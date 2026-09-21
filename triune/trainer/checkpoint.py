@@ -116,6 +116,7 @@ def save_latest(trainer, engine, step: int, loss: float) -> Path:
         _atomic_save_checkpoint(_checkpoint_payload(trainer, engine, step, loss), path)
     except Exception as exc:
         logger.error("Failed to save latest checkpoint to %s: %s", path, exc, exc_info=True)
+        raise
     return path
 
 
@@ -125,6 +126,7 @@ def save_best(trainer, engine, step: int, loss: float) -> Path:
         _atomic_save_checkpoint(_checkpoint_payload(trainer, engine, step, loss), path)
     except Exception as exc:
         logger.error("Failed to save best checkpoint to %s: %s", path, exc, exc_info=True)
+        raise
     return path
 
 
@@ -133,33 +135,65 @@ def load_checkpoint(trainer, path: str | Path, *, load_optimizer: bool) -> dict:
 
     # Schema-v2 Architecture & Semantic fingerprint verification
     saved_config = checkpoint.get("config", {})
-    if saved_config and hasattr(trainer, "config") and isinstance(trainer.config, dict):
-        mismatches = []
-        critical_checks = [
-            ("hidden_dim", "architecture"),
-            ("num_layers", "architecture"),
-            ("num_heads", "architecture"),
-            ("head_dim", "architecture"),
-            ("vocab_size", "architecture"),
-            ("num_experts", "moe"),
-            ("top_k", "moe"),
-            ("shared_expert", "moe"),
-            ("router_prefix_layers", "hierarchy"),
-            ("reflex_exit_layer", "hierarchy"),
-            ("limbic_exit_layer", "hierarchy"),
-        ]
-        for key, cat in critical_checks:
-            saved_val = saved_config.get(key)
-            current_val = trainer.config.get(key)
-            if saved_val is not None and current_val is not None and saved_val != current_val:
-                mismatches.append(f"{key} [{cat}]: saved={saved_val} vs current={current_val}")
+    saved_fp = checkpoint.get("fingerprint")
+    current_config = getattr(trainer, "config", {}) or {}
 
-        if mismatches:
-            raise ValueError(
-                f"Checkpoint architecture mismatch for {path}:\n"
-                + "\n".join(f"  - {m}" for m in mismatches)
-                + f"\nCannot restore weights into an incompatible model configuration."
-            )
+    if isinstance(current_config, dict):
+        current_fp = compute_checkpoint_fingerprint(current_config)
+
+        # 1. Authoritative Schema-v2 Fingerprint Gate
+        if saved_fp is not None:
+            if saved_fp != current_fp:
+                mismatches = []
+                saved_canon = checkpoint.get("canonical_semantics") or extract_canonical_semantics(saved_config)
+                curr_canon = extract_canonical_semantics(current_config)
+                for cat, keys in FINGERPRINT_SPEC.items():
+                    if cat == "schema_version":
+                        continue
+                    s_cat = saved_canon.get(cat, {})
+                    c_cat = curr_canon.get(cat, {})
+                    for k in keys:
+                        s_val = s_cat.get(k)
+                        c_val = c_cat.get(k)
+                        if s_val != c_val:
+                            mismatches.append(f"{cat}.{k}: saved={s_val} vs current={c_val}")
+
+                diff_str = "\n".join(f"  - {m}" for m in mismatches) if mismatches else "  - Non-semantic configuration variation"
+                raise ValueError(
+                    f"Checkpoint architecture mismatch: fingerprint mismatch for {path}\n"
+                    f"Saved fingerprint:   {saved_fp}\n"
+                    f"Current fingerprint: {current_fp}\n"
+                    f"Changed parameters:\n{diff_str}\n"
+                    f"Cannot restore weights into an incompatible model configuration."
+                )
+        elif saved_config:
+            # 2. Legacy Checkpoint Fallback: Validate critical architecture keys
+            mismatches = []
+            critical_checks = [
+                ("hidden_dim", "architecture"),
+                ("num_layers", "architecture"),
+                ("num_heads", "architecture"),
+                ("head_dim", "architecture"),
+                ("vocab_size", "architecture"),
+                ("num_experts", "moe"),
+                ("top_k", "moe"),
+                ("shared_expert", "moe"),
+                ("router_prefix_layers", "hierarchy"),
+                ("reflex_exit_layer", "hierarchy"),
+                ("limbic_exit_layer", "hierarchy"),
+            ]
+            for key, cat in critical_checks:
+                saved_val = saved_config.get(key)
+                current_val = current_config.get(key)
+                if saved_val is not None and current_val is not None and saved_val != current_val:
+                    mismatches.append(f"{key} [{cat}]: saved={saved_val} vs current={current_val}")
+
+            if mismatches:
+                raise ValueError(
+                    f"Checkpoint architecture mismatch for {path}:\n"
+                    + "\n".join(f"  - {m}" for m in mismatches)
+                    + f"\nCannot restore weights into an incompatible model configuration."
+                )
 
     state_dict = checkpoint["model_state"]
     if any(key.startswith("_orig_mod.") for key in state_dict):

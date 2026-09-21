@@ -101,6 +101,28 @@ class StreamingTrainingParityTest(unittest.TestCase):
                     msg=f"AdamW diverged at step {step} for parameter {name}",
                 )
 
+                # Assert AdamW optimizer state parity (step, exp_avg, exp_avg_sq)
+                state_ref = opt_ref.state.get(p_ref)
+                state_str = opt_str.state.get(p_str)
+                if state_ref is not None and state_str is not None:
+                    self.assertEqual(state_ref.get("step"), state_str.get("step"))
+                    if "exp_avg" in state_ref and "exp_avg" in state_str:
+                        torch.testing.assert_close(
+                            state_str["exp_avg"].cpu(),
+                            state_ref["exp_avg"].cpu(),
+                            rtol=1e-4,
+                            atol=1e-5,
+                            msg=f"AdamW exp_avg diverged at step {step} for {name}",
+                        )
+                    if "exp_avg_sq" in state_ref and "exp_avg_sq" in state_str:
+                        torch.testing.assert_close(
+                            state_str["exp_avg_sq"].cpu(),
+                            state_ref["exp_avg_sq"].cpu(),
+                            rtol=1e-4,
+                            atol=1e-5,
+                            msg=f"AdamW exp_avg_sq diverged at step {step} for {name}",
+                        )
+
         engine.detach()
 
     def test_muon_multi_step_parity(self):
@@ -135,7 +157,7 @@ class StreamingTrainingParityTest(unittest.TestCase):
             loss_str.backward()
             engine.step_streaming_optimizer(optimizer=opt_str, grad_clip=None)
 
-            # Compare 2D parameters
+            # Compare 2D parameters and Muon momentum buffer
             for p_ref, p_str in zip(p_ref_2d, p_str_2d):
                 ref_data = p_ref.data.cpu()
                 str_data = p_str._cpu_data if hasattr(p_str, "_cpu_data") else p_str.data.cpu()
@@ -146,6 +168,17 @@ class StreamingTrainingParityTest(unittest.TestCase):
                     atol=1e-4,
                     msg=f"Muon diverged at step {step}",
                 )
+
+                state_ref = opt_ref.state.get(p_ref)
+                state_str = opt_str.state.get(p_str)
+                if state_ref is not None and state_str is not None and "momentum" in state_ref and "momentum" in state_str:
+                    torch.testing.assert_close(
+                        state_str["momentum"].cpu(),
+                        state_ref["momentum"].cpu(),
+                        rtol=1e-3,
+                        atol=1e-4,
+                        msg=f"Muon momentum state diverged at step {step}",
+                    )
 
         engine.detach()
 
@@ -194,6 +227,52 @@ class StreamingTrainingParityTest(unittest.TestCase):
                     atol=5e-3,
                     msg=f"CentroidSteer diverged at step {step} for {name}",
                 )
+
+        # Assert inner optimizer state parity
+        if hasattr(opt_ref, "base_optimizer") and hasattr(opt_str, "base_optimizer"):
+            for p_ref, p_str in zip(model_ref.parameters(), model_str.parameters()):
+                s_ref = opt_ref.base_optimizer.state.get(p_ref)
+                s_str = opt_str.base_optimizer.state.get(p_str)
+                if s_ref is not None and s_str is not None:
+                    if "exp_avg" in s_ref and "exp_avg" in s_str:
+                        torch.testing.assert_close(
+                            s_str["exp_avg"].cpu(), s_ref["exp_avg"].cpu(),
+                            rtol=5e-3, atol=5e-3,
+                            msg="CentroidSteer base_optimizer exp_avg diverged",
+                        )
+
+        engine.detach()
+
+    def test_training_mode_invariants(self):
+        """Validates that training mode with routing executes cleanly and preserves finite router stats."""
+        model_ref, model_str, engine = create_paired_models(self.device, seed=505)
+        model_ref.train()
+        model_str.train()
+
+        opt_str = torch.optim.AdamW(model_str.parameters(), lr=1e-3)
+        engine.set_optimizer(opt_str)
+
+        inputs = torch.randint(0, 128, (2, 8), device=self.device)
+
+        engine.zero_grad()
+        logits_str, route_logits_str = model_str(inputs)
+        loss_str = logits_str.pow(2).mean()
+        loss_str.backward()
+
+        for p in model_str.parameters():
+            grad = getattr(p, "_cpu_grad", p.grad)
+            if grad is not None:
+                self.assertTrue(torch.isfinite(grad).all().item(), "Gradient contains non-finite numbers")
+
+        engine.step_streaming_optimizer(optimizer=opt_str, grad_clip=1.0)
+
+        for p in model_str.parameters():
+            p_data = getattr(p, "_cpu_data", p.data)
+            self.assertTrue(torch.isfinite(p_data).all().item(), "Parameter contains non-finite numbers")
+
+        self.assertIsNotNone(model_str.last_route_logits)
+        self.assertIsNotNone(model_str.last_depth_choice)
+        self.assertTrue(torch.isfinite(model_str.last_route_logits).all().item())
 
         engine.detach()
 

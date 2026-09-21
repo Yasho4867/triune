@@ -120,6 +120,32 @@ class TestGLACacheAndModelSemantics(unittest.TestCase):
                     step_logits, target_logit, rtol=1e-4, atol=1e-4
                 )
 
+    def test_dynamic_depth_cached_generation(self):
+        """Asserts cache propagation with dynamic depth routing produces mathematically consistent logits."""
+        full_tokens = torch.randint(0, 100, (1, 8), device=self.device)
+
+        with torch.no_grad():
+            full_logits, _ = self.model(full_tokens, force_depth=None)
+            full_depth = self.model.last_depth_choice
+
+            # Run prefix with cache
+            prefix_tokens = full_tokens[:, :5]
+            cache = self.model.init_cache(1)
+            prefix_logits, cache = self.model(prefix_tokens, cache=cache, force_depth=None)
+            prefix_depth = self.model.last_depth_choice
+
+            if prefix_depth.item() == full_depth.item():
+                torch.testing.assert_close(
+                    prefix_logits, full_logits[:, :5], rtol=1e-4, atol=1e-4
+                )
+
+            # Step-by-step autoregressive generation
+            for t in range(5, 8):
+                step_token = full_tokens[:, t : t + 1]
+                step_logits, cache = self.model(step_token, cache=cache, force_depth=None)
+                self.assertIsNotNone(self.model.last_depth_choice)
+                self.assertEqual(step_logits.shape, (1, 1, 100))
+
 
 class TestSchemaV2Checkpointing(unittest.TestCase):
     """Test Schema-v2 checkpoint canonical fingerprinting and mismatch rejection."""
@@ -218,6 +244,26 @@ class TestSchemaV2Checkpointing(unittest.TestCase):
             load_checkpoint(bad_trainer_topk, ckpt_path, load_optimizer=False)
         self.assertIn("top_k", str(ctx.exception))
 
+    def test_fingerprint_mismatch_semantic_rejection(self):
+        """Asserts load_checkpoint strictly rejects checkpoints when semantic parameters change."""
+        ckpt_path = save_latest(self.trainer, None, step=10, loss=1.2)
+
+        # Altering capacity_multiplier changes fingerprint even though tensor shapes are identical
+        bad_config_cap = dict(self.config, capacity_multiplier=2.5)
+        bad_trainer_cap = DummyTrainer(self.model, bad_config_cap, self.device)
+        with self.assertRaises(ValueError) as ctx:
+            load_checkpoint(bad_trainer_cap, ckpt_path, load_optimizer=False)
+        self.assertIn("fingerprint mismatch", str(ctx.exception).lower())
+        self.assertIn("capacity_multiplier", str(ctx.exception))
+
+        # Altering galore_rank
+        bad_config_galore = dict(self.config, galore_rank=512)
+        bad_trainer_galore = DummyTrainer(self.model, bad_config_galore, self.device)
+        with self.assertRaises(ValueError) as ctx:
+            load_checkpoint(bad_trainer_galore, ckpt_path, load_optimizer=False)
+        self.assertIn("fingerprint mismatch", str(ctx.exception).lower())
+        self.assertIn("galore_rank", str(ctx.exception))
+
 
 class TestConfigurationValidation(unittest.TestCase):
     """Test Phase 15 math.isfinite validation across configuration and model initialization."""
@@ -245,6 +291,14 @@ class TestConfigurationValidation(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_config(dict(valid_cfg, target_depth_dist=[float("nan"), 0.5, 0.5]))
 
+        # Test betas tuple containing NaN
+        with self.assertRaises(ValueError):
+            validate_config(dict(valid_cfg, betas=(float("nan"), 0.95)))
+
+        # Test galore_betas tuple containing Inf
+        with self.assertRaises(ValueError):
+            validate_config(dict(valid_cfg, galore_betas=(0.9, float("inf"))))
+
     def test_model_init_rejects_nan_and_inf(self):
         """Asserts TriuneTransformer constructor rejects non-finite balance_coef and target_depth_dist."""
         with self.assertRaises(ValueError):
@@ -255,6 +309,7 @@ class TestConfigurationValidation(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             TriuneTransformer(target_depth_dist=(float("nan"), 0.5, 0.5))
+
 
 
 if __name__ == "__main__":

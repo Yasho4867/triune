@@ -22,6 +22,7 @@ import torch
 import torch.nn as nn
 
 from .capabilities import PrecisionCapabilities
+from .staging import FP8StagingBuffer, ParameterStager, StagingBuffer
 
 
 
@@ -134,33 +135,38 @@ class LayerStreamingEngine:
         self.d2h_stream: Optional[torch.cuda.Stream] = None
         self.layers: list[nn.Module] = self._resolve_layers()
         self.caps = PrecisionCapabilities.detect(self.device)
+        self.stager: Optional[ParameterStager] = None
 
     def _stage_param_tensor(self, p: nn.Parameter) -> torch.Tensor:
-        target_dtype = torch.bfloat16 if p._cpu_data.dtype == torch.float8_e4m3fn else p._cpu_data.dtype
-        if self.config.fp8_weights and p.dim() >= 2 and self.device.type == "cuda":
-            gpu_master = p._cpu_data.to(self.device, non_blocking=True).to(target_dtype)
-            amax = gpu_master.abs().amax().clamp_min(1e-12)
-            scale = (448.0 / amax).to(dtype=target_dtype)
-            fp8_t = (gpu_master * scale).to(torch.float8_e4m3fn)
-            inv_scale = (1.0 / scale.float())
-            if self.caps.native_scaled_mm:
-                return fp8_t
-            else:
-                return (fp8_t.to(target_dtype) * inv_scale)
-        return p._cpu_data.to(self.device, non_blocking=True).to(target_dtype)
+        """Adapts parameter staging through ParameterStager."""
+        if self.stager is not None:
+            buf = self.stager.buffers.get(id(p))
+            if buf is not None:
+                target_dtype = torch.bfloat16 if getattr(p, "_cpu_data", p.data).dtype == torch.float8_e4m3fn else None
+                use_hw_fp8 = self.caps.native_scaled_mm and self.config.fp8_weights
+                if isinstance(buf, FP8StagingBuffer):
+                    return buf.stage_to_gpu(
+                        self.device, stream=None, target_dtype=target_dtype, non_blocking=True, use_hardware_fp8=use_hw_fp8
+                    )
+                return buf.stage_to_gpu(self.device, stream=None, target_dtype=target_dtype, non_blocking=True)
+        return p.to(self.device)
 
     def _prefetch_param_tensor(self, p: nn.Parameter) -> Any:
-        target_dtype = torch.bfloat16 if p._cpu_data.dtype == torch.float8_e4m3fn else p._cpu_data.dtype
-        if self.config.fp8_weights and p.dim() >= 2 and self.device.type == "cuda":
-            gpu_master = p._cpu_data.to(self.device, non_blocking=True).to(target_dtype)
-            amax = gpu_master.abs().amax().clamp_min(1e-12)
-            scale = (448.0 / amax).to(dtype=target_dtype)
-            fp8_t = (gpu_master * scale).to(torch.float8_e4m3fn)
-            inv_scale = (1.0 / scale.float())
-            return (fp8_t, inv_scale, target_dtype)
-        return p._cpu_data.to(self.device, non_blocking=True).to(target_dtype)
+        """Adapts parameter prefetching through ParameterStager."""
+        if self.stager is not None:
+            buf = self.stager.buffers.get(id(p))
+            if buf is not None:
+                target_dtype = torch.bfloat16 if getattr(p, "_cpu_data", p.data).dtype == torch.float8_e4m3fn else None
+                use_hw_fp8 = self.caps.native_scaled_mm and self.config.fp8_weights
+                if isinstance(buf, FP8StagingBuffer):
+                    return buf.stage_to_gpu(
+                        self.device, stream=self.prefetch_stream, target_dtype=target_dtype, non_blocking=True, use_hardware_fp8=use_hw_fp8
+                    )
+                return buf.stage_to_gpu(self.device, stream=self.prefetch_stream, target_dtype=target_dtype, non_blocking=True)
+        return p.to(self.device)
 
     def _unpack_prefetched(self, staged_item: Any) -> torch.Tensor:
+        """Unpacks staged items into appropriate tensor format."""
         if isinstance(staged_item, tuple):
             fp8_t, inv_scale, target_dtype = staged_item
             if self.caps.native_scaled_mm:
@@ -284,7 +290,17 @@ class LayerStreamingEngine:
         num_layers = len(self.layers)
         layer_to_idx = {layer: i for i, layer in enumerate(self.layers)}
 
-        # 5. Parameter autograd post-accumulate hooks and module backward hooks
+        # 5. Initialize ParameterStager to manage GPU temporary staging and master weight isolation
+        self.stager = ParameterStager(
+            device=self.device,
+            prefetch_stream=self.prefetch_stream,
+            d2h_stream=self.d2h_stream,
+            use_fp8=self.config.fp8_weights,
+        )
+        for layer in self.layers:
+            self.stager.register_module(layer)
+
+        # 6. Parameter autograd post-accumulate hooks and module backward hooks
         def make_post_accum_hook(param: nn.Parameter):
             def post_accum_hook(p: nn.Parameter) -> None:
                 if p.grad is None:
@@ -342,23 +358,20 @@ class LayerStreamingEngine:
 
             def make_bwd_pre_hook(l: nn.Module):
                 def bwd_pre_hook(module, grad_output):
-                    # Stream this layer's parameters and buffers to GPU
-                    for p in l.parameters():
-                        p.data = self._stage_param_tensor(p)
-                    for b in l.buffers():
-                        b.data = b._cpu_data.to(dev, non_blocking=True)
+                    target_dtype = None
+                    use_hw_fp8 = self.caps.native_scaled_mm and self.config.fp8_weights
+                    self.stager.stage_layer(l, stream=None, target_dtype=target_dtype, use_hardware_fp8=use_hw_fp8)
+                    self.stager.apply_staged_tensors(l)
                 return bwd_pre_hook
             self._hooks.append(layer.register_full_backward_pre_hook(make_bwd_pre_hook(layer)))
 
             def make_bwd_post_hook(l: nn.Module):
                 def bwd_post_hook(module, grad_input, grad_output):
-                    # Restore permanent CPU tensor pointers; GPU memory freed
-                    for t in list(l.parameters()) + list(l.buffers()):
-                        t.data = t._cpu_data
+                    self.stager.release_layer(l)
                 return bwd_post_hook
             self._hooks.append(layer.register_full_backward_hook(make_bwd_post_hook(layer)))
 
-        # 6. Forward execution path
+        # 7. Forward execution path
         orig_forward_block = getattr(self.model, "_forward_block", None)
         if orig_forward_block is not None:
             self.model._orig_forward_block = orig_forward_block
@@ -367,39 +380,28 @@ class LayerStreamingEngine:
                 idx = layer_to_idx.get(layer)
 
                 # Check if this layer was prefetched on secondary CUDA stream
-                if hasattr(layer, "_prefetched_cuda_params") and layer._prefetched_cuda_params is not None:
-                    if prefetch_stream is not None:
-                        torch.cuda.current_stream().wait_stream(prefetch_stream)
-                    for p, staged_item in zip(layer.parameters(), layer._prefetched_cuda_params):
-                        p.data = self._unpack_prefetched(staged_item)
-                    for b, cuda_tensor in zip(layer.buffers(), layer._prefetched_cuda_buffers):
-                        b.data = cuda_tensor
-                    layer._prefetched_cuda_params = None
-                    layer._prefetched_cuda_buffers = None
+                if getattr(layer, "_is_prefetched", False):
+                    self.stager.apply_staged_tensors(layer)
+                    layer._is_prefetched = False
                 else:
-                    # Layer 0 or un-prefetched: transfer synchronously on main stream
-                    for p in layer.parameters():
-                        p.data = self._stage_param_tensor(p)
-                    for b in layer.buffers():
-                        b.data = b._cpu_data.to(dev, non_blocking=True)
+                    target_dtype = None
+                    use_hw_fp8 = self.caps.native_scaled_mm and self.config.fp8_weights
+                    self.stager.stage_layer(layer, stream=None, target_dtype=target_dtype, use_hardware_fp8=use_hw_fp8)
+                    self.stager.apply_staged_tensors(layer)
 
-                # Prefetch NEXT layer into isolated layer staging buffers on secondary stream
+                # Prefetch NEXT layer into isolated staging buffers on secondary stream
                 # NEVER mutating next_layer parameters' .data from secondary stream!
                 if prefetch_stream is not None and idx is not None and idx + 1 < num_layers:
                     next_layer = self.layers[idx + 1]
-                    with torch.cuda.stream(prefetch_stream):
-                        next_layer._prefetched_cuda_params = [
-                            self._prefetch_param_tensor(p) for p in next_layer.parameters()
-                        ]
-                        next_layer._prefetched_cuda_buffers = [
-                            b._cpu_data.to(dev, non_blocking=True) for b in next_layer.buffers()
-                        ]
+                    target_dtype = None
+                    use_hw_fp8 = self.caps.native_scaled_mm and self.config.fp8_weights
+                    self.stager.stage_layer(next_layer, stream=prefetch_stream, target_dtype=target_dtype, use_hardware_fp8=use_hw_fp8)
+                    next_layer._is_prefetched = True
 
                 out = orig_forward_block(layer, x, return_exit, cache=cache, update_stats=update_stats)
 
                 # Instantly restore pointer to permanent CPU tensor; GPU memory freed
-                for t in list(layer.parameters()) + list(layer.buffers()):
-                    t.data = t._cpu_data
+                self.stager.release_layer(layer)
                 return out
 
             self.model._forward_block = streaming_forward_block
@@ -408,30 +410,22 @@ class LayerStreamingEngine:
             for idx, layer in enumerate(self.layers):
                 def make_fwd_pre_hook(l: nn.Module, i: int):
                     def fwd_pre_hook(module, args):
-                        if hasattr(l, "_prefetched_cuda_params") and l._prefetched_cuda_params is not None:
-                            if prefetch_stream is not None:
-                                torch.cuda.current_stream().wait_stream(prefetch_stream)
-                            for p, staged_item in zip(l.parameters(), l._prefetched_cuda_params):
-                                p.data = self._unpack_prefetched(staged_item)
-                            for b, cuda_tensor in zip(l.buffers(), l._prefetched_cuda_buffers):
-                                b.data = cuda_tensor
-                            l._prefetched_cuda_params = None
-                            l._prefetched_cuda_buffers = None
+                        if getattr(l, "_is_prefetched", False):
+                            self.stager.apply_staged_tensors(l)
+                            l._is_prefetched = False
                         else:
-                            for p in l.parameters():
-                                p.data = self._stage_param_tensor(p)
-                            for b in l.buffers():
-                                b.data = b._cpu_data.to(dev, non_blocking=True)
+                            target_dtype = None
+                            use_hw_fp8 = self.caps.native_scaled_mm and self.config.fp8_weights
+                            self.stager.stage_layer(l, stream=None, target_dtype=target_dtype, use_hardware_fp8=use_hw_fp8)
+                            self.stager.apply_staged_tensors(l)
 
                         if prefetch_stream is not None and i + 1 < num_layers:
                             next_layer = self.layers[i + 1]
-                            with torch.cuda.stream(prefetch_stream):
-                                next_layer._prefetched_cuda_params = [
-                                    self._prefetch_param_tensor(p) for p in next_layer.parameters()
-                                ]
-                                next_layer._prefetched_cuda_buffers = [
-                                    b._cpu_data.to(dev, non_blocking=True) for b in next_layer.buffers()
-                                ]
+                            target_dtype = None
+                            use_hw_fp8 = self.caps.native_scaled_mm and self.config.fp8_weights
+                            self.stager.stage_layer(next_layer, stream=prefetch_stream, target_dtype=target_dtype, use_hardware_fp8=use_hw_fp8)
+                            next_layer._is_prefetched = True
+
                         if isinstance(args, tuple):
                             return tuple(a.to(dev) if isinstance(a, torch.Tensor) and a.device != dev else a for a in args)
                         return args
@@ -440,8 +434,7 @@ class LayerStreamingEngine:
 
                 def make_fwd_post_hook(l: nn.Module):
                     def fwd_post_hook(module, args, output):
-                        for t in list(l.parameters()) + list(l.buffers()):
-                            t.data = t._cpu_data
+                        self.stager.release_layer(l)
                         return output
                     return fwd_post_hook
                 self._hooks.append(layer.register_forward_hook(make_fwd_post_hook(layer)))
@@ -474,9 +467,14 @@ class LayerStreamingEngine:
             self.d2h_stream.synchronize()
             self.d2h_stream = None
 
-        # Clean up temporary layer attributes and restore CPU storage pointers
-        # (Phase 14 compatibility restoration; replaced by ParameterStager in Phase 3)
+        # Clean up temporary layer attributes and restore CPU storage pointers via ParameterStager
+        if self.stager is not None:
+            self.stager.clear()
+            self.stager = None
+
         for layer in self.layers:
+            if hasattr(layer, "_is_prefetched"):
+                delattr(layer, "_is_prefetched")
             if hasattr(layer, "_prefetched_cuda_params"):
                 delattr(layer, "_prefetched_cuda_params")
             if hasattr(layer, "_prefetched_cuda_buffers"):
@@ -542,11 +540,13 @@ class LayerStreamingEngine:
         total_layers = len(self.layers)
         for layer_idx, layer in enumerate(self.layers):
             layer_params = list(layer.parameters())
+            target_dtype = torch.bfloat16 if any(getattr(p, "_cpu_data", p.data).dtype == torch.float8_e4m3fn for p in layer_params) else None
+            self.stager.stage_layer(layer, stream=None, target_dtype=target_dtype, use_hardware_fp8=False)
+            self.stager.apply_staged_tensors(layer)
+
             for p in layer_params:
-                target_dtype = torch.bfloat16 if p._cpu_data.dtype == torch.float8_e4m3fn else p._cpu_data.dtype
-                p.data = p._cpu_data.to(dev, non_blocking=True).to(target_dtype)
                 if hasattr(p, "_cpu_grad") and p._cpu_grad is not None:
-                    g = p._cpu_grad.to(dev, non_blocking=True).to(target_dtype)
+                    g = p._cpu_grad.to(dev, non_blocking=True).to(p.dtype)
                     if clip_coef < 1.0:
                         g.mul_(clip_coef)
                     p.grad = g
@@ -564,14 +564,11 @@ class LayerStreamingEngine:
             # Offload updated optimizer states back to CPU to prevent VRAM accumulation
             _move_param_states_to_cpu(opt, layer_params)
 
-            # Sync updated weights back to permanent CPU storage and release GPU tensors
+            # Clean p.grad and sync updated weights back to CPU master via ParameterStager
             for p in layer_params:
-                p._cpu_data.copy_(p.data.to(p._cpu_data.dtype), non_blocking=True)
                 p.grad = None
-                p.data = p._cpu_data
 
-            for b in layer.buffers():
-                b.data = b._cpu_data
+            self.stager.sync_layer_to_cpu(layer)
 
         # Increment global optimizer step counter if not already incremented by step_parameters
         if hasattr(opt, "step_count") and not hasattr(opt, "step_parameters"):

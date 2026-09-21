@@ -6,9 +6,12 @@ import logging
 import torch
 
 from triune.runtime.capabilities import PrecisionCapabilities
+from triune.model.fp8 import convert_to_fp8
 from .bf16 import bf16_autocast
 
 logger = logging.getLogger(__name__)
+
+__all__ = ["build_fp8_precision_context", "convert_to_fp8"]
 
 
 def build_fp8_precision_context(*, device, use_te: bool = True) -> callable:

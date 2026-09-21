@@ -89,18 +89,22 @@ def validate_config(config: Mapping[str, Any]) -> None:
     if config["save_every"] <= 0 or config["log_every"] <= 0:
         raise ValueError("save_every and log_every must be positive")
 
-    # Phase 15: Validate all floating-point configuration parameters are finite
-    float_fields = [
-        "lr", "min_lr", "muon_lr", "galore_lr",
-        "balance_coef", "bias_strength", "usage_ema_decay",
-        "steer_scale", "weight_decay", "muon_weight_decay",
-        "galore_weight_decay", "grad_clip",
-    ]
-    for field in float_fields:
-        if field in config and config[field] is not None:
-            val = config[field]
-            if not isinstance(val, (int, float)) or not math.isfinite(val):
-                raise ValueError(f"Config parameter '{field}' must be a finite float; got {val}")
+    # Phase 15: Validate all numeric configuration parameters (scalars, tuples, lists, dicts) are finite
+    def _validate_finite_recursive(name: str, val: Any) -> None:
+        if val is None or isinstance(val, (bool, str)):
+            return
+        if isinstance(val, (int, float)):
+            if not math.isfinite(val):
+                raise ValueError(f"Config parameter '{name}' must be finite; got {val}")
+        elif isinstance(val, (tuple, list)):
+            for i, item in enumerate(val):
+                _validate_finite_recursive(f"{name}[{i}]", item)
+        elif isinstance(val, Mapping):
+            for k, v in val.items():
+                _validate_finite_recursive(f"{name}.{k}", v)
+
+    for key, value in config.items():
+        _validate_finite_recursive(key, value)
 
     target = config.get("target_depth_dist")
     if target is not None:
@@ -108,4 +112,5 @@ def validate_config(config: Mapping[str, Any]) -> None:
             raise ValueError("target_depth_dist must contain three finite non-negative values")
         if abs(sum(target) - 1.0) > 1e-6:
             raise ValueError("target_depth_dist must sum to 1.0")
+
 
