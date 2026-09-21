@@ -1,3 +1,4 @@
+import unittest
 import torch
 import torch.nn as nn
 
@@ -195,7 +196,84 @@ def test_layer_streaming_optimizer_gpu_execution():
     print("✅ Layer-Streaming GPU Optimizer passed successfully!")
 
 
+def test_streaming_gradient_numerical_parity():
+    """Verify exact numerical gradient equivalence between streaming and non-streaming models."""
+    if not torch.cuda.is_available():
+        return
+
+    torch.manual_seed(42)
+    device = torch.device("cuda")
+
+    kwargs = dict(
+        vocab_size=100,
+        hidden_dim=64,
+        num_layers=4,
+        num_heads=2,
+        head_dim=32,
+        num_experts=2,
+        router_prefix_layers=1,
+        reflex_exit_layer=2,
+        limbic_exit_layer=3,
+        use_fp4=False,
+        use_fp8=False,
+    )
+
+    model_std = TriuneTransformer(**kwargs).to(device)
+    model_str = TriuneTransformer(**kwargs)
+    model_str.load_state_dict(model_std.state_dict())
+
+    engine = model_str.enable_layer_streaming(
+        device=device, chunk_size=1, pin_memory=False, instant_optimizer=False
+    )
+
+    x = torch.randint(0, 100, (2, 8), device=device)
+
+    # Standard backward with all exits enabled to test every single parameter
+    model_std.zero_grad()
+    r1, l1, c1, rt1 = model_std.forward_all_exits(x)
+    loss_std = r1.sum() + l1.sum() + c1.sum() + rt1.sum()
+    loss_std.backward()
+
+    # Streaming backward with all exits enabled
+    model_str.zero_grad()
+    r2, l2, c2, rt2 = model_str.forward_all_exits(x)
+    loss_str = r2.sum() + l2.sum() + c2.sum() + rt2.sum()
+    loss_str.backward()
+
+    assert torch.allclose(r1, r2, atol=1e-4, rtol=1e-3), "Reflex logits mismatch"
+    assert torch.allclose(l1, l2, atol=1e-4, rtol=1e-3), "Limbic logits mismatch"
+    assert torch.allclose(c1, c2, atol=1e-4, rtol=1e-3), "Cortex logits mismatch"
+    assert torch.allclose(rt1, rt2, atol=1e-4, rtol=1e-3), "Route logits mismatch"
+
+    param_count = 0
+    max_diff = 0.0
+    for (n1, p1), (n2, p2) in zip(model_std.named_parameters(), model_str.named_parameters()):
+        param_count += 1
+        g1 = p1.grad.cpu() if p1.grad is not None else None
+        g2 = p2._cpu_grad if hasattr(p2, "_cpu_grad") and p2._cpu_grad is not None else (p2.grad.cpu() if p2.grad is not None else None)
+        assert g1 is not None, f"{n1} has no grad in standard model"
+        assert g2 is not None, f"{n2} has no grad in streaming model"
+        diff = (g1 - g2).abs().max().item()
+        if diff > max_diff:
+            max_diff = diff
+        assert torch.allclose(g1, g2, atol=1e-4, rtol=1e-3), f"Gradient mismatch in {n1}: diff {diff}"
+
+    print(f"✅ Streaming gradient numerical parity verified across all {param_count} parameters (max diff: {max_diff})")
+
+
+class TestLayerStreaming(unittest.TestCase):
+    def test_lifecycle(self):
+        test_layer_streaming_engine_lifecycle()
+
+    def test_centroid_optimizer(self):
+        test_layer_streaming_with_centroid_optimizer()
+
+    def test_gpu_execution(self):
+        test_layer_streaming_optimizer_gpu_execution()
+
+    def test_gradient_numerical_parity(self):
+        test_streaming_gradient_numerical_parity()
+
+
 if __name__ == "__main__":
-    test_layer_streaming_engine_lifecycle()
-    test_layer_streaming_with_centroid_optimizer()
-    test_layer_streaming_optimizer_gpu_execution()
+    unittest.main()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from .config import DEPTH_BALANCE_COEF, TARGET_DEPTH_DIST
 from .transformer import TriuneTransformer
 
 
@@ -19,6 +20,8 @@ def build_model(config: dict | None = None) -> TriuneTransformer:
         router_prefix_layers=config.get("router_prefix_layers", 3),
         reflex_exit_layer=config.get("reflex_exit_layer", 6),
         limbic_exit_layer=config.get("limbic_exit_layer", 16),
+        target_depth_dist=config.get("target_depth_dist", TARGET_DEPTH_DIST),
+        balance_coef=config.get("balance_coef", DEPTH_BALANCE_COEF),
         use_fp4=config.get("use_fp4", False),
         use_fp8=config.get("use_fp8", False),
         streaming_fp8_weights=config.get("streaming_fp8_weights", False),

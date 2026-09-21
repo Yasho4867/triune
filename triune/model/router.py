@@ -56,8 +56,8 @@ class GumbelSoftmaxRouter(nn.Module):
             index = logits.argmax(dim=-1)
             y_route = F.one_hot(index, num_classes=3).float()
 
-        # Compute Load Balancing Regularization loss natively in the forward pass
+        # Compute Load Balancing Regularization loss natively in the forward pass (unweighted MSE)
         routing_mean = y_route.mean(dim=0)
-        balance_loss = self.balance_coef * (routing_mean - self.target_dist).pow(2).mean()
+        balance_loss = (routing_mean - self.target_dist).pow(2).mean()
 
         return logits, y_route, balance_loss

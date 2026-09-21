@@ -20,6 +20,8 @@ class TriuneTransformer(nn.Module):
         router_prefix_layers: int = ROUTER_PREFIX_LAYERS,
         reflex_exit_layer: int = REFLEX_EXIT_LAYER,
         limbic_exit_layer: int = LIMBIC_EXIT_LAYER,
+        target_depth_dist: tuple[float, float, float] = TARGET_DEPTH_DIST,
+        balance_coef: float = DEPTH_BALANCE_COEF,
         use_fp4: bool = False,
         use_fp8: bool = False,
         streaming_fp8_weights: bool = False,
@@ -42,6 +44,8 @@ class TriuneTransformer(nn.Module):
         self.router_prefix_layers = router_prefix_layers
         self.reflex_exit_layer = reflex_exit_layer
         self.limbic_exit_layer = limbic_exit_layer
+        self.target_depth_dist = target_depth_dist
+        self.balance_coef = balance_coef
         self.token_embed = nn.Embedding(vocab_size, hidden_dim)
 
         use_fp8_e4m3 = streaming_fp8_weights and hasattr(torch, "float8_e4m3fn")
@@ -64,7 +68,11 @@ class TriuneTransformer(nn.Module):
                         p.data = p.data.to(torch.float8_e4m3fn)
             self.layers.append(block)
 
-        self.router = GumbelSoftmaxRouter(hidden_dim)
+        self.router = GumbelSoftmaxRouter(
+            hidden_dim,
+            target_depth_dist=target_depth_dist,
+            balance_coef=balance_coef,
+        )
         self.final_norm = RMSNorm(hidden_dim)
         self.final_head = nn.Linear(hidden_dim, vocab_size)
         self._use_gradient_checkpointing = False

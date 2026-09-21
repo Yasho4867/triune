@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from datasets import load_dataset
 from tokenizers import Tokenizer
 from tokenizers.models import BPE
 from tokenizers.pre_tokenizers import ByteLevel
@@ -28,6 +27,7 @@ def build_tokenizer(
     dataset_config: str | None = "wikitext-103-raw-v1",
 ) -> Tokenizer:
     """Train and save a BPE tokenizer directly from a dataset stream."""
+    from datasets import load_dataset
     dataset = load_dataset(dataset_name, dataset_config, split="train", streaming=True)
     tokenizer = Tokenizer(BPE(unk_token="[UNK]"))
     tokenizer.pre_tokenizer = ByteLevel(add_prefix_space=True)

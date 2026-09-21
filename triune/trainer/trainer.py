@@ -60,6 +60,11 @@ class Trainer:
         self.eval_batches = self._materialize_eval_batches()
         print(f"✅ Evaluation batch(es) ready.", flush=True)
         self.engine = TrainingEngine(self)
+        try:
+            from .callbacks import install_checkpoint_signal_handlers
+            install_checkpoint_signal_handlers(self)
+        except Exception:
+            pass
 
     def _materialize_eval_batches(self):
         iterator = iter(self.eval_loader)

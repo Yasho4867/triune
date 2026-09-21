@@ -266,8 +266,13 @@ def main(argv: list[str] | None = None) -> dict:
         eval_loader = build_dataloader(tokenizer, config, sep_token_id, is_holdout=True)
         print("✅ Dataset stream configured.", flush=True)
         if config.get("use_fp8", False):
-            precision_context = build_fp8_precision_context(device=device, use_te=False)
-            print("✅ Native FP8 (E4M3) scaled GEMM active in model layers", flush=True)
+            use_te = config.get("use_te", True)
+            precision_context = build_fp8_precision_context(device=device, use_te=use_te)
+            desc = getattr(precision_context, "description", "FP8 precision context active")
+            if "falling back" in desc.lower():
+                print(f"⚠️ {desc}", flush=True)
+            else:
+                print(f"✅ {desc}", flush=True)
         elif config.get("use_fp4"):
             precision_context = build_precision_context(use_fp4=True, device=device)
         else:
