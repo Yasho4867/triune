@@ -75,7 +75,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--strict_vram", action="store_true", help="Deprecated alias; use default behavior without --force")
     parser.add_argument("--no_wandb", action="store_true")
     parser.add_argument("--no_hf_login", action="store_true")
-    parser.add_argument("--model_name", choices=("triune-small", "triune-base", "triune-moe"), default=None)
+    parser.add_argument(
+        "--model_name",
+        type=str,
+        default="triune-2.5b",
+        help="Architecture preset (triune-nano, triune-small, triune-2.5b, triune-7b) or Hugging Face model ID",
+    )
+    parser.add_argument("--lora", action="store_true", help="Enable LoRA parameter-efficient fine-tuning")
+    parser.add_argument("--lora_rank", type=int, default=16, help="LoRA rank dimension (default: 16)")
+    parser.add_argument("--lora_alpha", type=float, default=32.0, help="LoRA alpha scaling (default: 32.0)")
+    parser.add_argument("--lora_dropout", type=float, default=0.05, help="LoRA dropout (default: 0.05)")
+    parser.add_argument("--lora_targets", type=str, default=None, help="Comma-separated target module names for LoRA")
     parser.add_argument("--num_layers", type=int)
     parser.add_argument("--num_experts", type=int)
     parser.add_argument("--tokenizer_path", type=Path, default=Path("triune_tokenizer.json"))
@@ -121,15 +131,18 @@ def main(argv: list[str] | None = None) -> dict:
         )
         if getattr(args, key) is not None
     }
-    if args.model_name == "triune-small":
-        overrides.setdefault("num_layers", 18)
-        overrides.setdefault("num_experts", 4)
-    elif args.model_name == "triune-base":
-        overrides.setdefault("num_layers", 24)
-        overrides.setdefault("num_experts", 8)
-    elif args.model_name == "triune-moe":
-        overrides.setdefault("num_layers", 32)
-        overrides.setdefault("num_experts", 16)
+    model_name_str = (args.model_name or "triune-2.5b").lower()
+    preset_configs = {
+        "triune-nano": {"num_layers": 8, "hidden_dim": 512, "num_heads": 4, "head_dim": 128, "num_experts": 4, "router_prefix_layers": 2, "reflex_exit_layer": 3, "limbic_exit_layer": 6},
+        "triune-small": {"num_layers": 14, "hidden_dim": 1024, "num_heads": 8, "head_dim": 128, "num_experts": 4, "router_prefix_layers": 3, "reflex_exit_layer": 5, "limbic_exit_layer": 10},
+        "triune-2.5b": {"num_layers": 18, "hidden_dim": 1280, "num_heads": 10, "head_dim": 128, "num_experts": 8, "router_prefix_layers": 3, "reflex_exit_layer": 5, "limbic_exit_layer": 13},
+        "triune-7b": {"num_layers": 32, "hidden_dim": 2048, "num_heads": 16, "head_dim": 128, "num_experts": 8, "router_prefix_layers": 4, "reflex_exit_layer": 8, "limbic_exit_layer": 22},
+        "triune-base": {"num_layers": 24, "hidden_dim": 1536, "num_heads": 12, "head_dim": 128, "num_experts": 8, "router_prefix_layers": 3, "reflex_exit_layer": 6, "limbic_exit_layer": 16},
+        "triune-moe": {"num_layers": 32, "hidden_dim": 1536, "num_heads": 12, "head_dim": 128, "num_experts": 16, "router_prefix_layers": 3, "reflex_exit_layer": 6, "limbic_exit_layer": 16},
+    }
+    if model_name_str in preset_configs:
+        for k, v in preset_configs[model_name_str].items():
+            overrides.setdefault(k, v)
 
     if overrides.get("checkpoint_dir"):
         overrides["checkpoint_dir"] = str(overrides["checkpoint_dir"])
@@ -145,13 +158,16 @@ def main(argv: list[str] | None = None) -> dict:
         config["model_name"] = args.model_name
     Path(config["checkpoint_dir"]).mkdir(parents=True, exist_ok=True)
 
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA is required for Triune training")
-    device = torch.device("cuda")
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.allow_tf32 = True
-    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+    else:
+        device = torch.device("cpu")
+        print("⚠️ [Hardware] CUDA not detected. Training on CPU.", flush=True)
     from triune.runtime.resource_manager import DynamicResourceManager
+
 
     # Run feasibility assessment and display transparent breakdown
     assessment = DynamicResourceManager.assess_feasibility(
@@ -190,15 +206,30 @@ def main(argv: list[str] | None = None) -> dict:
         if sep_token_id is None:
             raise ValueError("Tokenizer must define a [SEP] special token")
         
-        # Build model with BF16 default dtype to halve CPU RAM from 19.8GB -> 9.2GB
-        torch.set_default_dtype(torch.bfloat16)
-        try:
-            raw_model = build_model(config)
-        finally:
-            torch.set_default_dtype(torch.float32)
+        # Build model with BF16 default dtype
+        if model_name_str not in preset_configs and ("/" in args.model_name or not Path(args.model_name).exists()):
+            try:
+                from transformers import AutoModelForCausalLM
+                print(f"⏳ Loading Hugging Face model '{args.model_name}'...", flush=True)
+                raw_model = AutoModelForCausalLM.from_pretrained(args.model_name, torch_dtype=torch.bfloat16)
+            except Exception as e:
+                print(f"⚠️ Could not load via transformers ({e}); building Triune model...", flush=True)
+                torch.set_default_dtype(torch.bfloat16)
+                try:
+                    raw_model = build_model(config)
+                finally:
+                    torch.set_default_dtype(torch.float32)
+        else:
+            torch.set_default_dtype(torch.bfloat16)
+            try:
+                raw_model = build_model(config)
+            finally:
+                torch.set_default_dtype(torch.float32)
 
         if args.streaming:
-            raw_model.enable_layer_streaming(
+            from triune.runtime.streaming import enable_layer_streaming
+            enable_layer_streaming(
+                raw_model,
                 device=device,
                 chunk_size=args.streaming_chunk_size,
                 pin_memory=args.streaming_pin_memory,
@@ -210,9 +241,24 @@ def main(argv: list[str] | None = None) -> dict:
             model = DynamicResourceManager.safe_to_device(
                 raw_model, device=device, dtype=torch.bfloat16, force=args.force
             )
-        if args.grad_checkpoint is not False:
+
+        if args.lora:
+            from triune.trainer.finetune import LoRAConfig, TriuneFineTuner
+            targets = [t.strip() for t in args.lora_targets.split(",")] if args.lora_targets else None
+            lora_cfg = LoRAConfig(
+                rank=args.lora_rank,
+                alpha=args.lora_alpha,
+                dropout=args.lora_dropout,
+                target_modules=targets,
+            )
+            TriuneFineTuner(model, lora_cfg)
+            trainable_p = sum(p.numel() for p in model.parameters() if p.requires_grad)
+            print(f"✅ LoRA attached: rank={args.lora_rank}, alpha={args.lora_alpha}, trainable={trainable_p:,}", flush=True)
+
+        if args.grad_checkpoint is not False and hasattr(model, "gradient_checkpointing_enable"):
             model.gradient_checkpointing_enable()
             print("✅ Selective gradient checkpointing enabled", flush=True)
+
         print(f"Params: {sum(parameter.numel() for parameter in model.parameters()):,}", flush=True)
         optimizer = build_optimizer(model, config)
         print(f"⏳ Connecting dataset stream: '{config.get('dataset_name')}' ({config.get('dataset_config')})...", flush=True)
