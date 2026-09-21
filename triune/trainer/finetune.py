@@ -59,7 +59,10 @@ class LoRAConfig:
         self.rank = r if r is not None else rank
         self.alpha = lora_alpha if lora_alpha is not None else alpha
         self.dropout = dropout
-        self.target_modules = target_modules or ["q_proj", "v_proj", "out_proj", "0", "2"]
+        self.target_modules = target_modules or [
+            "q_proj", "k_proj", "v_proj", "o_proj", "out_proj",
+            "gate_proj", "up_proj", "down_proj", "0", "2"
+        ]
         self.use_qlora = use_qlora
 
 

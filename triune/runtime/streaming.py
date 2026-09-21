@@ -129,6 +129,27 @@ class LayerStreamingEngine:
         self.is_attached = False
         self._hooks: list[Any] = []
         self.prefetch_stream: Optional[torch.cuda.Stream] = None
+        self.layers: list[nn.Module] = self._resolve_layers()
+
+    def _resolve_layers(self) -> list[nn.Module]:
+        """Dynamically detect sequential transformer blocks across diverse model architectures."""
+        if hasattr(self.model, "layers") and isinstance(self.model.layers, (nn.ModuleList, list, tuple)):
+            return list(self.model.layers)
+        # Hugging Face Llama / Mistral / Qwen / Gemma / DeepSeek
+        if hasattr(self.model, "model") and hasattr(self.model.model, "layers"):
+            return list(self.model.model.layers)
+        # Hugging Face GPT-2 / MPT
+        if hasattr(self.model, "transformer") and hasattr(self.model.transformer, "h"):
+            return list(self.model.transformer.h)
+        # Hugging Face Falcon / ChatGLM
+        if hasattr(self.model, "transformer") and hasattr(self.model.transformer, "layers"):
+            return list(self.model.transformer.layers)
+        # Search named submodules for largest ModuleList
+        max_ml: list[nn.Module] = []
+        for name, m in self.model.named_modules():
+            if isinstance(m, nn.ModuleList) and len(m) > len(max_ml):
+                max_ml = list(m)
+        return max_ml
 
     def set_optimizer(self, optimizer: Any) -> None:
         """Sets the active optimizer to enable instant layer-wise optimization during backward."""
@@ -136,19 +157,29 @@ class LayerStreamingEngine:
 
     def get_root_parameters(self) -> List[nn.Parameter]:
         """Returns non-layer root parameters resident on GPU (embeddings, router, heads)."""
-        layer_param_ids = {id(p) for layer in self.model.layers for p in layer.parameters()}
+        layer_param_ids = {id(p) for layer in self.layers for p in layer.parameters()}
         return [p for p in self.model.parameters() if id(p) not in layer_param_ids]
 
     def attach(self, optimizer: Optional[Any] = None) -> None:
         """Attaches streaming hooks, configures CPU parameters, and initializes root components on GPU."""
-        if self.is_attached or not hasattr(self.model, "layers"):
+        if self.is_attached or not self.layers:
             return
         if optimizer is not None:
             self.optimizer = optimizer
 
-        print("⚡ [Layer Streaming] Initializing AirLLM-style memory virtualization...", flush=True)
+        print("⚡ [Layer Streaming] Initializing memory virtualization...", flush=True)
 
         # 1. Root non-layer components stay resident on GPU (~100MB)
+        layer_ids = {id(l) for l in self.layers}
+        for name, child in self.model.named_children():
+            if id(child) not in layer_ids and not any(id(l) in {id(c) for c in child.modules()} for l in self.layers):
+                child.to(self.device)
+            elif hasattr(child, "embed_tokens"):
+                child.embed_tokens.to(self.device)
+            elif hasattr(child, "norm"):
+                child.norm.to(self.device)
+        if hasattr(self.model, "lm_head"):
+            self.model.lm_head.to(self.device)
         if hasattr(self.model, "token_embed"):
             self.model.token_embed.to(self.device)
         if hasattr(self.model, "router"):
@@ -161,9 +192,9 @@ class LayerStreamingEngine:
         # 2. Configure layers on CPU and establish permanent CPU storage pointers for both params & buffers
         use_fp8_cpu = self.config.fp8_weights and hasattr(torch, "float8_e4m3fn")
         if use_fp8_cpu:
-            print("💾 [Layer Streaming] Compressing CPU host weights to FP8 (4.6 GB total host RAM).", flush=True)
+            print("💾 [Layer Streaming] Compressing CPU host weights to FP8.", flush=True)
 
-        for layer in self.model.layers:
+        for layer in self.layers:
             layer.to("cpu")
             for p in layer.parameters():
                 if use_fp8_cpu and p.dim() >= 2:
@@ -189,7 +220,7 @@ class LayerStreamingEngine:
 
         if should_pin:
             print("🚀 [Layer Streaming] Pinned host RAM enabled for high-throughput PCIe DMA.", flush=True)
-            for layer in self.model.layers:
+            for layer in self.layers:
                 for t in list(layer.parameters()) + list(layer.buffers()):
                     if not t._cpu_data.is_pinned():
                         try:
@@ -205,16 +236,16 @@ class LayerStreamingEngine:
         if dev.type == "cuda" and self.config.async_prefetch:
             try:
                 self.prefetch_stream = torch.cuda.Stream(device=dev)
-                print("⚡ [Layer Streaming] Secondary CUDA prefetch stream active (overlapping transfers with compute).", flush=True)
+                print("⚡ [Layer Streaming] Secondary CUDA prefetch stream active.", flush=True)
             except Exception:
                 self.prefetch_stream = None
 
         prefetch_stream = self.prefetch_stream
-        num_layers = len(self.model.layers)
-        layer_to_idx = {layer: i for i, layer in enumerate(self.model.layers)}
+        num_layers = len(self.layers)
+        layer_to_idx = {layer: i for i, layer in enumerate(self.layers)}
 
         # 5. Backward pre/post hooks with Instant Layer Optimizer
-        for idx, layer in enumerate(self.model.layers):
+        for idx, layer in enumerate(self.layers):
             def make_bwd_pre_hook(l: nn.Module):
                 def bwd_pre_hook(module, grad_output):
                     # Stream this layer's parameters and buffers to GPU
@@ -244,7 +275,7 @@ class LayerStreamingEngine:
                 return bwd_post_hook
             self._hooks.append(layer.register_full_backward_hook(make_bwd_post_hook(layer)))
 
-        # 6. Intercept model._forward_block with zero-copy CPU restoration
+        # 6. Forward execution path
         orig_forward_block = getattr(self.model, "_forward_block", None)
         if orig_forward_block is not None:
             self.model._orig_forward_block = orig_forward_block
@@ -260,7 +291,7 @@ class LayerStreamingEngine:
                 idx = layer_to_idx.get(layer)
                 # Prefetch next layer on secondary CUDA stream
                 if prefetch_stream is not None and idx is not None and idx + 1 < num_layers:
-                    next_layer = self.model.layers[idx + 1]
+                    next_layer = self.layers[idx + 1]
                     with torch.cuda.stream(prefetch_stream):
                         for p in next_layer.parameters():
                             target_dtype = torch.bfloat16 if p._cpu_data.dtype == torch.float8_e4m3fn else p._cpu_data.dtype
@@ -279,6 +310,39 @@ class LayerStreamingEngine:
                 return out
 
             self.model._forward_block = streaming_forward_block
+        else:
+            # Universal PyTorch forward hooks for external architectures (Llama, Mistral, Qwen, etc.)
+            for idx, layer in enumerate(self.layers):
+                def make_fwd_pre_hook(l: nn.Module, i: int):
+                    def fwd_pre_hook(module, args):
+                        for p in l.parameters():
+                            target_dtype = torch.bfloat16 if p._cpu_data.dtype == torch.float8_e4m3fn else p._cpu_data.dtype
+                            p.data = p._cpu_data.to(dev, non_blocking=True).to(target_dtype)
+                        for b in l.buffers():
+                            b.data = b._cpu_data.to(dev, non_blocking=True)
+                        if prefetch_stream is not None and i + 1 < num_layers:
+                            next_layer = self.layers[i + 1]
+                            with torch.cuda.stream(prefetch_stream):
+                                for p in next_layer.parameters():
+                                    target_dtype = torch.bfloat16 if p._cpu_data.dtype == torch.float8_e4m3fn else p._cpu_data.dtype
+                                    p.data = p._cpu_data.to(dev, non_blocking=True).to(target_dtype)
+                                for b in next_layer.buffers():
+                                    b.data = b._cpu_data.to(dev, non_blocking=True)
+                        if prefetch_stream is not None:
+                            torch.cuda.current_stream().wait_stream(prefetch_stream)
+                        if isinstance(args, tuple):
+                            return tuple(a.to(dev) if isinstance(a, torch.Tensor) and a.device != dev else a for a in args)
+                        return args
+                    return fwd_pre_hook
+                self._hooks.append(layer.register_forward_pre_hook(make_fwd_pre_hook(layer, idx)))
+
+                def make_fwd_post_hook(l: nn.Module):
+                    def fwd_post_hook(module, args, output):
+                        for t in list(l.parameters()) + list(l.buffers()):
+                            t.data = t._cpu_data
+                        return output
+                    return fwd_post_hook
+                self._hooks.append(layer.register_forward_hook(make_fwd_post_hook(layer)))
 
         self.model._streaming_engine = self
         self.model._layer_streaming_active = True
@@ -326,8 +390,8 @@ class LayerStreamingEngine:
             p.grad = None
 
         # 2. Step each transformer layer one by one on GPU Tensor Cores (<80ms per layer)
-        total_layers = len(self.model.layers)
-        for layer_idx, layer in enumerate(self.model.layers):
+        total_layers = len(self.layers)
+        for layer_idx, layer in enumerate(self.layers):
             layer_params = list(layer.parameters())
             for p in layer_params:
                 target_dtype = torch.bfloat16 if p._cpu_data.dtype == torch.float8_e4m3fn else p._cpu_data.dtype
@@ -368,10 +432,10 @@ class LayerStreamingEngine:
 
     def zero_grad(self) -> None:
         """Zeros gradients on model and optimizer."""
+        self.model.zero_grad()
         if self.optimizer is not None:
             self.optimizer.zero_grad()
         for p in self.model.parameters():
-            p.grad = None
             if hasattr(p, "_cpu_grad"):
                 p._cpu_grad = None
 
@@ -388,6 +452,35 @@ class LayerStreamingEngine:
         for p in offloaded_params:
             p.grad = None
             p._cpu_grad = None
+
+
+def enable_layer_streaming(
+    model: nn.Module,
+    device: Optional[torch.device | str] = None,
+    chunk_size: int = 1,
+    pin_memory: Optional[bool] = None,
+    async_prefetch: bool = True,
+    fp8_weights: bool = False,
+    optimizer: Optional[Any] = None,
+) -> LayerStreamingEngine:
+    """Enable layer streaming on any PyTorch model (Triune, Llama, Mistral, Qwen, etc.)."""
+    if device is None:
+        target_device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
+    elif isinstance(device, str):
+        target_device = torch.device(device)
+    else:
+        target_device = device
+
+    cfg = StreamingConfig(
+        enabled=True,
+        chunk_size=chunk_size,
+        pin_memory=pin_memory,
+        async_prefetch=async_prefetch,
+        fp8_weights=fp8_weights,
+    )
+    engine = LayerStreamingEngine(model, device=target_device, config=cfg, optimizer=optimizer)
+    engine.attach(optimizer=optimizer)
+    return engine
 
 
 def apply_layer_streaming_if_requested(

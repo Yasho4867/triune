@@ -11,6 +11,7 @@ from .streaming import (
     LayerStreamingEngine,
     StreamingConfig,
     apply_layer_streaming_if_requested,
+    enable_layer_streaming,
 )
 from .vram import AutoOffloader, VRAMProfiler
 
@@ -25,9 +26,11 @@ __all__ = [
     "VRAMBudgetExceededError",
     "LayerStreamingEngine",
     "StreamingConfig",
+    "enable_layer_streaming",
     "apply_layer_streaming_if_requested",
     "PythonSandbox",
     "SandboxResult",
     "VRAMProfiler",
     "AutoOffloader",
 ]
+

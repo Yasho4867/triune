@@ -135,6 +135,14 @@ def load_model(model_name_or_path: str | Path, **kwargs: Any) -> torch.nn.Module
         config = build_config({**presets[model_name_str], **kwargs})
         return build_model(config)
 
+    # Check Hugging Face hub / local directory
+    try:
+        from transformers import AutoModelForCausalLM
+        return AutoModelForCausalLM.from_pretrained(str(model_name_or_path), **kwargs)
+    except Exception:
+        pass
+
     # Fallback to default build_model with kwargs as config overrides
     config = build_config(kwargs)
     return build_model(config)
+

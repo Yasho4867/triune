@@ -20,6 +20,7 @@ from .runtime import (
     MemoryPlanner,
     PythonSandbox,
     VRAMProfiler,
+    enable_layer_streaming,
 )
 from .trainer import Engine, LoRAConfig, LoRALayer, Trainer, TriuneFineTuner
 
@@ -60,6 +61,7 @@ __all__ = [
     "DynamicResourceManager",
     "LiveVRAMMonitor",
     "LayerStreamingEngine",
+    "enable_layer_streaming",
     "PythonSandbox",
     "VRAMProfiler",
     "AutoOffloader",
