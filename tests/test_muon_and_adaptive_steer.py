@@ -54,13 +54,67 @@ def test_muon_optimizer_step():
 
     assert layer.weight.grad is not None
     opt.step()
-    opt.zero_grad()
+
+    # Verify state tracking
+    state = opt.state[layer.weight]
+    assert state["step"] == 1, f"Expected step 1, got {state['step']}"
+    assert "momentum" in state, "State must contain momentum buffer"
+    assert state["momentum"].shape == layer.weight.shape
 
     # Verify weights changed
     weight_change = (layer.weight.data - initial_weight).abs().sum().item()
     print(f"Weight change after Muon step: {weight_change:.4f}")
     assert weight_change > 0, "Weight should have updated"
+
+    # Step 2: verify momentum accumulation
+    opt.zero_grad()
+    loss2 = layer(x).pow(2).mean()
+    loss2.backward()
+    opt.step()
+    assert state["step"] == 2
+
     print("✅ Muon optimizer step passed!\n")
+
+
+def test_muon_invariants_and_device_discipline():
+    print("=== Testing Muon Invariants & Device Discipline ===")
+    # 1. 1D and 3D rejection in zeropower_via_newtonschulz5
+    try:
+        zeropower_via_newtonschulz5(torch.randn(64))
+        assert False, "Should raise ValueError for 1D tensor"
+    except ValueError as e:
+        assert "2D matrix" in str(e)
+
+    try:
+        zeropower_via_newtonschulz5(torch.randn(4, 16, 16))
+        assert False, "Should raise ValueError for 3D tensor"
+    except ValueError as e:
+        assert "2D matrix" in str(e)
+
+    # 2. 1D rejection in Muon constructor
+    bias_param = nn.Parameter(torch.randn(32))
+    try:
+        Muon([bias_param], lr=0.02)
+        assert False, "Should raise ValueError for 1D parameter in Muon"
+    except ValueError as e:
+        assert "2D parameter" in str(e)
+
+    # 3. CPU device conservation: CPU tensor must stay on CPU
+    G_cpu = torch.randn(32, 32, device="cpu")
+    O_cpu = zeropower_via_newtonschulz5(G_cpu)
+    assert O_cpu.device == torch.device("cpu"), f"Expected CPU device, got {O_cpu.device}"
+
+    # 4. Decoupled weight decay verification
+    p = nn.Parameter(torch.ones(10, 10))
+    opt = Muon([p], lr=0.1, weight_decay=0.05, momentum=0.0)
+    p.grad = torch.zeros_like(p)
+    opt.step()
+    # ortho_update of zeros is zeros; weight decay decays by (1 - 0.1 * 0.05) = 0.995
+    expected = 1.0 * (1.0 - 0.1 * 0.05)
+    diff = (p.data - expected).abs().max().item()
+    assert diff < 1e-5, f"Expected weight decay to yield {expected}, got max diff {diff}"
+
+    print("✅ Muon invariants & device discipline passed!\n")
 
 
 def test_adaptive_steer_scale_and_load_ratio():
@@ -174,6 +228,7 @@ def test_full_triune_3tier_optimizer():
 if __name__ == "__main__":
     test_newtonschulz5_orthogonality()
     test_muon_optimizer_step()
+    test_muon_invariants_and_device_discipline()
     test_adaptive_steer_scale_and_load_ratio()
     test_full_triune_3tier_optimizer()
     print("🎉 ALL TESTS PASSED SUCCESSFULLY!")

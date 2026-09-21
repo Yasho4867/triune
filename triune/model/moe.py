@@ -62,12 +62,19 @@ class MoE_FFN(nn.Module):
         else:
             gate_weights = F.softmax(bias_free_logits, dim=-1)
 
-        top_vals, top_idx = torch.topk(biased_logits, self.top_k, dim=-1)
+        # DeepSeek-V3 style load-balancing: biased_logits selects top-k experts for balanced
+        # assignment, while unbiased bias_free_logits provides pure token mixing weights.
+        _, top_idx = torch.topk(biased_logits, self.top_k, dim=-1)
         flat_idx = top_idx.reshape(B * T, self.top_k)
         flat_vals = torch.gather(gate_weights, dim=-1, index=top_idx).reshape(B * T, self.top_k)
 
+        # Renormalize top-k weights so selected expert contributions sum to 1.0
+        if self.top_k > 1:
+            flat_vals = flat_vals / (flat_vals.sum(dim=-1, keepdim=True) + 1e-20)
+
         capacity = int(math.ceil((B*T) / self.num_experts * MOE_CAPACITY_MULTIPLIER))
         out = torch.zeros_like(flat_x)
+        accepted_counts = torch.zeros(self.num_experts, dtype=torch.long, device=x.device)
 
         if self.shared_expert:
             shared_out = self.shared(flat_x)
@@ -91,6 +98,7 @@ class MoE_FFN(nn.Module):
                 else:
                     val_k_keep = val_k[indices]
 
+                accepted_counts[e] += indices.numel()
                 expert_input = flat_x[indices]
 
                 orig_tokens = expert_input.size(0)
@@ -107,20 +115,25 @@ class MoE_FFN(nn.Module):
                 out.index_add_(0, indices, expert_output * val_k_keep.unsqueeze(-1))
 
         if self.training and update_stats:
-            self._update_routing_stats(flat_x, flat_idx)
+            self._update_routing_stats(flat_x, flat_idx, accepted_counts)
 
         return out.reshape(B, T, D)
 
     @torch.no_grad()
-    def _update_routing_stats(self, flat_x, flat_idx):
+    def _update_routing_stats(self, flat_x, flat_idx, accepted_counts):
         """Update non-gradient routing state without retaining an activation graph."""
-        counts = torch.bincount(flat_idx.flatten(), minlength=self.num_experts)
+        requested_counts = torch.bincount(flat_idx.flatten(), minlength=self.num_experts)
         target = max(1.0, float((flat_x.size(0) * self.top_k) / self.num_experts))
-        self._pending_bias_update = -(counts - target).sign() * MOE_BIAS_UPDATE_RATE
+        
+        # Bias steering equalizes requested demand across experts
+        self._pending_bias_update = -(requested_counts - target).sign() * MOE_BIAS_UPDATE_RATE
 
-        batch_ratio = counts.float() / target
+        # Expert utilization ratio reflects actual accepted tokens processed
+        batch_ratio = accepted_counts.float() / target
         self.expert_load_ratio.mul_(0.9).add_(batch_ratio.to(self.expert_load_ratio.device), alpha=0.1)
-        self.last_counts = counts.detach()
+        self.last_counts = requested_counts.detach()
+        self.last_requested_counts = requested_counts.detach()
+        self.last_accepted_counts = accepted_counts.detach()
         self.last_target = target
 
         centroids = []

@@ -18,14 +18,18 @@ class RotaryEmbedding(nn.Module):
         self.register_buffer('cos_cached', emb.cos(), persistent=False)
         self.register_buffer('sin_cached', emb.sin(), persistent=False)
 
-    def forward(self, seq_len, device):
+    def forward(self, seq_len, device, offset: int = 0):
         # Return in fp32 to preserve precision; caller casts q/k to bf16
-        if seq_len <= self.max_seq_len:
-            return self.cos_cached[:seq_len].to(device, torch.float32), self.sin_cached[:seq_len].to(device, torch.float32)
+        total_len = offset + seq_len
+        if total_len <= self.max_seq_len:
+            return (
+                self.cos_cached[offset:total_len].to(device, torch.float32),
+                self.sin_cached[offset:total_len].to(device, torch.float32),
+            )
 
         # Generation can grow past the training sequence length.  Do not silently
         # return a too-short cache; build the required positions on demand.
-        t = torch.arange(seq_len, device=device, dtype=torch.float32)
+        t = torch.arange(offset, total_len, device=device, dtype=torch.float32)
         freqs = torch.einsum('i,j->ij', t, self.inv_freq.to(device))
         emb = torch.cat((freqs, freqs), dim=-1)
         return emb.cos(), emb.sin()

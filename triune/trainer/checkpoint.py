@@ -17,15 +17,20 @@ logger = logging.getLogger(__name__)
 
 
 def _checkpoint_payload(trainer, engine, step: int, loss: float) -> dict:
+    run_id = None
+    if hasattr(trainer, "logger") and trainer.logger is not None:
+        run_id = getattr(trainer.logger, "run_id", None)
+    best_loss = getattr(engine, "best_eval_loss", None) if engine is not None else None
+    depth_ema = getattr(engine, "depth_usage_ema", None) if engine is not None else None
     return {
         "step": step,
         "model_state": trainer.model.state_dict(),
         "optimizer_state": trainer.optimizer.state_dict(),
         "loss": loss,
-        "best_eval_loss": engine.best_eval_loss,
-        "config": trainer.config,
-        "depth_usage_ema": engine.depth_usage_ema,
-        "wandb_run_id": trainer.logger.run_id,
+        "best_eval_loss": best_loss,
+        "config": getattr(trainer, "config", {}),
+        "depth_usage_ema": depth_ema,
+        "wandb_run_id": run_id,
     }
 
 
@@ -86,10 +91,26 @@ def save_best(trainer, engine, step: int, loss: float) -> Path:
 
 def load_checkpoint(trainer, path: str | Path, *, load_optimizer: bool) -> dict:
     checkpoint = torch.load(path, map_location=trainer.device, weights_only=False)
+
+    # Architecture fingerprint verification
+    saved_config = checkpoint.get("config", {})
+    if saved_config and hasattr(trainer, "config") and isinstance(trainer.config, dict):
+        mismatches = []
+        for key in ("hidden_dim", "num_layers", "num_heads", "num_experts", "vocab_size"):
+            if key in saved_config and key in trainer.config:
+                if saved_config[key] != trainer.config[key]:
+                    mismatches.append(f"{key}: saved={saved_config[key]} vs current={trainer.config[key]}")
+        if mismatches:
+            raise ValueError(
+                f"Checkpoint architecture mismatch for {path}: {', '.join(mismatches)}. "
+                f"Cannot restore weights or optimizer state into an incompatible model architecture."
+            )
+
     state_dict = checkpoint["model_state"]
     if any(key.startswith("_orig_mod.") for key in state_dict):
         state_dict = {key.removeprefix("_orig_mod."): value for key, value in state_dict.items()}
     trainer.model.load_state_dict(state_dict)
     if load_optimizer:
-        trainer.optimizer.load_state_dict(checkpoint["optimizer_state"])
+        if "optimizer_state" in checkpoint:
+            trainer.optimizer.load_state_dict(checkpoint["optimizer_state"])
     return checkpoint

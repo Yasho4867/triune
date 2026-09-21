@@ -9,8 +9,7 @@ on consumer GPUs with limited VRAM (e.g. 8GB RTX 5070) by virtualizing memory:
 - Handles all parameters AND registered buffers (expert_bias, inv_freq, etc.).
 - Dynamic auto-pinning leverages DMA when host RAM is ample and protects system when tight.
 - PyTorch autograd backward pre/post hooks bring layers to GPU just-in-time.
-- Immediate gradient offload hooks (p._cpu_grad) intercept gradients and clear p.grad on GPU.
-- GPU VRAM consumption is bounded to <1.5 GB regardless of model size.
+- Designed to drastically minimize persistent layer-weight VRAM; peak VRAM depends on batch size, sequence length, activations, and root embedding dimensions.
 - Fully opt-in and configurable via --streaming.
 """
 
@@ -190,19 +189,10 @@ class LayerStreamingEngine:
             self.model.final_head.to(self.device)
 
         # 2. Configure layers on CPU and establish permanent CPU storage pointers for both params & buffers
-        use_fp8_cpu = self.config.fp8_weights and hasattr(torch, "float8_e4m3fn")
-        if use_fp8_cpu:
-            print("💾 [Layer Streaming] Compressing CPU host weights to FP8.", flush=True)
-
         for layer in self.layers:
             layer.to("cpu")
             for p in layer.parameters():
-                if use_fp8_cpu and p.dim() >= 2:
-                    if p.dtype != torch.float8_e4m3fn:
-                        p.data = p.data.to(torch.float8_e4m3fn)
-                    p._cpu_data = p.data
-                else:
-                    p._cpu_data = p.data
+                p._cpu_data = p.data
             for b in layer.buffers():
                 b._cpu_data = b.data
 
@@ -244,8 +234,22 @@ class LayerStreamingEngine:
         num_layers = len(self.layers)
         layer_to_idx = {layer: i for i, layer in enumerate(self.layers)}
 
-        # 5. Backward pre/post hooks with Instant Layer Optimizer
+        # 5. Parameter autograd hooks and module backward hooks
+        def make_param_grad_hook(param: nn.Parameter):
+            def param_grad_hook(grad: torch.Tensor):
+                if grad is not None:
+                    grad_cpu = grad.detach().to("cpu", non_blocking=True)
+                    if not hasattr(param, "_cpu_grad") or param._cpu_grad is None:
+                        param._cpu_grad = grad_cpu
+                    else:
+                        param._cpu_grad.add_(grad_cpu)
+            return param_grad_hook
+
         for idx, layer in enumerate(self.layers):
+            for p in layer.parameters():
+                if p.requires_grad:
+                    self._hooks.append(p.register_hook(make_param_grad_hook(p)))
+
             def make_bwd_pre_hook(l: nn.Module):
                 def bwd_pre_hook(module, grad_output):
                     # Stream this layer's parameters and buffers to GPU
@@ -259,16 +263,10 @@ class LayerStreamingEngine:
 
             def make_bwd_post_hook(l: nn.Module):
                 def bwd_post_hook(module, grad_input, grad_output):
-                    # Offload layer gradients to CPU buffer and free GPU memory
+                    # Free GPU VRAM
                     for p in l.parameters():
-                        if p.grad is not None:
-                            grad_cpu = p.grad.data.cpu()
-                            if not hasattr(p, "_cpu_grad") or p._cpu_grad is None:
-                                p._cpu_grad = grad_cpu
-                            else:
-                                p._cpu_grad.add_(grad_cpu)
-                            p.grad = None  # Instantly free GPU VRAM
-                    
+                        p.grad = None
+
                     # Restore permanent CPU tensor pointers
                     for t in list(l.parameters()) + list(l.buffers()):
                         t.data = t._cpu_data
@@ -281,29 +279,40 @@ class LayerStreamingEngine:
             self.model._orig_forward_block = orig_forward_block
 
             def streaming_forward_block(layer, x, return_exit, cache=None, update_stats=True):
-                # Stream this layer's parameters and buffers to GPU
-                for p in layer.parameters():
-                    target_dtype = torch.bfloat16 if p._cpu_data.dtype == torch.float8_e4m3fn else p._cpu_data.dtype
-                    p.data = p._cpu_data.to(dev, non_blocking=True).to(target_dtype)
-                for b in layer.buffers():
-                    b.data = b._cpu_data.to(dev, non_blocking=True)
-                
                 idx = layer_to_idx.get(layer)
-                # Prefetch next layer on secondary CUDA stream
+
+                # Check if this layer was prefetched on secondary CUDA stream
+                if hasattr(layer, "_prefetched_cuda_params") and layer._prefetched_cuda_params is not None:
+                    if prefetch_stream is not None:
+                        torch.cuda.current_stream().wait_stream(prefetch_stream)
+                    for p, cuda_tensor in zip(layer.parameters(), layer._prefetched_cuda_params):
+                        p.data = cuda_tensor
+                    for b, cuda_tensor in zip(layer.buffers(), layer._prefetched_cuda_buffers):
+                        b.data = cuda_tensor
+                    layer._prefetched_cuda_params = None
+                    layer._prefetched_cuda_buffers = None
+                else:
+                    # Layer 0 or un-prefetched: transfer synchronously on main stream
+                    for p in layer.parameters():
+                        target_dtype = torch.bfloat16 if p._cpu_data.dtype == torch.float8_e4m3fn else p._cpu_data.dtype
+                        p.data = p._cpu_data.to(dev, non_blocking=True).to(target_dtype)
+                    for b in layer.buffers():
+                        b.data = b._cpu_data.to(dev, non_blocking=True)
+
+                # Prefetch NEXT layer into isolated layer staging buffers on secondary stream
+                # NEVER mutating next_layer parameters' .data from secondary stream!
                 if prefetch_stream is not None and idx is not None and idx + 1 < num_layers:
                     next_layer = self.layers[idx + 1]
                     with torch.cuda.stream(prefetch_stream):
-                        for p in next_layer.parameters():
-                            target_dtype = torch.bfloat16 if p._cpu_data.dtype == torch.float8_e4m3fn else p._cpu_data.dtype
-                            p.data = p._cpu_data.to(dev, non_blocking=True).to(target_dtype)
-                        for b in next_layer.buffers():
-                            b.data = b._cpu_data.to(dev, non_blocking=True)
-
-                if prefetch_stream is not None:
-                    torch.cuda.current_stream().wait_stream(prefetch_stream)
+                        next_layer._prefetched_cuda_params = [
+                            p._cpu_data.to(dev, non_blocking=True) for p in next_layer.parameters()
+                        ]
+                        next_layer._prefetched_cuda_buffers = [
+                            b._cpu_data.to(dev, non_blocking=True) for b in next_layer.buffers()
+                        ]
 
                 out = orig_forward_block(layer, x, return_exit, cache=cache, update_stats=update_stats)
-                
+
                 # Instantly restore pointer to permanent CPU tensor; GPU memory freed
                 for t in list(layer.parameters()) + list(layer.buffers()):
                     t.data = t._cpu_data
@@ -315,21 +324,31 @@ class LayerStreamingEngine:
             for idx, layer in enumerate(self.layers):
                 def make_fwd_pre_hook(l: nn.Module, i: int):
                     def fwd_pre_hook(module, args):
-                        for p in l.parameters():
-                            target_dtype = torch.bfloat16 if p._cpu_data.dtype == torch.float8_e4m3fn else p._cpu_data.dtype
-                            p.data = p._cpu_data.to(dev, non_blocking=True).to(target_dtype)
-                        for b in l.buffers():
-                            b.data = b._cpu_data.to(dev, non_blocking=True)
+                        if hasattr(l, "_prefetched_cuda_params") and l._prefetched_cuda_params is not None:
+                            if prefetch_stream is not None:
+                                torch.cuda.current_stream().wait_stream(prefetch_stream)
+                            for p, cuda_tensor in zip(l.parameters(), l._prefetched_cuda_params):
+                                p.data = cuda_tensor
+                            for b, cuda_tensor in zip(l.buffers(), l._prefetched_cuda_buffers):
+                                b.data = cuda_tensor
+                            l._prefetched_cuda_params = None
+                            l._prefetched_cuda_buffers = None
+                        else:
+                            for p in l.parameters():
+                                target_dtype = torch.bfloat16 if p._cpu_data.dtype == torch.float8_e4m3fn else p._cpu_data.dtype
+                                p.data = p._cpu_data.to(dev, non_blocking=True).to(target_dtype)
+                            for b in l.buffers():
+                                b.data = b._cpu_data.to(dev, non_blocking=True)
+
                         if prefetch_stream is not None and i + 1 < num_layers:
                             next_layer = self.layers[i + 1]
                             with torch.cuda.stream(prefetch_stream):
-                                for p in next_layer.parameters():
-                                    target_dtype = torch.bfloat16 if p._cpu_data.dtype == torch.float8_e4m3fn else p._cpu_data.dtype
-                                    p.data = p._cpu_data.to(dev, non_blocking=True).to(target_dtype)
-                                for b in next_layer.buffers():
-                                    b.data = b._cpu_data.to(dev, non_blocking=True)
-                        if prefetch_stream is not None:
-                            torch.cuda.current_stream().wait_stream(prefetch_stream)
+                                next_layer._prefetched_cuda_params = [
+                                    p._cpu_data.to(dev, non_blocking=True) for p in next_layer.parameters()
+                                ]
+                                next_layer._prefetched_cuda_buffers = [
+                                    b._cpu_data.to(dev, non_blocking=True) for b in next_layer.buffers()
+                                ]
                         if isinstance(args, tuple):
                             return tuple(a.to(dev) if isinstance(a, torch.Tensor) and a.device != dev else a for a in args)
                         return args

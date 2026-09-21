@@ -135,14 +135,22 @@ def load_model(model_name_or_path: str | Path, **kwargs: Any) -> torch.nn.Module
         config = build_config({**presets[model_name_str], **kwargs})
         return build_model(config)
 
+    if model_name_str in ("default", "none", ""):
+        config = build_config(kwargs)
+        return build_model(config)
+
     # Check Hugging Face hub / local directory
+    hf_err = None
     try:
         from transformers import AutoModelForCausalLM
         return AutoModelForCausalLM.from_pretrained(str(model_name_or_path), **kwargs)
-    except Exception:
-        pass
+    except Exception as exc:
+        hf_err = exc
 
-    # Fallback to default build_model with kwargs as config overrides
-    config = build_config(kwargs)
-    return build_model(config)
+    raise ValueError(
+        f"Model '{model_name_or_path}' could not be resolved. "
+        f"It is not a valid checkpoint path, registered architecture in MODEL_REGISTRY, "
+        f"known JSON config, or built-in preset ({list(presets.keys())}). "
+        f"Attempted Hugging Face AutoModelForCausalLM loading failed with: {hf_err}"
+    )
 

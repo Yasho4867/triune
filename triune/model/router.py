@@ -1,3 +1,4 @@
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -8,26 +9,33 @@ class GumbelSoftmaxRouter(nn.Module):
     Enables end-to-end differentiability of discrete early-exit decisions
     while maintaining physical execution sparsity in the forward pass.
     """
-    def __init__(self, hidden_dim: int, target_depth_dist=(0.34, 0.33, 0.33), balance_coef: float = 0.30):
+    def __init__(self, hidden_dim: int, target_depth_dist=(0.34, 0.33, 0.33), balance_coef: float | None = None):
         super().__init__()
         self.router_mlp = nn.Sequential(
             nn.Linear(hidden_dim, 256),
             nn.ReLU(),
             nn.Linear(256, 3)  # Outputs: logits for [Reflex, Limbic, Cortex]
         )
-        self.register_buffer("target_dist", torch.tensor(target_depth_dist, dtype=torch.float32))
-        self.balance_coef = balance_coef
+        target_tensor = torch.as_tensor(target_depth_dist, dtype=torch.float32)
+        if target_tensor.ndim != 1 or target_tensor.shape[0] != 3:
+            raise ValueError(f"target_depth_dist must have 3 elements, got {target_depth_dist}")
+        if abs(target_tensor.sum().item() - 1.0) > 1e-4:
+            raise ValueError(f"target_depth_dist must sum to 1.0, got {target_tensor.sum().item():.4f}")
+        self.register_buffer("target_dist", target_tensor)
 
     def forward(self, x: torch.Tensor, temperature: float = 1.0, force_depth: int = None):
         """
         Args:
             x (Tensor): Input activations of shape [B, T, D] from prefix layers.
-            temperature (float): Relaxation temperature for Gumbel Softmax.
+            temperature (float): Relaxation temperature for Gumbel Softmax (must be > 0 and finite).
             force_depth (int, optional): Force routing to exit 0, 1, or 2 if specified.
         Returns:
+            logits (Tensor): Raw router logits [B, 3].
             y_route (Tensor): One-hot-like tensor of shape [B, 3] indicating selected path.
-            balance_loss (Tensor): Load-balancing regularization loss.
+            balance_loss (Tensor): Load-balancing regularization loss (unweighted MSE).
         """
+        if not math.isfinite(temperature) or temperature <= 0:
+            raise ValueError(f"Gumbel-Softmax temperature must be a finite positive number, got {temperature}")
         B, T, D = x.shape
         pooled = x.mean(dim=1)  # Sequence pooling: [B, D]
         logits = self.router_mlp(pooled)  # Routing logits: [B, 3]

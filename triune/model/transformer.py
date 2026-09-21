@@ -27,10 +27,23 @@ class TriuneTransformer(nn.Module):
         streaming_fp8_weights: bool = False,
     ):
         super().__init__()
-        if num_layers <= limbic_exit_layer:
+        if not (0 < router_prefix_layers < reflex_exit_layer < limbic_exit_layer < num_layers):
             raise ValueError(
-                f"num_layers must exceed limbic_exit_layer ({limbic_exit_layer}); got {num_layers}"
+                f"Layer hierarchy violation: expected 0 < router_prefix_layers ({router_prefix_layers}) < "
+                f"reflex_exit_layer ({reflex_exit_layer}) < limbic_exit_layer ({limbic_exit_layer}) < "
+                f"num_layers ({num_layers})"
             )
+        if num_experts < 1:
+            raise ValueError(f"num_experts must be >= 1; got {num_experts}")
+        if vocab_size < 1:
+            raise ValueError(f"vocab_size must be >= 1; got {vocab_size}")
+        if num_heads < 1 or head_dim < 1:
+            raise ValueError(f"num_heads ({num_heads}) and head_dim ({head_dim}) must be >= 1")
+        if abs(sum(target_depth_dist) - 1.0) > 1e-4:
+            raise ValueError(f"target_depth_dist must sum to 1.0; got {target_depth_dist}")
+        if any(d < 0 for d in target_depth_dist):
+            raise ValueError(f"target_depth_dist elements must be non-negative; got {target_depth_dist}")
+
         expected_hidden_dim = num_heads * head_dim
         if hidden_dim != expected_hidden_dim:
             raise ValueError(
@@ -48,7 +61,6 @@ class TriuneTransformer(nn.Module):
         self.balance_coef = balance_coef
         self.token_embed = nn.Embedding(vocab_size, hidden_dim)
 
-        use_fp8_e4m3 = streaming_fp8_weights and hasattr(torch, "float8_e4m3fn")
         self.layers = nn.ModuleList()
         for i in range(num_layers):
             block = TransformerBlock(
@@ -62,16 +74,11 @@ class TriuneTransformer(nn.Module):
                 use_fp4=use_fp4,
                 use_fp8=use_fp8,
             )
-            if use_fp8_e4m3:
-                for p in block.parameters():
-                    if p.dim() >= 2:
-                        p.data = p.data.to(torch.float8_e4m3fn)
             self.layers.append(block)
 
         self.router = GumbelSoftmaxRouter(
             hidden_dim,
             target_depth_dist=target_depth_dist,
-            balance_coef=balance_coef,
         )
         self.final_norm = RMSNorm(hidden_dim)
         self.final_head = nn.Linear(hidden_dim, vocab_size)
@@ -137,6 +144,8 @@ class TriuneTransformer(nn.Module):
         return logits, depth_choice, balance_loss
 
     def forward(self, input_ids, force_depth=None, cache=None, temperature=1.0, return_balance_loss=False):
+        if force_depth is not None and force_depth not in (0, 1, 2):
+            raise ValueError(f"force_depth must be 0, 1, or 2; got {force_depth}")
         B, T = input_ids.shape
         device = input_ids.device
         x = self.token_embed(input_ids)
@@ -145,8 +154,6 @@ class TriuneTransformer(nn.Module):
         self.last_balance_loss = balance_loss
 
         if force_depth is not None:
-            if force_depth not in (0, 1, 2):
-                raise ValueError(f"force_depth must be 0, 1, or 2; got {force_depth}")
             if force_depth == 0:
                 x_out = self._run_layers(x_prefix, self.router_prefix_layers, self.reflex_exit_layer)
                 _, logits, _ = self._forward_block(self.layers[self.reflex_exit_layer], x_out, True)

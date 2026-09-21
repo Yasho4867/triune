@@ -218,8 +218,8 @@ def test_streaming_gradient_numerical_parity():
         use_fp8=False,
     )
 
-    model_std = TriuneTransformer(**kwargs).to(device)
-    model_str = TriuneTransformer(**kwargs)
+    model_std = TriuneTransformer(**kwargs).to(device).eval()
+    model_str = TriuneTransformer(**kwargs).eval()
     model_str.load_state_dict(model_std.state_dict())
 
     engine = model_str.enable_layer_streaming(
@@ -228,7 +228,7 @@ def test_streaming_gradient_numerical_parity():
 
     x = torch.randint(0, 100, (2, 8), device=device)
 
-    # Standard backward with all exits enabled to test every single parameter
+    # Standard backward with all exits enabled (eval mode guarantees zero Gumbel noise drift)
     model_std.zero_grad()
     r1, l1, c1, rt1 = model_std.forward_all_exits(x)
     loss_std = r1.sum() + l1.sum() + c1.sum() + rt1.sum()

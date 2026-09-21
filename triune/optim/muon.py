@@ -16,22 +16,20 @@ def zeropower_via_newtonschulz5(G: torch.Tensor, steps: int = 5, eps: float = 1e
     Uses a quintic polynomial whose coefficients (a=3.4445, b=-4.7750, c=2.0315) are optimized
     for rapid convergence to the nearest semi-orthogonal matrix.
     """
-    assert G.ndim >= 2, f"Expected tensor with ndim >= 2, got {G.ndim}"
+    if G.ndim != 2:
+        raise ValueError(
+            f"zeropower_via_newtonschulz5 requires a 2D matrix, got ndim={G.ndim} with shape {tuple(G.shape)}"
+        )
     
     orig_device = G.device
     orig_dtype = G.dtype
-    compute_device = torch.device("cuda") if torch.cuda.is_available() else orig_device
+    compute_device = orig_device
     
-    # Run in bfloat16 on CUDA Tensor Cores for 100x speedup
+    # Run in bfloat16 on CUDA Tensor Cores for speedup if supported
     if compute_device.type == "cuda" and torch.cuda.is_bf16_supported():
-        X = G.to(device=compute_device, dtype=torch.bfloat16, non_blocking=True)
+        X = G.to(device=compute_device, dtype=torch.bfloat16)
     else:
-        X = G.to(device=compute_device, dtype=torch.float32, non_blocking=True)
-        
-    # Flatten non-matrix dimensions if present
-    orig_shape = X.shape
-    if X.ndim > 2:
-        X = X.reshape(X.size(0), -1)
+        X = G.to(device=compute_device, dtype=torch.float32)
         
     norm = X.norm()
     X = X / (norm + eps)
@@ -50,10 +48,7 @@ def zeropower_via_newtonschulz5(G: torch.Tensor, steps: int = 5, eps: float = 1e
     if transposed:
         X = X.T
         
-    if len(orig_shape) > 2:
-        X = X.reshape(orig_shape)
-        
-    return X.to(device=orig_device, dtype=orig_dtype, non_blocking=True)
+    return X.to(device=orig_device, dtype=orig_dtype)
 
 
 class Muon(Optimizer):
@@ -87,6 +82,12 @@ class Muon(Optimizer):
             ns_steps=ns_steps,
         )
         super().__init__(params, defaults)
+        for group in self.param_groups:
+            for p in group["params"]:
+                if p.ndim != 2:
+                    raise ValueError(
+                        f"Muon optimizer only supports 2D parameter matrices, got shape {tuple(p.shape)} (ndim={p.ndim})"
+                    )
 
     @torch.no_grad()
     def step(self, closure=None):
@@ -103,6 +104,10 @@ class Muon(Optimizer):
             ns_steps = group["ns_steps"]
 
             for p in group["params"]:
+                if p.ndim != 2:
+                    raise ValueError(
+                        f"Muon optimizer only supports 2D parameter matrices, got shape {tuple(p.shape)} (ndim={p.ndim})"
+                    )
                 if p.grad is None:
                     continue
                 grad = p.grad.data
