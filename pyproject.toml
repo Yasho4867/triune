@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "triune"
 version = "2.1.0"
-description = "Universal High-Performance AI Framework with 3-Tier Muon/CentroidSteer, Dynamic Early Exits, Layer Streaming, and Studio IDE"
+description = "PyTorch framework for multi-exit Mixture-of-Experts language models with layer streaming and Muon optimization"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }

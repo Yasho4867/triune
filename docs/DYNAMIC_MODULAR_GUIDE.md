@@ -1,97 +1,88 @@
-# Dynamic & Modular Architecture Guide
+# Architecture Configuration Guide
 
-The Triune framework is engineered with a **fully dynamic, modular, and configurable architecture**. Every component—from the layer depth and head dimensions to the MoE expert counts, early-exit layers, Gumbel router parameters, and GaLore optimizer rank—can be customized dynamically via Python API or the unified CLI.
+Triune models are configured via parameter dictionaries or JSON files. This guide details architectural parameters, structural invariants, and hardware sizing.
 
 ---
 
-## 1. Dynamic Model Definition (Python API)
-
-You can define any custom Triune architecture on the fly without modifying source code:
+## 1. Model Instantiation
 
 ```python
-import torch
 from triune.model import TriuneTransformer
 
-# Define a custom dynamic Triune architecture (e.g. Triune 2.5B)
 model = TriuneTransformer(
-    vocab_size=32000,           # Vocabulary size
+    vocab_size=32000,
     hidden_dim=1280,            # Must equal num_heads * head_dim
-    num_layers=18,              # Dynamic total layer count
-    num_heads=10,               # Attention heads
-    head_dim=128,               # Gated Linear Attention head dimension
-    num_experts=8,              # Dynamic MoE experts per layer
-    router_prefix_layers=3,     # Layers before early-exit routing decision
-    reflex_exit_layer=5,        # Reflex exit layer index (normalized via RMSNorm)
-    limbic_exit_layer=13,       # Limbic exit layer index (normalized via RMSNorm)
-    use_fp8=True                # Native FP8 (E4M3) scaled GEMM
+    num_layers=18,
+    num_heads=10,
+    head_dim=128,
+    num_experts=8,              # MoE experts per routed layer
+    router_prefix_layers=3,     # Prefix layers before routing decision
+    reflex_exit_layer=5,        # Intermediate exit 1
+    limbic_exit_layer=13,       # Intermediate exit 2
+    use_fp8=True                # FP8 scaled GEMM execution
 )
-
-print(f"Total Parameters: {sum(p.numel() for p in model.parameters()):,}")
 ```
 
-### Architectural Constraints & Invariants:
-1. **Hidden Dimension Invariant**:
+### Structural Invariants
+
+1. **Hidden Dimension**:
    $$\text{hidden\_dim} = \text{num\_heads} \times \text{head\_dim}$$
-2. **Layer Ordering Constraint**:
+
+2. **Layer Order**:
    $$\text{router\_prefix\_layers} < \text{reflex\_exit\_layer} < \text{limbic\_exit\_layer} < \text{num\_layers}$$
-3. **MoE Activation**:
-   - Layers $0 \le i \le \text{reflex\_exit\_layer}$: Dense feed-forward networks.
-   - Layers $i > \text{reflex\_exit\_layer}$: Dynamic Mixture-of-Experts with `num_experts` and a shared expert.
+
+3. **Feed-Forward Layers**:
+   - Layers $0 \le i \le \text{reflex\_exit\_layer}$: Dense feed-forward layers.
+   - Layers $i > \text{reflex\_exit\_layer}$: Sparse MoE blocks with `num_experts` and a shared expert.
+
 4. **Intermediate Exit Normalization**:
-   - Both `reflex_exit_layer` and `limbic_exit_layer` automatically receive dedicated `RMSNorm` normalization before logits projection to guarantee uniform variance matching the terminal Cortex head.
+   - `reflex_exit_layer` and `limbic_exit_layer` apply dedicated parameter-free `RMSNorm` normalization before their linear projection heads to match the variance scale of the final Cortex exit.
 
 ---
 
-## 2. Dynamic Hardware & VRAM Memory Planning
+## 2. Hardware Planning and Execution Modes
 
-Triune includes an automated **Hardware Memory Planner** (`MemoryPlanner`) and **Dynamic Resource Manager** (`DynamicResourceManager`) that inspects physical GPU hardware and models memory allocations:
-
-### Hardware Budget Recommendations:
-
-| Target Hardware | VRAM | Recommended Preset | Optimal Execution Flags |
-| :--- | :--- | :--- | :--- |
-| **RTX 4060 / 5070 Laptop** | **8 GB** | `triune-2.5b` (2.45B) | `--streaming --streaming_fp8_weights --use_fp8 --batch_size 2 --grad_accum 8` |
-| **RTX 4070 / 5070 Ti / 3080** | **12 GB** | `triune-small` (In-Memory) | `--use_fp8 --batch_size 4 --grad_accum 4` |
-| **RTX 4080 / 4090** | **16 - 24 GB** | `triune-2.5b` (In-Memory) | `--use_fp8 --batch_size 4 --grad_accum 4` |
-| **A100 / H100 (Single Node)** | **80 GB** | `triune-7b` (7.2B) | `--use_fp8 --batch_size 8 --grad_accum 4 --seq_len 1024` |
-| **8x H100 Cluster** | **640 GB** | `triune-7b` (Distributed) | `torchrun --nproc_per_node=8 scripts/train.py --model_name triune-7b` |
+| Available VRAM | Preset | Parameters | Recommended Execution Flags |
+| :--- | :--- | :---: | :--- |
+| **8 GB** | `triune-2.5b` | 2.45B | `--streaming --streaming_fp8_weights --use_fp8 --batch_size 2 --grad_accum 8` |
+| **12 GB** | `triune-small` | 750M | `--use_fp8 --batch_size 4 --grad_accum_steps 4` |
+| **16–24 GB** | `triune-2.5b` | 2.45B | `--use_fp8 --batch_size 4 --grad_accum_steps 4` |
+| **80 GB** | `triune-7b` | 7.2B | `--use_fp8 --batch_size 8 --grad_accum_steps 4 --seq_len 1024` |
+| **Multi-GPU (8x)** | `triune-7b` | 7.2B | `torchrun --nproc_per_node=8 scripts/train.py --model_name triune-7b` |
 
 ---
 
-## 3. Dynamic Gumbel-Softmax Routing
+## 3. Router Configuration
 
-The router uses a **Straight-Through (ST) Gumbel-Softmax** module that provides discrete execution paths while allowing continuous backpropagation:
+The model uses a Straight-Through (ST) Gumbel-Softmax router for discrete pathway execution during forward passes and continuous gradient propagation during backward passes.
 
-```python
-# Forward pass through model with dynamic temperature
-logits, route_logits = model(x, temperature=0.8)
-
-# Access the native load-balancing regularization loss
-balance_loss = model.last_balance_loss
-```
-
-### Customizing Router Parameters:
 ```python
 from triune.model.router import GumbelSoftmaxRouter
 
 router = GumbelSoftmaxRouter(
-    hidden_dim=1536,
-    target_depth_dist=(0.40, 0.35, 0.25),  # 40% Reflex, 35% Limbic, 25% Cortex
-    balance_coef=0.30                      # Load-balancing penalty multiplier
+    hidden_dim=1280,
+    target_depth_dist=(0.40, 0.35, 0.25),  # Reflex, Limbic, Cortex target distribution
+    balance_coef=0.30                      # Auxiliary load-balancing coefficient
 )
+```
+
+During forward execution:
+```python
+logits, route_logits = model(input_ids, temperature=0.8)
+balance_loss = model.last_balance_loss
 ```
 
 ---
 
-## 4. Full Training CLI with Dynamic Flags
+## 4. Training CLI Flags
 
-You can override every hyperparameter directly from the command line:
+Hyperparameters can be overridden directly from the command line:
 
 ```bash
 python scripts/train.py \
-    --model_name triune-small \
+    --model_name triune-2.5b \
     --num_layers 18 \
-    --num_experts 4 \
+    --num_experts 8 \
     --seq_len 256 \
     --batch_size 2 \
     --grad_accum_steps 8 \
@@ -104,12 +95,13 @@ python scripts/train.py \
     --eval_every 500
 ```
 
-### Dynamic CLI Options Reference:
-- `--model_name`: Base preset (`triune-small`, `triune-base`, `triune-moe`).
-- `--num_layers`: Total layer depth (must exceed `--limbic_exit_layer`).
-- `--num_experts`: Number of MoE experts per layer (default: 8).
-- `--dataset_name`: Hugging Face dataset (e.g. `roneneldan/TinyStories`, `HuggingFaceFW/fineweb-edu`) or local file path (`data.jsonl`, `data.txt`, `data.parquet`).
-- `--target_depth_dist`: Target comma-separated probabilities for early exits (e.g. `0.50,0.30,0.20`).
+### Parameter Reference
+
+- `--model_name`: Architecture preset (`triune-nano`, `triune-small`, `triune-2.5b`, `triune-7b`).
+- `--num_layers`: Total layer count (must exceed `--limbic_exit_layer`).
+- `--num_experts`: Number of MoE experts per routed block.
+- `--dataset_name`: Hugging Face dataset ID or local path (`.jsonl`, `.txt`, `.parquet`).
+- `--target_depth_dist`: Comma-separated target probabilities for early exits (e.g. `0.4,0.3,0.3`).
 - `--steer_scale`: Subspace steering coefficient for centroid-augmented GaLore optimizer.
-- `--shuffle_buffer`: Size of streaming token shuffle buffer (smaller values start streaming instantly).
-- `--no_wandb`: Disables W&B logging for offline/local training.
+- `--shuffle_buffer`: Token shuffle buffer size for streaming datasets.
+- `--no_wandb`: Disables Weights & Biases logging for local training.
