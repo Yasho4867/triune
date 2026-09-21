@@ -64,7 +64,8 @@ class NewFrameworkFeaturesTest(unittest.TestCase):
             return data
 
         nodes = global_registry.list_nodes()
-        self.assertIn("CustomFilterNode", nodes)
+        node_names = [n["name"] for n in nodes]
+        self.assertIn("CustomFilterNode", node_names)
         schema = global_registry.get_schema("CustomFilterNode")
         self.assertEqual(schema["inputs"], ["tensor"])
 

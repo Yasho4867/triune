@@ -12,18 +12,18 @@ You can define any custom Triune architecture on the fly without modifying sourc
 import torch
 from triune.model import TriuneTransformer
 
-# Define a custom dynamic Triune architecture
+# Define a custom dynamic Triune architecture (e.g. Triune 2.5B)
 model = TriuneTransformer(
     vocab_size=32000,           # Vocabulary size
-    hidden_dim=1536,            # Must equal num_heads * head_dim
+    hidden_dim=1280,            # Must equal num_heads * head_dim
     num_layers=18,              # Dynamic total layer count
-    num_heads=12,               # Attention heads
+    num_heads=10,               # Attention heads
     head_dim=128,               # Gated Linear Attention head dimension
-    num_experts=4,              # Dynamic MoE experts per layer (e.g. 2, 4, 8, 16)
+    num_experts=8,              # Dynamic MoE experts per layer
     router_prefix_layers=3,     # Layers before early-exit routing decision
-    reflex_exit_layer=6,        # Reflex exit layer index
-    limbic_exit_layer=14,       # Limbic exit layer index (must be < num_layers)
-    use_fp4=False               # Set True for FP4/NVFP4 quantization
+    reflex_exit_layer=5,        # Reflex exit layer index (normalized via RMSNorm)
+    limbic_exit_layer=13,       # Limbic exit layer index (normalized via RMSNorm)
+    use_fp8=True                # Native FP8 (E4M3) scaled GEMM
 )
 
 print(f"Total Parameters: {sum(p.numel() for p in model.parameters()):,}")
@@ -37,37 +37,24 @@ print(f"Total Parameters: {sum(p.numel() for p in model.parameters()):,}")
 3. **MoE Activation**:
    - Layers $0 \le i \le \text{reflex\_exit\_layer}$: Dense feed-forward networks.
    - Layers $i > \text{reflex\_exit\_layer}$: Dynamic Mixture-of-Experts with `num_experts` and a shared expert.
+4. **Intermediate Exit Normalization**:
+   - Both `reflex_exit_layer` and `limbic_exit_layer` automatically receive dedicated `RMSNorm` normalization before logits projection to guarantee uniform variance matching the terminal Cortex head.
 
 ---
 
 ## 2. Dynamic Hardware & VRAM Memory Planning
 
-Triune includes an automated **Hardware Memory Planner** (`MemoryPlanner`) that inspects your GPU before allocation and calculates the exact VRAM footprint for any configuration.
-
-### VRAM Calculation Breakdown:
-1. **Model Weights Footprint**:
-   $$M_{\text{weights}} = \frac{N_{\text{params}} \times \text{bytes\_per\_param}}{1024^3}\text{ GiB}$$
-   - `float32`: 4.0 bytes/param
-   - `bfloat16` / `fp16`: 2.0 bytes/param
-   - `fp8`: 1.0 byte/param
-   - `fp4` / `nvfp4`: 0.5 bytes/param
-
-2. **GaLore Centroid Optimizer Memory**:
-   - Standard AdamW: $8.0\text{ bytes/param}$ ($16.0\text{ GB}$ for 2B params)
-   - **Triune CentroidSteerOptimizer (GaLore)**: Projects gradients into rank-$r$ subspaces, tracking state only for active rank projections $\approx 2.0\text{ bytes/param}$ ($4.0\text{ GB}$ for 2B params, a **$4\times$ to $6\times$ reduction**).
-
-3. **Activation Cache with Selective Checkpointing**:
-   - With gradient checkpointing: Activations scale with sequence length and batch size:
-     $$M_{\text{act}} \approx \frac{B \times T \times D \times 2}{1024^2}\text{ MiB}$$
+Triune includes an automated **Hardware Memory Planner** (`MemoryPlanner`) and **Dynamic Resource Manager** (`DynamicResourceManager`) that inspects physical GPU hardware and models memory allocations:
 
 ### Hardware Budget Recommendations:
 
-| Target Hardware | VRAM | Recommended Preset | Dynamic Config Overrides |
+| Target Hardware | VRAM | Recommended Preset | Optimal Execution Flags |
 | :--- | :--- | :--- | :--- |
-| **RTX 4060 / 5070 Laptop** | **8 GB** | `triune-small` | `--num_layers 18 --num_experts 4 --batch_size 2 --grad_accum 8` |
-| **RTX 4070 / 5070 Ti / 3080** | **12 GB** | `triune-small` / `fp8-base` | `--num_layers 20 --num_experts 6 --batch_size 4 --grad_accum 4` |
-| **RTX 4080 / 4090** | **16 - 24 GB** | `triune-base` | `--num_layers 24 --num_experts 8 --batch_size 4 --grad_accum 4` |
-| **A100 / H100 / H200** | **80 - 141 GB** | `triune-moe` | `--num_layers 32 --num_experts 16 --batch_size 16 --grad_accum 2` |
+| **RTX 4060 / 5070 Laptop** | **8 GB** | `triune-2.5b` (2.45B) | `--streaming --streaming_fp8_weights --use_fp8 --batch_size 2 --grad_accum 8` |
+| **RTX 4070 / 5070 Ti / 3080** | **12 GB** | `triune-small` (In-Memory) | `--use_fp8 --batch_size 4 --grad_accum 4` |
+| **RTX 4080 / 4090** | **16 - 24 GB** | `triune-2.5b` (In-Memory) | `--use_fp8 --batch_size 4 --grad_accum 4` |
+| **A100 / H100 (Single Node)** | **80 GB** | `triune-7b` (7.2B) | `--use_fp8 --batch_size 8 --grad_accum 4 --seq_len 1024` |
+| **8x H100 Cluster** | **640 GB** | `triune-7b` (Distributed) | `torchrun --nproc_per_node=8 scripts/train.py --model_name triune-7b` |
 
 ---
 

@@ -8,6 +8,15 @@ import os
 import sys
 from pathlib import Path
 
+# ── Disable HuggingFace XET protocol (MUST be before any HF imports) ─────
+# huggingface_hub ≥1.31 ships hf-xet which routes ALL downloads through
+# us.aws.cdn.hf.co/xet-bridge-us/.  From non-US locations the SSL
+# handshake to that endpoint frequently times out.  Disabling XET
+# forces standard HTTPS streaming via CloudFront edge servers.
+os.environ["HF_HUB_DISABLE_XET"] = "1"
+os.environ.pop("HF_XET_HIGH_PERFORMANCE", None)
+os.environ.pop("HF_HUB_ENABLE_HF_TRANSFER", None)
+
 import torch
 
 if __package__ in (None, ""):
@@ -54,6 +63,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--steer_scale", type=float)
     parser.add_argument("--use_fp4", "--use_nvfp4", dest="use_fp4", action="store_true")
     parser.add_argument("--use_fp8", action="store_true", help="Enable native FP8 (E4M3) precision context")
+    parser.add_argument("--use_muon", action=argparse.BooleanOptionalAction, default=True, help="Enable Muon for non-expert 2D hidden weights")
+    parser.add_argument("--muon_lr", type=float, help="Muon learning rate (default: 0.02)")
+    parser.add_argument("--force", action="store_true", help="Override resource manager feasibility recommendations and proceed regardless of VRAM budget")
+    parser.add_argument("--auto_fit", action="store_true", default=False, help="Automatically adopt recommended microbatch and grad_accum settings if not explicitly specified")
+    parser.add_argument("--streaming", action="store_true", help="Enable AirLLM-style layer streaming to train large models on consumer GPUs with <1.5 GB VRAM")
+    parser.add_argument("--streaming_chunk_size", type=int, default=1, help="Number of layers to stream/cache simultaneously (default: 1)")
+    parser.add_argument("--streaming_pin_memory", action=argparse.BooleanOptionalAction, default=None, help="Pin host memory for PCIe DMA in streaming mode (auto-detected based on RAM)")
+    parser.add_argument("--streaming_prefetch", action=argparse.BooleanOptionalAction, default=True, help="Prefetch next layer on secondary CUDA stream during layer streaming")
+    parser.add_argument("--streaming_fp8_weights", action=argparse.BooleanOptionalAction, default=True, help="Compress CPU host resident weights to FP8 to halve host RAM from 9.2 GB to 4.6 GB (default: True)")
+    parser.add_argument("--strict_vram", action="store_true", help="Deprecated alias; use default behavior without --force")
     parser.add_argument("--no_wandb", action="store_true")
     parser.add_argument("--no_hf_login", action="store_true")
     parser.add_argument("--model_name", choices=("triune-small", "triune-base", "triune-moe"), default=None)
@@ -97,9 +116,10 @@ def main(argv: list[str] | None = None) -> dict:
         for key in (
             "checkpoint_dir", "seq_len", "lr", "total_steps", "batch_size", "grad_accum_steps",
             "save_every", "log_every", "eval_every", "eval_batches", "target_depth_dist", "usage_ema_decay", "bias_strength",
-            "balance_coef", "exploration", "exploration_steps", "steer_scale", "dataset_name",
+            "balance_coef", "exploration", "exploration_steps", "steer_scale", "use_muon", "muon_lr", "dataset_name",
             "dataset_config", "num_workers", "num_layers", "num_experts", "shuffle_buffer",
         )
+        if getattr(args, key) is not None
     }
     if args.model_name == "triune-small":
         overrides.setdefault("num_layers", 18)
@@ -111,10 +131,18 @@ def main(argv: list[str] | None = None) -> dict:
         overrides.setdefault("num_layers", 32)
         overrides.setdefault("num_experts", 16)
 
-    overrides["checkpoint_dir"] = str(overrides["checkpoint_dir"]) if overrides["checkpoint_dir"] else None
+    if overrides.get("checkpoint_dir"):
+        overrides["checkpoint_dir"] = str(overrides["checkpoint_dir"])
     overrides["use_fp4"] = args.use_fp4
     overrides["use_fp8"] = args.use_fp8
+    overrides["streaming"] = args.streaming
+    overrides["streaming_chunk_size"] = args.streaming_chunk_size
+    overrides["streaming_pin_memory"] = args.streaming_pin_memory
+    overrides["streaming_prefetch"] = args.streaming_prefetch
+    overrides["streaming_fp8_weights"] = getattr(args, "streaming_fp8_weights", False)
     config = build_config(overrides)
+    if args.model_name:
+        config["model_name"] = args.model_name
     Path(config["checkpoint_dir"]).mkdir(parents=True, exist_ok=True)
 
     if not torch.cuda.is_available():
@@ -123,24 +151,30 @@ def main(argv: list[str] | None = None) -> dict:
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
     os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
-    os.environ.setdefault("HF_XET_HIGH_PERFORMANCE", "1")
-    from triune.runtime.memory_planner import MemoryPlanner
+    from triune.runtime.resource_manager import DynamicResourceManager
 
-    total_vram_gb = torch.cuda.get_device_properties(device).total_memory / (1024**3)
-    mem_est = MemoryPlanner.estimate_vram(config, available_vram_gb=total_vram_gb)
-    precision_label = 'FP8' if config.get('use_fp8') else ('FP4' if config.get('use_fp4') else 'BF16')
-    print(f"📊 [VRAM Pre-Flight Check] Detected GPU: {torch.cuda.get_device_name(device)} ({total_vram_gb:.2f} GB VRAM)", flush=True)
-    print(f"   • Total Parameters:          {mem_est.total_params:,}", flush=True)
-    print(f"   • Model Weights ({precision_label}):       ~{mem_est.param_memory_gb:.2f} GB", flush=True)
-    print(f"   • Optimizer (GaLore Centroid): ~{mem_est.optimizer_memory_gb:.2f} GB", flush=True)
-    print(f"   • Activations (Checkpointed):  ~{mem_est.activation_memory_gb:.2f} GB", flush=True)
-    print(f"   • Gradients (BF16 Active):     ~{mem_est.gradient_memory_gb:.2f} GB", flush=True)
-    print(f"   • Estimated Total Footprint:   ~{mem_est.total_vram_gb:.2f} GB (Recommended Batch: {mem_est.recommended_batch_size}, Grad Accum: {mem_est.recommended_grad_accum})", flush=True)
+    # Run feasibility assessment and display transparent breakdown
+    assessment = DynamicResourceManager.assess_feasibility(
+        config, device=device, user_overrides=overrides, safety_ceiling=0.85
+    )
+    print(DynamicResourceManager.format_assessment_report(assessment), flush=True)
 
-    if mem_est.total_vram_gb > total_vram_gb * 0.90:
-        print(f"⚠️ [VRAM Warning] Configuration ({mem_est.total_vram_gb:.2f} GB) is near or exceeds safe threshold for your {total_vram_gb:.2f} GB GPU.", flush=True)
-        if args.model_name == "triune-base" or config.get("num_layers", 24) >= 24:
-            print("💡 Recommended Action: Use '--model_name triune-small' (18 layers, 4 experts, ~3.9 GB total VRAM) for seamless training on 8GB VRAM.", flush=True)
+    if args.streaming:
+        print(f"🌊 [Layer Streaming Engine] Active: chunk size {args.streaming_chunk_size}. Layers reside in CPU RAM and stream to GPU on-demand (<1.5 GB VRAM target).", flush=True)
+
+    # Validate and allot resources; respects user --force override and explicit flags
+    allotment = DynamicResourceManager.validate_and_allot(
+        config,
+        device=device,
+        force=args.force or args.streaming,
+        auto_fit=args.auto_fit,
+        user_overrides=overrides,
+        safety_ceiling=0.85,
+    )
+    config = allotment.config
+
+    if allotment.adjustment_reason:
+        print(f"⚙️ [Resource Manager] Status: {allotment.adjustment_reason}", flush=True)
 
     if not args.no_hf_login:
         _request_hf_token()
@@ -156,16 +190,36 @@ def main(argv: list[str] | None = None) -> dict:
         if sep_token_id is None:
             raise ValueError("Tokenizer must define a [SEP] special token")
         
-        # Allocate model directly in bfloat16 to avoid float32 VRAM spikes
-        model = build_model(config).to(device=device, dtype=torch.bfloat16)
+        # Build model with BF16 default dtype to halve CPU RAM from 19.8GB -> 9.2GB
+        torch.set_default_dtype(torch.bfloat16)
+        try:
+            raw_model = build_model(config)
+        finally:
+            torch.set_default_dtype(torch.float32)
+
+        if args.streaming:
+            raw_model.enable_layer_streaming(
+                device=device,
+                chunk_size=args.streaming_chunk_size,
+                pin_memory=args.streaming_pin_memory,
+                async_prefetch=args.streaming_prefetch,
+                fp8_weights=args.streaming_fp8_weights,
+            )
+            model = raw_model
+        else:
+            model = DynamicResourceManager.safe_to_device(
+                raw_model, device=device, dtype=torch.bfloat16, force=args.force
+            )
         if args.grad_checkpoint is not False:
             model.gradient_checkpointing_enable()
             print("✅ Selective gradient checkpointing enabled", flush=True)
         print(f"Params: {sum(parameter.numel() for parameter in model.parameters()):,}", flush=True)
         optimizer = build_optimizer(model, config)
+        print(f"⏳ Connecting dataset stream: '{config.get('dataset_name')}' ({config.get('dataset_config')})...", flush=True)
         train_loader = build_dataloader(tokenizer, config, sep_token_id, is_holdout=False)
         eval_loader = build_dataloader(tokenizer, config, sep_token_id, is_holdout=True)
-        if getattr(args, "use_fp8", False):
+        print("✅ Dataset stream configured.", flush=True)
+        if config.get("use_fp8", False):
             precision_context = build_fp8_precision_context(device=device, use_te=False)
             print("✅ Native FP8 (E4M3) scaled GEMM active in model layers", flush=True)
         elif config.get("use_fp4"):

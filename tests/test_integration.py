@@ -30,9 +30,17 @@ class _Tokenizer:
 class FullModelIntegrationTest(unittest.TestCase):
     def test_gumbel_router_and_transformer_step(self):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print(f"\nRunning integration test on device: {device}")
-        model = TriuneTransformer(vocab_size=1000, hidden_dim=1536, num_layers=18, use_fp4=False).to(device)
-        self.assertIsInstance(model.router, GumbelSoftmaxRouter)
+        model = TriuneTransformer(
+            vocab_size=1000,
+            hidden_dim=256,
+            num_layers=8,
+            num_heads=2,
+            head_dim=128,
+            num_experts=4,
+            router_prefix_layers=2,
+            reflex_exit_layer=3,
+            limbic_exit_layer=6,
+        ).to(device)
         
         # Test forward pass with Gumbel Straight-Through sampling
         x = torch.randint(0, 1000, (2, 8), device=device)

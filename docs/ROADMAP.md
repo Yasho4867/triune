@@ -1,22 +1,25 @@
 # Triune Ecosystem Roadmap
 
-## Phase 1 – Framework Engine (Current Focus)
-- ✅ Refactor core `triune` package into 11 modular components (`model`, `trainer`, `runtime`, `optim`, `data`, `inference`, `recipes`, `agents`, `callbacks`, `export`, `api`, `plugins`).
-- ✅ Implement VRAM Memory Planner (`triune.runtime.MemoryPlanner`) for RTX 5070 Laptop GPUs.
-- ✅ Implement `PythonSandbox` for secure code, custom node, and agent execution.
-- ✅ Implement FP8 (E4M3/HYBRID) precision context recipe with PyTorch native fallback.
-- ✅ Implement `load_model` API and Model Zoo adapters.
-- ✅ Implement Embedded FastAPI & WebSocket telemetry server (`triune.api`) powering Studio.
-- ✅ Implement Node-based plugin schema & custom node registry (`triune.plugins`).
-- ✅ Implement model exporters (`export_safetensors`, `export_gguf`, `export_onnx`).
+## Phase 1 – Framework Engine & Algorithmic Breakthroughs (Completed ✅)
+- ✅ Core `triune` package unified under single root packaging (`pyproject.toml`, `pip install -e .`).
+- ✅ **AirLLM-Style Layer Streaming Engine**: Sub-300 MB peak VRAM execution for 2.5B–5B architectures on 8 GB laptop GPUs.
+- ✅ **3-Tier Optimizer Architecture**:
+  - **Tier 1 (Muon)**: 5th-order Newton-Schulz matrix orthogonalization for non-expert 2D hidden projections.
+  - **Tier 2 (CentroidSteer)**: Dual-sided SVD GaLore with semantic activation centroid steering for routed MoE experts.
+  - **Tier 3 (AdamW)**: Adaptive moment estimation for 1D vectors and norms.
+- ✅ **Native Hardware FP8 (E4M3) Scaled GEMM**: Hardware acceleration on modern GPUs (Ada Lovelace, Blackwell) with dynamic quantization.
+- ✅ **Variance-Matched Exit Normalization**: Intermediate `RMSNorm` at Reflex and Limbic layers eliminating early-exit gradient explosions.
+- ✅ **Dynamic Hardware Resource Manager**: Automated feasibility probing, live VRAM telemetry, and strict architecture immutability with `--force` authority.
+- ✅ **Embedded FastAPI & WebSocket Telemetry Server**: OpenAI-compatible `/v1/chat/completions` and streaming telemetry.
 
-## Phase 2 – Native Triune Models & Benchmarks
-- 🔲 Pre-train native **Triune 2.5B MoE** baseline checkpoint on FineWeb-Edu.
-- 🔲 Benchmark inference throughput against open models (Llama 3, Qwen 2.5, Smollm) with `Reflex` and `Limbic` dynamic depth exit heads.
-- 🔲 Publish checkpoints to Hugging Face Hub under unified `load_model("triune-base")` API.
+## Phase 2 – Pretraining & Distributed Scaling (Active Focus 🚀)
+- 🔲 **Track 1 (Laptop Pretraining)**: Pretrain native **`triune-2.5b`** (~2.45B params, ~780M active) on `HuggingFaceFW/fineweb-edu` using Layer Streaming + Muon on RTX 5070 (8 GB).
+- 🔲 **Track 2 (Cloud Distributed Scaling)**: Multi-GPU cluster pretraining for **`triune-7b`** (~7.2B params, ~2.2B active) using distributed PyTorch FSDP2 / torchrun.
+- 🔲 Dynamic routing calibration: Platt scaling / ECE calibrated loss on router logits to achieve Jev-style high-confidence System 1 early returns.
+- 🔲 Checkpoint export pipeline: SafeTensors and Hugging Face Hub direct publishing (`triune/triune-2.5b-base`).
 
-## Phase 3 – Triune Studio (Visual GUI / IDE)
-- 🔲 Ship self-contained Triune Studio desktop installer.
-- 🔲 Interactive Chat & Playground with multi-model side-by-side comparison.
-- 🔲 Real-time Training Dashboard (Loss curves, router exit head distributions, VRAM memory timeline).
-- 🔲 Node-based Visual Graph Builder for custom data pipelines, model building, and agentic workflows.
+## Phase 3 – Triune Studio & Ecosystem (Upcoming 🌟)
+- 🔲 One-click standalone Windows installer for Triune Studio.
+- 🔲 Real-time Training Visualizer: Interactive loss curves, router exit distribution charts, and per-expert load balancing graphs.
+- 🔲 DAG Workflow Builder: Drag-and-drop node graph for dataset ingestion, fine-tuning, and model export.
+- 🔲 GGUF & llama.cpp export for ultra-fast local inference across Apple Silicon and CPU/GPU runtimes.

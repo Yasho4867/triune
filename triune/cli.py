@@ -27,9 +27,18 @@ def main() -> None:
     mem_parser = subparsers.add_parser("plan-memory", help="Estimate VRAM budget for RTX 5070 or target GPU")
     mem_parser.add_argument("--vram-gb", type=float, default=8.0, help="Target VRAM in GB")
 
+    # Train command
+    train_parser = subparsers.add_parser("train", help="Train Triune Transformer models")
+    train_parser.add_argument("train_args", nargs=argparse.REMAINDER, help="Arguments passed to training script")
+
     args = parser.parse_args()
 
-    if args.command == "studio":
+    if args.command == "train":
+        from scripts.train import main as train_main
+        sys.argv = [sys.argv[0]] + (args.train_args or [])
+        train_main()
+
+    elif args.command == "studio":
         from triune.desktop import launch_desktop_app
 
         launch_desktop_app(port=args.port)

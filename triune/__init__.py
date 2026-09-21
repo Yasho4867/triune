@@ -8,10 +8,19 @@ from .callbacks import Callback, CallbackList, EventEmitter, TelemetryCallback, 
 from .configs.config import build_config, default_config, validate_config
 from .execution import DAGParser, ExecutionEngine, NodeExecutionError
 from .export import export_gguf, export_model, export_onnx, export_safetensors
-from .model import TriuneModel, build_model, load_model, register_model
-from .optim import CentroidSteerOptimizer, build_optimizer
+from .model import TriuneModel, TriuneTransformer, build_model, load_model, register_model
+from .optim import CentroidSteerOptimizer, Muon, build_optimizer
 from .plugins import NodeRegistry, register_node
-from .runtime import AutoOffloader, MemoryPlan, MemoryPlanner, PythonSandbox, VRAMProfiler
+from .runtime import (
+    AutoOffloader,
+    DynamicResourceManager,
+    LayerStreamingEngine,
+    LiveVRAMMonitor,
+    MemoryPlan,
+    MemoryPlanner,
+    PythonSandbox,
+    VRAMProfiler,
+)
 from .trainer import Engine, LoRAConfig, LoRALayer, Trainer, TriuneFineTuner
 
 __all__ = [
@@ -37,15 +46,20 @@ __all__ = [
     "export_gguf",
     "export_onnx",
     "TriuneModel",
+    "TriuneTransformer",
     "build_model",
     "load_model",
     "register_model",
     "CentroidSteerOptimizer",
+    "Muon",
     "build_optimizer",
     "NodeRegistry",
     "register_node",
     "MemoryPlan",
     "MemoryPlanner",
+    "DynamicResourceManager",
+    "LiveVRAMMonitor",
+    "LayerStreamingEngine",
     "PythonSandbox",
     "VRAMProfiler",
     "AutoOffloader",

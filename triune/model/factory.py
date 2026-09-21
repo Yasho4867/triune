@@ -21,4 +21,5 @@ def build_model(config: dict | None = None) -> TriuneTransformer:
         limbic_exit_layer=config.get("limbic_exit_layer", 16),
         use_fp4=config.get("use_fp4", False),
         use_fp8=config.get("use_fp8", False),
+        streaming_fp8_weights=config.get("streaming_fp8_weights", False),
     )

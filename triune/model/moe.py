@@ -41,7 +41,10 @@ class MoE_FFN(nn.Module):
 
         self.router = nn.Linear(dim, num_experts)
         self.register_buffer('expert_bias', torch.zeros(num_experts))
+        self.register_buffer('expert_load_ratio', torch.ones(num_experts))
         self.last_centroids = None
+        self.last_counts = None
+        self.last_target = None
         self.overflow_counter = 0
         self._global_step = 0
 
@@ -101,7 +104,7 @@ class MoE_FFN(nn.Module):
                 if pad:
                     expert_output = expert_output[:orig_tokens]
 
-                out[indices] += expert_output * val_k_keep.unsqueeze(-1)
+                out.index_add_(0, indices, expert_output * val_k_keep.unsqueeze(-1))
 
         if self.training and update_stats:
             self._update_routing_stats(flat_x, flat_idx)
@@ -112,8 +115,13 @@ class MoE_FFN(nn.Module):
     def _update_routing_stats(self, flat_x, flat_idx):
         """Update non-gradient routing state without retaining an activation graph."""
         counts = torch.bincount(flat_idx.flatten(), minlength=self.num_experts)
-        target = (flat_x.size(0) * self.top_k) / self.num_experts
+        target = max(1.0, float((flat_x.size(0) * self.top_k) / self.num_experts))
         self._pending_bias_update = -(counts - target).sign() * MOE_BIAS_UPDATE_RATE
+
+        batch_ratio = counts.float() / target
+        self.expert_load_ratio.mul_(0.9).add_(batch_ratio.to(self.expert_load_ratio.device), alpha=0.1)
+        self.last_counts = counts.detach()
+        self.last_target = target
 
         centroids = []
         for expert_idx in range(self.num_experts):

@@ -16,15 +16,15 @@ _HAS_SCALED_MM = hasattr(torch, "_scaled_mm") and hasattr(torch, "float8_e4m3fn"
 
 
 def _quantize_to_fp8(tensor: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """Dynamically quantize a BF16/FP32 tensor to float8_e4m3fn with per-tensor scaling.
-    
+    """Dynamically quantize a BF16 tensor to float8_e4m3fn with per-tensor scaling.
+
     Returns (fp8_tensor, inverse_scale) where inverse_scale is used to dequantize.
-    448.0 is the maximum finite representable value in E4M3 format.
+    Avoids intermediate FP32 allocations to prevent VRAM spikes.
     """
     amax = tensor.abs().amax().clamp_min(1e-12)
-    scale = (448.0 / amax).float()
-    tensor_fp8 = (tensor.float() * scale).clamp(-448.0, 448.0).to(torch.float8_e4m3fn)
-    scale_inv = (1.0 / scale)
+    scale = (448.0 / amax).to(dtype=tensor.dtype)
+    tensor_fp8 = (tensor * scale).to(torch.float8_e4m3fn)
+    scale_inv = (1.0 / scale.float())
     return tensor_fp8, scale_inv
 
 

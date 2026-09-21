@@ -56,7 +56,9 @@ class Trainer:
         self.grad_accum = config["grad_accum_steps"]
         self.z_loss_coef = 1e-3
         self._train_batches = CyclingDataLoader(train_loader)
+        print(f"⏳ Materializing {self.config.get('eval_batches', 1)} evaluation batch(es)...", flush=True)
         self.eval_batches = self._materialize_eval_batches()
+        print(f"✅ Evaluation batch(es) ready.", flush=True)
         self.engine = TrainingEngine(self)
 
     def _materialize_eval_batches(self):

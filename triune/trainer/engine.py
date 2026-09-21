@@ -9,6 +9,7 @@ import torch
 import torch.nn.functional as F
 
 from triune.model import MoE_FFN
+from triune.runtime.resource_manager import LiveVRAMMonitor
 
 
 class TrainingEngine:
@@ -18,6 +19,11 @@ class TrainingEngine:
         self.best_eval_loss = float("inf")
         self.target_depth_dist = torch.tensor(trainer.config["target_depth_dist"], device=trainer.device)
         self.depth_usage_ema = self.target_depth_dist.clone()
+        self.vram_monitor = LiveVRAMMonitor(trainer.device)
+        streaming_engine = getattr(self.model, "_streaming_engine", None)
+        if streaming_engine is not None:
+            streaming_engine.set_optimizer(self.optimizer)
+            streaming_engine.config.grad_clip = self.config.get("grad_clip", 1.0)
 
     @property
     def model(self):
@@ -63,10 +69,8 @@ class TrainingEngine:
     def _log_training(self, *, loss, lm_loss, router_loss, balance_loss, lr, exploration_rate, overflow, labels, route_logits):
         if self.step % self.config["log_every"]:
             return
-        vram_gib = (
-            torch.cuda.memory_allocated(self.trainer.device) / 1024**3
-            if self.trainer.device.type == "cuda" else 0.0
-        )
+        telemetry = self.vram_monitor.format_telemetry()
+        vram_gib = self.vram_monitor.last_allocated_gb
         depth_names = ("Reflex", "Limbic", "Cortex")
         chosen = route_logits.argmax(dim=-1)[0].item()
         target = labels[0].item()
@@ -76,7 +80,7 @@ class TrainingEngine:
             f"(LM: {lm_loss:.4f}, Router: {router_loss:.4f}, Bal: {balance_loss:.4f}) "
             f"| Router: {depth_names[chosen]} (target: {depth_names[target]}) "
             f"| Usage: {usage} | LR: {lr:.2e} "
-            f"| VRAM: {vram_gib:.2f} GB "
+            f"| {telemetry} "
             f"| Best Eval: {self.best_eval_loss:.4f} | Overflow: {overflow}",
             flush=True
         )
@@ -102,13 +106,18 @@ class TrainingEngine:
         self.model.train()
         try:
             while self.step < self.config["total_steps"]:
+                self.vram_monitor.tick()
                 lr = self.trainer.lr_schedule(self.config, self.step)
                 self.trainer.set_optimizer_lr(self.optimizer, lr)
                 for module in self.model.modules():
                     if isinstance(module, MoE_FFN):
                         module._global_step = self.step
 
+                streaming_engine = getattr(self.model, "_streaming_engine", None)
                 self.optimizer.zero_grad()
+                if streaming_engine is not None:
+                    streaming_engine.zero_grad()
+
                 totals = {"loss": 0.0, "lm": 0.0, "router": 0.0, "balance": 0.0, "overflow": 0}
                 last_labels = last_route_logits = None
                 exploration_rate = self._exploration_rate()
@@ -144,8 +153,12 @@ class TrainingEngine:
                             module.overflow_counter = 0
                     last_labels, last_route_logits = labels, route_logits.detach()
 
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config["grad_clip"])
-                self.optimizer.step()
+                if streaming_engine is not None:
+                    streaming_engine.step_streaming_optimizer(optimizer=self.optimizer, grad_clip=self.config["grad_clip"])
+                else:
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config["grad_clip"])
+                    self.optimizer.step()
+
                 for module in self.model.modules():
                     if isinstance(module, MoE_FFN) and hasattr(module, "step_bias"):
                         module.step_bias()

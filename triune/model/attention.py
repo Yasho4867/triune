@@ -19,17 +19,14 @@ def _pytorch_chunk_gla(q, k, v, g):
     B, T, H, HD = q.shape
     decay = torch.exp(g)
     S = torch.zeros(B, H, HD, HD, device=q.device, dtype=q.dtype)
-    outs = []
+    out = torch.empty(B, T, H, HD, device=q.device, dtype=q.dtype)
     for t in range(T):
         decay_t = decay[:, t, :, :].unsqueeze(-1)
         k_t = k[:, t, :, :].unsqueeze(-1)
         v_t = v[:, t, :, :].unsqueeze(-2)
         S = S * decay_t + torch.matmul(k_t, v_t)
         q_t = q[:, t, :, :].unsqueeze(-2)
-        # Corrected: Remove the transpose from S
-        o_t = torch.matmul(q_t, S).squeeze(-2)
-        outs.append(o_t)
-    out = torch.stack(outs, dim=1)
+        out[:, t, :, :] = torch.matmul(q_t, S).squeeze(-2)
     return out, None
 
 

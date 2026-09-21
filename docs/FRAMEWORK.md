@@ -2,75 +2,120 @@
 
 ## Architecture Overview
 
-Triune is an **All-in-One AI Research Suite** featuring a standalone core Python framework (`triune`), unified CLI, embedded WebUI API server (`triune.api`), VRAM Memory Planner (`triune.runtime.MemoryPlanner`), sandboxed code execution (`triune.runtime.PythonSandbox`), and visual node plugin protocol (`triune.plugins`).
+Triune is an **All-in-One AI Research Suite** engineered around a single source of truth: the `triune` Python package. It combines high-performance model architectures, adaptive multi-exit routing, an advanced 3-tier optimizer suite, AirLLM-style layer streaming, hardware resource management, and an embedded web/desktop Studio IDE.
 
 ```
-triune/
-├── __init__.py          # Main Exports (load_model, register_model, Trainer, MemoryPlanner)
-├── model/               # Universal Model Base, Native MoE/Limbic, Zoo Adapters
-├── trainer/             # High-level Trainer, Engine, Checkpointer
-├── runtime/             # VRAM Memory Planner, Python Sandbox, Telemetry
-├── optim/               # CentroidSteerOptimizer, GaLore, 8-bit AdamW
-├── data/                # Tokenizers, Streaming Datasets, Parquet/JSONL Loaders
-├── inference/           # Generation, KV-Cache Management, Samplers
-├── recipes/             # BF16, FP8 E4M3/Hybrid, NVFP4 Precision Recipes
-├── agents/              # Lightweight Tool-Use & Multi-Agent Engine
-├── callbacks/           # Custom Training, Logging, and Telemetry Hooks
-├── export/              # SafeTensors, GGUF, and ONNX Exporters
-├── api/                 # Embedded FastAPI & WebSockets (OpenAI Spec & Telemetry)
-└── plugins/             # Node-based Visual Pipeline Schema & Custom Node Registry
+TriuneTransformer/
+├── pyproject.toml              # PyPA package configuration (pip install -e .)
+├── requirements.txt            # Lightweight pip requirements fallback
+├── triune/                     # CORE FRAMEWORK ENGINE
+│   ├── __init__.py             # Public exports (load_model, TriuneTransformer, Muon, etc.)
+│   ├── cli.py                  # Unified CLI (studio, train, chat, plan-memory)
+│   ├── model/                  # Transformer, Attention, MoE, Norms, FP8, Zoo
+│   ├── optim/                  # 3-Tier Optimizer: Muon, CentroidSteer, AdamW, Factory
+│   ├── runtime/                # Layer Streaming, Resource Manager, Sandbox, Profiler
+│   ├── trainer/                # Trainer, TrainingEngine, Checkpointing, Scheduler
+│   ├── data/                   # Tokenizers, Streaming Datasets, CyclingDataLoader
+│   ├── configs/                # Dynamic configuration builder and defaults
+│   ├── modules/                # Modular extension & registry system
+│   ├── api/                    # FastAPI & WebSockets (OpenAI Spec & Telemetry)
+│   └── desktop.py              # PyWebView desktop application launcher
+├── studio/                     # TRIUNE STUDIO (Visual IDE & GUI)
+│   ├── src/                    # Web UI Frontend (HTML, React, CSS, Vendor assets)
+│   ├── launcher/               # Desktop runner (desktop.py)
+│   └── installer/              # Windows installer build scripts
+└── models/                     # TRIUNE MODEL ZOO & ARCHITECTURE PRESETS
+    ├── README.md               # Model Zoo documentation & hardware matrix
+    └── configs/                # Architecture preset JSON definitions
 ```
 
-## Public API & Component Map
+---
 
-| Component | Public API | Responsibility |
-| --- | --- | --- |
-| Model Zoo | `triune.load_model("triune-base")`, `register_model` | Loads native, HF, or user custom models. |
-| VRAM Planner | `triune.MemoryPlanner.estimate_vram(config)` | Auto-budgets VRAM for RTX 5070 / target GPUs. |
-| Sandboxed Code | `triune.PythonSandbox` | Safely executes custom loss ops, nodes, & agent tools. |
-| Custom Nodes | `triune.register_node(name)` | Registers custom visual nodes into Studio & CLI. |
-| Agent Engine | `triune.Agent`, `MultiAgentOrchestrator` | Multi-agent execution and tool calling. |
-| Exporters | `triune.export_safetensors`, `export_gguf`, `export_onnx` | One-command model weight exports. |
-| Precision | `triune.build_fp8_precision_context`, `bf16_autocast` | FP8 (E4M3/HYBRID), BF16, or NVFP4 context. |
-| Embedded API | `triune.api.run_server(host, port)` | Powers Triune Studio (OpenAI spec `/v1/chat/completions`). |
+## 🔑 Core Subsystems & Public APIs
 
-## CLI Commands
-
-```bash
-# Launch embedded API server for Triune Studio
-triune serve --port 8000
-
-# Estimate VRAM budget for RTX 5070 Laptop GPU (8GB / 12GB)
-triune plan-memory --vram-gb 8.0
-
-# Terminal interactive chat
-triune chat --model triune-base
-
-# Execute framework test suite
-wsl /home/yasho4867/venvs/triune/bin/python tests/test_framework.py
-```
-
-## Programmatic Usage Example
+### 1. Model Architecture & Zoo (`triune.model`)
+* **`TriuneTransformer`**: Primary model class featuring Gated Linear Attention (GLA), Mixture-of-Experts (MoE) with a dedicated shared expert, and three variance-matched exit heads (`Reflex`, `Limbic`, `Cortex`).
+* **`load_model(name_or_path, **kwargs)`**: Instantiates native Triune presets (`triune-nano`, `triune-small`, `triune-2.5b`, `triune-7b`, `triune-base`), loads from JSON architecture configs in `models/configs/`, or loads weights from checkpoints.
+* **`register_model(name)`**: Decorator allowing third-party and custom models to register with the unified loader.
 
 ```python
-import torch
 import triune
 
-# 1. Estimate VRAM Memory Plan for Laptop GPU
-config = triune.build_config({})
-plan = triune.MemoryPlanner.estimate_vram(config, target_vram_gb=8.0)
-print("Recommended Batch Size:", plan.recommended_batch_size)
+# Load a 2.5B parameter Triune model
+model = triune.load_model("triune-2.5b")
+```
 
-# 2. Load Model via Model Zoo API
-model = triune.load_model("triune-base").cuda()
+### 2. 3-Tier Optimizer Suite (`triune.optim`)
+Triune divides model parameters into three distinct mathematical tiers:
+* **Tier 1 (Muon)**: Applies 5th-order Newton-Schulz matrix orthogonalization to all non-expert 2D hidden projections (attention projections, shared expert projections, and intermediate heads).
+* **Tier 2 (CentroidSteer)**: Symmetrical dual-sided low-rank SVD projections with semantic activation centroid steering for routed MoE expert matrices.
+* **Tier 3 (AdamW)**: Adaptive moment estimation for 1D vectors (RMSNorm scale weights, biases, router heads, token embeddings).
 
-# 3. Register Custom Node for Studio & CLI
-@triune.register_node("Custom Preprocessor", category="data")
-def custom_preprocessor(text: str) -> str:
-    return text.strip().lower()
+```python
+from triune.optim import build_optimizer
 
-# 4. Safe Code Execution inside Sandbox
-sandbox = triune.PythonSandbox()
-result = sandbox.execute_code("y = x * 2", locals_dict={"x": 10})
-print(result["y"])  # 20
+optimizer = build_optimizer(model, config)
+```
+
+### 3. Layer Streaming Engine (`triune.runtime.streaming`)
+Allows models far exceeding physical GPU VRAM (such as `triune-2.5b` with 4.95B–2.5B parameters on an 8 GB laptop GPU) to train without out-of-memory errors:
+* **FP8 Host Weight Compression**: Weights are compressed to `torch.float8_e4m3fn` in CPU host RAM (~2.4 GB host memory).
+* **On-Demand Micro-Transfers**: A secondary CUDA prefetch stream transfers blocks immediately prior to forward/backward execution.
+* **Layer-by-Layer Optimizer State Migration**: Optimizer states (`exp_avg`, `exp_avg_sq`, `momentum`) migrate to GPU immediately before each layer step and are evicted back to host RAM immediately after, maintaining a peak VRAM footprint of strictly $<300\text{ MB}$.
+
+```python
+from triune.runtime import LayerStreamingEngine, StreamingConfig
+
+engine = LayerStreamingEngine(model, StreamingConfig(pin_memory=False, use_fp8=True))
+engine.attach()
+```
+
+### 4. Hardware Resource Manager (`triune.runtime.resource_manager`)
+* **`DynamicResourceManager`**: Probes physical GPU VRAM, compute capability, BF16/FP8 support, and assesses feasibility.
+* **`LiveVRAMMonitor`**: Provides real-time formatted telemetry (`VRAM: allocated/total | Res | Peak | Headroom`).
+* **User Override Authority**: Protects architectural immutability. Hardware limits can be bypassed cleanly via the `--force` flag without silently truncating layers or expert counts.
+
+### 5. Embedded API & Studio Server (`triune.api`)
+* **`create_app()`**: Configures a FastAPI application serving OpenAI-compatible endpoints (`/v1/chat/completions`), training telemetry WebSockets (`/ws/telemetry`), and static UI assets under `/static`.
+* **`run_server(host, port)`**: Launches the Uvicorn server hosting the Studio backend.
+
+---
+
+## 💻 CLI Commands
+
+The unified CLI provides command-line control over all engine capabilities:
+
+```bash
+# Launch Triune Studio native desktop window
+triune studio --port 8000
+
+# Launch headless FastAPI server for Studio & remote clients
+triune serve --host 0.0.0.0 --port 8000
+
+# Interactive terminal chat with any Triune model
+triune chat --model triune-2.5b
+
+# Calculate theoretical VRAM memory plan for target hardware
+triune plan-memory --vram-gb 8.0
+```
+
+---
+
+## 🧪 Automated Testing
+
+```bash
+# Core forward, backward, and training cycle tests
+python tests/test_framework.py
+
+# Layer streaming engine & optimizer state migration tests
+python tests/test_streaming_engine.py
+
+# 3-tier Muon and CentroidSteer optimizer tests
+python tests/test_muon_and_adaptive_steer.py
+
+# Hardware probe & user override tests
+python tests/test_resource_manager.py
+
+# Dynamic node registry and plugin tests
+python tests/test_features.py
 ```

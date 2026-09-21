@@ -23,8 +23,10 @@ class TransformerBlock(nn.Module):
         self.norm2 = RMSNorm(dim)
         self.layer_idx = layer_idx
         if layer_idx in exit_layers:
+            self.exit_norm = RMSNorm(dim)
             self.exit_head = nn.Linear(dim, vocab_size)
         else:
+            self.exit_norm = None
             self.exit_head = None
         self.use_moe = use_moe
         self._use_gradient_checkpointing = False
@@ -38,7 +40,7 @@ class TransformerBlock(nn.Module):
             norm2_x = self.norm2(x)
             if isinstance(self.ffn, MoE_FFN):
                 ffn_out = torch.utils.checkpoint.checkpoint(
-                    self.ffn, norm2_x, use_reentrant=False
+                    lambda n: self.ffn(n, update_stats=update_stats), norm2_x, use_reentrant=False
                 )
             else:
                 ffn_out = torch.utils.checkpoint.checkpoint(
@@ -53,7 +55,7 @@ class TransformerBlock(nn.Module):
             else:
                 x = x + self.ffn(self.norm2(x))
         if self.exit_head and return_exit:
-            exit_logits = self.exit_head(x)
+            exit_logits = self.exit_head(self.exit_norm(x))
             return x, exit_logits, new_cache
         return x, None, new_cache
 

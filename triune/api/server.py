@@ -28,9 +28,9 @@ def _resolve_studio_src() -> "Path | None":
 
     workspace_root = Path(__file__).resolve().parent.parent.parent
     for cand in [
-        workspace_root / "triune_studio" / "src",
+        workspace_root / "studio" / "src",
         workspace_root / "studio",
-        Path.cwd() / "triune_studio" / "src",
+        Path.cwd() / "studio" / "src",
         Path.cwd() / "studio",
     ]:
         if cand.is_dir():

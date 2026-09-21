@@ -1,6 +1,7 @@
-﻿torch>=2.0.0
-datasets
-tokenizers
-bitsandbytes
-wandb
-flash-linear-attention
+torch>=2.0.0
+datasets>=2.0.0
+tokenizers>=0.13.0
+safetensors>=0.4.0
+wandb>=0.15.0
+fastapi>=0.100.0
+uvicorn>=0.22.0

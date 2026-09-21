@@ -1,0 +1,73 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "triune"
+version = "2.1.0"
+description = "Universal High-Performance AI Framework with 3-Tier Muon/CentroidSteer, Dynamic Early Exits, Layer Streaming, and Studio IDE"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "Yash" }
+]
+keywords = [
+    "deep-learning",
+    "transformer",
+    "mixture-of-experts",
+    "gla",
+    "muon",
+    "centroid-steer",
+    "layer-streaming",
+    "early-exit",
+    "fp8",
+    "pytorch"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "torch>=2.0.0",
+    "datasets>=2.0.0",
+    "tokenizers>=0.13.0",
+    "safetensors>=0.4.0",
+]
+
+[project.optional-dependencies]
+studio = [
+    "fastapi>=0.100.0",
+    "uvicorn>=0.22.0",
+    "pywebview>=4.0.0",
+]
+train = [
+    "wandb>=0.15.0",
+    "bitsandbytes>=0.41.0",
+]
+dev = [
+    "pytest>=7.0.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
+all = [
+    "fastapi>=0.100.0",
+    "uvicorn>=0.22.0",
+    "pywebview>=4.0.0",
+    "wandb>=0.15.0",
+    "bitsandbytes>=0.41.0",
+    "pytest>=7.0.0",
+]
+
+[project.scripts]
+triune = "triune.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["triune*"]
+exclude = ["tests*", "studio*", "models*", "scripts*"]

@@ -1,0 +1,20 @@
+{
+  "model_name": "triune-small",
+  "vocab_size": 32000,
+  "hidden_dim": 1024,
+  "num_layers": 14,
+  "num_heads": 8,
+  "head_dim": 128,
+  "num_experts": 4,
+  "top_k_experts": 1,
+  "shared_expert": true,
+  "shared_expert_scale": 0.5,
+  "expert_hidden_multiplier": 6,
+  "router_prefix_layers": 3,
+  "reflex_exit_layer": 5,
+  "limbic_exit_layer": 10,
+  "use_gla": true,
+  "use_rope": true,
+  "gla_head_dim": 128,
+  "rope_max_seq_len": 4096
+}
