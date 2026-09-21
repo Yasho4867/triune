@@ -11,8 +11,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+from triune.runtime.capabilities import PrecisionCapabilities
+
 # Check if hardware FP8 scaled_mm is available at import time
 _HAS_SCALED_MM = hasattr(torch, "_scaled_mm") and hasattr(torch, "float8_e4m3fn")
+
 
 
 def _quantize_to_fp8(tensor: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -102,11 +105,14 @@ class FP8Linear(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if _HAS_SCALED_MM and x.is_cuda:
-            try:
-                return _FP8MatmulFn.apply(x, self.weight, self.bias)
-            except (RuntimeError, NotImplementedError):
-                pass
+            caps = PrecisionCapabilities.detect(x.device)
+            if caps.native_scaled_mm:
+                try:
+                    return _FP8MatmulFn.apply(x, self.weight, self.bias)
+                except (RuntimeError, NotImplementedError):
+                    pass
         return F.linear(x, self.weight, self.bias)
 
     def extra_repr(self) -> str:
         return f"in_features={self.in_features}, out_features={self.out_features}, bias={self.bias is not None}, fp8={_HAS_SCALED_MM}"
+

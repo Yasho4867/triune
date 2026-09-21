@@ -13,6 +13,8 @@ from .streaming import (
     apply_layer_streaming_if_requested,
     enable_layer_streaming,
 )
+from .capabilities import PrecisionCapabilities
+from .staging import FP8StagingBuffer, ParameterStager, StagingBuffer
 from .vram import AutoOffloader, VRAMProfiler
 
 __all__ = [
@@ -28,6 +30,10 @@ __all__ = [
     "StreamingConfig",
     "enable_layer_streaming",
     "apply_layer_streaming_if_requested",
+    "PrecisionCapabilities",
+    "ParameterStager",
+    "StagingBuffer",
+    "FP8StagingBuffer",
     "PythonSandbox",
     "SandboxResult",
     "VRAMProfiler",

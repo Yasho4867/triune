@@ -5,6 +5,8 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
+from triune.runtime.capabilities import PrecisionCapabilities
+
 try:
     import transformer_engine.pytorch as te
 
@@ -15,13 +17,9 @@ except ImportError:
 
 
 def _is_te_supported() -> bool:
-    if not HAS_TE or not torch.cuda.is_available():
-        return False
-    try:
-        major, _ = torch.cuda.get_device_capability()
-        return major >= 8
-    except Exception:
-        return False
+    caps = PrecisionCapabilities.detect()
+    return caps.transformer_engine and (caps.compute_capability[0] >= 8)
+
 
 
 class FP4Linear(nn.Module):

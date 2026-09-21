@@ -2,18 +2,53 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
-import torch
-
-
+import hashlib
+import json
 import logging
 import os
+from pathlib import Path
 import shutil
 import tempfile
 import time
+from typing import Any, Mapping
+
+import torch
 
 logger = logging.getLogger(__name__)
+
+# Schema-v2 canonical fingerprint specification (Safeguard 6)
+FINGERPRINT_SPEC = {
+    "schema_version": 2,
+    "architecture": ["hidden_dim", "num_layers", "num_heads", "head_dim", "vocab_size"],
+    "attention": ["head_dim", "use_rope", "rope_max_seq_len"],
+    "moe": ["num_experts", "top_k", "shared_expert", "shared_scale", "capacity_multiplier"],
+    "hierarchy": ["router_prefix_layers", "reflex_exit_layer", "limbic_exit_layer", "target_depth_dist"],
+    "precision": ["use_fp4", "use_fp8"],
+    "optimizer": ["use_muon", "muon_lr", "galore", "galore_rank"],
+}
+
+
+def extract_canonical_semantics(config: Mapping[str, Any]) -> dict[str, Any]:
+    """Extracts canonical architecture and training semantics according to Schema-v2 specification."""
+    canonical: dict[str, Any] = {"schema_version": 2}
+    for category, keys in FINGERPRINT_SPEC.items():
+        if category == "schema_version":
+            continue
+        cat_dict: dict[str, Any] = {}
+        for k in keys:
+            val = config.get(k)
+            if isinstance(val, tuple):
+                val = list(val)
+            cat_dict[k] = val
+        canonical[category] = cat_dict
+    return canonical
+
+
+def compute_checkpoint_fingerprint(config: Mapping[str, Any]) -> str:
+    """Computes deterministic SHA-256 fingerprint over Schema-v2 canonical semantics."""
+    canonical = extract_canonical_semantics(config)
+    serialized = json.dumps(canonical, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
 def _checkpoint_payload(trainer, engine, step: int, loss: float) -> dict:
@@ -22,13 +57,17 @@ def _checkpoint_payload(trainer, engine, step: int, loss: float) -> dict:
         run_id = getattr(trainer.logger, "run_id", None)
     best_loss = getattr(engine, "best_eval_loss", None) if engine is not None else None
     depth_ema = getattr(engine, "depth_usage_ema", None) if engine is not None else None
+    cfg = getattr(trainer, "config", {}) or {}
     return {
         "step": step,
         "model_state": trainer.model.state_dict(),
-        "optimizer_state": trainer.optimizer.state_dict(),
+        "optimizer_state": trainer.optimizer.state_dict() if trainer.optimizer is not None else {},
         "loss": loss,
         "best_eval_loss": best_loss,
-        "config": getattr(trainer, "config", {}),
+        "config": cfg,
+        "schema_version": 2,
+        "fingerprint": compute_checkpoint_fingerprint(cfg),
+        "canonical_semantics": extract_canonical_semantics(cfg),
         "depth_usage_ema": depth_ema,
         "wandb_run_id": run_id,
     }
@@ -92,18 +131,34 @@ def save_best(trainer, engine, step: int, loss: float) -> Path:
 def load_checkpoint(trainer, path: str | Path, *, load_optimizer: bool) -> dict:
     checkpoint = torch.load(path, map_location=trainer.device, weights_only=False)
 
-    # Architecture fingerprint verification
+    # Schema-v2 Architecture & Semantic fingerprint verification
     saved_config = checkpoint.get("config", {})
     if saved_config and hasattr(trainer, "config") and isinstance(trainer.config, dict):
         mismatches = []
-        for key in ("hidden_dim", "num_layers", "num_heads", "num_experts", "vocab_size"):
-            if key in saved_config and key in trainer.config:
-                if saved_config[key] != trainer.config[key]:
-                    mismatches.append(f"{key}: saved={saved_config[key]} vs current={trainer.config[key]}")
+        critical_checks = [
+            ("hidden_dim", "architecture"),
+            ("num_layers", "architecture"),
+            ("num_heads", "architecture"),
+            ("head_dim", "architecture"),
+            ("vocab_size", "architecture"),
+            ("num_experts", "moe"),
+            ("top_k", "moe"),
+            ("shared_expert", "moe"),
+            ("router_prefix_layers", "hierarchy"),
+            ("reflex_exit_layer", "hierarchy"),
+            ("limbic_exit_layer", "hierarchy"),
+        ]
+        for key, cat in critical_checks:
+            saved_val = saved_config.get(key)
+            current_val = trainer.config.get(key)
+            if saved_val is not None and current_val is not None and saved_val != current_val:
+                mismatches.append(f"{key} [{cat}]: saved={saved_val} vs current={current_val}")
+
         if mismatches:
             raise ValueError(
-                f"Checkpoint architecture mismatch for {path}: {', '.join(mismatches)}. "
-                f"Cannot restore weights or optimizer state into an incompatible model architecture."
+                f"Checkpoint architecture mismatch for {path}:\n"
+                + "\n".join(f"  - {m}" for m in mismatches)
+                + f"\nCannot restore weights into an incompatible model configuration."
             )
 
     state_dict = checkpoint["model_state"]
@@ -111,6 +166,6 @@ def load_checkpoint(trainer, path: str | Path, *, load_optimizer: bool) -> dict:
         state_dict = {key.removeprefix("_orig_mod."): value for key, value in state_dict.items()}
     trainer.model.load_state_dict(state_dict)
     if load_optimizer:
-        if "optimizer_state" in checkpoint:
+        if "optimizer_state" in checkpoint and checkpoint["optimizer_state"]:
             trainer.optimizer.load_state_dict(checkpoint["optimizer_state"])
     return checkpoint

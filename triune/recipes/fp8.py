@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import torch
 
+from triune.runtime.capabilities import PrecisionCapabilities
 from .bf16 import bf16_autocast
 
 logger = logging.getLogger(__name__)
@@ -15,16 +16,17 @@ def build_fp8_precision_context(*, device, use_te: bool = True) -> callable:
 
     Tries Transformer Engine FP8 (DelayedScaling) first when requested and available,
     falling back to PyTorch native float8_e4m3fn autocast if TE is unavailable,
-    or BF16 autocast if the GPU capability is below SM89.
+    or BF16 autocast if the GPU capability is below SM89 or kernel is unsupported.
     """
     if device.type != "cuda":
         raise RuntimeError("FP8 requires CUDA")
 
-    major, minor = torch.cuda.get_device_capability(device)
+    caps = PrecisionCapabilities.detect(device)
+    major, minor = caps.compute_capability
     is_sm89_plus = (major > 8) or (major == 8 and minor >= 9)
 
     # 1. Try Transformer Engine if requested and on SM89+
-    if use_te and is_sm89_plus:
+    if use_te and is_sm89_plus and caps.transformer_engine:
         try:
             import transformer_engine.pytorch as te
             from transformer_engine.common.recipe import DelayedScaling, Format
@@ -38,8 +40,8 @@ def build_fp8_precision_context(*, device, use_te: bool = True) -> callable:
         except (ImportError, Exception):
             pass
 
-    # 2. Try PyTorch native float8 autocast on SM89+
-    if is_sm89_plus and hasattr(torch, "float8_e4m3fn"):
+    # 2. Try PyTorch native float8 autocast if native scaled_mm is functional
+    if is_sm89_plus and caps.native_scaled_mm and hasattr(torch, "float8_e4m3fn"):
         try:
             with torch.amp.autocast("cuda", dtype=torch.float8_e4m3fn):
                 pass
@@ -53,9 +55,14 @@ def build_fp8_precision_context(*, device, use_te: bool = True) -> callable:
     if not is_sm89_plus:
         msg = f"GPU SM{major}.{minor} lacks FP8 Tensor Cores (requires SM89+ / Ada, Hopper, Blackwell); falling back to BF16 autocast."
     else:
-        msg = "FP8 execution unavailable; falling back to BF16 autocast."
+        msg = (
+            f"FP8 execution unavailable on SM{major}.{minor} "
+            f"(native_scaled_mm={caps.native_scaled_mm}, TE={caps.transformer_engine}); "
+            f"falling back to BF16 autocast."
+        )
 
     logger.warning(msg)
     ctx_fn = lambda: torch.amp.autocast("cuda", dtype=torch.bfloat16)
     ctx_fn.description = msg
     return ctx_fn
+

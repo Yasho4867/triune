@@ -74,6 +74,9 @@ def build_config(overrides: Mapping[str, Any] | None = None) -> dict[str, Any]:
     return config
 
 
+import math
+
+
 def validate_config(config: Mapping[str, Any]) -> None:
     if config["seq_len"] <= 0 or config["seq_len"] > defaults.ROPE_MAX_SEQ_LEN:
         raise ValueError(f"seq_len must be in [1, {defaults.ROPE_MAX_SEQ_LEN}]")
@@ -85,8 +88,24 @@ def validate_config(config: Mapping[str, Any]) -> None:
         raise ValueError("eval_every and eval_batches must be positive")
     if config["save_every"] <= 0 or config["log_every"] <= 0:
         raise ValueError("save_every and log_every must be positive")
-    target = config["target_depth_dist"]
-    if len(target) != 3 or any(value < 0 for value in target):
-        raise ValueError("target_depth_dist must contain three non-negative values")
-    if abs(sum(target) - 1.0) > 1e-6:
-        raise ValueError("target_depth_dist must sum to 1.0")
+
+    # Phase 15: Validate all floating-point configuration parameters are finite
+    float_fields = [
+        "lr", "min_lr", "muon_lr", "galore_lr",
+        "balance_coef", "bias_strength", "usage_ema_decay",
+        "steer_scale", "weight_decay", "muon_weight_decay",
+        "galore_weight_decay", "grad_clip",
+    ]
+    for field in float_fields:
+        if field in config and config[field] is not None:
+            val = config[field]
+            if not isinstance(val, (int, float)) or not math.isfinite(val):
+                raise ValueError(f"Config parameter '{field}' must be a finite float; got {val}")
+
+    target = config.get("target_depth_dist")
+    if target is not None:
+        if len(target) != 3 or any(not isinstance(v, (int, float)) or not math.isfinite(v) or v < 0 for v in target):
+            raise ValueError("target_depth_dist must contain three finite non-negative values")
+        if abs(sum(target) - 1.0) > 1e-6:
+            raise ValueError("target_depth_dist must sum to 1.0")
+

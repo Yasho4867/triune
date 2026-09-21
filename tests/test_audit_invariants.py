@@ -12,10 +12,11 @@ import torch.nn as nn
 from triune.model.transformer import TriuneTransformer
 from triune.model.router import GumbelSoftmaxRouter
 from triune.model.attention import VectorisedGLA
-from triune.model.moe import MoE_FFN
+from triune.model.moe import MoE_FFN, RoutingResult
 from triune.model.zoo import load_model
 from triune.data.dataloader import CyclingDataLoader
 from triune.trainer.checkpoint import save_latest, load_checkpoint
+from triune.runtime.staging import ParameterStager, StagingBuffer
 
 
 class ArchitecturalAuditInvariantsTest(unittest.TestCase):
@@ -196,6 +197,73 @@ class ArchitecturalAuditInvariantsTest(unittest.TestCase):
         with self.assertRaises(ValueError) as ctx:
             load_checkpoint(trainer_bad, ckpt_path, load_optimizer=True)
         self.assertIn("Checkpoint architecture mismatch", str(ctx.exception))
+
+    def test_moe_routing_result_and_accepted_centroids(self):
+        """Phase 7 & 8: RoutingResult container and accepted-only centroid statistics."""
+        dim = 32
+        num_experts = 2
+        moe = MoE_FFN(dim=dim, num_experts=num_experts, top_k=1, shared_expert=False)
+        moe.train()
+
+        torch.manual_seed(42)
+        # B*T = 100, capacity = math.ceil(100 / 2 * 1.5) = 75
+        x = torch.randn(10, 10, dim)
+        flat_x = x.reshape(100, dim)
+
+        # Force all tokens to request expert 0 with varying confidence
+        with torch.no_grad():
+            moe.router.weight.zero_()
+            moe.router.bias.copy_(torch.tensor([100.0, 0.0]))
+            moe.expert_bias.zero_()
+
+        out = moe(x, update_stats=True)
+
+        # 1. RoutingResult structure validation
+        self.assertTrue(hasattr(moe, "last_requested_counts"))
+        self.assertTrue(hasattr(moe, "last_accepted_counts"))
+        self.assertTrue(hasattr(moe, "last_dropped_counts"))
+        self.assertEqual(moe.last_requested_counts.tolist(), [100, 0])
+        self.assertEqual(moe.last_accepted_counts.tolist(), [75, 0])
+        self.assertEqual(moe.last_dropped_counts.tolist(), [25, 0])
+
+        # 2. Phase 8 verification: centroid calculation must NOT equal the full 100 requested tokens
+        unconstrained_mean = flat_x.mean(dim=0)
+        centroid_0 = moe.last_centroids[0]
+        centroid_diff_unconstrained = (centroid_0 - unconstrained_mean).abs().max().item()
+        self.assertGreater(centroid_diff_unconstrained, 1e-4, "Centroid should not include dropped tokens")
+
+        # 3. Direct update_routing_stats consistency
+        moe.update_routing_stats(x)
+        self.assertEqual(moe.last_requested_counts.tolist(), [100, 0])
+        self.assertEqual(moe.last_accepted_counts.tolist(), [75, 0])
+        self.assertEqual(moe.last_dropped_counts.tolist(), [25, 0])
+
+    def test_parameter_stager_lifecycle(self):
+        """Phase 3 & 14: ParameterStager isolation and lifecycle management."""
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        linear = nn.Linear(16, 16)
+        orig_weight_cpu = linear.weight.clone()
+
+        stager = ParameterStager(device=device)
+        stager.register_module(linear)
+
+        # 1. Stage to GPU
+        stager.stage_layer(linear)
+        self.assertEqual(linear.weight.data.device.type, device.type)
+
+        # 2. Mutate staged GPU tensor (simulating optimizer or forward update)
+        with torch.no_grad():
+            linear.weight.data.add_(1.0)
+
+        # 3. Sync back to permanent CPU master and release
+        stager.sync_layer_to_cpu(linear)
+        self.assertEqual(linear.weight.data.device.type, "cpu")
+        torch.testing.assert_close(linear.weight.data, orig_weight_cpu + 1.0)
+
+        # 4. Release and cleanup
+        stager.release_layer(linear)
+        stager.clear()
+        self.assertEqual(len(stager.buffers), 0)
 
 
 if __name__ == "__main__":
