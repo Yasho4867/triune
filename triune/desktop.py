@@ -1,4 +1,4 @@
-"""Native Windows Desktop Application Launcher for Triune Studio."""
+"""Desktop Application Launcher for Triune Studio."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ def launch_desktop_app(port: int = 8000) -> None:
     """Launch embedded Triune Studio API server and open as a native desktop application window."""
     from triune.api import run_server
 
-    print(f"🚀 Starting Triune Framework Engine on http://127.0.0.1:{port}")
+    print(f"[Studio] Starting Triune Framework Engine on http://127.0.0.1:{port}")
     server_thread = threading.Thread(
         target=run_server,
         kwargs={"host": "127.0.0.1", "port": port},
@@ -25,13 +25,13 @@ def launch_desktop_app(port: int = 8000) -> None:
     time.sleep(1.5)
     url = f"http://127.0.0.1:{port}/"
 
-    # 1. Try PyWebView for a pure native desktop window
+    # 1. Try PyWebView for a desktop window (Windows, macOS, Linux)
     try:
         import webview
 
-        print("📱 Launching Triune Studio Native Window via PyWebView...")
+        print("[Studio] Launching native window via PyWebView...")
         webview.create_window(
-            title="Triune Studio – AI Engine & Research IDE",
+            title="Triune Studio",
             url=url,
             width=1340,
             height=880,
@@ -43,20 +43,20 @@ def launch_desktop_app(port: int = 8000) -> None:
     except ImportError:
         pass
 
-    # 2. Try MS Edge Native Windows App Mode (--app=http://127.0.0.1:8000/)
+    # 2. Windows: Try MS Edge App Mode
     if sys.platform == "win32":
         try:
-            print("📱 Launching Triune Studio Native Windows App Mode (MS Edge WebView)...")
             edge_path = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
             if not os.path.exists(edge_path):
                 edge_path = r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"
 
             if os.path.exists(edge_path):
+                print("[Studio] Launching MS Edge application mode...")
                 subprocess.Popen([edge_path, f"--app={url}", "--name=Triune Studio"])
                 return
         except Exception:
             pass
 
-    # 3. Fallback to default browser
-    print("🌐 Opening Triune Studio in browser window...")
+    # 3. Fallback to default system browser
+    print(f"[Studio] Opening in browser: {url}")
     webbrowser.open(url)

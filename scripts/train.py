@@ -225,7 +225,7 @@ def main(argv: list[str] | None = None) -> dict:
         elif config.get("use_fp4"):
             precision_context = build_precision_context(use_fp4=True, device=device)
         else:
-            precision_context = lambda: bf16_autocast("cuda")
+            precision_context = lambda: bf16_autocast(device.type)
 
         trainer = Trainer(
             model=model,

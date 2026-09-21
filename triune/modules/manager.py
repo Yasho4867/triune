@@ -22,8 +22,7 @@ class ModuleManager:
         if config_dir:
             self.base_dir = Path(config_dir)
         else:
-            # Default to C:\TriuneStudio or user home
-            if sys.platform == "win32" and os.path.exists("C:\\"):
+            if sys.platform == "win32" and os.path.exists("C:\\TriuneStudio"):
                 self.base_dir = Path("C:\\TriuneStudio")
             else:
                 self.base_dir = Path.home() / ".triune_studio"

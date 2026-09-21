@@ -102,7 +102,10 @@ class FP8Linear(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if _HAS_SCALED_MM and x.is_cuda:
-            return _FP8MatmulFn.apply(x, self.weight, self.bias)
+            try:
+                return _FP8MatmulFn.apply(x, self.weight, self.bias)
+            except (RuntimeError, NotImplementedError):
+                pass
         return F.linear(x, self.weight, self.bias)
 
     def extra_repr(self) -> str:

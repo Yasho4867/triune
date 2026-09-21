@@ -67,10 +67,10 @@ def find_workspace() -> Path:
     if getattr(sys, "frozen", False):
         exe_dir = Path(sys.executable).parent
         for cand in [exe_dir.parent.parent, exe_dir.parent, exe_dir, Path.cwd()]:
-            if (cand / "triune_framework").exists():
+            if (cand / "triune").exists():
                 return cand
     workspace = Path(__file__).resolve().parent.parent.parent
-    if (workspace / "triune_framework").exists():
+    if (workspace / "triune").exists():
         return workspace
     return Path.cwd()
 
@@ -96,25 +96,30 @@ def start_static_server(directory: Path, port: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Find the venv python executable (studio_env)
+# Find the venv python executable (studio_env or active interpreter)
 # ---------------------------------------------------------------------------
 def find_venv_python() -> Path | None:
-    """Find the studio_env python.exe that has torch installed."""
+    """Find a Python interpreter with torch installed (Windows or Linux)."""
     exe_dir = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
     workspace = find_workspace()
 
+    is_win = sys.platform == "win32"
+    bin_dir = "Scripts" if is_win else "bin"
+    py_name = "python.exe" if is_win else "python"
+
     candidates = [
-        exe_dir / "studio_env" / "Scripts" / "python.exe",
-        exe_dir.parent / "studio_env" / "Scripts" / "python.exe",
-        workspace / "triune_studio" / "studio_env" / "Scripts" / "python.exe",
-        workspace / "studio_env" / "Scripts" / "python.exe",
+        exe_dir / "studio_env" / bin_dir / py_name,
+        exe_dir.parent / "studio_env" / bin_dir / py_name,
+        workspace / "studio_env" / bin_dir / py_name,
+        workspace / ".venv" / bin_dir / py_name,
+        Path(sys.executable),
     ]
     for p in candidates:
         if p.exists():
             print(f"[Launcher] Found venv python: {p}")
             return p
 
-    print("[Launcher] WARNING: Could not find studio_env python.exe")
+    print("[Launcher] WARNING: Could not find venv python executable")
     for p in candidates:
         print(f"  Checked: {p} (exists={p.exists()})")
     return None
