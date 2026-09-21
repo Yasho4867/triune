@@ -65,6 +65,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--use_fp8", action="store_true", help="Enable native FP8 (E4M3) precision context")
     parser.add_argument("--use_muon", action=argparse.BooleanOptionalAction, default=True, help="Enable Muon for non-expert 2D hidden weights")
     parser.add_argument("--muon_lr", type=float, help="Muon learning rate (default: 0.02)")
+    parser.add_argument("--galore", action=argparse.BooleanOptionalAction, default=None, help="Enable GaLore low-rank gradient projection for expert weights")
+    parser.add_argument("--galore_rank", type=int, help="GaLore projection subspace rank (default: 256)")
+    parser.add_argument("--galore_update_gap", type=int, help="GaLore subspace update frequency in steps (default: 200)")
+    parser.add_argument("--galore_lr", type=float, help="GaLore learning rate (default: 1e-4)")
+    parser.add_argument("--galore_weight_decay", type=float, help="GaLore weight decay (default: 0.05)")
     parser.add_argument("--force", action="store_true", help="Override resource manager feasibility recommendations and proceed regardless of VRAM budget")
     parser.add_argument("--auto_fit", action="store_true", default=False, help="Automatically adopt recommended microbatch and grad_accum settings if not explicitly specified")
     parser.add_argument("--streaming", action="store_true", help="Enable AirLLM-style layer streaming to train large models on consumer GPUs with <1.5 GB VRAM")
@@ -126,7 +131,9 @@ def main(argv: list[str] | None = None) -> dict:
         for key in (
             "checkpoint_dir", "seq_len", "lr", "total_steps", "batch_size", "grad_accum_steps",
             "save_every", "log_every", "eval_every", "eval_batches", "target_depth_dist", "usage_ema_decay", "bias_strength",
-            "balance_coef", "exploration", "exploration_steps", "steer_scale", "use_muon", "muon_lr", "dataset_name",
+            "balance_coef", "exploration", "exploration_steps", "steer_scale", "use_muon", "muon_lr",
+            "galore", "galore_rank", "galore_update_gap", "galore_lr", "galore_weight_decay",
+            "dataset_name",
             "dataset_config", "num_workers", "num_layers", "num_experts", "shuffle_buffer",
         )
         if getattr(args, key) is not None
