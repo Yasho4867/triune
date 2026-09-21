@@ -586,6 +586,7 @@
         });
         const data = await response.json();
         const reply = data.choices ? data.choices[0].message.content : 'Engine processing completed.';
+        const tele = data.telemetry || { route: route.toUpperCase(), vram: `${vramUsage.allocated} GB`, latency: '18ms' };
 
         setMessages(prev => [
           ...prev,
@@ -594,7 +595,12 @@
             text: reply,
             time: new Date().toLocaleTimeString(),
             isAssistant: true,
-            telemetry: { route: route.toUpperCase(), vram: `${vramUsage.allocated} GB`, latency: '18ms' }
+            telemetry: {
+              route: tele.route || route.toUpperCase(),
+              vram: tele.vram_gb !== undefined ? `${tele.vram_gb} GB` : `${vramUsage.allocated} GB`,
+              latency: tele.latency_ms !== undefined ? `${tele.latency_ms}ms` : '18ms',
+              speed: tele.tokens_per_sec ? `${tele.tokens_per_sec} t/s` : undefined
+            }
           }
         ]);
       } catch (err) {
@@ -608,6 +614,50 @@
             telemetry: { route: route.toUpperCase(), vram: `${vramUsage.allocated} GB`, latency: '14ms' }
           }
         ]);
+      }
+    };
+
+    const handleStartFineTuning = async () => {
+      setFineTuningStatus('🎯 Attaching LoRA adapters & initiating fine-tuning run on PyTorch backend...');
+      try {
+        const res = await apiFetch('/v1/finetune/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            dataset_path: loraConfig.dataset,
+            lora_rank: loraConfig.rank,
+            lora_alpha: loraConfig.alpha,
+            epochs: loraConfig.epochs,
+            lr: parseFloat(loraConfig.lr) || 2e-4,
+          })
+        });
+        const data = await res.json();
+        if (data.status === 'started') {
+          showToast('LoRA fine-tuning started on PyTorch engine!');
+          const poller = setInterval(async () => {
+            try {
+              const sRes = await apiFetch('/v1/finetune/status');
+              const sData = await sRes.json();
+              if (sData.status === 'completed') {
+                clearInterval(poller);
+                setFineTuningStatus(`✅ Fine-tuning completed! Final Loss: ${sData.final_loss}. Saved to: ${sData.output_dir}`);
+                showToast('LoRA Fine-Tuning Completed!');
+              } else if (sData.status === 'failed') {
+                clearInterval(poller);
+                setFineTuningStatus(`❌ Fine-tuning failed: ${sData.error}`);
+                showToast('Fine-Tuning Failed');
+              } else if (sData.status === 'running') {
+                setFineTuningStatus(`🚀 Training in progress... Step ${sData.step} (Trainable params: ${sData.trainable_params})`);
+              }
+            } catch (err) {
+              clearInterval(poller);
+            }
+          }, 1000);
+        } else {
+          setFineTuningStatus(`⚠️ ${data.message || 'Could not start fine-tuning'}`);
+        }
+      } catch (err) {
+        setFineTuningStatus('❌ Network error: Could not reach backend fine-tuning endpoint');
       }
     };
 
@@ -984,13 +1034,7 @@
               e('button', {
                 className: 'btn-send',
                 style: { width: '100%', height: '48px', marginTop: '10px' },
-                onClick: () => {
-                  setFineTuningStatus('🎯 Attaching LoRA adapters & starting fine-tuning run on PyTorch engine...');
-                  setTimeout(() => {
-                    setFineTuningStatus('✅ Fine-tuning completed! Saved to ./checkpoints/finetuned.safetensors');
-                    showToast('LoRA Fine-Tuning Run Finished!');
-                  }, 1200);
-                }
+                onClick: handleStartFineTuning
               }, 'Start LoRA Fine-Tuning Run'),
               fineTuningStatus && e('div', { className: 'notebook-terminal', style: { marginTop: '16px' } }, fineTuningStatus)
             )

@@ -35,10 +35,6 @@ def rotate_half(x):
     return torch.cat((-x2, x1), dim=-1)
 
 def apply_rotary(q, k, cos, sin):
-    # q, k are bf16; cos, sin are fp32 – we cast inside
-    cos = cos.unsqueeze(0).unsqueeze(0).to(q.dtype)
-    sin = sin.unsqueeze(0).unsqueeze(0).to(q.dtype)
-    q_rot = q * cos + rotate_half(q) * sin
-    k_rot = k * cos + rotate_half(k) * sin
-    return q_rot, k_rot
+    from triune.kernels import fast_rope
+    return fast_rope(q, k, cos, sin)
 

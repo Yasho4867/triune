@@ -103,16 +103,96 @@ if HAS_FASTAPI:
                     except Exception as err:
                         print(f"[Triune Engine GPU Note] {err}")
 
-                # Real hardware-spinning PyTorch model for CPU (runs autograd in ~50ms per step)
-                self.model = nn.Sequential(
-                    nn.Embedding(4000, 512),
-                    nn.Linear(512, 1024),
-                    nn.GELU(),
-                    nn.Linear(1024, 512),
-                    nn.Linear(512, 4000)
+                # Real native TriuneTransformer architecture on CPU (8 layers, 4 experts, 3-tier exits)
+                self.model = TriuneTransformer(
+                    vocab_size=4000,
+                    hidden_dim=512,
+                    num_layers=8,
+                    num_heads=4,
+                    num_experts=4,
+                    router_prefix_layers=2,
+                    reflex_exit_layer=3,
+                    limbic_exit_layer=6,
+                    use_fp4=False,
+                    use_fp8=False,
                 ).to(self.device)
                 self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=1e-4)
-                print("[Triune Engine] Loaded optimized PyTorch Hardware Model on CPU.")
+                print("[Triune Engine] Loaded 8-Layer MoE TriuneTransformer on CPU.")
+
+        def generate_text(self, prompt: str, max_new_tokens: int = 64, temperature: float = 0.7, force_depth: Optional[int] = None) -> Dict[str, Any]:
+            self.lazy_init_model()
+            t0 = time.perf_counter()
+            self.model.eval()
+
+            # Check if tokenizer exists
+            tokenizer = None
+            for t_path in ("triune_tokenizer.json", "tokenizer.json"):
+                if Path(t_path).is_file():
+                    try:
+                        from triune.data.tokenizer import load_tokenizer
+                        tokenizer = load_tokenizer(t_path)
+                        break
+                    except Exception:
+                        pass
+
+            vocab_size = getattr(self.model, "vocab_size", 4000)
+            if tokenizer:
+                ids = tokenizer.encode(prompt).ids
+                pad_id = tokenizer.token_to_id("[PAD]") or 0
+                eos_id = tokenizer.token_to_id("[SEP]") or 2
+            else:
+                ids = [ord(c) % (vocab_size - 1) + 1 for c in prompt]
+                pad_id = 0
+                eos_id = 2
+
+            if not ids:
+                ids = [1]
+
+            input_tensor = torch.tensor([ids], dtype=torch.long, device=self.device)
+            gen_ids = []
+            route_used = "CORTEX"
+
+            with torch.no_grad():
+                for _ in range(max(1, min(max_new_tokens, 128))):
+                    res = self.model(input_tensor, force_depth=force_depth)
+                    if isinstance(res, tuple):
+                        logits, route_logits = res[0], res[1]
+                        if route_logits is not None and route_logits.numel() > 0:
+                            route_choice = route_logits.argmax(dim=-1).item()
+                            route_used = ["REFLEX", "LIMBIC", "CORTEX"][min(route_choice, 2)]
+                    else:
+                        logits = res
+
+                    next_logits = logits[0, -1].float() / max(0.01, temperature)
+                    next_token = torch.argmax(next_logits).item() if temperature <= 0.05 else torch.multinomial(torch.softmax(next_logits, dim=-1), 1).item()
+                    if next_token == eos_id or len(gen_ids) >= max_new_tokens:
+                        break
+                    gen_ids.append(next_token)
+                    input_tensor = torch.cat([input_tensor, torch.tensor([[next_token]], device=self.device)], dim=1)
+
+            t1 = time.perf_counter()
+            elapsed_sec = max(0.001, t1 - t0)
+            tok_per_sec = int(len(gen_ids) / elapsed_sec)
+
+            if tokenizer and gen_ids:
+                try:
+                    generated_text = tokenizer.decode(gen_ids)
+                except Exception:
+                    generated_text = "".join(chr(i % 128) for i in gen_ids)
+            elif gen_ids:
+                generated_text = "".join(chr(i % 128) for i in gen_ids)
+            else:
+                generated_text = f"Processed prompt with Triune MoE {route_used} tier."
+
+            vram_stats = VRAMProfiler.get_vram_stats(self.device)
+            return {
+                "text": generated_text,
+                "route": route_used,
+                "tokens_count": len(gen_ids),
+                "tokens_per_sec": tok_per_sec,
+                "latency_ms": round(elapsed_sec * 1000, 1),
+                "vram_gb": vram_stats.get("allocated_gb", 0.0),
+            }
 
         def step_once(self) -> Dict[str, Any]:
             self.lazy_init_model()
@@ -213,17 +293,35 @@ if HAS_FASTAPI:
     class SandboxRunRequest(BaseModel):
         code: str
 
+    finetune_state: Dict[str, Any] = {
+        "is_running": False,
+        "status": "idle",
+        "step": 0,
+        "loss": 0.0,
+        "final_loss": None,
+        "trainable_params": 0,
+        "output_dir": "",
+        "error": None,
+    }
+
     @router.get("/v1/models")
     async def list_models() -> Dict[str, Any]:
         """List available model checkpoints and zoo entries."""
-        return {
-            "object": "list",
-            "data": [
-                {"id": "triune-2.5b-moe", "object": "model"},
-                {"id": "triune-750m-dense", "object": "model"},
-                {"id": "triune-vision-mini", "object": "model"},
-            ],
-        }
+        from pathlib import Path
+        models = [
+            {"id": "triune-nano", "object": "model", "description": "8-layer MoE (CPU & Edge Optimized)"},
+            {"id": "triune-small", "object": "model", "description": "14-layer MoE with 4 experts"},
+            {"id": "triune-2.5b", "object": "model", "description": "18-layer MoE with 8 experts"},
+            {"id": "triune-base", "object": "model", "description": "24-layer MoE with 8 experts (Production Standard)"},
+            {"id": "triune-moe", "object": "model", "description": "32-layer MoE with 16 experts"},
+            {"id": "triune-7b", "object": "model", "description": "32-layer MoE with 8 experts"},
+        ]
+        for cdir in ("checkpoints", "checkpoints_full"):
+            p = Path(cdir)
+            if p.is_dir():
+                for f in p.glob("*.pt"):
+                    models.append({"id": f"{cdir}/{f.name}", "object": "checkpoint", "description": f"Local checkpoint: {f.name}"})
+        return {"object": "list", "data": models}
 
     @router.get("/v1/system/diagnostics")
     async def get_system_diagnostics() -> Dict[str, Any]:
@@ -247,8 +345,24 @@ if HAS_FASTAPI:
 
     @router.post("/v1/chat/completions")
     async def chat_completions(req: ChatCompletionRequest) -> Dict[str, Any]:
-        """Real PyTorch engine chat completion response."""
+        """Real PyTorch engine chat completion response with dynamic routing."""
         user_prompt = req.messages[-1].get("content", "") if req.messages else ""
+        force_depth = None
+        for cmd, d in (("reflex", 0), ("limbic", 1), ("cortex", 2)):
+            if user_prompt.lower().startswith(f"{cmd} ") or req.model.lower().endswith(cmd):
+                force_depth = d
+                if user_prompt.lower().startswith(f"{cmd} "):
+                    user_prompt = user_prompt[len(cmd) + 1:].strip()
+                break
+
+        res = await asyncio.to_thread(
+            pytorch_state.generate_text,
+            user_prompt,
+            max_new_tokens=req.max_tokens,
+            temperature=req.temperature,
+            force_depth=force_depth,
+        )
+
         return {
             "id": "chatcmpl-triune",
             "object": "chat.completion",
@@ -258,12 +372,63 @@ if HAS_FASTAPI:
                     "index": 0,
                     "message": {
                         "role": "assistant",
-                        "content": f"[PyTorch Engine - {pytorch_state.device_name}] Processed prompt through native TriuneTransformer architecture:\n\n\"{user_prompt}\""
+                        "content": res["text"]
                     },
                     "finish_reason": "stop",
                 }
             ],
+            "telemetry": {
+                "route": res["route"],
+                "latency_ms": res["latency_ms"],
+                "tokens_per_sec": res["tokens_per_sec"],
+                "tokens_count": res["tokens_count"],
+                "vram_gb": res["vram_gb"],
+            }
         }
+
+    @router.post("/v1/finetune/start")
+    async def start_finetune(req: FineTuneRequest) -> Dict[str, Any]:
+        """Initiate real LoRA fine-tuning task in the background."""
+        if finetune_state["is_running"]:
+            return {"status": "already_running", "message": "A fine-tuning run is already active."}
+
+        finetune_state["is_running"] = True
+        finetune_state["status"] = "running"
+        finetune_state["error"] = None
+        finetune_state["step"] = 0
+
+        async def _run_finetune_job():
+            try:
+                pytorch_state.lazy_init_model()
+                cfg = LoRAConfig(
+                    rank=req.lora_rank,
+                    alpha=req.lora_alpha,
+                )
+                finetuner = TriuneFineTuner(pytorch_state.model, cfg)
+                finetune_state["trainable_params"] = finetuner.count_trainable_parameters()
+
+                res = await asyncio.to_thread(
+                    finetuner.fit,
+                    dataset_path=req.dataset_path,
+                    epochs=req.epochs,
+                    lr=req.lr,
+                )
+                finetune_state["status"] = "completed"
+                finetune_state["final_loss"] = res.get("final_loss", 0.0)
+                finetune_state["output_dir"] = res.get("output_dir", "")
+            except Exception as exc:
+                finetune_state["status"] = "failed"
+                finetune_state["error"] = str(exc)
+            finally:
+                finetune_state["is_running"] = False
+
+        asyncio.create_task(_run_finetune_job())
+        return {"status": "started", "message": f"LoRA fine-tuning initiated for {req.epochs} epochs."}
+
+    @router.get("/v1/finetune/status")
+    async def get_finetune_status() -> Dict[str, Any]:
+        """Return live LoRA fine-tuning progress and status."""
+        return finetune_state
 
     @router.post("/v1/dag/execute")
     async def execute_dag(req: DAGExecuteRequest) -> Dict[str, Any]:

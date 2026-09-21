@@ -7,7 +7,9 @@ class RMSNorm(nn.Module):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(dim))
         self.eps = eps
+
     def forward(self, x):
-        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps) * self.weight
+        from triune.kernels import fast_rmsnorm
+        return fast_rmsnorm(x, self.weight, self.eps)
 
 # ─── Hybrid Attention (only GLA, no dead projections) ────────

@@ -8,6 +8,7 @@ from .rotary import *
 from .router import *
 from .transformer import *
 from .zoo import load_model
+from .adapters import WeightTiedExitProjection, attach_early_exits, generate_adaptive
 
 __all__ = [
     "MODEL_REGISTRY",

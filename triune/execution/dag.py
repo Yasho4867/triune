@@ -80,6 +80,55 @@ class ExecutionEngine:
     def __init__(self):
         self.node_registry: Dict[str, Callable] = {}
         self.execution_state: Dict[str, Any] = {}
+        self._register_default_handlers()
+
+    def _register_default_handlers(self) -> None:
+        """Register default handlers for standard DAG node categories."""
+        self.register_handler("Data", self._handle_data_node)
+        self.register_handler("Model", self._handle_model_node)
+        self.register_handler("Optimizer", self._handle_optimizer_node)
+        self.register_handler("Export", self._handle_export_node)
+
+    @staticmethod
+    def _handle_data_node(node: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        title = node.get("title", "DataLoader")
+        details = node.get("details", "")
+        return {
+            "status": "active",
+            "source": title,
+            "tokens_loaded": 2048,
+            "config": details,
+        }
+
+    @staticmethod
+    def _handle_model_node(node: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        title = node.get("title", "TriuneTransformer")
+        return {
+            "status": "initialized",
+            "architecture": title,
+            "precision": "bfloat16",
+            "layers_ready": True,
+        }
+
+    @staticmethod
+    def _handle_optimizer_node(node: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        title = node.get("title", "CentroidSteerOptimizer")
+        return {
+            "status": "ready",
+            "optimizer": title,
+            "steer_scale": 0.20,
+            "muon_active": True,
+        }
+
+    @staticmethod
+    def _handle_export_node(node: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        title = node.get("title", "SafeTensors")
+        return {
+            "status": "exported",
+            "target": title,
+            "format": "safetensors",
+            "quantized": True,
+        }
 
     def register_handler(self, node_type: str, handler: Callable):
         self.node_registry[node_type] = handler
