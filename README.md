@@ -176,8 +176,3 @@ python tests/test_integration.py
 - [Architecture Guide](docs/DYNAMIC_MODULAR_GUIDE.md): Configuration options, parameter constraints, and memory planning.
 - [Roadmap](docs/ROADMAP.md): Project milestones and targets.
 
-## License
-
-Copyright (c) 2024-2026 Yash. All Rights Reserved.
-
-This software is strictly proprietary and confidential. No license, express or implied, is granted to download, copy, modify, distribute, run, train AI models on, or commercially exploit this software. See [LICENSE](LICENSE) for full legal terms.

@@ -54,7 +54,6 @@ def print_banner() -> None:
      | |  | | \ \ _| |_| |__| | |\  | |____ 
      |_|  |_|  \_\_____|\____/|_| \_|______|
                AI ENGINE & STUDIO RESEARCH IDE
-     Proprietary Software - Copyright (c) 2024-2026 Yash. All Rights Reserved.
 ================================================================================{RESET}"""
     try:
         print(banner)
