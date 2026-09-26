@@ -1135,11 +1135,26 @@ if HAS_FASTAPI:
                     datasets.append({
                         "id": f.stem,
                         "name": f.name,
+                        "path": str(f).replace("\\", "/"),
                         "tokens": f"~{int(size_mb * 250000):,} (estimated)",
                         "status": f"Local File ({size_mb} MB)",
                         "type": "local"
                     })
         return {"datasets": datasets}
+
+    class DatasetSelectRequest(BaseModel):
+        dataset_path: str
+
+    @router.post("/v1/datasets/select")
+    async def select_dataset_endpoint(req: DatasetSelectRequest) -> Dict[str, Any]:
+        """Activate dataset for live training, LoRA, and DAG pipeline."""
+        pytorch_state.load_training_data(req.dataset_path)
+        return {
+            "status": "success",
+            "dataset_path": pytorch_state.dataset_path,
+            "sequences": len(pytorch_state.data_chunks),
+            "message": f"Active dataset set to {pytorch_state.dataset_path}"
+        }
 
     # -------------------------------------------------------------------------
     # BYOK Provider Credentials Endpoints

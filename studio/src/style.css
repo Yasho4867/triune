@@ -747,6 +747,65 @@ body {
   line-height: 1.5;
 }
 
+.node-card-react.running {
+  border-color: #d97706 !important;
+  box-shadow: 0 0 18px rgba(217, 119, 6, 0.45) !important;
+  animation: node-pulse 1.2s infinite alternate;
+}
+
+.node-card-react.completed {
+  border-color: #16a34a !important;
+  box-shadow: 0 0 14px rgba(22, 163, 74, 0.3) !important;
+}
+
+.node-card-react.failed {
+  border-color: #dc2626 !important;
+  box-shadow: 0 0 14px rgba(220, 38, 38, 0.3) !important;
+}
+
+@keyframes node-pulse {
+  from { box-shadow: 0 0 6px rgba(217, 119, 6, 0.3); }
+  to { box-shadow: 0 0 20px rgba(217, 119, 6, 0.7); }
+}
+
+.node-status-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 4px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.node-status-badge.running {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.node-status-badge.completed {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.node-status-badge.failed {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.node-live-output {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: #fcfbf9;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: #15803d;
+  font-weight: 600;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
 /* Ports on nodes - Fixed to exact vertical center of node header (top: 19px) */
 .node-port {
   width: 14px;
