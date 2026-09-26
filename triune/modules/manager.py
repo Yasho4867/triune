@@ -67,8 +67,8 @@ class ModuleManager:
                 "type": "model",
                 "version": "1.2.0",
                 "description": "Standard 24-layer MoE checkpoint with 8 experts and 3 exit heads (Reflex, Limbic, Cortex). Optimized for fast local inference.",
-                "repo_url": "https://github.com/Yash-456/triune-transformer",
-                "download_url": "https://github.com/Yash-456/triune-transformer/releases/download/v1.2.0/triune-base.safetensors",
+                "repo_url": "https://github.com/Yasho4867/triune",
+                "download_url": "https://github.com/Yasho4867/triune/releases/download/v1.2.0/triune-base.safetensors",
                 "size_mb": 4800,
                 "tags": ["MoE", "2.5B", "Recommended", "Native"],
                 "requires_cuda": False
@@ -81,7 +81,7 @@ class ModuleManager:
                 "version": "1.0.4",
                 "description": "LoRA rank-16 adapter trained on FineWeb & StarCoder Python/Rust dataset. Plugs directly into TriuneTransformer query/value projections.",
                 "repo_url": "https://github.com/huggingface/transformers",
-                "download_url": "https://github.com/Yash-456/triune-transformer/releases/download/v1.0.0/code-lora-r16.safetensors",
+                "download_url": "https://github.com/Yasho4867/triune/releases/download/v1.0.0/code-lora-r16.safetensors",
                 "size_mb": 64,
                 "tags": ["LoRA", "Coding", "r=16"],
                 "requires_cuda": False

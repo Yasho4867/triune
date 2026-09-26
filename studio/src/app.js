@@ -140,6 +140,7 @@
     const [metrics, setMetrics] = useState({ loss: 2.845, lm_loss: 2.345, router_loss: 0.5, step: 0, throughput: 1250 });
     const [exitUsage, setExitUsage] = useState({ reflex: 38.0, limbic: 34.0, cortex: 28.0 });
     const [telemetryLogs, setTelemetryLogs] = useState([]);
+    const [lastSample, setLastSample] = useState('');
     const canvasRef = useRef(null);
 
     // Visual Node Graph State
@@ -162,7 +163,7 @@
       alpha: 32,
       lr: '0.0002',
       epochs: 3,
-      dataset: 'finetune.jsonl',
+      dataset: 'data/fineweb_sample.jsonl',
       quantization: '4-bit NF4'
     });
     const [fineTuningStatus, setFineTuningStatus] = useState(null);
@@ -394,6 +395,7 @@
               if (latest.exit_usage) setExitUsage(latest.exit_usage);
             }
             if (data.logs && data.logs.length > 0) setTelemetryLogs(data.logs);
+            if (data.last_sample) setLastSample(data.last_sample);
           } catch (err) {}
         }, 300);
       }
@@ -597,6 +599,55 @@
       }
     };
 
+    const handleSaveCheckpoint = async () => {
+      showToast('Saving model checkpoint to disk...');
+      try {
+        const res = await apiFetch('/v1/training/save_checkpoint', { method: 'POST' });
+        const data = await res.json();
+        if (data.status === 'success') {
+          showToast(`💾 Checkpoint saved! (${data.size_mb} MB) -> ${data.filename}`);
+        } else {
+          showToast(`Save failed: ${data.message || 'unknown error'}`);
+        }
+      } catch (err) {
+        showToast('Error saving checkpoint to disk');
+      }
+    };
+
+    const handleLoadModel = async (modelId) => {
+      showToast(`Loading ${modelId} into engine...`);
+      try {
+        const candidatePaths = [
+          `checkpoints_full/best.pt`,
+          `checkpoints_full/latest.pt`,
+          `checkpoints/${modelId}.pt`,
+          `checkpoints/triune_studio_step_0.pt`
+        ];
+        let loaded = false;
+        for (const p of candidatePaths) {
+          const res = await apiFetch('/v1/models/load', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ checkpoint_path: p })
+          });
+          const data = await res.json();
+          if (data.status === 'success') {
+            showToast(`✅ Loaded ${p} into live engine!`);
+            setActiveModel(modelId);
+            loaded = true;
+            break;
+          }
+        }
+        if (!loaded) {
+          setActiveModel(modelId);
+          showToast(`Switched active model to ${modelId}`);
+        }
+      } catch (err) {
+        setActiveModel(modelId);
+        showToast(`Switched active model to ${modelId}`);
+      }
+    };
+
     const handleExecuteDAG = async () => {
       setDagExecutionStatus('Sending DAG graph to ExecutionEngine...');
       try {
@@ -606,8 +657,20 @@
           body: JSON.stringify({ nodes, edges })
         });
         const data = await res.json();
-        setDagExecutionStatus(`✅ ExecutionEngine processed DAG! Executed ${Object.keys(data.results || {}).length} nodes.`);
-        showToast('DAG Engine Executed!');
+        const results = data.results || {};
+        const count = Object.keys(results).length;
+
+        let details = [];
+        for (const [k, v] of Object.entries(results)) {
+          const out = v.output || {};
+          if (out.tokens_loaded) details.push(`Data: ${out.tokens_loaded} tok`);
+          if (out.total_params) details.push(`Model: ${out.total_params}`);
+          if (out.loss !== undefined) details.push(`Step Loss: ${out.loss}`);
+          if (out.file_size_mb) details.push(`Export: ${out.file_size_mb} MB`);
+        }
+        const summary = details.length > 0 ? ` (${details.join(' | ')})` : '';
+        setDagExecutionStatus(`✅ ExecutionEngine processed ${count} nodes in real pipeline!${summary}`);
+        showToast('DAG Engine Executed Pipeline!');
       } catch (err) {
         setDagExecutionStatus('✅ ExecutionEngine completed pipeline.');
         showToast('DAG Executed!');
@@ -634,19 +697,23 @@
           })
         });
         const data = await response.json();
-        const reply = data.choices ? data.choices[0].message.content : 'Engine processing completed.';
+        const isExternal = activeModel.includes('gpt') || activeModel.includes('claude') || activeModel.includes('gemini');
+        const reply = data.choices
+          ? data.choices[0].message.content
+          : (data.error ? `⚠️ [API Key Notice]: ${data.error}` : 'Engine processing completed.');
+        const senderName = isExternal ? activeModel.toUpperCase() : 'Triune MoE Engine';
         const tele = data.telemetry || { route: route.toUpperCase(), vram: `${vramUsage.allocated} GB`, latency: '18ms' };
 
         setMessages(prev => [
           ...prev,
           {
-            sender: 'Triune Engine',
+            sender: senderName,
             text: reply,
             time: new Date().toLocaleTimeString(),
             isAssistant: true,
             telemetry: {
-              route: tele.route || route.toUpperCase(),
-              vram: tele.vram_gb !== undefined ? `${tele.vram_gb} GB` : `${vramUsage.allocated} GB`,
+              route: isExternal ? 'CLOUD API' : (tele.route || route.toUpperCase()),
+              vram: isExternal ? '0.0 GB (Cloud)' : (tele.vram_gb !== undefined ? `${tele.vram_gb} GB` : `${vramUsage.allocated} GB`),
               latency: tele.latency_ms !== undefined ? `${tele.latency_ms}ms` : '18ms',
               speed: tele.tokens_per_sec ? `${tele.tokens_per_sec} t/s` : undefined
             }
@@ -892,13 +959,25 @@
             e('div', { className: 'chat-controls-box' },
               e('div', { className: 'route-select-row' },
                 e('div', null,
-                  e('label', { style: { marginRight: '8px', fontWeight: 600 } }, 'Exit Head Route:'),
+                  e('label', { style: { marginRight: '8px', fontWeight: 600 } }, 'Model:'),
+                  e('select', { value: activeModel, onChange: ev => { setActiveModel(ev.target.value); showToast(`Active Model: ${ev.target.value}`); } },
+                    e('option', { value: 'triune-base' }, 'Triune-Base (Local Native MoE 32k)'),
+                    e('option', { value: 'triune-small' }, 'Triune-Small (Local Fast MoE 32k)'),
+                    e('option', { value: 'gpt-4o-mini' }, 'GPT-4o Mini (OpenAI BYOK)'),
+                    e('option', { value: 'claude-3-5-sonnet' }, 'Claude 3.5 Sonnet (Anthropic BYOK)'),
+                    e('option', { value: 'gemini-1.5-flash' }, 'Gemini 1.5 Flash (Google BYOK)')
+                  )
+                ),
+                activeModel.startsWith('triune') ? e('div', null,
+                  e('label', { style: { marginRight: '8px', fontWeight: 600 } }, 'Exit Route:'),
                   e('select', { value: route, onChange: ev => setRoute(ev.target.value) },
                     e('option', { value: 'auto' }, 'Auto (Adaptive Layer Exit)'),
                     e('option', { value: 'reflex' }, 'Reflex (Shallow Exit - Fast)'),
                     e('option', { value: 'limbic' }, 'Limbic (Mid Depth Exit)'),
                     e('option', { value: 'cortex' }, 'Cortex (Full Layer Depth)')
                   )
+                ) : e('div', null,
+                  e('span', { className: 'pill', style: { background: '#fef3c7', color: '#92400e', borderColor: '#fde68a' } }, 'BYOK API Mode')
                 ),
                 e('div', null,
                   e('label', { style: { marginRight: '8px' } }, `Temp: ${temperature}`),
@@ -944,11 +1023,20 @@
             e('div', { className: 'card-chart' },
               e('div', { className: 'chart-header' },
                 e('h3', { style: { fontFamily: 'Newsreader', fontSize: '18px' } }, `Real-time PyTorch Engine Loss Stream (${systemDiagnostics.device_name})`),
-                e('button', { className: `btn-action ${isTraining ? 'pause' : 'start'}`, onClick: handleToggleTraining },
-                  isTraining ? 'Pause PyTorch Loop' : 'Start PyTorch Loop'
+                e('div', { style: { display: 'flex', gap: '8px' } },
+                  e('button', { className: `btn-action ${isTraining ? 'pause' : 'start'}`, onClick: handleToggleTraining },
+                    isTraining ? 'Pause PyTorch Loop' : 'Start PyTorch Loop'
+                  ),
+                  e('button', { className: 'btn-action', style: { background: 'var(--accent-olive, #2b4c3f)', color: '#fff' }, onClick: handleSaveCheckpoint },
+                    '💾 Save Checkpoint'
+                  )
                 )
               ),
               e('canvas', { ref: canvasRef, width: 850, height: 240, className: 'loss-canvas' }),
+              lastSample && e('div', { className: 'card-stat', style: { marginTop: '12px', textAlign: 'left', background: 'var(--bg-card, #f4efe6)', border: '1px solid var(--border-color, #d4ccb8)', borderRadius: '8px', padding: '12px 16px' } },
+                e('div', { className: 'stat-label', style: { color: 'var(--accent-terracotta, #9a3412)', fontWeight: 600, marginBottom: '4px' } }, '✨ Latest Live Model Generation (32k Vocab BPE):'),
+                e('div', { style: { fontFamily: 'JetBrains Mono, monospace', fontSize: '13px', color: 'var(--text-main, #24211e)', lineHeight: '1.5' } }, `"${lastSample}"`)
+              ),
               e('div', { className: 'telemetry-box' },
                 telemetryLogs.length > 0
                   ? telemetryLogs.map((log, idx) => e('div', { key: idx }, log))
@@ -1130,6 +1218,7 @@
                   e('p', { style: { color: 'var(--text-muted)', fontSize: '13px', lineHeight: '1.5' } }, m.desc),
                   e('div', { className: 'model-actions' },
                     e('button', { className: 'btn-sec', onClick: () => { setActiveModel(m.id); showToast(`Active Model: ${m.name}`); } }, 'Select Active'),
+                    e('button', { className: 'btn-sec', style: { color: 'var(--accent-olive, #2b4c3f)', fontWeight: 600 }, onClick: () => handleLoadModel(m.id) }, 'Load Checkpoint'),
                     e('button', { className: 'btn-sec', onClick: () => handleExportModel(m.id, 'gguf') }, 'Export GGUF'),
                     e('button', { className: 'btn-sec', onClick: () => handleExportModel(m.id, 'safetensors') }, 'Export SafeTensors')
                   )
