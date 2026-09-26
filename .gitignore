@@ -17,7 +17,6 @@ build/
 dist/
 *.egg-info/
 *.spec
-!studio/TriuneStudio.spec
 *.exe
 scratch/
 

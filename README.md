@@ -30,12 +30,11 @@ docs/                   Mathematical foundations and technical guides
 
 Triune provides an automated installer in `studio/installer/` that inspects your hardware (NVIDIA CUDA, AMD ROCm, Apple Silicon Metal, or CPU), configures a virtual environment, installs the optimal PyTorch distribution, and creates desktop launchers.
 
-### Windows (Double-Click or CMD / PowerShell)
+### Windows (Double-Click or Command Prompt / PowerShell)
 ```cmd
 :: Double-click install_studio.bat or run from terminal:
 studio\installer\install_studio.bat
 ```
-*(Or in PowerShell: `.\studio\installer\install_studio.ps1`)*
 
 ### Linux / WSL2 / macOS (Terminal)
 ```bash
@@ -98,16 +97,19 @@ print(f"Estimated parameters: {plan.param_memory_gb:.2f} GB")
 ```
 
 ### CLI
-
+ 
 ```bash
-# Launch Triune Studio
+# Launch Triune Studio Desktop App
 triune studio --port 8000
 
-# Start API server
+# Start embedded API & UI server
 triune serve --port 8000
 
-# Interactive chat
-triune chat --model triune-2.5b
+# Interactive terminal chat
+triune chat --checkpoint checkpoints_full/best.pt
+
+# GPU & hardware diagnostics
+triune gpucheck
 
 # Check memory requirements
 triune plan-memory --vram-gb 8.0
@@ -176,4 +178,5 @@ python tests/test_integration.py
 
 ## License
 
-Apache 2.0
+Triune Non-Commercial Research & Proprietary Source License v1.0. See [LICENSE](LICENSE) for details.
+Strictly prohibited for commercial use, production deployment, or commercial model training without a written commercial license.

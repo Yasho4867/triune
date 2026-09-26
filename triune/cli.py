@@ -21,7 +21,13 @@ def main() -> None:
 
     # Chat command
     chat_parser = subparsers.add_parser("chat", help="Interactive terminal chat session")
-    chat_parser.add_argument("--model", default="triune-base", help="Model name or checkpoint path")
+    chat_parser.add_argument("--checkpoint", default="checkpoints_full/best.pt", help="Model checkpoint path")
+    chat_parser.add_argument("--tokenizer", default="triune_tokenizer.json", help="Tokenizer path")
+    chat_parser.add_argument("--temperature", type=float, default=0.7, help="Sampling temperature")
+    chat_parser.add_argument("--max-tokens", type=int, default=100, help="Maximum generated tokens")
+
+    # GPU check command
+    subparsers.add_parser("gpucheck", help="Print CUDA and hardware diagnostics")
 
     # Memory Plan command
     mem_parser = subparsers.add_parser("plan-memory", help="Estimate VRAM budget for RTX 5070 or target GPU")
@@ -47,6 +53,18 @@ def main() -> None:
 
         print(f"🚀 Starting Triune API Server on http://{args.host}:{args.port}")
         run_server(host=args.host, port=args.port)
+    elif args.command == "chat":
+        from scripts.chat import main as chat_main
+        chat_args = [
+            "--checkpoint", args.checkpoint,
+            "--tokenizer_path", args.tokenizer,
+            "--temperature", str(args.temperature),
+            "--max_new_tokens", str(args.max_tokens),
+        ]
+        chat_main(chat_args)
+    elif args.command == "gpucheck":
+        from scripts.gpucheck import main as gpucheck_main
+        gpucheck_main()
     elif args.command == "plan-memory":
         from triune.configs import build_config
         from triune.runtime import MemoryPlanner

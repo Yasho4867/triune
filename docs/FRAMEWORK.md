@@ -20,10 +20,14 @@ triune/
 │   ├── modules/                # Modular extension and registry system
 │   ├── api/                    # FastAPI and WebSocket server
 │   └── desktop.py              # Desktop window launcher
-├── studio/                     # Triune Studio frontend and installer
-│   ├── src/                    # Web frontend assets
-│   ├── launcher/               # Desktop runner
-│   └── installer/              # Build scripts
+├── studio/                     # Triune Studio frontend and 1-click launchers
+│   ├── src/                    # Web frontend assets (HTML, CSS, React UI)
+│   ├── TriuneStudio.bat        # 1-click desktop launcher (Windows)
+│   ├── TriuneStudio.sh         # 1-click desktop launcher (Linux / macOS)
+│   └── installer/              # Automated hardware-aware installers
+│       ├── installer.py        # Cross-platform hardware probe and venv setup
+│       ├── install_studio.bat  # 1-click installer (Windows)
+│       └── install_studio.sh   # 1-click installer (Linux / macOS)
 └── models/                     # Model zoo presets and configurations
     ├── README.md               # Model specifications
     └── configs/                # JSON architecture configurations
