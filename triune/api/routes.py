@@ -423,9 +423,10 @@ if HAS_FASTAPI:
 
             if self.tokenizer and gen_ids:
                 try:
-                    generated_text = self.tokenizer.decode(gen_ids)
+                    generated_text = self.tokenizer.decode(gen_ids, skip_special_tokens=True)
                 except Exception:
                     generated_text = " ".join(str(i) for i in gen_ids)
+                generated_text = generated_text.replace("Ġ", " ").replace("Ċ", "\n").replace("  ", " ").strip()
             elif gen_ids:
                 generated_text = f"Generated {len(gen_ids)} tokens across {route_used} tier."
             else:

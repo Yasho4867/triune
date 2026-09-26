@@ -7,6 +7,7 @@ from pathlib import Path
 from tokenizers import Tokenizer
 from tokenizers.models import BPE
 from tokenizers.pre_tokenizers import ByteLevel
+from tokenizers.decoders import ByteLevel as ByteLevelDecoder
 from tokenizers.processors import ByteLevel as ByteLevelProcessor
 from tokenizers.trainers import BpeTrainer
 
@@ -14,7 +15,13 @@ SPECIAL_TOKENS = ["[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]"]
 
 
 def load_tokenizer(path: str | Path) -> Tokenizer:
-    return Tokenizer.from_file(str(path))
+    tok = Tokenizer.from_file(str(path))
+    if tok.decoder is None:
+        try:
+            tok.decoder = ByteLevelDecoder()
+        except Exception:
+            pass
+    return tok
 
 
 def build_tokenizer(

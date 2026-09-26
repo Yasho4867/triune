@@ -62,7 +62,9 @@
     "trim_offsets": true,
     "use_regex": true
   },
-  "decoder": null,
+  "decoder": {
+    "type": "ByteLevel"
+  },
   "model": {
     "type": "BPE",
     "dropout": null,

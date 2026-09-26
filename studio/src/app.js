@@ -395,7 +395,7 @@
               if (latest.exit_usage) setExitUsage(latest.exit_usage);
             }
             if (data.logs && data.logs.length > 0) setTelemetryLogs(data.logs);
-            if (data.last_sample) setLastSample(data.last_sample);
+            if (data.last_sample) setLastSample(data.last_sample.replace(/Ġ/g, ' ').replace(/\s+/g, ' ').trim());
           } catch (err) {}
         }, 300);
       }
@@ -1035,11 +1035,11 @@
               e('canvas', { ref: canvasRef, width: 850, height: 240, className: 'loss-canvas' }),
               lastSample && e('div', { className: 'card-stat', style: { marginTop: '12px', textAlign: 'left', background: 'var(--bg-card, #f4efe6)', border: '1px solid var(--border-color, #d4ccb8)', borderRadius: '8px', padding: '12px 16px' } },
                 e('div', { className: 'stat-label', style: { color: 'var(--accent-terracotta, #9a3412)', fontWeight: 600, marginBottom: '4px' } }, '✨ Latest Live Model Generation (32k Vocab BPE):'),
-                e('div', { style: { fontFamily: 'JetBrains Mono, monospace', fontSize: '13px', color: 'var(--text-main, #24211e)', lineHeight: '1.5' } }, `"${lastSample}"`)
+                e('div', { style: { fontFamily: 'JetBrains Mono, monospace', fontSize: '13px', color: 'var(--text-main, #24211e)', lineHeight: '1.5' } }, `"${lastSample.replace(/Ġ/g, ' ').replace(/\s+/g, ' ').trim()}"`)
               ),
               e('div', { className: 'telemetry-box' },
                 telemetryLogs.length > 0
-                  ? telemetryLogs.map((log, idx) => e('div', { key: idx }, log))
+                  ? telemetryLogs.map((log, idx) => e('div', { key: idx }, log.replace(/Ġ/g, ' ')))
                   : e('div', null, '[TELEMETRY] Click "Start PyTorch Loop" to run background engine steps...')
               )
             )
