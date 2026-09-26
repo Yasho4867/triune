@@ -6,7 +6,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+cd "$SCRIPT_DIR/../.."
 
 CYAN='\033[0;36m'
 GREEN='\033[0;32m'
@@ -40,5 +40,5 @@ fi
 echo -e "${GREEN}[✓] Found Python: $($PY_BIN --version) ($PY_BIN)${NC}"
 echo ""
 
-# Launch universal install.py
-exec "$PY_BIN" install.py "$@"
+# Launch installer.py
+exec "$PY_BIN" "$SCRIPT_DIR/installer.py" "$@"

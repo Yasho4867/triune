@@ -28,36 +28,35 @@ docs/                   Mathematical foundations and technical guides
 
 ## 🚀 1-Click Installation (Recommended)
 
-Triune comes with an intelligent, automated installer that inspects your hardware (NVIDIA CUDA, AMD ROCm, Apple Silicon Metal, or CPU), configures a virtual environment, installs the optimal PyTorch distribution, and creates desktop launchers.
+Triune provides an automated installer in `studio/installer/` that inspects your hardware (NVIDIA CUDA, AMD ROCm, Apple Silicon Metal, or CPU), configures a virtual environment, installs the optimal PyTorch distribution, and creates desktop launchers.
 
 ### Windows (Double-Click or CMD / PowerShell)
 ```cmd
-:: Double-click install.bat or run from terminal:
-install.bat
+:: Double-click install_studio.bat or run from terminal:
+studio\installer\install_studio.bat
 ```
-*(Or in PowerShell: `.\install.ps1`)*
+*(Or in PowerShell: `.\studio\installer\install_studio.ps1`)*
 
 ### Linux / WSL2 / macOS (Terminal)
 ```bash
-chmod +x install.sh
-./install.sh
+chmod +x studio/installer/install_studio.sh
+./studio/installer/install_studio.sh
 ```
 
 ### Universal Python Installer (Any OS)
 ```bash
-python install.py
+python studio/installer/installer.py
 ```
 
 ---
 
 ## 🖥️ Launching Triune Studio
 
-After installation, launch Triune Studio as a native desktop application with a single command:
+After installation, launch Triune Studio as a native desktop application:
 
-- **Windows Desktop**: Double-click the **`Triune Studio`** icon on your Desktop, or run `launch.bat`
-- **PowerShell**: `.\launch.ps1`
-- **Linux / macOS**: `./launch.sh`
-- **Python / CLI**: `python launch.py --port 8000`
+- **Windows**: Double-click the **`Triune Studio`** icon on your Desktop, or run `studio\TriuneStudio.bat`
+- **Linux / macOS**: `./studio/TriuneStudio.sh`
+- **Python / CLI**: `python scripts/launch_studio.py --port 8000`
 
 ---
 
