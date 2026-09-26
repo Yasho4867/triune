@@ -50,25 +50,44 @@ def _wait_for_server(url: str, timeout: float = 15.0) -> bool:
     return False
 
 
+def _is_triune_server_alive(port: int) -> bool:
+    """Check if an active Triune Studio server is responding on this port."""
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/v1/system/diagnostics", timeout=1.0) as resp:
+            if resp.status == 200:
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def _find_wsl_python() -> str | None:
     """Detect if WSL2 is installed and has a GPU PyTorch Python environment."""
     if sys.platform != "win32":
         return None
     try:
-        # Check standard user venv locations
+        # Check standard user venv locations with sufficient timeout for WSL wake-up
         for cand in [
             "/home/yasho4867/venvs/triune/bin/python",
-            "~/venvs/triune/bin/python",
-            "~/.venv/bin/python",
+            "/root/venvs/triune/bin/python",
         ]:
-            r = subprocess.run(["wsl.exe", "-e", "test", "-f", cand], capture_output=True, timeout=2.0)
+            r = subprocess.run(["wsl.exe", "-e", "test", "-f", cand], capture_output=True, timeout=8.0)
             if r.returncode == 0:
                 return cand
+
+        # Dynamic check in user home directory
+        dyn = subprocess.run(
+            ["wsl.exe", "bash", "-c", "for p in ~/venvs/triune/bin/python /home/$USER/venvs/triune/bin/python ~/.venv/bin/python; do if [ -f \"$p\" ]; then echo \"$p\"; exit 0; fi; done"],
+            capture_output=True, text=True, timeout=8.0
+        )
+        cand_dyn = dyn.stdout.strip()
+        if cand_dyn:
+            return cand_dyn
 
         # Check if python3 in WSL has torch with CUDA
         chk = subprocess.run(
             ["wsl.exe", "bash", "-c", "python3 -c 'import torch; print(torch.cuda.is_available())'"],
-            capture_output=True, text=True, timeout=4.0
+            capture_output=True, text=True, timeout=8.0
         )
         if "True" in chk.stdout:
             return "python3"
@@ -112,6 +131,19 @@ def launch_desktop_app(port: int = 8000) -> None:
     workspace_root = Path(__file__).resolve().parent.parent
     studio_src = workspace_root / "studio" / "src"
 
+    # Check if a Triune Studio server is already alive on this port
+    server_already_running = False
+    if _is_port_in_use(port):
+        if _is_triune_server_alive(port):
+            print(f"[Studio] Connected to existing Triune Studio backend on http://127.0.0.1:{port}/")
+            server_already_running = True
+        else:
+            # Port is occupied by a foreign application; allocate the next free port
+            free_p = _find_free_port(start_port=port)
+            if free_p != port:
+                print(f"[Studio] Port {port} is occupied by another application. Reallocating to port {free_p}...")
+                port = free_p
+
     # 1. Determine optimal backend execution mode
     local_has_torch = False
     local_has_cuda = False
@@ -128,57 +160,70 @@ def launch_desktop_app(port: int = 8000) -> None:
 
     api_proc = None
 
-    if local_has_cuda or (local_has_torch and not wsl_py):
-        # Native Python with PyTorch
-        print(f"[Studio] Starting native PyTorch backend on http://127.0.0.1:{port}...")
-        from triune.api import run_server
-        server_thread = threading.Thread(
-            target=run_server,
-            kwargs={"host": "127.0.0.1", "port": port},
-            daemon=True,
-        )
-        server_thread.start()
-
-    elif wsl_py:
-        # Windows host bridging to high-performance WSL2 GPU engine
-        wsl_ws = _to_wsl_path(workspace_root)
-        print(f"[Studio] Hardware Bridge: Launching backend in WSL2 with GPU acceleration ({wsl_py})...")
-        wsl_cmd = [
-            "wsl.exe", "-e", wsl_py, "-c",
-            f"import sys; sys.path.insert(0, '{wsl_ws}'); from triune.api import run_server; run_server(host='0.0.0.0', port={port})"
-        ]
-        try:
-            api_proc = subprocess.Popen(
-                wsl_cmd,
-                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-            )
-        except Exception as e:
-            print(f"[Studio] Failed to launch WSL backend: {e}")
-
-    else:
-        # Native host Python in lightweight UI Mode or Fallback
-        try:
+    if not server_already_running:
+        if local_has_cuda:
+            # Native Python with CUDA PyTorch
+            print(f"[Studio] Starting native PyTorch CUDA backend on http://127.0.0.1:{port}...")
             from triune.api import run_server
-            print(f"[Studio] Starting Triune Studio in Host UI Mode on http://127.0.0.1:{port}...")
             server_thread = threading.Thread(
                 target=run_server,
                 kwargs={"host": "127.0.0.1", "port": port},
                 daemon=True,
             )
             server_thread.start()
-        except Exception:
-            print(f"[Studio] Starting built-in fallback HTTP server on port {port}...")
-            _start_fallback_http_server(studio_src, port)
+
+        elif wsl_py:
+            # Windows host bridging to high-performance WSL2 GPU engine
+            wsl_ws = _to_wsl_path(workspace_root)
+            print(f"[Studio] Hardware Bridge: Launching backend in WSL2 with GPU acceleration ({wsl_py})...")
+            wsl_cmd = [
+                "wsl.exe", "-e", wsl_py, "-c",
+                f"import sys; sys.path.insert(0, '{wsl_ws}'); from triune.api import run_server; run_server(host='0.0.0.0', port={port})"
+            ]
+            try:
+                api_proc = subprocess.Popen(
+                    wsl_cmd,
+                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+                )
+            except Exception as e:
+                print(f"[Studio] Failed to launch WSL backend: {e}")
+
+        elif local_has_torch:
+            # Native host Python with CPU PyTorch
+            print(f"[Studio] Starting native PyTorch CPU backend on http://127.0.0.1:{port}...")
+            from triune.api import run_server
+            server_thread = threading.Thread(
+                target=run_server,
+                kwargs={"host": "127.0.0.1", "port": port},
+                daemon=True,
+            )
+            server_thread.start()
+
+        else:
+            # Native host Python in lightweight UI Mode or Fallback
+            try:
+                from triune.api import run_server
+                print(f"[Studio] Starting Triune Studio in Host UI Mode on http://127.0.0.1:{port}...")
+                server_thread = threading.Thread(
+                    target=run_server,
+                    kwargs={"host": "127.0.0.1", "port": port},
+                    daemon=True,
+                )
+                server_thread.start()
+            except Exception:
+                print(f"[Studio] Starting built-in fallback HTTP server on port {port}...")
+                _start_fallback_http_server(studio_src, port)
 
     url = f"http://127.0.0.1:{port}/"
 
     # 2. Wait for server to be responsive BEFORE opening browser/webview
-    print(f"[Studio] Waiting for server to initialize on {url}...")
-    server_ready = _wait_for_server(url, timeout=12.0)
-    if server_ready:
-        print(f"[Studio] Server ready and responsive on {url}!")
-    else:
-        print(f"[Studio] Notice: Server still warming up; proceeding with window launch.")
+    if not server_already_running:
+        print(f"[Studio] Waiting for server to initialize on {url}...")
+        server_ready = _wait_for_server(url, timeout=15.0)
+        if server_ready:
+            print(f"[Studio] Server ready and responsive on {url}!")
+        else:
+            print(f"[Studio] Notice: Server still warming up; proceeding with window launch.")
 
     # 3. Launch native desktop window via PyWebView
     try:
