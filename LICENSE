@@ -1,85 +1,65 @@
-TRIUNE NON-COMMERCIAL RESEARCH & PROPRIETARY SOURCE LICENSE (v1.0)
+COPYRIGHT NOTICE AND RESERVATION OF RIGHTS
+
 Copyright (c) 2024-2026 Yash. All Rights Reserved.
 
 ================================================================================
-IMPORTANT - READ CAREFULLY:
-This Software is proprietary and source-available under the terms set forth below.
-By downloading, cloning, installing, copying, accessing, or using the Software,
-You agree to be bound by the terms and conditions of this License Agreement.
-If You do not agree to the terms of this License, You may not use the Software.
+STRICTLY PROPRIETARY AND CONFIDENTIAL
 ================================================================================
 
-1. DEFINITIONS
+1. PROPRIETARY SOFTWARE
+The Triune software, including without limitation all source code, architecture
+specifications, algorithms, neural network configurations, model weights, checkpoints,
+documentation, user interfaces (including Triune Studio), assets, and tools (collectively,
+the "Software"), is the exclusive proprietary property and trade secret of Yash
+(the "Copyright Holder").
 
-"Licensor" means Yash, the author and copyright owner of the Software.
+2. NO LICENSE GRANTED
+THIS SOFTWARE IS NOT OPEN SOURCE AND IS NOT PUBLIC DOMAIN.
+NO LICENSE, PERMISSION, OR RIGHT OF ANY KIND (WHETHER EXPRESS, IMPLIED, BY ESTOPPEL,
+OR OTHERWISE) IS GRANTED TO ANY PERSON OR ENTITY TO:
 
-"Software" means the Triune / TriuneTransformer software package, including source
-code, architecture specifications, algorithms, documentation, trained weights,
-adapters, configuration presets, and desktop/web applications (including Triune Studio).
+  (a) Download, copy, reproduce, clone, mirror, or extract the Software or any portion
+      thereof, except solely to view this repository on the host platform in accordance
+      with the platform's terms of service;
+  (b) Modify, adapt, translate, decompile, reverse-engineer, disassemble, or create
+      derivative works based on the Software;
+  (c) Distribute, publish, display, sublicense, sell, rent, lease, lend, or transfer
+      the Software or any derivative work to any third party;
+  (d) Run, execute, deploy, or operate the Software or its models for any personal,
+      educational, academic, research, internal, or commercial purpose;
+  (e) Ingest, process, or use the Software, its source code, or architecture definitions
+      to train, fine-tune, distill, evaluate, or develop any artificial intelligence,
+      machine learning model, or automated software system.
 
-"Non-Commercial Purpose" means academic research, personal study, non-profit
-scholarly publication, individual hobbyist experimentation, and internal evaluation
-conducted strictly without any direct or indirect commercial advantage, monetary
-compensation, or business exploitation.
+3. STATUTORY RESERVATION OF RIGHTS
+The Copyright Holder reserves all exclusive rights, title, and interest in and to the
+Software, including all copyrights, patent rights, trade secret rights, trademark rights,
+and all other intellectual property rights under:
+  - The copyright laws of the United States (Title 17, United States Code);
+  - The Indian Copyright Act, 1957;
+  - The Berne Convention for the Protection of Literary and Artistic Works;
+  - The Universal Copyright Convention;
+  - The WIPO Copyright Treaty (WCT);
+  - All other applicable national, international, and multilateral intellectual
+    property laws and treaties.
 
-"Commercial Purpose" means any use of the Software, its derivatives, or its outputs:
-  (a) for monetary consideration, commercial gain, fee, revenue, or business advantage;
-  (b) in any commercial service, software-as-a-service (SaaS), platform, or API;
-  (c) to train, fine-tune, distill, or produce artificial intelligence models intended
-      for commercial sale, commercial deployment, or enterprise use;
-  (d) as part of any commercial software application, library, or product distributed
-      to customers or internal enterprise users;
-  (e) by or on behalf of a for-profit entity, corporation, or partnership, except for
-      pre-approved non-production evaluation under written consent from Licensor.
+4. INFRINGEMENT AND ENFORCEMENT
+Any unauthorized use, reproduction, distribution, public display, modification, or
+commercial exploitation of the Software constitutes willful copyright infringement
+and a violation of applicable statutory and common laws. The Copyright Holder reserves
+the right to seek all available legal, equitable, and monetary remedies, including but
+not limited to immediate preliminary and permanent injunctive relief, statutory damages,
+actual damages, disgorgement of profits, and full recovery of legal costs and attorneys' fees.
 
-"Derivative Work" means any modification, extension, adaptation, translation, or
-work based upon or incorporating any portion of the Software.
-
-
-2. GRANT OF LICENSE
-
-Subject to the terms and restrictions of this License, Licensor grants You a
-non-exclusive, non-transferable, revocable, royalty-free license to:
-  (a) View, inspect, study, and compile the source code of the Software;
-  (b) Modify and create Derivative Works of the Software solely for Non-Commercial Purposes;
-  (c) Run the Software on personal computers, academic clusters, or private non-commercial
-      hardware strictly for Non-Commercial Purposes.
-
-
-3. STRICT RESTRICTIONS (COMMERCIAL USE PROHIBITED)
-
-You may NOT, directly or indirectly:
-  (a) USE THE SOFTWARE OR ANY DERIVATIVE WORK FOR ANY COMMERCIAL PURPOSE;
-  (b) Sell, rent, lease, sublicense, distribute, or transfer the Software or any
-      Derivative Work to any third party for commercial gain;
-  (c) Host or offer the Software, its inference engine, or Triune Studio as an API,
-      online service, hosted application, or cloud-based utility;
-  (d) Remove, alter, or obscure any copyright notices, proprietary markings, or license
-      terms contained in the Software;
-  (e) Distribute modified versions of the Software without retaining this License and
-      providing prominent notices stating that the files have been modified.
-
-
-4. COMMERCIAL LICENSING
-
-If You wish to use the Software, Triune Studio, its Mixture-of-Experts architecture,
-layer streaming algorithms, or any derived weights for any Commercial Purpose, You
-must obtain a separate, written commercial license agreement directly from Licensor.
-Inquiries may be directed to the repository owner and author.
-
-
-5. PROPRIETARY RIGHTS & PATENTS
-
-Licensor retains all right, title, and interest in and to the Software, including all
-associated intellectual property rights, trademarks, patents, and trade secrets.
-Nothing in this License transfers ownership of any intellectual property to You.
-
+5. COMMERCIAL & LICENSING INQUIRIES
+If you wish to evaluate, license, or obtain permission to use the Software, its Mixture-of-Experts
+architecture, layer-streaming engine, or Triune Studio for any purpose, you must obtain a
+separate, formal, written license agreement signed directly by the Copyright Holder.
+Inquiries may be directed to the repository owner.
 
 6. DISCLAIMER OF WARRANTIES
-
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
 INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL LICENSOR OR COPYRIGHT
-HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
-SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL THE COPYRIGHT HOLDER BE
+LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE.

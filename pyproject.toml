@@ -8,7 +8,7 @@ version = "2.1.0"
 description = "PyTorch framework for multi-exit Mixture-of-Experts language models with layer streaming and Muon optimization"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "Proprietary - Non-Commercial Research & Educational Use Only" }
+license = { text = "Proprietary - All Rights Reserved" }
 authors = [
     { name = "Yash" }
 ]

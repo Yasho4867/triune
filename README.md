@@ -178,5 +178,6 @@ python tests/test_integration.py
 
 ## License
 
-Triune Non-Commercial Research & Proprietary Source License v1.0. See [LICENSE](LICENSE) for details.
-Strictly prohibited for commercial use, production deployment, or commercial model training without a written commercial license.
+Copyright (c) 2024-2026 Yash. All Rights Reserved.
+
+This software is strictly proprietary and confidential. No license, express or implied, is granted to download, copy, modify, distribute, run, train AI models on, or commercially exploit this software. See [LICENSE](LICENSE) for full legal terms.
