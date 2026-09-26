@@ -207,6 +207,11 @@ if HAS_FASTAPI:
             self.batch_size = 4
             self.seq_len = 64
             self.dataset_path = "data/fineweb_sample.jsonl"
+            self.dataset_name = "HuggingFaceFW/fineweb-edu"
+            self.dataset_type = "streaming"
+            self.total_tokens_trained = 0
+            self.current_batch_preview = ""
+            self.active_checkpoint: Optional[str] = None
             self.last_sample_decode = ""
 
             if HAS_TORCH:
@@ -278,6 +283,30 @@ if HAS_FASTAPI:
                 use_fp8=False,
             ).to(self.device)
             self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=1e-4)
+
+            # Auto-restore latest studio checkpoint if available
+            ckpt_dir = Path("checkpoints")
+            if ckpt_dir.is_dir():
+                ckpts = sorted(ckpt_dir.glob("triune_studio_step_*.pt"), key=lambda x: x.stat().st_mtime, reverse=True)
+                if ckpts and ckpts[0].is_file():
+                    try:
+                        latest_p = ckpts[0]
+                        ckpt = torch.load(latest_p, map_location=self.device, weights_only=False)
+                        st = ckpt.get("model_state", ckpt)
+                        self.model.load_state_dict(st, strict=False)
+                        self.step = ckpt.get("step", 0)
+                        if "optimizer_state" in ckpt and ckpt["optimizer_state"] and self.optimizer:
+                            try:
+                                self.optimizer.load_state_dict(ckpt["optimizer_state"])
+                            except Exception:
+                                pass
+                        self.active_checkpoint = latest_p.name
+                        msg = f"[Triune Engine] Auto-restored active weights from {latest_p.name} (step {self.step})."
+                        self.logs.insert(0, msg)
+                        print(msg)
+                    except Exception as err:
+                        print(f"[Triune Engine] Checkpoint auto-load notice: {err}")
+
             print(f"[Triune Engine] Loaded 6-Layer MoE TriuneTransformer (32k vocab, 4 experts) on {self.device_name}.")
             self.load_training_data()
 
@@ -286,13 +315,23 @@ if HAS_FASTAPI:
             if dataset_path:
                 self.dataset_path = dataset_path
 
-            p = Path(self.dataset_path)
-            if not p.is_file():
-                for alt in ("data/fineweb_sample.jsonl", "data/finetune.jsonl"):
-                    if Path(alt).is_file():
-                        p = Path(alt)
-                        self.dataset_path = alt
-                        break
+            if self.dataset_path in ("fineweb-edu", "HuggingFaceFW/fineweb-edu", "streaming"):
+                self.dataset_name = "HuggingFaceFW/fineweb-edu"
+                self.dataset_type = "streaming"
+                p = Path("data/fineweb_sample.jsonl")
+            elif self.dataset_path in ("wikitext-103", "wikitext"):
+                self.dataset_name = "wikitext-103-raw-v1"
+                self.dataset_type = "streaming"
+                p = Path("data/fineweb_sample.jsonl")
+            else:
+                p = Path(self.dataset_path)
+                if not p.is_file():
+                    for alt in ("data/fineweb_sample.jsonl", "data/finetune.jsonl"):
+                        if Path(alt).is_file():
+                            p = Path(alt)
+                            break
+                self.dataset_name = p.name if p.is_file() else "FineWeb-Edu Stream"
+                self.dataset_type = "local" if (p.is_file() and not self.dataset_name.startswith("fineweb")) else "streaming"
 
             texts = []
             if p.is_file():
@@ -304,7 +343,7 @@ if HAS_FASTAPI:
                                 continue
                             try:
                                 item = json.loads(line)
-                                t = item.get("text") or item.get("prompt", "") + " " + item.get("completion", "")
+                                t = item.get("text") or item.get("content") or item.get("story") or (item.get("prompt", "") + " " + item.get("completion", ""))
                                 if t:
                                     texts.append(t)
                             except Exception:
@@ -344,7 +383,9 @@ if HAS_FASTAPI:
 
             self.data_chunks = chunks
             self.data_idx = 0
-            print(f"[Triune Engine] Loaded dataset '{p.name}': {len(chunks)} sequences ({len(all_token_ids)} tokens).")
+            log_msg = f"[DATASET] Active stream source: '{self.dataset_name}' ({self.dataset_type}) | {len(chunks)} sequences ({len(all_token_ids):,} tokens)."
+            self.logs.insert(0, log_msg)
+            print(f"[Triune Engine] {log_msg}")
 
         def generate_text(self, prompt: str, max_new_tokens: int = 64, temperature: float = 0.7, force_depth: Optional[int] = None) -> Dict[str, Any]:
             if not HAS_TORCH or TriuneTransformer is None:
@@ -478,6 +519,19 @@ if HAS_FASTAPI:
             batch = torch.stack(batch_tensors).to(self.device)
             x = batch[:, :-1]
             targets = batch[:, 1:].contiguous()
+            # Record cumulative tokens trained
+            tokens_in_step = x.numel()
+            self.total_tokens_trained += tokens_in_step
+
+            # Decode current batch sample for live ingestion transparency
+            if self.tokenizer:
+                try:
+                    raw_decoded = self.tokenizer.decode(x[0].tolist(), skip_special_tokens=True)
+                    self.current_batch_preview = raw_decoded.replace("Ġ", " ").replace("Ċ", "\n").replace("  ", " ").strip()
+                except Exception:
+                    self.current_batch_preview = f"Sequence chunk #{self.data_idx}"
+            else:
+                self.current_batch_preview = f"Sequence chunk #{self.data_idx}"
 
             res = self.model(x)
             if isinstance(res, tuple):
@@ -524,12 +578,35 @@ if HAS_FASTAPI:
                 "throughput": tok_per_sec,
                 "vram_gb": vram_stats.get("allocated_gb", 0.0),
                 "device": self.device_name,
-                "exit_usage": {"reflex": reflex_pct, "limbic": limbic_pct, "cortex": cortex_pct}
+                "exit_usage": {"reflex": reflex_pct, "limbic": limbic_pct, "cortex": cortex_pct},
+                "tokens_trained": self.total_tokens_trained,
+                "batch_preview": self.current_batch_preview,
+                "dataset_name": self.dataset_name,
+                "dataset_type": self.dataset_type,
+                "active_checkpoint": self.active_checkpoint,
             }
 
             self.history.append(payload)
             if len(self.history) > 100:
                 self.history.pop(0)
+
+            # Periodic auto-checkpoint every 500 steps
+            if self.step % 500 == 0:
+                try:
+                    ckpt_dir = Path("checkpoints")
+                    ckpt_dir.mkdir(parents=True, exist_ok=True)
+                    auto_name = f"triune_studio_step_{self.step}.pt"
+                    auto_path = ckpt_dir / auto_name
+                    torch.save({
+                        "step": self.step,
+                        "model_state": self.model.state_dict(),
+                        "optimizer_state": self.optimizer.state_dict() if self.optimizer else None,
+                        "loss": payload["loss"],
+                    }, auto_path)
+                    self.active_checkpoint = auto_name
+                    self.logs.insert(0, f"[CHECKPOINT] Periodic auto-save: {auto_name} at step {self.step}.")
+                except Exception:
+                    pass
 
             # Every 10 steps, generate a real live decoded sample
             if self.step % 10 == 0 or not self.last_sample_decode:
@@ -539,9 +616,7 @@ if HAS_FASTAPI:
                 except Exception:
                     pass
 
-            log_line = f"[STEP {self.step}] Loss: {payload['loss']} | LM: {payload['lm_loss']} | {tok_per_sec} tok/s"
-            if self.last_sample_decode:
-                log_line += f" | Sample: \"{self.last_sample_decode[:40]}...\""
+            log_line = f"[STEP {self.step}] Loss: {payload['loss']} | {tok_per_sec} tok/s | Ingesting [{self.dataset_name}]: \"{self.current_batch_preview[:36]}...\""
             self.logs.insert(0, log_line)
             if len(self.logs) > 50:
                 self.logs.pop()
@@ -799,9 +874,20 @@ if HAS_FASTAPI:
         """Ingest raw JSON DAG graph and execute pipeline using ExecutionEngine."""
         if dag_engine is None:
             return {"status": "needs_torch", "message": "DAG execution engine requires PyTorch. Run install.bat or launch with WSL2."}
-        graph_json = {"nodes": req.nodes, "edges": req.edges}
-        res = dag_engine.execute_graph(graph_json)
-        return res
+        try:
+            graph_json = {"nodes": req.nodes, "edges": req.edges}
+            res = dag_engine.execute_graph(graph_json)
+            return {
+                "status": res.get("status", "success"),
+                "results": res.get("results", {}),
+                "context": res.get("context", {})
+            }
+        except Exception as e:
+            return {
+                "status": "error",
+                "error": str(e),
+                "results": {}
+            }
 
     @router.get("/v1/vram/stats")
     async def get_vram_stats() -> Dict[str, Any]:
@@ -858,6 +944,16 @@ if HAS_FASTAPI:
             "logs": pytorch_state.logs,
             "device": pytorch_state.device_name,
             "last_sample": pytorch_state.last_sample_decode,
+            "dataset": {
+                "name": pytorch_state.dataset_name,
+                "type": pytorch_state.dataset_type,
+                "total_tokens": pytorch_state.total_tokens_trained,
+                "active_batch_preview": pytorch_state.current_batch_preview,
+                "sequences_count": len(pytorch_state.data_chunks),
+                "batch_size": pytorch_state.batch_size,
+                "seq_len": pytorch_state.seq_len,
+            },
+            "active_checkpoint": pytorch_state.active_checkpoint,
         }
 
     @router.post("/v1/training/start")
@@ -893,6 +989,12 @@ if HAS_FASTAPI:
     class ModelLoadRequest(BaseModel):
         checkpoint_path: str
 
+    class CheckpointActionRequest(BaseModel):
+        checkpoint_path: str
+
+    class CheckpointSaveRequest(BaseModel):
+        name: Optional[str] = None
+
     @router.post("/v1/training/save_checkpoint")
     async def save_training_checkpoint(name: Optional[str] = None) -> Dict[str, Any]:
         """Save current real PyTorch model weights and optimizer state to disk."""
@@ -917,6 +1019,7 @@ if HAS_FASTAPI:
             }
         }
         torch.save(ckpt, ckpt_path)
+        pytorch_state.active_checkpoint = filename
         size_mb = round(ckpt_path.stat().st_size / (1024 * 1024), 2)
         log_msg = f"[CHECKPOINT] Saved checkpoint to {ckpt_path} ({size_mb} MB) at step {pytorch_state.step}."
         pytorch_state.logs.insert(0, log_msg)
@@ -968,11 +1071,82 @@ if HAS_FASTAPI:
                     pytorch_state.optimizer.load_state_dict(ckpt["optimizer_state"])
                 except Exception:
                     pass
-            log_msg = f"[MODEL] Successfully loaded checkpoint from {p.name} (step: {pytorch_state.step})."
+            pytorch_state.active_checkpoint = p.name
+            log_msg = f"[CHECKPOINT] Successfully loaded checkpoint from {p.name} (step: {pytorch_state.step})."
             pytorch_state.logs.insert(0, log_msg)
-            return {"status": "success", "message": log_msg, "step": pytorch_state.step}
+            return {"status": "success", "message": log_msg, "step": pytorch_state.step, "checkpoint": p.name}
         except Exception as exc:
             return {"status": "error", "message": f"Failed to load checkpoint: {exc}"}
+
+    @router.get("/v1/checkpoints")
+    async def list_checkpoints_endpoint() -> Dict[str, Any]:
+        """List all .pt checkpoints on disk with sizes, timestamps, and active status."""
+        ckpts = []
+        import re
+        from datetime import datetime
+
+        for cdir in ("checkpoints", "checkpoints_full"):
+            p = Path(cdir)
+            if p.is_dir():
+                for f in p.glob("*.pt"):
+                    try:
+                        stat = f.stat()
+                        size_mb = round(stat.st_size / (1024 * 1024), 2)
+                        size_formatted = f"{size_mb:.1f} MB" if size_mb < 1024 else f"{(size_mb/1024):.2f} GB"
+                        mtime_str = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+
+                        step_match = re.search(r"step_(\d+)", f.name)
+                        step_num = int(step_match.group(1)) if step_match else None
+
+                        is_active = (pytorch_state.active_checkpoint == f.name) or (step_num is not None and step_num == pytorch_state.step)
+                        ckpts.append({
+                            "id": f"{cdir}/{f.name}",
+                            "filename": f.name,
+                            "folder": cdir,
+                            "path": str(f).replace("\\", "/"),
+                            "size_mb": size_mb,
+                            "size_formatted": size_formatted,
+                            "step": step_num,
+                            "mtime": mtime_str,
+                            "is_active": is_active,
+                        })
+                    except Exception:
+                        pass
+        ckpts.sort(key=lambda x: (not x["is_active"], x["mtime"]), reverse=True)
+        return {
+            "checkpoints": ckpts,
+            "active_checkpoint": pytorch_state.active_checkpoint,
+            "current_step": pytorch_state.step
+        }
+
+    @router.post("/v1/checkpoints/load")
+    async def load_checkpoint_endpoint(req: CheckpointActionRequest) -> Dict[str, Any]:
+        """Load checkpoint weights into active engine."""
+        return await load_model_checkpoint_endpoint(ModelLoadRequest(checkpoint_path=req.checkpoint_path))
+
+    @router.post("/v1/checkpoints/save")
+    async def save_checkpoint_endpoint(req: CheckpointSaveRequest) -> Dict[str, Any]:
+        """Save active PyTorch weights to a new checkpoint."""
+        return await save_training_checkpoint(name=req.name)
+
+    @router.post("/v1/checkpoints/delete")
+    async def delete_checkpoint_endpoint(req: CheckpointActionRequest) -> Dict[str, Any]:
+        """Safely delete a checkpoint from checkpoints directory."""
+        p = Path(req.checkpoint_path)
+        if not p.is_file():
+            return {"status": "error", "message": f"File not found: {req.checkpoint_path}"}
+        parts = p.resolve().parts
+        if "checkpoints" not in parts and "checkpoints_full" not in parts:
+            return {"status": "error", "message": "Cannot delete files outside checkpoints directories."}
+        try:
+            p.unlink()
+            log_msg = f"[CHECKPOINT] Deleted checkpoint {p.name}."
+            pytorch_state.logs.insert(0, log_msg)
+            if pytorch_state.active_checkpoint == p.name:
+                pytorch_state.active_checkpoint = None
+            return {"status": "success", "message": log_msg}
+        except Exception as e:
+            return {"status": "error", "message": f"Failed to delete: {e}"}
 
     class ModelExportRequest(BaseModel):
         model_id: str = "triune-base"

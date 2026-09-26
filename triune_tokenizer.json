@@ -63,7 +63,10 @@
     "use_regex": true
   },
   "decoder": {
-    "type": "ByteLevel"
+    "type": "ByteLevel",
+    "add_prefix_space": true,
+    "trim_offsets": true,
+    "use_regex": true
   },
   "model": {
     "type": "BPE",

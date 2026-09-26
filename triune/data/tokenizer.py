@@ -15,7 +15,20 @@ SPECIAL_TOKENS = ["[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]"]
 
 
 def load_tokenizer(path: str | Path) -> Tokenizer:
-    tok = Tokenizer.from_file(str(path))
+    try:
+        tok = Tokenizer.from_file(str(path))
+    except Exception:
+        import json
+        with open(str(path), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if data.get("decoder") and data["decoder"].get("type") == "ByteLevel":
+            data["decoder"] = {
+                "type": "ByteLevel",
+                "add_prefix_space": True,
+                "trim_offsets": True,
+                "use_regex": True,
+            }
+        tok = Tokenizer.from_str(json.dumps(data))
     if tok.decoder is None:
         try:
             tok.decoder = ByteLevelDecoder()

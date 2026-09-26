@@ -367,5 +367,13 @@ class ExecutionEngine:
                 print(f"  [FAIL] Node [{node_name}] failed: {err}")
                 results[node_id] = {"status": "failed", "error": str(err)}
                 break
+        safe_context = {}
+        for k, v in context.items():
+            if k in ("model", "optimizer"):
+                safe_context[k] = f"<{v.__class__.__name__} initialized>"
+            elif isinstance(v, (str, int, float, bool, list, dict, type(None))):
+                safe_context[k] = v
+            else:
+                safe_context[k] = str(v)
 
-        return {"status": "success", "results": results, "context": context}
+        return {"status": "success", "results": results, "context": safe_context}
