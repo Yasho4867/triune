@@ -126,7 +126,7 @@ def _start_fallback_http_server(directory: Path, port: int) -> None:
     t.start()
 
 
-def launch_desktop_app(port: int = 8000) -> None:
+def launch_desktop_app(port: int = 8000, use_browser: bool = False) -> None:
     """Launch embedded Triune Studio API server and open as a native desktop application window."""
     workspace_root = Path(__file__).resolve().parent.parent
     studio_src = workspace_root / "studio" / "src"
@@ -226,72 +226,97 @@ def launch_desktop_app(port: int = 8000) -> None:
             print(f"[Studio] Notice: Server still warming up; proceeding with window launch.")
 
     # 3. Launch native desktop window via PyWebView
-    try:
-        import webview
+    if not use_browser:
+        try:
+            import webview
 
-        print("[Studio] Opening native desktop window via PyWebView...")
-        window = webview.create_window(
-            title="Triune Studio - AI Engine & Research IDE",
-            url=url,
-            width=1380,
-            height=900,
-            resizable=True,
-            min_size=(960, 640),
-        )
+            print("[Studio] Opening native desktop window via PyWebView...")
+            window = webview.create_window(
+                title="Triune Studio - AI Engine & Research IDE",
+                url=url,
+                width=1380,
+                height=900,
+                resizable=True,
+                min_size=(960, 640),
+            )
 
-        def on_closed():
-            print("[Studio] Window closed. Shutting down background processes...")
+            def on_closed():
+                print("[Studio] Window closed. Shutting down background processes...")
+                if api_proc and api_proc.poll() is None:
+                    api_proc.terminate()
+                os._exit(0)
+
+            window.events.closed += on_closed
+            webview.start()
             if api_proc and api_proc.poll() is None:
                 api_proc.terminate()
-            os._exit(0)
+            return
+        except Exception as err:
+            print(f"[Studio] PyWebView note: {err}")
 
-        window.events.closed += on_closed
-        webview.start()
-        if api_proc and api_proc.poll() is None:
-            api_proc.terminate()
-        return
-    except Exception as err:
-        print(f"[Studio] PyWebView note: {err}")
+        # 4. Windows: Try MS Edge App Mode
+        if sys.platform == "win32":
+            try:
+                edge_paths = [
+                    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+                    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+                ]
+                for edge_path in edge_paths:
+                    if os.path.exists(edge_path):
+                        print("[Studio] Opening in Microsoft Edge App Mode...")
+                        proc = subprocess.Popen([edge_path, f"--app={url}", "--name=Triune Studio"])
+                        time.sleep(1.0)
+                        if proc.poll() is not None:
+                            # Edge delegated to existing browser instance; keep server running
+                            print(f"[Studio] Triune Studio is running at {url}. Press Ctrl+C to stop.")
+                            try:
+                                if api_proc:
+                                    api_proc.wait()
+                                else:
+                                    while True:
+                                        time.sleep(1.0)
+                            except KeyboardInterrupt:
+                                print("\n[Studio] Shutting down...")
+                            finally:
+                                if api_proc and api_proc.poll() is None:
+                                    api_proc.terminate()
+                            return
+                        else:
+                            try:
+                                proc.wait()
+                            finally:
+                                if api_proc and api_proc.poll() is None:
+                                    api_proc.terminate()
+                            return
+            except Exception:
+                pass
 
-    # 4. Windows: Try MS Edge App Mode
-    if sys.platform == "win32":
-        try:
-            edge_paths = [
-                r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-                r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
-            ]
-            for edge_path in edge_paths:
-                if os.path.exists(edge_path):
-                    print("[Studio] Opening in Microsoft Edge App Mode...")
-                    proc = subprocess.Popen([edge_path, f"--app={url}", "--name=Triune Studio"])
+        # 5. Linux / macOS: Try Chrome / Chromium App Mode
+        if sys.platform != "win32":
+            for browser in ["google-chrome", "chromium", "chromium-browser"]:
+                try:
+                    proc = subprocess.Popen([browser, f"--app={url}"])
                     try:
                         proc.wait()
                     finally:
                         if api_proc and api_proc.poll() is None:
                             api_proc.terminate()
                     return
-        except Exception:
-            pass
+                except FileNotFoundError:
+                    continue
 
-    # 5. Linux / macOS: Try Chrome / Chromium App Mode
-    if sys.platform != "win32":
-        for browser in ["google-chrome", "chromium", "chromium-browser"]:
-            try:
-                proc = subprocess.Popen([browser, f"--app={url}"])
-                try:
-                    proc.wait()
-                finally:
-                    if api_proc and api_proc.poll() is None:
-                        api_proc.terminate()
-                return
-            except FileNotFoundError:
-                continue
-
-    # 6. Fallback: Default web browser
+    # 6. Fallback or explicit browser mode: Default web browser
     print(f"[Studio] Opening in default web browser: {url}")
     webbrowser.open(url)
-    if api_proc:
-        try:
+    print(f"[Studio] Triune Studio is running at {url}. Press Ctrl+C to stop.")
+    try:
+        if api_proc:
             api_proc.wait()
-        except KeyboardInterrupt:
+        else:
+            while True:
+                time.sleep(1.0)
+    except KeyboardInterrupt:
+        print("\n[Studio] Shutting down...")
+    finally:
+        if api_proc and api_proc.poll() is None:
             api_proc.terminate()

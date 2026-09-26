@@ -13,6 +13,7 @@ def main() -> None:
     # Studio command
     studio_parser = subparsers.add_parser("studio", help="Launch Triune Studio Native Windows Application")
     studio_parser.add_argument("--port", type=int, default=8000, help="Port number")
+    studio_parser.add_argument("--browser", action="store_true", help="Launch directly in default web browser instead of desktop window")
 
     # Serve command
     serve_parser = subparsers.add_parser("serve", help="Launch embedded FastAPI server for Studio & API")
@@ -47,7 +48,7 @@ def main() -> None:
     elif args.command == "studio":
         from triune.desktop import launch_desktop_app
 
-        launch_desktop_app(port=args.port)
+        launch_desktop_app(port=args.port, use_browser=args.browser)
     elif args.command == "serve":
         from triune.api import run_server
 
