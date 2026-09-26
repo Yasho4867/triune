@@ -26,8 +26,14 @@ class LoRALayer(nn.Module):
         in_features = getattr(original_layer, "in_features", 1536)
         out_features = getattr(original_layer, "out_features", 1536)
 
-        self.lora_A = nn.Parameter(torch.zeros(rank, in_features))
-        self.lora_B = nn.Parameter(torch.zeros(out_features, rank))
+        orig_weight = original_layer.weight
+        param_dtype = (
+            orig_weight.dtype
+            if orig_weight.is_floating_point() and "float8" not in str(orig_weight.dtype)
+            else torch.float32
+        )
+        self.lora_A = nn.Parameter(torch.zeros(rank, in_features, device=orig_weight.device, dtype=param_dtype))
+        self.lora_B = nn.Parameter(torch.zeros(out_features, rank, device=orig_weight.device, dtype=param_dtype))
         nn.init.kaiming_uniform_(self.lora_A, a=math.sqrt(5))
         nn.init.zeros_(self.lora_B)
 
@@ -40,7 +46,7 @@ class LoRALayer(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         orig_out = self.original_layer(x)
         lora_out = (self.dropout(x) @ self.lora_A.T) @ self.lora_B.T
-        return orig_out + lora_out * self.scaling
+        return orig_out + (lora_out * self.scaling).to(orig_out.dtype)
 
 
 class LoRAConfig:

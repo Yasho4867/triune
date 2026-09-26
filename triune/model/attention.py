@@ -94,12 +94,12 @@ class VectorisedGLA(nn.Module):
         if HAS_FLA and x.is_cuda and initial_state is None:
             # Convert tensors to bfloat16/float16 for FLA Triton kernel compatibility & memory efficiency
             target_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-            q_fla = q.to(dtype=target_dtype)
-            k_fla = k.to(dtype=target_dtype)
-            v_fla = v.to(dtype=target_dtype)
-            g_fla = g.to(dtype=target_dtype)
+            q_fla = q.to(dtype=target_dtype).transpose(1, 2)
+            k_fla = k.to(dtype=target_dtype).transpose(1, 2)
+            v_fla = v.to(dtype=target_dtype).transpose(1, 2)
+            g_fla = g.to(dtype=target_dtype).transpose(1, 2)
             out, final_state = chunk_gla(q_fla, k_fla, v_fla, g_fla, scale=None)
-            out = out.to(dtype=x.dtype)
+            out = out.transpose(1, 2).to(dtype=x.dtype)
         else:
             out, final_state = _pytorch_chunk_gla(q, k, v, g, initial_state=initial_state)
 

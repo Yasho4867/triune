@@ -76,7 +76,8 @@ def fast_rope(q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Te
         cos: [T, D] or [1, 1, T, D]
         sin: [T, D] or [1, 1, T, D]
     """
-    if is_triton_available() and q.is_cuda and q.dim() == 4:
+    requires_grad = (q.requires_grad or k.requires_grad or torch.is_grad_enabled())
+    if is_triton_available() and q.is_cuda and q.dim() == 4 and not requires_grad:
         try:
             B, H, T, D = q.shape
             half_d = D // 2
@@ -98,21 +99,7 @@ def fast_rope(q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Te
         except Exception:
             pass
 
-def rotate_half(x: torch.Tensor) -> torch.Tensor:
-    x1, x2 = x.chunk(2, dim=-1)
-    return torch.cat((-x2, x1), dim=-1)
-
-
-def fast_rope(q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """Applies rotary position embeddings using fused Triton or vectorized PyTorch.
-
-    Args:
-        q: [B, H, T, D] or [B, T, H, D]
-        k: [B, H, T, D] or [B, T, H, D]
-        cos: [T, D] or [1, 1, T, D]
-        sin: [T, D] or [1, 1, T, D]
-    """
-    # Vectorized PyTorch Fast Execution
+    # Vectorized PyTorch Fast Execution Fallback
     cos = cos.to(dtype=q.dtype, device=q.device)
     sin = sin.to(dtype=q.dtype, device=q.device)
 
@@ -125,6 +112,13 @@ def fast_rope(q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Te
             cos = cos.unsqueeze(0)
             sin = sin.unsqueeze(0)
 
-    q_rot = q * cos + rotate_half(q) * sin
-    k_rot = k * cos + rotate_half(k) * sin
+    # Use rotate_half with full-D cos/sin (cos/sin are [T, D] where D = full head_dim)
+    q_rot = q * cos + _rotate_half(q) * sin
+    k_rot = k * cos + _rotate_half(k) * sin
     return q_rot, k_rot
+
+
+def _rotate_half(x: torch.Tensor) -> torch.Tensor:
+    """Rotary helper: [-x2, x1] from the two halves of the last dimension."""
+    x1, x2 = x.chunk(2, dim=-1)
+    return torch.cat((-x2, x1), dim=-1)

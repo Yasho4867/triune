@@ -25,8 +25,12 @@ class DAGParser:
         edges = graph_json.get("edges", [])
 
         deps: Dict[str, List[str]] = {n["id"]: [] for n in nodes}
+        node_ids = set(deps.keys())
         for edge in edges:
-            deps[edge["target"]].append(edge["source"])
+            src, tgt = edge.get("source"), edge.get("target")
+            if src not in node_ids or tgt not in node_ids:
+                continue  # Fix M-10: skip dangling edges
+            deps[tgt].append(src)
 
         res = {}
         for n in nodes:
@@ -48,8 +52,10 @@ class DAGParser:
         node_map: Dict[str, Dict[str, Any]] = {n["id"]: n for n in nodes}
 
         for edge in edges:
-            src = edge["source"]
-            target = edge["target"]
+            src = edge.get("source")
+            target = edge.get("target")
+            if src not in node_map or target not in node_map:
+                continue  # Fix M-10: skip dangling edges
             adj[src].append(target)
             in_degree[target] = in_degree.get(target, 0) + 1
 

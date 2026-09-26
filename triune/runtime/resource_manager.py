@@ -185,42 +185,50 @@ class DynamicResourceManager:
         )
 
     @classmethod
-    def calculate_model_size(cls, config: Dict[str, Any]) -> Tuple[int, float]:
+    def calculate_model_size(cls, config: Dict[str, Any], model: Optional[nn.Module] = None) -> Tuple[int, float]:
         """Accurately compute total parameter count and raw parameter footprint in GB."""
-        vocab_size = config.get("vocab_size", 32000)
-        hidden_dim = config.get("hidden_dim", 1536)
-        num_layers = config.get("num_layers", 24)
-        num_experts = config.get("num_experts", 8)
-        expert_multiplier = config.get("expert_hidden_multiplier", 6)
-        reflex_exit_layer = config.get("reflex_exit_layer", 6)
+        if model is not None:
+            seen_ids = set()
+            total_params = 0
+            for p in model.parameters():
+                if id(p) not in seen_ids:
+                    seen_ids.add(id(p))
+                    total_params += p.numel()
+        else:
+            vocab_size = config.get("vocab_size", 32000)
+            hidden_dim = config.get("hidden_dim", 1536)
+            num_layers = config.get("num_layers", 24)
+            num_experts = config.get("num_experts", 8)
+            expert_multiplier = config.get("expert_hidden_multiplier", 6)
+            reflex_exit_layer = config.get("reflex_exit_layer", 6)
 
-        # 1. Embeddings & output norm
-        embed_params = vocab_size * hidden_dim + hidden_dim
+            # 1. Embeddings & output norm
+            embed_params = vocab_size * hidden_dim + hidden_dim
 
-        # 2. Transformer layers
-        total_layer_params = 0
-        for i in range(num_layers):
-            # Attention (Q, K, V, Gate, Out) + 2 RMSNorms
-            attn_params = 5 * (hidden_dim ** 2) + 2 * hidden_dim
+            # 2. Transformer layers
+            total_layer_params = 0
+            for i in range(num_layers):
+                # Attention (Q, K, V, Gate, Out) + 2 RMSNorms
+                attn_params = 5 * (hidden_dim ** 2) + 2 * hidden_dim
 
-            # FFN: MoE vs dense prefix
-            if i > reflex_exit_layer:
-                expert_dim = hidden_dim * expert_multiplier
-                routed_params = num_experts * (2 * hidden_dim * expert_dim)
-                shared_params = 2 * hidden_dim * expert_dim
-                router_params = hidden_dim * num_experts
-                ffn_params = routed_params + shared_params + router_params
-            else:
-                ffn_params = 2 * hidden_dim * (hidden_dim * 4)
+                # FFN: MoE vs dense prefix
+                if i > reflex_exit_layer:
+                    expert_dim = hidden_dim * expert_multiplier
+                    routed_params = num_experts * (2 * hidden_dim * expert_dim)
+                    shared_params = 2 * hidden_dim * expert_dim
+                    router_params = hidden_dim * num_experts
+                    ffn_params = routed_params + shared_params + router_params
+                else:
+                    ffn_params = 2 * hidden_dim * (hidden_dim * 4)
 
-            total_layer_params += attn_params + ffn_params
+                total_layer_params += attn_params + ffn_params
 
-        # 3. Exit heads (Reflex, Limbic, Cortex)
-        exit_head_params = 3 * (hidden_dim * vocab_size) + 3 * vocab_size
-        # 4. Depth router
-        depth_router_params = hidden_dim * 3 + (num_layers * 2 * hidden_dim) + hidden_dim
+            # 3. Exit heads (Reflex, Limbic, Cortex)
+            exit_head_params = 3 * (hidden_dim * vocab_size) + 3 * vocab_size
+            # 4. Depth router
+            depth_router_params = hidden_dim * 3 + (num_layers * 2 * hidden_dim) + hidden_dim
 
-        total_params = embed_params + total_layer_params + exit_head_params + depth_router_params
+            total_params = embed_params + total_layer_params + exit_head_params + depth_router_params
 
         # Precision bytes per param
         if config.get("use_fp4"):
@@ -240,6 +248,7 @@ class DynamicResourceManager:
         device: Optional[torch.device] = None,
         user_overrides: Optional[Dict[str, Any]] = None,
         safety_ceiling: float = 0.85,
+        model: Optional[nn.Module] = None,
     ) -> FeasibilityAssessment:
         """Assesses hardware capacity and model memory demands, returning recommendations."""
         hw = cls.probe_hardware(device)
@@ -248,7 +257,7 @@ class DynamicResourceManager:
         safe_budget_gb = free_vram_gb * safety_ceiling
 
         cfg = dict(config)
-        total_params, param_memory_gb = cls.calculate_model_size(cfg)
+        total_params, param_memory_gb = cls.calculate_model_size(cfg, model=model)
 
         use_muon = cfg.get("use_muon", True)
         opt_bytes_factor = 0.5 if use_muon else 0.8
@@ -421,11 +430,12 @@ class DynamicResourceManager:
         auto_fit: bool = False,
         user_overrides: Optional[Dict[str, Any]] = None,
         safety_ceiling: float = 0.85,
+        model: Optional[nn.Module] = None,
     ) -> AllotmentPlan:
         """Validates configuration against physical VRAM and allots resources without altering architecture."""
         overrides = user_overrides or {}
         assessment = cls.assess_feasibility(
-            config, device=device, user_overrides=overrides, safety_ceiling=safety_ceiling
+            config, device=device, user_overrides=overrides, safety_ceiling=safety_ceiling, model=model
         )
 
         cfg = dict(config)
@@ -525,7 +535,8 @@ class DynamicResourceManager:
                         )
 
             # 3. Any remaining submodules
-            model.to(device=device, dtype=dtype)
+            # Removed self-defeating final model.to() call that bulk-transfers everything
+            # model.to(device=device, dtype=dtype)
             allocated_gb = torch.cuda.memory_allocated(device) / (1024 ** 3)
             print(f"✅ [Resource Manager] Staged transfer complete. Allocated: {allocated_gb:.2f}/{total_bytes/(1024**3):.2f} GB", flush=True)
             return model

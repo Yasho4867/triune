@@ -10,7 +10,10 @@ class CyclingDataLoader:
         self.loader = loader
         self._iterator = iter(loader)
 
-    def next(self):
+    def __iter__(self):
+        return self
+
+    def __next__(self):
         try:
             return next(self._iterator)
         except StopIteration:
@@ -19,3 +22,6 @@ class CyclingDataLoader:
                 return next(self._iterator)
             except StopIteration:
                 raise RuntimeError("DataLoader is empty; cannot cycle an empty dataset") from None
+
+    def next(self):
+        return self.__next__()

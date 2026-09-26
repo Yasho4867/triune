@@ -1,62 +1,252 @@
-"""Desktop Application Launcher for Triune Studio."""
+"""Desktop Application Launcher for Triune Studio.
+
+Seamlessly launches the embedded Triune API & UI server and opens a native desktop
+application window across Windows, Linux, WSL2, and macOS.
+"""
 
 from __future__ import annotations
 
+import http.server
 import os
+import socket
+import socketserver
 import subprocess
 import sys
 import threading
 import time
+import urllib.request
 import webbrowser
+from pathlib import Path
+
+
+def _is_port_in_use(port: int, host: str = "127.0.0.1") -> bool:
+    """Check if a network port is already in use."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind((host, port))
+            return False
+        except OSError:
+            return True
+
+
+def _find_free_port(start_port: int = 8000, max_attempts: int = 20) -> int:
+    """Find the next available TCP port."""
+    for p in range(start_port, start_port + max_attempts):
+        if not _is_port_in_use(p):
+            return p
+    return start_port
+
+
+def _wait_for_server(url: str, timeout: float = 15.0) -> bool:
+    """Poll a URL until it responds with HTTP 200 or timeout occurs."""
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        try:
+            with urllib.request.urlopen(url, timeout=0.8) as resp:
+                if resp.status == 200:
+                    return True
+        except Exception:
+            time.sleep(0.2)
+    return False
+
+
+def _find_wsl_python() -> str | None:
+    """Detect if WSL2 is installed and has a GPU PyTorch Python environment."""
+    if sys.platform != "win32":
+        return None
+    try:
+        # Check standard user venv locations
+        for cand in [
+            "/home/yasho4867/venvs/triune/bin/python",
+            "~/venvs/triune/bin/python",
+            "~/.venv/bin/python",
+        ]:
+            r = subprocess.run(["wsl.exe", "-e", "test", "-f", cand], capture_output=True, timeout=2.0)
+            if r.returncode == 0:
+                return cand
+
+        # Check if python3 in WSL has torch with CUDA
+        chk = subprocess.run(
+            ["wsl.exe", "bash", "-c", "python3 -c 'import torch; print(torch.cuda.is_available())'"],
+            capture_output=True, text=True, timeout=4.0
+        )
+        if "True" in chk.stdout:
+            return "python3"
+    except Exception:
+        pass
+    return None
+
+
+def _to_wsl_path(path: Path) -> str:
+    """Convert a Windows Path to a WSL POSIX mount path."""
+    p_posix = path.resolve().as_posix()
+    drive = p_posix[0].lower()
+    rest = p_posix[2:]  # Strip 'C:'
+    return f"/mnt/{drive}{rest}"
+
+
+def _start_fallback_http_server(directory: Path, port: int) -> None:
+    """Run built-in Python HTTP server if FastAPI is completely unavailable."""
+    class QuietHandler(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, directory=str(directory), **kw)
+
+        def log_message(self, fmt, *args):
+            pass
+
+    def serve():
+        socketserver.TCPServer.allow_reuse_address = True
+        try:
+            with socketserver.TCPServer(("127.0.0.1", port), QuietHandler) as httpd:
+                print(f"[Studio Fallback] Serving static UI on http://127.0.0.1:{port}")
+                httpd.serve_forever()
+        except Exception as err:
+            print(f"[Studio Fallback Error] {err}")
+
+    t = threading.Thread(target=serve, daemon=True)
+    t.start()
 
 
 def launch_desktop_app(port: int = 8000) -> None:
     """Launch embedded Triune Studio API server and open as a native desktop application window."""
-    from triune.api import run_server
+    workspace_root = Path(__file__).resolve().parent.parent
+    studio_src = workspace_root / "studio" / "src"
 
-    print(f"[Studio] Starting Triune Framework Engine on http://127.0.0.1:{port}")
-    server_thread = threading.Thread(
-        target=run_server,
-        kwargs={"host": "127.0.0.1", "port": port},
-        daemon=True,
-    )
-    server_thread.start()
-
-    time.sleep(1.5)
-    url = f"http://127.0.0.1:{port}/"
-
-    # 1. Try PyWebView for a desktop window (Windows, macOS, Linux)
+    # 1. Determine optimal backend execution mode
+    local_has_torch = False
+    local_has_cuda = False
     try:
-        import webview
-
-        print("[Studio] Launching native window via PyWebView...")
-        webview.create_window(
-            title="Triune Studio",
-            url=url,
-            width=1340,
-            height=880,
-            resizable=True,
-            min_size=(900, 600),
-        )
-        webview.start()
-        return
+        import torch
+        local_has_torch = True
+        local_has_cuda = torch.cuda.is_available()
     except ImportError:
         pass
 
-    # 2. Windows: Try MS Edge App Mode
+    wsl_py = None
+    if sys.platform == "win32" and not local_has_cuda:
+        wsl_py = _find_wsl_python()
+
+    api_proc = None
+
+    if local_has_cuda or (local_has_torch and not wsl_py):
+        # Native Python with PyTorch
+        print(f"[Studio] Starting native PyTorch backend on http://127.0.0.1:{port}...")
+        from triune.api import run_server
+        server_thread = threading.Thread(
+            target=run_server,
+            kwargs={"host": "127.0.0.1", "port": port},
+            daemon=True,
+        )
+        server_thread.start()
+
+    elif wsl_py:
+        # Windows host bridging to high-performance WSL2 GPU engine
+        wsl_ws = _to_wsl_path(workspace_root)
+        print(f"[Studio] Hardware Bridge: Launching backend in WSL2 with GPU acceleration ({wsl_py})...")
+        wsl_cmd = [
+            "wsl.exe", "-e", wsl_py, "-c",
+            f"import sys; sys.path.insert(0, '{wsl_ws}'); from triune.api import run_server; run_server(host='0.0.0.0', port={port})"
+        ]
+        try:
+            api_proc = subprocess.Popen(
+                wsl_cmd,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+            )
+        except Exception as e:
+            print(f"[Studio] Failed to launch WSL backend: {e}")
+
+    else:
+        # Native host Python in lightweight UI Mode or Fallback
+        try:
+            from triune.api import run_server
+            print(f"[Studio] Starting Triune Studio in Host UI Mode on http://127.0.0.1:{port}...")
+            server_thread = threading.Thread(
+                target=run_server,
+                kwargs={"host": "127.0.0.1", "port": port},
+                daemon=True,
+            )
+            server_thread.start()
+        except Exception:
+            print(f"[Studio] Starting built-in fallback HTTP server on port {port}...")
+            _start_fallback_http_server(studio_src, port)
+
+    url = f"http://127.0.0.1:{port}/"
+
+    # 2. Wait for server to be responsive BEFORE opening browser/webview
+    print(f"[Studio] Waiting for server to initialize on {url}...")
+    server_ready = _wait_for_server(url, timeout=12.0)
+    if server_ready:
+        print(f"[Studio] Server ready and responsive on {url}!")
+    else:
+        print(f"[Studio] Notice: Server still warming up; proceeding with window launch.")
+
+    # 3. Launch native desktop window via PyWebView
+    try:
+        import webview
+
+        print("[Studio] Opening native desktop window via PyWebView...")
+        window = webview.create_window(
+            title="Triune Studio - AI Engine & Research IDE",
+            url=url,
+            width=1380,
+            height=900,
+            resizable=True,
+            min_size=(960, 640),
+        )
+
+        def on_closed():
+            print("[Studio] Window closed. Shutting down background processes...")
+            if api_proc and api_proc.poll() is None:
+                api_proc.terminate()
+            os._exit(0)
+
+        window.events.closed += on_closed
+        webview.start()
+        if api_proc and api_proc.poll() is None:
+            api_proc.terminate()
+        return
+    except Exception as err:
+        print(f"[Studio] PyWebView note: {err}")
+
+    # 4. Windows: Try MS Edge App Mode
     if sys.platform == "win32":
         try:
-            edge_path = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
-            if not os.path.exists(edge_path):
-                edge_path = r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"
-
-            if os.path.exists(edge_path):
-                print("[Studio] Launching MS Edge application mode...")
-                subprocess.Popen([edge_path, f"--app={url}", "--name=Triune Studio"])
-                return
+            edge_paths = [
+                r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+                r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+            ]
+            for edge_path in edge_paths:
+                if os.path.exists(edge_path):
+                    print("[Studio] Opening in Microsoft Edge App Mode...")
+                    proc = subprocess.Popen([edge_path, f"--app={url}", "--name=Triune Studio"])
+                    try:
+                        proc.wait()
+                    finally:
+                        if api_proc and api_proc.poll() is None:
+                            api_proc.terminate()
+                    return
         except Exception:
             pass
 
-    # 3. Fallback to default system browser
-    print(f"[Studio] Opening in browser: {url}")
+    # 5. Linux / macOS: Try Chrome / Chromium App Mode
+    if sys.platform != "win32":
+        for browser in ["google-chrome", "chromium", "chromium-browser"]:
+            try:
+                proc = subprocess.Popen([browser, f"--app={url}"])
+                try:
+                    proc.wait()
+                finally:
+                    if api_proc and api_proc.poll() is None:
+                        api_proc.terminate()
+                return
+            except FileNotFoundError:
+                continue
+
+    # 6. Fallback: Default web browser
+    print(f"[Studio] Opening in default web browser: {url}")
     webbrowser.open(url)
+    if api_proc:
+        try:
+            api_proc.wait()
+        except KeyboardInterrupt:
+            api_proc.terminate()

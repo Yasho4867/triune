@@ -36,6 +36,22 @@ class TestTriuneEcosystem(unittest.TestCase):
         result = sandbox.execute_code("res = a + b", locals_dict={"a": 15, "b": 25})
         self.assertEqual(result["res"], 40)
 
+    def test_sandbox_security(self):
+        """Verify sandbox rejects dangerous operations."""
+        sandbox = PythonSandbox(timeout=5)
+        
+        # Test: import os should fail or be restricted
+        result = sandbox.execute_code('import os; os.system("echo pwned")')
+        self.assertFalse(result.get('success', False), "Sandbox should reject importing os")
+        
+        # Test: file access should fail or be isolated
+        result = sandbox.execute_code('open("/etc/passwd").read()')
+        self.assertFalse(result.get('success', True), "Sandbox should not allow arbitrary file reads")
+        
+        # Test: timeout enforcement
+        result = sandbox.execute_code('import time; time.sleep(100)')
+        self.assertFalse(result.get('success', True), "Sandbox should enforce timeout")
+
     def test_model_zoo(self):
         model = load_model("triune-small")
         self.assertIsNotNone(model)

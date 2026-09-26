@@ -34,7 +34,7 @@ class TransformerBlock(nn.Module):
     def forward(self, x, return_exit=False, cache=None, update_stats=True):
         if self._use_gradient_checkpointing and self.training:
             attn_out, new_cache = torch.utils.checkpoint.checkpoint(
-                self.attn, self.norm1(x), use_reentrant=False
+                lambda n: self.attn(n, cache=cache), self.norm1(x), use_reentrant=False
             )
             x = x + attn_out
             norm2_x = self.norm2(x)

@@ -122,6 +122,11 @@ class Muon(Optimizer):
                 state["step"] += 1
                 momentum = state["momentum"]
 
+                # Fix H-5: ensure momentum is on the same device as grad
+                if momentum.device != grad.device:
+                    state['momentum'] = momentum.to(grad.device)
+                    momentum = state['momentum']
+
                 # Momentum accumulation
                 momentum.lerp_(grad, 1.0 - beta)
 

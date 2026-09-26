@@ -121,30 +121,28 @@ class TestGLACacheAndModelSemantics(unittest.TestCase):
                 )
 
     def test_dynamic_depth_cached_generation(self):
-        """Asserts cache propagation with dynamic depth routing produces mathematically consistent logits."""
+        """Gate 5: Cached generation maintains logit equivalence."""
         full_tokens = torch.randint(0, 100, (1, 8), device=self.device)
-
+        prefix = full_tokens[:, :4]
+        suffix = full_tokens[:, 4:]
+        
         with torch.no_grad():
-            full_logits, _ = self.model(full_tokens, force_depth=None)
-            full_depth = self.model.last_depth_choice
-
-            # Run prefix with cache
-            prefix_tokens = full_tokens[:, :5]
+            # Force deterministic depth for parity comparison
+            full_logits, _ = self.model(full_tokens, force_depth=2)
+            
             cache = self.model.init_cache(1)
-            prefix_logits, cache = self.model(prefix_tokens, cache=cache, force_depth=None)
-            prefix_depth = self.model.last_depth_choice
-
-            if prefix_depth.item() == full_depth.item():
-                torch.testing.assert_close(
-                    prefix_logits, full_logits[:, :5], rtol=1e-4, atol=1e-4
-                )
-
-            # Step-by-step autoregressive generation
-            for t in range(5, 8):
-                step_token = full_tokens[:, t : t + 1]
-                step_logits, cache = self.model(step_token, cache=cache, force_depth=None)
-                self.assertIsNotNone(self.model.last_depth_choice)
-                self.assertEqual(step_logits.shape, (1, 1, 100))
+            prefix_logits, cache = self.model(prefix, cache=cache, force_depth=2)
+            
+            for i in range(suffix.size(1)):
+                token = suffix[:, i:i+1]
+                step_logits, cache = self.model(token, cache=cache, force_depth=2)
+            
+            # Fix C-9: unconditional assertion — always verify logit parity
+            torch.testing.assert_close(
+                step_logits[:, -1, :], full_logits[:, -1, :],
+                rtol=1e-4, atol=1e-4,
+                msg="Cached single-step logits must match full-sequence logits"
+            )
 
 
 class TestSchemaV2Checkpointing(unittest.TestCase):
@@ -260,9 +258,31 @@ class TestSchemaV2Checkpointing(unittest.TestCase):
         bad_config_galore = dict(self.config, galore_rank=512)
         bad_trainer_galore = DummyTrainer(self.model, bad_config_galore, self.device)
         with self.assertRaises(ValueError) as ctx:
-            load_checkpoint(bad_trainer_galore, ckpt_path, load_optimizer=False)
+            load_checkpoint(bad_trainer_galore, ckpt_path, load_optimizer=True)
         self.assertIn("fingerprint mismatch", str(ctx.exception).lower())
         self.assertIn("galore_rank", str(ctx.exception))
+
+    def test_weights_only_load_allows_optimizer_changes(self):
+        """Fix H-2: weights_only load should succeed when only optimizer settings change."""
+        ckpt_path = save_latest(self.trainer, None, step=42, loss=0.85)
+        
+        # Change optimizer settings but keep model architecture identical
+        changed_config = dict(self.config, use_muon=not self.config.get('use_muon', False), galore_rank=512)
+        new_model = TriuneTransformer(
+            vocab_size=100,
+            hidden_dim=64,
+            num_layers=4,
+            num_heads=2,
+            head_dim=32,
+            router_prefix_layers=1,
+            reflex_exit_layer=2,
+            limbic_exit_layer=3,
+        ).to(self.device)
+        new_trainer = DummyTrainer(new_model, changed_config, self.device)
+        
+        # This should NOT raise — optimizer settings are irrelevant for weights-only load
+        loaded = load_checkpoint(new_trainer, ckpt_path, load_optimizer=False)
+        self.assertEqual(loaded['step'], 42)
 
 
 class TestConfigurationValidation(unittest.TestCase):

@@ -17,7 +17,17 @@ def export_safetensors(model: torch.nn.Module, output_path: str | Path) -> Path:
         from safetensors.torch import save_file
 
         state_dict = model.state_dict()
-        save_file(state_dict, str(output_path))
+        # Fix H-10: deduplicate tied weights that share memory
+        seen_ptrs = set()
+        deduped = {}
+        for key, tensor in state_dict.items():
+            ptr = tensor.data_ptr()
+            if ptr in seen_ptrs:
+                deduped[key] = tensor.clone()
+            else:
+                seen_ptrs.add(ptr)
+                deduped[key] = tensor
+        save_file(deduped, str(output_path))
     except ImportError:
         # Fallback to standard torch save if safetensors package absent
         torch.save(model.state_dict(), output_path)

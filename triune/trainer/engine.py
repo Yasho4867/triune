@@ -126,6 +126,8 @@ class TrainingEngine:
                     x, y = self.trainer.next_batch()
                     x, y = x.to(self.trainer.device), y.to(self.trainer.device)
                     labels = self._router_labels(x, y)
+                    # Intentional batched exploration: same forced depth across all sequences in the batch
+                    # for gradient correlation. Per-sequence exploration would require per-item depth tensors.
                     chosen_depth = random.choice((0, 1, 2)) if random.random() < exploration_rate else None
 
                     with self.trainer.model_autocast():
@@ -162,6 +164,7 @@ class TrainingEngine:
                 for module in self.model.modules():
                     if isinstance(module, MoE_FFN) and hasattr(module, "step_bias"):
                         module.step_bias()
+                # overflow is a cumulative count, not an average
                 for key in ("loss", "lm", "router", "balance"):
                     totals[key] /= self.trainer.grad_accum
 

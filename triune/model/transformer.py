@@ -78,9 +78,8 @@ class TriuneTransformer(nn.Module):
         self.router = GumbelSoftmaxRouter(hidden_dim, target_depth_dist=target_depth_dist, balance_coef=balance_coef)
         self.final_norm = RMSNorm(hidden_dim)
         self.final_head = nn.Linear(hidden_dim, vocab_size, bias=False)
-        self.token_embed.weight = self.final_head.weight
-
         self.apply(self._init_weights)
+        self.token_embed.weight = self.final_head.weight
 
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
@@ -144,7 +143,7 @@ class TriuneTransformer(nn.Module):
             depth_choice = y_route.argmax(dim=-1)
         else:
             depth_choice = torch.full((B,), force_depth, device=device, dtype=torch.long)
-        return logits, depth_choice, balance_loss
+        return logits, y_route, depth_choice, balance_loss
 
     def forward(
         self,
@@ -161,7 +160,7 @@ class TriuneTransformer(nn.Module):
         x = self.token_embed(input_ids)
 
         x_prefix, new_cache = self._run_layers(x, 0, self.router_prefix_layers, cache=cache)
-        route_logits, depth_choice, balance_loss = self._route(x_prefix, force_depth, B, device, temperature=temperature)
+        route_logits, y_route, depth_choice, balance_loss = self._route(x_prefix, force_depth, B, device, temperature=temperature)
         self.last_route_logits = route_logits
         self.last_depth_choice = depth_choice
         self.last_balance_loss = balance_loss
@@ -229,18 +228,19 @@ class TriuneTransformer(nn.Module):
                 x_d, d_cache = self._run_layers(x_d, self.router_prefix_layers, self.num_layers, cache=d_cache)
                 logits_d = self.final_head(self.final_norm(x_d))
 
-            final_logits.index_copy_(0, idx, logits_d)
+            # Fix C-1: out-of-place to preserve autograd graph
+            final_logits = final_logits.index_copy(0, idx, logits_d)
             if cache is not None and d_cache is not None:
                 for l_idx, entry in enumerate(d_cache):
                     if entry is not None and isinstance(entry, tuple) and entry[0] is not None:
                         s_d, off = entry
                         if new_cache[l_idx] is not None and isinstance(new_cache[l_idx], tuple) and new_cache[l_idx][0] is not None:
                             new_s, _ = new_cache[l_idx]
-                            new_s.index_copy_(0, idx, s_d)
+                            new_s = new_s.index_copy(0, idx, s_d)
                             new_cache[l_idx] = (new_s, off)
                         else:
                             full_s = torch.zeros(B, *s_d.shape[1:], device=device, dtype=s_d.dtype)
-                            full_s.index_copy_(0, idx, s_d)
+                            full_s = full_s.index_copy(0, idx, s_d)
                             new_cache[l_idx] = (full_s, off)
 
         if cache is not None:
@@ -255,7 +255,7 @@ class TriuneTransformer(nn.Module):
         device = input_ids.device
         x = self.token_embed(input_ids)
         x_prefix, _ = self._run_layers(x, 0, self.router_prefix_layers)
-        route_logits, _, _ = self._route(x_prefix, None, B, device)
+        route_logits, _, _, _ = self._route(x_prefix, None, B, device)
 
         # Run every MoE block with the same update_stats value.  Label generation
         # must not alter routing statistics.

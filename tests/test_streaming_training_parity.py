@@ -276,6 +276,46 @@ class StreamingTrainingParityTest(unittest.TestCase):
 
         engine.detach()
 
+    def test_train_mode_streaming_parity(self):
+        """Verify streaming doesn't break dropout/routing in training mode."""
+        # This test verifies that a single training step produces finite,
+        # non-NaN results in both streaming and non-streaming configurations.
+        # Full numerical parity in train mode is not expected due to
+        # execution-order floating-point variation from streaming.
+        torch.manual_seed(42)
+        model_ref, model_str, engine = create_paired_models(self.device, seed=42)
+        model_ref.train()
+        model_str.train()
+        
+        opt_ref = torch.optim.AdamW(model_ref.parameters(), lr=1e-3)
+        opt_str = torch.optim.AdamW(model_str.parameters(), lr=1e-3)
+        engine.set_optimizer(opt_str)
+        
+        inputs = torch.randint(0, 128, (2, 8), device=self.device)
+        
+        # Reference step
+        opt_ref.zero_grad()
+        logits_ref, _ = model_ref(inputs)
+        loss_ref = logits_ref.pow(2).mean()
+        loss_ref.backward()
+        
+        # Streaming step
+        engine.zero_grad()
+        logits_str, _ = model_str(inputs)
+        loss_str = logits_str.pow(2).mean()
+        loss_str.backward()
+        
+        # Verify finite grads
+        for p in model_ref.parameters():
+            if p.grad is not None:
+                self.assertTrue(torch.isfinite(p.grad).all().item())
+        for p in model_str.parameters():
+            grad = getattr(p, "_cpu_grad", p.grad)
+            if grad is not None:
+                self.assertTrue(torch.isfinite(grad).all().item())
+                
+        engine.detach()
+
     def test_gradient_accumulation_parity(self):
         """Phase 6: Gradient accumulation parity between 1 large batch and N microbatches."""
         for num_accum in (1, 2, 4):

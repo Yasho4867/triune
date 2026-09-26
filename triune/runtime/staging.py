@@ -92,20 +92,25 @@ class FP8StagingBuffer(StagingBuffer):
 
         def _do_quantize():
             gpu_master = self.cpu_master.to(device, non_blocking=non_blocking).to(compute_dtype)
-            amax = gpu_master.abs().amax().clamp_min(1e-12)
-            scale = (448.0 / amax).to(dtype=compute_dtype)
-            fp8_t = (gpu_master * scale).to(torch.float8_e4m3fn)
-            inv_scale = (1.0 / scale.float())
-
-            self.amax = amax
-            self.scale = scale
-            self.inv_scale = inv_scale
-            self.fp8_tensor = fp8_t
-
             if use_hardware_fp8:
-                self.gpu_tensor = fp8_t
+                amax = gpu_master.abs().amax().clamp_min(1e-12)
+                scale = (448.0 / amax).to(dtype=compute_dtype)
+                fp8_t = (gpu_master * scale).to(torch.float8_e4m3fn)
+                inv_scale = (1.0 / scale.float())
+
+                self.amax = amax
+                self.scale = scale
+                self.inv_scale = inv_scale
+                self.fp8_tensor = fp8_t
             else:
-                self.gpu_tensor = (fp8_t.to(compute_dtype) * inv_scale)
+                self.amax = None
+                self.scale = None
+                self.inv_scale = None
+                self.fp8_tensor = None
+
+            # CRITICAL INVARIANT: self.gpu_tensor is ALWAYS the master precision representation
+            # so autograd, optimizer, and non-FP8 consumers always see BF16/FP32.
+            self.gpu_tensor = gpu_master
             return self.gpu_tensor
 
         if stream is not None:
@@ -126,11 +131,8 @@ class FP8StagingBuffer(StagingBuffer):
             if self.event is not None:
                 self.event.synchronize()
                 self.event = None
-            if self.gpu_tensor.dtype == torch.float8_e4m3fn and self.inv_scale is not None:
-                dequant = self.gpu_tensor.to(self.cpu_master.dtype) * self.inv_scale.to(self.cpu_master.dtype)
-                self.cpu_master.copy_(dequant, non_blocking=non_blocking)
-            else:
-                self.cpu_master.copy_(self.gpu_tensor.to(self.cpu_master.dtype), non_blocking=non_blocking)
+            # Master weight updates are in master precision (BF16/FP32)
+            self.cpu_master.copy_(self.gpu_tensor.to(self.cpu_master.dtype), non_blocking=non_blocking)
 
     def release_gpu(self) -> None:
         """Releases temporary GPU execution tensors and scale metadata, restoring CPU master."""
@@ -160,16 +162,35 @@ class ParameterStager:
         self.buffers: dict[int, StagingBuffer] = {}
 
     def register_module(self, module: nn.Module) -> None:
-        """Initializes staging buffers for all parameters and buffers in a module."""
+        """Initializes staging buffers for all parameters and buffers in a module.
+
+        FP8 staging is strictly opt-in per module: only parameters owned by modules
+        explicitly marked with `_triune_fp8_aware = True` (such as FP8Linear) and
+        having dim >= 2 receive an FP8StagingBuffer when self.use_fp8 is enabled.
+        Ordinary nn.Linear, norms, embeddings, routers, and biases are NEVER marked
+        FP8-aware and always receive standard StagingBuffer.
+        """
+        for sub_name, sub in module.named_modules():
+            is_fp8_aware = getattr(sub, "_triune_fp8_aware", False)
+            for p_name, p in sub.named_parameters(recurse=False):
+                p_id = id(p)
+                if p_id not in self.buffers:
+                    master = p.data if not hasattr(p, "_cpu_data") else p._cpu_data
+                    p._cpu_data = master
+                    p._master_dtype = master.dtype
+                    if self.use_fp8 and is_fp8_aware and p.dim() >= 2:
+                        self.buffers[p_id] = FP8StagingBuffer(param=p, cpu_master=master)
+                    else:
+                        self.buffers[p_id] = StagingBuffer(param=p, cpu_master=master)
+
+        # Fallback for any unmapped parameters/buffers
         for p in module.parameters():
             p_id = id(p)
             if p_id not in self.buffers:
                 master = p.data if not hasattr(p, "_cpu_data") else p._cpu_data
                 p._cpu_data = master
-                if self.use_fp8 and p.dim() >= 2:
-                    self.buffers[p_id] = FP8StagingBuffer(param=p, cpu_master=master)
-                else:
-                    self.buffers[p_id] = StagingBuffer(param=p, cpu_master=master)
+                p._master_dtype = master.dtype
+                self.buffers[p_id] = StagingBuffer(param=p, cpu_master=master)
 
         for b in module.buffers():
             b_id = id(b)
@@ -240,6 +261,8 @@ class ParameterStager:
                 p._fp8_inv_scale = None
             if hasattr(p, "_fp8_amax"):
                 p._fp8_amax = None
+            if hasattr(p, "_cpu_data"):
+                p.data = p._cpu_data
 
     def sync_layer_to_cpu(self, layer: nn.Module) -> None:
         """Synchronizes updated GPU weights for a layer back to CPU master storage."""
@@ -256,17 +279,27 @@ class ParameterStager:
                 p._fp8_inv_scale = None
             if hasattr(p, "_fp8_amax"):
                 p._fp8_amax = None
+            if hasattr(p, "_cpu_data"):
+                p.data = p._cpu_data
+
+    def cleanup_all(self) -> None:
+        """Universal exception cleanup: releases all GPU tensors, restores CPU pointers,
+        clears temporary FP8 metadata, and synchronizes/retires pending events."""
+        for buf in self.buffers.values():
+            buf.release_gpu()
+            p = buf.param
+            if hasattr(p, "_fp8_tensor"):
+                p._fp8_tensor = None
+            if hasattr(p, "_fp8_scale"):
+                p._fp8_scale = None
+            if hasattr(p, "_fp8_inv_scale"):
+                p._fp8_inv_scale = None
+            if hasattr(p, "_fp8_amax"):
+                p._fp8_amax = None
+            if hasattr(p, "_cpu_data"):
+                p.data = p._cpu_data
 
     def clear(self) -> None:
         """Releases all staging buffers and resets state."""
-        for buf in self.buffers.values():
-            buf.release_gpu()
-            if hasattr(buf.param, "_fp8_tensor"):
-                buf.param._fp8_tensor = None
-            if hasattr(buf.param, "_fp8_scale"):
-                buf.param._fp8_scale = None
-            if hasattr(buf.param, "_fp8_inv_scale"):
-                buf.param._fp8_inv_scale = None
-            if hasattr(buf.param, "_fp8_amax"):
-                buf.param._fp8_amax = None
+        self.cleanup_all()
         self.buffers.clear()

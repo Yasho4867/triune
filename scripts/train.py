@@ -176,43 +176,44 @@ def main(argv: list[str] | None = None) -> dict:
     from triune.runtime.resource_manager import DynamicResourceManager
 
 
-    # Run feasibility assessment and display transparent breakdown
-    assessment = DynamicResourceManager.assess_feasibility(
-        config, device=device, user_overrides=overrides, safety_ceiling=0.85
-    )
-    print(DynamicResourceManager.format_assessment_report(assessment), flush=True)
-
-    if args.streaming:
-        print(f"🌊 [Layer Streaming Engine] Active: chunk size {args.streaming_chunk_size}. Layers reside in CPU RAM and stream to GPU on-demand (<1.5 GB VRAM target).", flush=True)
-
-    # Validate and allot resources; respects user --force override and explicit flags
-    allotment = DynamicResourceManager.validate_and_allot(
-        config,
-        device=device,
-        force=args.force or args.streaming,
-        auto_fit=args.auto_fit,
-        user_overrides=overrides,
-        safety_ceiling=0.85,
-    )
-    config = allotment.config
-
-    if allotment.adjustment_reason:
-        print(f"⚙️ [Resource Manager] Status: {allotment.adjustment_reason}", flush=True)
-
-    if not args.no_hf_login:
-        _request_hf_token()
-
-    resume_path = args.resume_latest or (Path(config["checkpoint_dir"]) / "best.pt" if args.resume_best else None)
-    logger = NullLogger() if args.no_wandb else WandbLogger(
-        project="triune-transformer", config=config, run_id=_checkpoint_run_id(resume_path)
-    )
     try:
         tokenizer = load_tokenizer(args.tokenizer_path)
         config["vocab_size"] = tokenizer.get_vocab_size()
         sep_token_id = tokenizer.token_to_id("[SEP]")
         if sep_token_id is None:
             raise ValueError("Tokenizer must define a [SEP] special token")
-        
+
+        # Run feasibility assessment and display transparent breakdown
+        assessment = DynamicResourceManager.assess_feasibility(
+            config, device=device, user_overrides=overrides, safety_ceiling=0.85
+        )
+        print(DynamicResourceManager.format_assessment_report(assessment), flush=True)
+
+        if args.streaming:
+            print(f"🌊 [Layer Streaming Engine] Active: chunk size {args.streaming_chunk_size}. Layers reside in CPU RAM and stream to GPU on-demand (<1.5 GB VRAM target).", flush=True)
+
+        # Validate and allot resources; respects user --force override and explicit flags
+        allotment = DynamicResourceManager.validate_and_allot(
+            config,
+            device=device,
+            force=args.force or args.streaming,
+            auto_fit=args.auto_fit,
+            user_overrides=overrides,
+            safety_ceiling=0.85,
+        )
+        config = allotment.config
+
+        if allotment.adjustment_reason:
+            print(f"⚙️ [Resource Manager] Status: {allotment.adjustment_reason}", flush=True)
+
+        if not args.no_hf_login:
+            _request_hf_token()
+
+        resume_path = args.resume_latest or (Path(config["checkpoint_dir"]) / "best.pt" if args.resume_best else None)
+        logger = NullLogger() if args.no_wandb else WandbLogger(
+            project="triune-transformer", config=config, run_id=_checkpoint_run_id(resume_path)
+        )
+
         # Build model with BF16 default dtype
         if model_name_str not in preset_configs and ("/" in args.model_name or not Path(args.model_name).exists()):
             try:
@@ -273,6 +274,10 @@ def main(argv: list[str] | None = None) -> dict:
         eval_loader = build_dataloader(tokenizer, config, sep_token_id, is_holdout=True)
         print("✅ Dataset stream configured.", flush=True)
         if config.get("use_fp8", False):
+            fp8_count = sum(1 for m in model.modules() if getattr(m, '_triune_fp8_aware', False))
+            if fp8_count == 0:
+                print("⚠️ [FP8] use_fp8=True but no FP8Linear modules found in model. Check model factory.", flush=True)
+
             use_te = config.get("use_te", True)
             precision_context = build_fp8_precision_context(device=device, use_te=use_te)
             desc = getattr(precision_context, "description", "FP8 precision context active")

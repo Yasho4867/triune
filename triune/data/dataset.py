@@ -57,59 +57,66 @@ class TokenStreamDataset(IterableDataset):
         buffer.clear()
 
     def __iter__(self) -> Iterator[tuple[torch.Tensor, torch.Tensor]]:
-        token_buffer: list[int] = []
-        batch_buffer: list[tuple[torch.Tensor, torch.Tensor]] = []
-        token_count = 0
-        stream = self._stream()
-
-        # Query active worker environment
+        import time
+        max_retries = 3
         worker_info = torch.utils.data.get_worker_info()
 
-        # Maintain separate offsets per worker to skip sequences
-        sample_idx = 0
-        tokens_to_skip = self.offset
+        for attempt in range(max_retries):
+            token_buffer: list[int] = []
+            batch_buffer: list[tuple[torch.Tensor, torch.Tensor]] = []
+            token_count = 0
+            sample_idx = 0
+            tokens_to_skip = self.offset // worker_info.num_workers if worker_info is not None else self.offset
 
-        for sample in stream:
-            if isinstance(sample, str):
-                text = sample
-            else:
-                text = sample.get("text") or sample.get("content") or sample.get("story") or sample.get("prompt") or ""
-            if not text.strip():
-                continue
+            try:
+                stream = self._stream()
+                for sample in stream:
+                    if isinstance(sample, str):
+                        text = sample
+                    else:
+                        text = sample.get("text") or sample.get("content") or sample.get("story") or sample.get("prompt") or ""
+                    if not text.strip():
+                        continue
 
-            # Simple sharding: let workers skip samples round-robin
-            if worker_info is not None:
-                if sample_idx % worker_info.num_workers != worker_info.id:
+                    # Simple sharding: let workers skip samples round-robin
+                    if worker_info is not None:
+                        if sample_idx % worker_info.num_workers != worker_info.id:
+                            sample_idx += 1
+                            continue
                     sample_idx += 1
-                    continue
-            sample_idx += 1
 
-            ids = self.tokenizer.encode(text).ids
-            if tokens_to_skip:
-                if tokens_to_skip >= len(ids):
-                    tokens_to_skip -= len(ids)
-                    continue
-                ids = ids[tokens_to_skip:]
-                tokens_to_skip = 0
+                    ids = self.tokenizer.encode(text).ids
+                    if tokens_to_skip:
+                        if tokens_to_skip >= len(ids):
+                            tokens_to_skip -= len(ids)
+                            continue
+                        ids = ids[tokens_to_skip:]
+                        tokens_to_skip = 0
 
-            token_buffer.extend(ids)
-            token_buffer.append(self.sep_token_id)
+                    token_buffer.extend(ids)
+                    token_buffer.append(self.sep_token_id)
 
-            while len(token_buffer) >= self.seq_len + 1:
-                chunk = token_buffer[: self.seq_len + 1]
-                del token_buffer[: self.seq_len + 1]
-                batch_buffer.append(
-                    (torch.tensor(chunk[:-1], dtype=torch.long), torch.tensor(chunk[1:], dtype=torch.long))
-                )
-                token_count += self.seq_len
+                    while len(token_buffer) >= self.seq_len + 1:
+                        chunk = token_buffer[: self.seq_len + 1]
+                        del token_buffer[: self.seq_len + 1]
+                        batch_buffer.append(
+                            (torch.tensor(chunk[:-1], dtype=torch.long), torch.tensor(chunk[1:], dtype=torch.long))
+                        )
+                        token_count += self.seq_len
 
-                if len(batch_buffer) >= self.shuffle_buffer:
-                    yield from self._flush(batch_buffer)
-                if self.max_tokens is not None and token_count >= self.max_tokens:
-                    yield from self._flush(batch_buffer)
-                    return
+                        if len(batch_buffer) >= self.shuffle_buffer:
+                            yield from self._flush(batch_buffer)
+                        if self.max_tokens is not None and token_count >= self.max_tokens:
+                            yield from self._flush(batch_buffer)
+                            return
 
-        yield from self._flush(batch_buffer)
+                yield from self._flush(batch_buffer)
+                break
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    time.sleep(2 ** attempt)
+                else:
+                    raise
 
 
 def build_dataloader(tokenizer, config: dict, sep_token_id: int, *, is_holdout: bool) -> DataLoader:

@@ -100,6 +100,20 @@ class FrameworkTest(unittest.TestCase):
         resumed.resume(checkpoint_dir / "latest.pt")
         self.assertEqual(resumed.engine.step, 1)
 
+        # After resume, verify weights match
+        for (n1, p1), (n2, p2) in zip(trainer.model.named_parameters(), resumed.model.named_parameters()):
+            torch.testing.assert_close(p1, p2, msg=f"Weight mismatch after resume: {n1}")
+
+        # Verify optimizer state was restored
+        for (k1, v1), (k2, v2) in zip(
+            trainer.optimizer.state_dict()['state'].items(),
+            resumed.optimizer.state_dict()['state'].items()
+        ):
+            if isinstance(v1, dict):
+                for sk in v1:
+                    if isinstance(v1[sk], torch.Tensor):
+                        torch.testing.assert_close(v1[sk], v2[sk], msg=f"Optimizer state mismatch: param {k1}, key {sk}")
+
     def test_fp8_linear_backward_dtype_mix(self):
         from triune.model.fp8 import FP8Linear
         layer = FP8Linear(16, 32, bias=True, dtype=torch.bfloat16)

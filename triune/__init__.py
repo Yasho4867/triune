@@ -6,17 +6,21 @@ import importlib
 from typing import Any
 
 # Eager core imports (fast, zero heavy web/agent/export dependencies)
-from .configs.config import build_config, default_config, validate_config
-from .kernels import fast_cross_entropy, fast_rmsnorm, fast_rope
-from .model import (
-    TriuneModel,
-    TriuneTransformer,
-    attach_early_exits,
-    build_model,
-    load_model,
-    register_model,
-)
-from .optim import CentroidSteerOptimizer, Muon, build_optimizer
+try:
+    from .configs.config import build_config, default_config, validate_config
+    from .kernels import fast_cross_entropy, fast_rmsnorm, fast_rope
+    from .model import (
+        TriuneModel,
+        TriuneTransformer,
+        attach_early_exits,
+        build_model,
+        load_model,
+        register_model,
+    )
+    from .optim import CentroidSteerOptimizer, Muon, build_optimizer
+except ImportError:
+    # Allows lightweight tooling and desktop launchers to initialize without direct torch installation
+    pass
 
 # Mapping of heavy/secondary components to their host submodule
 _LAZY_IMPORTS = {

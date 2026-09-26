@@ -66,7 +66,8 @@ class AutoOffloader:
             if self.model and hasattr(self.model, "layers"):
                 for idx, layer in enumerate(reversed(self.model.layers)):
                     if idx < 4:
-                        self.offload_layer(f"layer_{idx}", layer)
+                        actual_idx = len(self.model.layers) - 1 - idx
+                        self.offload_layer(f"layer_{actual_idx}", layer)
             return True
         return False
 

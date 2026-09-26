@@ -78,6 +78,9 @@ import math
 
 
 def validate_config(config: Mapping[str, Any]) -> None:
+    if config.get('use_fp4') and config.get('use_fp8'):
+        raise ValueError("use_fp4 and use_fp8 are mutually exclusive. Enable only one.")
+
     if config["seq_len"] <= 0 or config["seq_len"] > defaults.ROPE_MAX_SEQ_LEN:
         raise ValueError(f"seq_len must be in [1, {defaults.ROPE_MAX_SEQ_LEN}]")
     if config["batch_size"] <= 0 or config["grad_accum_steps"] <= 0:

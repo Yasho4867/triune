@@ -27,6 +27,30 @@ FINGERPRINT_SPEC = {
     "optimizer": ["use_muon", "muon_lr", "galore", "galore_rank"],
 }
 
+MODEL_FINGERPRINT_KEYS = {
+    "architecture": ["hidden_dim", "num_layers", "num_heads", "head_dim", "vocab_size"],
+    "attention": ["head_dim", "use_rope", "rope_max_seq_len"],
+    "moe": ["num_experts", "top_k", "shared_expert", "shared_scale", "capacity_multiplier"],
+    "hierarchy": ["router_prefix_layers", "reflex_exit_layer", "limbic_exit_layer", "target_depth_dist"],
+    "precision": ["use_fp4", "use_fp8"],
+}
+
+OPTIMIZER_FINGERPRINT_KEYS = {
+    "optimizer": ["use_muon", "muon_lr", "galore", "galore_rank"],
+}
+
+def compute_model_fingerprint(config):
+    canonical = {"schema_version": 2}
+    for category, keys in MODEL_FINGERPRINT_KEYS.items():
+        cat_dict = {}
+        for k in keys:
+            val = config.get(k)
+            if isinstance(val, tuple): val = list(val)
+            cat_dict[k] = val
+        canonical[category] = cat_dict
+    serialized = json.dumps(canonical, sort_keys=True, separators=(',', ':'))
+    return hashlib.sha256(serialized.encode('utf-8')).hexdigest()
+
 
 def extract_canonical_semantics(config: Mapping[str, Any]) -> dict[str, Any]:
     """Extracts canonical architecture and training semantics according to Schema-v2 specification."""
@@ -131,7 +155,8 @@ def save_best(trainer, engine, step: int, loss: float) -> Path:
 
 
 def load_checkpoint(trainer, path: str | Path, *, load_optimizer: bool) -> dict:
-    checkpoint = torch.load(path, map_location=trainer.device, weights_only=False)
+    # Fix H-1: always load to CPU first; streaming engine handles GPU staging
+    checkpoint = torch.load(path, map_location="cpu", weights_only=False)
 
     # Schema-v2 Architecture & Semantic fingerprint verification
     saved_config = checkpoint.get("config", {})
@@ -158,14 +183,24 @@ def load_checkpoint(trainer, path: str | Path, *, load_optimizer: bool) -> dict:
                         if s_val != c_val:
                             mismatches.append(f"{cat}.{k}: saved={s_val} vs current={c_val}")
 
-                diff_str = "\n".join(f"  - {m}" for m in mismatches) if mismatches else "  - Non-semantic configuration variation"
-                raise ValueError(
-                    f"Checkpoint architecture mismatch: fingerprint mismatch for {path}\n"
-                    f"Saved fingerprint:   {saved_fp}\n"
-                    f"Current fingerprint: {current_fp}\n"
-                    f"Changed parameters:\n{diff_str}\n"
-                    f"Cannot restore weights into an incompatible model configuration."
-                )
+                if not load_optimizer:
+                    # Only check model-relevant categories, not optimizer settings
+                    model_categories = set(MODEL_FINGERPRINT_KEYS.keys())
+                    mismatches = [m for m in mismatches if any(m.startswith(cat) for cat in model_categories)]
+                    if not mismatches:
+                        # Optimizer-only mismatch with weights_only load — this is fine
+                        pass  # Allow the load to proceed
+
+                if mismatches or load_optimizer:
+                    if not (not load_optimizer and not mismatches):
+                        diff_str = "\n".join(f"  - {m}" for m in mismatches) if mismatches else "  - Non-semantic configuration variation"
+                        raise ValueError(
+                            f"Checkpoint architecture mismatch: fingerprint mismatch for {path}\n"
+                            f"Saved fingerprint:   {saved_fp}\n"
+                            f"Current fingerprint: {current_fp}\n"
+                            f"Changed parameters:\n{diff_str}\n"
+                            f"Cannot restore weights into an incompatible model configuration."
+                        )
         elif saved_config:
             # 2. Legacy Checkpoint Fallback: Validate critical architecture keys
             mismatches = []

@@ -203,16 +203,20 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
             if id(p) not in param_ids:
                 continue
 
-            grad = p.grad.data
-            if grad.abs().sum() == 0:
+            if p.grad is None:
                 continue
+
+            grad = p.grad.data
+            # Fix M-2: removed zero-grad skip — Adam bias correction and momentum decay
+            # require processing zero gradients to maintain correct state
 
             module = group['module']
             expert_idx = group['expert_idx']
             state = group['state']
             m, n = grad.shape
 
-            if (self.step_count - group['proj_step']) >= self.update_gap or group['projection'] is None:
+            is_initial = (group['projection'] is None)
+            if (self.step_count - group['proj_step']) >= self.update_gap or is_initial:
                 svd_device = grad.device
                 grad_fp32 = grad.to(device=svd_device, non_blocking=True).float()
                 U, S, V = torch.svd_lowrank(grad_fp32, q=min(self.rank + 10, m, n), niter=2)
@@ -228,7 +232,8 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                 del grad_fp32, U, S, V
                 if svd_device.type == "cuda":
                     torch.cuda.empty_cache()
-                group['proj_step'] = self.step_count
+                if not is_initial:
+                    group['proj_step'] = self.step_count
                 state['momentum'] = None
                 state['variance'] = None
                 state['step'] = 0
@@ -261,11 +266,13 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                     if c_res_norm > 1e-8:
                         c_orth = (c_res / c_res_norm).to(device=proj.device, dtype=proj.dtype)
                         if hasattr(module, 'expert_load_ratio') and expert_idx < module.expert_load_ratio.size(0):
-                            load_r = module.expert_load_ratio[expert_idx].item()
-                            util_mult = max(0.3, min(2.0, 1.0 + (1.0 - load_r)))
+                            # Fix H-6: Replace .item() with tensor ops to avoid CPU-GPU sync
+                            load_r = module.expert_load_ratio[expert_idx]
+                            util_mult = torch.clamp(1.0 + (1.0 - load_r), min=0.3, max=2.0)
                         else:
-                            util_mult = 1.0
-                        residual_mult = max(0.1, min(1.0, c_res_norm.item()))
+                            util_mult = torch.tensor(1.0, device=proj.device, dtype=proj.dtype)
+                        # Fix H-6: Also replace c_res_norm.item()
+                        residual_mult = torch.clamp(c_res_norm, min=0.1, max=1.0)
                         effective_steer = self.steer_scale * util_mult * residual_mult
                         proj_aug = torch.cat([proj, (effective_steer * c_orth).unsqueeze(1)], dim=1)
                         steer_applied = True
@@ -301,7 +308,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                 delta_full = delta_lr @ proj_aug.T
 
             if expert_wd != 0:
-                p.data -= expert_lr * expert_wd * p.data
+                p.data.mul_(1.0 - expert_lr * expert_wd)  # Fix M-3: decoupled weight decay without .data subtraction
             p.data -= expert_lr * delta_full.reshape(p.shape)
 
         if is_global_step_end:

@@ -24,7 +24,10 @@ def build_precision_context(*, use_fp4: bool, device) -> callable:
     if major < 10:
         raise RuntimeError(f"NVFP4 requires a Blackwell-class GPU (SM100+); found {major}.{minor}")
 
-    recipe = NVFP4BlockScaling(fp4_format=Format.E2M1)
+    try:
+        recipe = NVFP4BlockScaling(fp4_format=Format.E2M1)
+    except Exception:
+        recipe = NVFP4BlockScaling()
     autocast = getattr(te, "autocast", None) or getattr(te, "fp8_autocast", None)
     if autocast is None:
         raise RuntimeError("Transformer Engine exposes no autocast context manager")

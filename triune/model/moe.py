@@ -98,7 +98,7 @@ class MoE_FFN(nn.Module):
 
         if self.shared_expert:
             shared_out = self.shared(flat_x)
-            out += self.shared_scale * shared_out
+            out = out + self.shared_scale * shared_out
 
         for k in range(self.top_k):
             idx_k = flat_idx[:, k]
@@ -133,7 +133,8 @@ class MoE_FFN(nn.Module):
                 if pad:
                     expert_output = expert_output[:orig_tokens]
 
-                out.index_add_(0, indices, expert_output * val_k_keep.unsqueeze(-1))
+                # Fix C-1: out-of-place to preserve autograd graph
+                out = out.index_add(0, indices, expert_output * val_k_keep.unsqueeze(-1))
 
         requested_counts = torch.bincount(flat_idx.flatten(), minlength=self.num_experts)
         dropped_counts = (requested_counts - accepted_counts).clamp_min(0)
@@ -148,6 +149,9 @@ class MoE_FFN(nn.Module):
 
         if self.training and update_stats:
             self._update_routing_stats(flat_x, routing_result)
+
+        if self.training:
+            self._global_step += 1
 
         return out.reshape(B, T, D)
 

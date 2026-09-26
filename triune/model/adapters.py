@@ -216,6 +216,8 @@ def generate_adaptive(
     2. Else evaluates Limbic exit (Layer ~60%). If margin Δp >= threshold * 0.8 -> exits early (saves ~40% FLOPs).
     3. Else runs through full Cortex depth.
     """
+    if input_ids.size(0) != 1:
+        raise ValueError(f"generate_adaptive currently supports batch_size=1 only; got batch_size={input_ids.size(0)}")
     device = input_ids.device
     curr_ids = input_ids.clone()
     generated_tokens: List[int] = []

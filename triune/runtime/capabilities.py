@@ -31,13 +31,16 @@ def _probe_cublas_scaled_mm(device: torch.device) -> bool:
 
     supported = False
     try:
+        cap = torch.cuda.get_device_capability(device)
+        if cap < (8, 9):  # FP8 requires Ada Lovelace or newer
+            return False
         a = torch.zeros((16, 16), device=device, dtype=torch.float8_e4m3fn)
         b = torch.zeros((16, 16), device=device, dtype=torch.float8_e4m3fn)
         sa = torch.tensor(1.0, device=device)
         sb = torch.tensor(1.0, device=device)
         torch._scaled_mm(a, b, scale_a=sa, scale_b=sb, out_dtype=torch.bfloat16)
         supported = True
-    except Exception:
+    except (RuntimeError, Exception):
         supported = False
 
     _SCALED_MM_PROBE_CACHE[dev_idx] = supported
@@ -55,6 +58,7 @@ class PrecisionCapabilities:
     transformer_engine: bool
     native_scaled_mm: bool
     bf16_supported: bool
+    mxfp8_gemm: bool = False
 
     @classmethod
     def detect(cls, device: Optional[torch.device | str] = None) -> "PrecisionCapabilities":
@@ -97,13 +101,20 @@ class PrecisionCapabilities:
 
         # FP4 GEMM requires Blackwell (SM100+ / SM120+) and Transformer Engine with NVFP4 support
         has_te_fp4 = False
+        has_te_mxfp8 = False
         if has_te and major >= 10:
             try:
                 from transformer_engine.common.recipe import NVFP4BlockScaling  # noqa: F401
                 has_te_fp4 = True
             except (ImportError, Exception):
                 has_te_fp4 = False
+            try:
+                from transformer_engine.common.recipe import MXFP8BlockScaling  # noqa: F401
+                has_te_mxfp8 = True
+            except (ImportError, Exception):
+                has_te_mxfp8 = False
         fp4_gemm = (major >= 10) and has_te_fp4
+        mxfp8_gemm = (major >= 10) and has_te_mxfp8
 
         return cls(
             device=dev,
@@ -113,18 +124,31 @@ class PrecisionCapabilities:
             transformer_engine=has_te,
             native_scaled_mm=native_scaled_mm,
             bf16_supported=bf16_supported,
+            mxfp8_gemm=mxfp8_gemm,
         )
 
     def resolve_precision(self, requested: str, fallback: bool = True) -> str:
         """Resolves requested precision string against detected capabilities.
 
-        Supported requested strings: 'fp4', 'fp8', 'bf16', 'bfloat16', 'fp32', 'float32'.
+        Supported requested strings: 'fp4', 'fp8', 'mxfp8', 'bf16', 'bfloat16', 'fp32', 'float32'.
         If requested precision is unsupported:
           - If fallback=True: returns highest supported precision and logs warning.
           - If fallback=False: raises RuntimeError with clear context.
         """
         req = requested.lower().strip()
         major, minor = self.compute_capability
+
+        if req == "mxfp8":
+            if self.mxfp8_gemm:
+                return "mxfp8"
+            msg = (
+                f"MXFP8 requested but unsupported on {self.device} (SM{major}.{minor}). "
+                f"Requires SM100+ (Blackwell) and Transformer Engine with MXFP8BlockScaling."
+            )
+            if not fallback:
+                raise RuntimeError(msg)
+            logger.warning(f"{msg} Falling back to BF16.")
+            return "bf16" if self.bf16_supported else "fp32"
 
         if req == "fp4":
             if self.fp4_gemm:

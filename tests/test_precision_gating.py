@@ -128,7 +128,7 @@ class TestFP8StagingBuffer(unittest.TestCase):
         self.assertEqual(buf.cpu_master.dtype, torch.bfloat16)
 
         # 1. Stage to GPU
-        gpu_tensor = buf.stage_to_gpu(device=device, use_hardware_fp8=False)
+        gpu_tensor = buf.stage_to_gpu(device=device, use_hardware_fp8=True)
         self.assertIsNotNone(buf.fp8_tensor)
         self.assertEqual(buf.fp8_tensor.dtype, torch.float8_e4m3fn)
         self.assertEqual(buf.fp8_tensor.device.type, "cuda")
@@ -162,33 +162,39 @@ class TestFP8StagingBuffer(unittest.TestCase):
 
     @unittest.skipUnless(torch.cuda.is_available(), "Requires CUDA")
     def test_parameter_stager_with_fp8(self):
-        """Asserts ParameterStager instantiates FP8StagingBuffer for 2D weights when use_fp8=True."""
+        """Asserts ParameterStager instantiates FP8StagingBuffer for 2D weights of FP8-aware modules."""
         device = torch.device("cuda:0")
-        linear = nn.Linear(64, 128, bias=True).to(torch.bfloat16)
+        fp8_linear = FP8Linear(64, 128, bias=True).to(torch.bfloat16)
+        ordinary_linear = nn.Linear(64, 128, bias=True).to(torch.bfloat16)
 
         stager = ParameterStager(device=device, use_fp8=True)
-        stager.register_module(linear)
+        stager.register_module(fp8_linear)
+        stager.register_module(ordinary_linear)
 
-        w_buf = stager.buffers[id(linear.weight)]
-        b_buf = stager.buffers[id(linear.bias)]
+        w_buf_fp8 = stager.buffers[id(fp8_linear.weight)]
+        b_buf_fp8 = stager.buffers[id(fp8_linear.bias)]
+        w_buf_ord = stager.buffers[id(ordinary_linear.weight)]
 
-        self.assertIsInstance(w_buf, FP8StagingBuffer)
+        self.assertIsInstance(w_buf_fp8, FP8StagingBuffer)
         # 1D bias is not quantized to FP8
-        self.assertIsInstance(b_buf, StagingBuffer)
-        self.assertNotIsInstance(b_buf, FP8StagingBuffer)
+        self.assertIsInstance(b_buf_fp8, StagingBuffer)
+        self.assertNotIsInstance(b_buf_fp8, FP8StagingBuffer)
+        # Ordinary nn.Linear is never quantized to FP8
+        self.assertIsInstance(w_buf_ord, StagingBuffer)
+        self.assertNotIsInstance(w_buf_ord, FP8StagingBuffer)
 
         # Stage and apply
-        stager.stage_layer(linear)
-        stager.apply_staged_tensors(linear)
+        stager.stage_layer(fp8_linear, use_hardware_fp8=True)
+        stager.apply_staged_tensors(fp8_linear)
 
-        self.assertEqual(linear.weight.device.type, "cuda")
-        self.assertEqual(linear.bias.device.type, "cuda")
+        self.assertEqual(fp8_linear.weight.device.type, "cuda")
+        self.assertEqual(fp8_linear.bias.device.type, "cuda")
 
         # Release layer
-        stager.release_layer(linear)
-        self.assertEqual(linear.weight.device.type, "cpu")
-        self.assertEqual(linear.bias.device.type, "cpu")
-        self.assertEqual(linear.weight.dtype, torch.bfloat16)
+        stager.release_layer(fp8_linear)
+        self.assertEqual(fp8_linear.weight.device.type, "cpu")
+        self.assertEqual(fp8_linear.bias.device.type, "cpu")
+        self.assertEqual(fp8_linear.weight.dtype, torch.bfloat16)
 
 
 class TestStreamingFP8Engine(unittest.TestCase):

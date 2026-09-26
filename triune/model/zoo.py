@@ -24,8 +24,18 @@ def load_model(model_name_or_path: str | Path, **kwargs: Any) -> torch.nn.Module
     model_name_str = str(model_name_or_path).lower()
 
 
+    path_obj = Path(model_name_or_path)
+
+    # Check local JSON config file
+    if path_obj.is_file() and path_obj.suffix.lower() == ".json":
+        import json
+        with open(path_obj, encoding="utf-8") as f:
+            file_cfg = json.load(f)
+        config = build_config({**file_cfg, **kwargs})
+        return build_model(config)
+
     # Check local checkpoint path
-    if Path(model_name_or_path).is_file():
+    if path_obj.is_file():
         checkpoint = torch.load(model_name_or_path, map_location="cpu", weights_only=False)
         saved_config = checkpoint.get("config", {})
         config = build_config({**saved_config, **kwargs})

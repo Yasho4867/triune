@@ -97,7 +97,22 @@ def start_static_server(directory: Path, port: int) -> None:
 
 # ---------------------------------------------------------------------------
 # Find the venv python executable (studio_env or active interpreter)
-# ---------------------------------------------------------------------------
+def _to_wsl_path(path: Path) -> str:
+    """Convert a Windows Path to a WSL POSIX mount path."""
+    p_posix = path.resolve().as_posix()
+    drive = p_posix[0].lower()
+    rest = p_posix[2:]
+    return f"/mnt/{drive}{rest}"
+
+
+def _has_torch(py_bin: Path) -> bool:
+    try:
+        r = subprocess.run([str(py_bin), "-c", "import torch; print(torch.__version__)"], capture_output=True, timeout=2.0)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
 def find_venv_python() -> Path | None:
     """Find a Python interpreter with torch installed (Windows or Linux)."""
     exe_dir = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
@@ -114,14 +129,33 @@ def find_venv_python() -> Path | None:
         workspace / ".venv" / bin_dir / py_name,
         Path(sys.executable),
     ]
+    # First priority: interpreter with PyTorch
     for p in candidates:
-        if p.exists():
-            print(f"[Launcher] Found venv python: {p}")
+        if p.exists() and _has_torch(p):
+            print(f"[Launcher] Found PyTorch-ready python: {p}")
             return p
 
-    print("[Launcher] WARNING: Could not find venv python executable")
+    # Second priority: any valid interpreter
     for p in candidates:
-        print(f"  Checked: {p} (exists={p.exists()})")
+        if p.exists():
+            print(f"[Launcher] Found interpreter (Host UI Mode): {p}")
+            return p
+
+    return None
+
+
+def find_wsl_python() -> str | None:
+    """Detect if WSL2 has a Python venv with Triune dependencies."""
+    if sys.platform != "win32":
+        return None
+    try:
+        cand = "/home/yasho4867/venvs/triune/bin/python"
+        res = subprocess.run(["wsl.exe", "-e", "test", "-f", cand], timeout=2.0)
+        if res.returncode == 0:
+            print(f"[Launcher] Found WSL2 GPU venv python: {cand}")
+            return cand
+    except Exception:
+        pass
     return None
 
 
@@ -153,6 +187,27 @@ def start_api_server(venv_python: Path, port: int) -> subprocess.Popen | None:
         return proc
     except Exception as e:
         print(f"[API Server] Failed to start: {e}")
+        return None
+
+
+def start_wsl_api_server(wsl_python: str, port: int) -> subprocess.Popen | None:
+    """Spawn the Triune API server in WSL2 with GPU acceleration."""
+    workspace = find_workspace()
+    wsl_ws = _to_wsl_path(workspace)
+    server_script = (
+        f"import sys; "
+        f"sys.path.insert(0, '{wsl_ws}'); "
+        f"from triune.api import run_server; run_server(host='0.0.0.0', port={port})"
+    )
+    try:
+        proc = subprocess.Popen(
+            ["wsl.exe", "-e", wsl_python, "-c", server_script],
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+        )
+        print(f"[API Server] Spawned WSL2 python (PID {proc.pid}) on port {port}")
+        return proc
+    except Exception as e:
+        print(f"[API Server] Failed to start via WSL: {e}")
         return None
 
 
@@ -211,14 +266,24 @@ def launch() -> None:
     # STEP 2: Start the API backend via venv python subprocess
     api_proc = None
     venv_py = find_venv_python()
-    if venv_py:
+    wsl_py = find_wsl_python()
+    local_torch = _has_torch(venv_py) if venv_py else False
+
+    if local_torch:
         api_proc = start_api_server(venv_py, api_port)
-        if api_proc:
-            api_url = f"http://127.0.0.1:{api_port}/v1/system/diagnostics"
-            if wait_for_server(api_url, timeout=15.0):
-                print(f"[Launcher] API PyTorch Engine server ready on port {api_port}")
-            else:
-                print(f"[Launcher] API server starting on port {api_port} (UI will auto-discover)")
+    elif wsl_py:
+        print("[Launcher] Host Python lacks PyTorch; launching GPU backend via WSL2...")
+        api_proc = start_wsl_api_server(wsl_py, api_port)
+    elif venv_py:
+        print("[Launcher] Launching Host UI Mode backend...")
+        api_proc = start_api_server(venv_py, api_port)
+
+    if api_proc:
+        api_url = f"http://127.0.0.1:{api_port}/v1/system/diagnostics"
+        if wait_for_server(api_url, timeout=15.0):
+            print(f"[Launcher] API PyTorch Engine server ready on port {api_port}")
+        else:
+            print(f"[Launcher] API server starting on port {api_port} (UI will auto-discover)")
     else:
         print("[Launcher] No venv python found — UI-only mode")
 

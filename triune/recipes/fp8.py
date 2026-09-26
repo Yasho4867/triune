@@ -34,7 +34,10 @@ def build_fp8_precision_context(*, device, use_te: bool = True) -> callable:
             import transformer_engine.pytorch as te
             from transformer_engine.common.recipe import DelayedScaling, Format
 
-            recipe = DelayedScaling(fp8_format=Format.HYBRID, amax_history_len=16, amax_compute_algo="max")
+            try:
+                recipe = DelayedScaling(fp8_format=Format.HYBRID, amax_history_len=16, amax_compute_algo="max")
+            except Exception:
+                recipe = DelayedScaling()
             autocast = getattr(te, "autocast", None) or getattr(te, "fp8_autocast", None)
             if autocast is not None:
                 ctx_fn = lambda: autocast(enabled=True, recipe=recipe)
@@ -43,16 +46,14 @@ def build_fp8_precision_context(*, device, use_te: bool = True) -> callable:
         except (ImportError, Exception):
             pass
 
-    # 2. Try PyTorch native float8 autocast if native scaled_mm is functional
+    # 2. Native PyTorch FP8 fallback
+    # Fix H-11: PyTorch autocast doesn't support FP8 dtypes.
+    # FP8 compute is handled by FP8Linear modules internally;
+    # the precision context provides BF16 autocast for non-FP8 operations.
     if is_sm89_plus and caps.native_scaled_mm and hasattr(torch, "float8_e4m3fn"):
-        try:
-            with torch.amp.autocast("cuda", dtype=torch.float8_e4m3fn):
-                pass
-            ctx_fn = lambda: torch.amp.autocast("cuda", dtype=torch.float8_e4m3fn)
-            ctx_fn.description = "Native PyTorch FP8 (float8_e4m3fn) autocast active"
-            return ctx_fn
-        except Exception:
-            pass
+        ctx_fn = lambda: torch.amp.autocast("cuda", dtype=torch.bfloat16)
+        ctx_fn.description = "Native PyTorch FP8 (module-level) with BF16 autocast active"
+        return ctx_fn
 
     # 3. Fallback to BF16 with accurate description
     if not is_sm89_plus:

@@ -9,8 +9,16 @@ import sys
 import traceback
 import platform
 from typing import Any, Dict, List, Optional
-import torch
-import torch.nn as nn
+try:
+    import torch
+    import torch.nn as nn
+    HAS_TORCH = True
+except ImportError:
+    torch = None
+    nn = None
+    HAS_TORCH = False
+
+from pathlib import Path
 
 try:
     from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -24,17 +32,63 @@ except ImportError:
     WebSocketDisconnect = Exception
     BaseModel = object
 
-from triune.execution import ExecutionEngine
-from triune.plugins import node_registry
-from triune.runtime import VRAMProfiler, PythonSandbox
-from triune.trainer import LoRAConfig, TriuneFineTuner
-from triune.callbacks import global_emitter
-from triune.model.transformer import TriuneTransformer
+try:
+    from triune.execution import ExecutionEngine
+    from triune.plugins import node_registry
+    from triune.runtime import VRAMProfiler, PythonSandbox
+    from triune.trainer import LoRAConfig, TriuneFineTuner
+    from triune.callbacks import global_emitter
+    from triune.model.transformer import TriuneTransformer
+    from triune.modules.manager import ModuleManager
+    HAS_TRIUNE_MODULES = True
+except ImportError:
+    ExecutionEngine = None
+    node_registry = None
+    VRAMProfiler = None
+    PythonSandbox = None
+    LoRAConfig = None
+    TriuneFineTuner = None
+    global_emitter = None
+    TriuneTransformer = None
+    ModuleManager = None
+    HAS_TRIUNE_MODULES = False
+
+if VRAMProfiler is None:
+    class FallbackVRAMProfiler:
+        @staticmethod
+        def get_vram_stats(*args, **kwargs):
+            return {
+                "allocated_gb": 0.0,
+                "reserved_gb": 0.0,
+                "max_allocated_gb": 0.0,
+                "total_gb": 0.0,
+                "allocated": 0.0,
+                "reserved": 0.0,
+                "total": 0.0,
+                "oom_risk": False,
+            }
+
+        @staticmethod
+        def check_oom_risk(*args, **kwargs):
+            return False
+
+    VRAMProfiler = FallbackVRAMProfiler
 
 if HAS_FASTAPI:
     router = APIRouter()
-    dag_engine = ExecutionEngine()
-    sandbox = PythonSandbox()
+    dag_engine = ExecutionEngine() if ExecutionEngine is not None else None
+    sandbox = PythonSandbox() if PythonSandbox is not None else None
+    
+    if ModuleManager is not None:
+        module_manager = ModuleManager()
+    else:
+        class FallbackModuleManager:
+            def get_config(self): return {}
+            def save_config(self, c): pass
+            def search_modules(self, q, t): return []
+            def list_installed(self): return []
+            def check_updates(self): return []
+        module_manager = FallbackModuleManager()
 
     class TelemetryConnectionManager:
         def __init__(self) -> None:
@@ -62,13 +116,26 @@ if HAS_FASTAPI:
         def __init__(self):
             self.step = 0
             self.is_training = False
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            self.device_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else f"CPU ({platform.processor() or 'x86_64'})"
+            if HAS_TORCH:
+                self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+                self.device_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else f"CPU ({platform.processor() or 'x86_64'})"
+                self.loss_fn = nn.CrossEntropyLoss(ignore_index=0)
+                self.logs: List[str] = [
+                    f"[SYSTEM] PyTorch {torch.__version__} engine initialized on {self.device_name}.",
+                    "[ENGINE] TriuneTransformer MoE Engine ready for hardware training.",
+                ]
+            else:
+                self.device = "cpu"
+                self.device_name = f"Host UI Mode ({platform.processor() or 'x86_64'})"
+                self.loss_fn = None
+                self.logs: List[str] = [
+                    f"[SYSTEM] Studio running in Host UI Mode on {self.device_name}.",
+                    "[ENGINE] Install PyTorch with install.bat or launch with WSL2 for full GPU acceleration.",
+                ]
             print(f"[Triune Engine] Initializing Native Engine on: {self.device_name}")
 
             self.model = None
             self.optimizer = None
-            self.loss_fn = nn.CrossEntropyLoss(ignore_index=0)
             self.history: List[Dict[str, Any]] = [
                 {
                     "step": 0,
@@ -81,13 +148,11 @@ if HAS_FASTAPI:
                     "exit_usage": {"reflex": 38.0, "limbic": 34.0, "cortex": 28.0}
                 }
             ]
-            self.logs: List[str] = [
-                f"[SYSTEM] PyTorch {torch.__version__} engine initialized on {self.device_name}.",
-                "[ENGINE] TriuneTransformer MoE Engine ready for hardware training.",
-            ]
             self.training_task: Optional[asyncio.Task] = None
 
         def lazy_init_model(self):
+            if not HAS_TORCH or TriuneTransformer is None:
+                raise RuntimeError("PyTorch is not installed in this environment. Run install.bat to install PyTorch or launch via WSL2.")
             if self.model is None:
                 if torch.cuda.is_available():
                     try:
@@ -120,17 +185,27 @@ if HAS_FASTAPI:
                 print("[Triune Engine] Loaded 8-Layer MoE TriuneTransformer on CPU.")
 
         def generate_text(self, prompt: str, max_new_tokens: int = 64, temperature: float = 0.7, force_depth: Optional[int] = None) -> Dict[str, Any]:
+            if not HAS_TORCH or TriuneTransformer is None:
+                return {
+                    "text": "[Host UI Mode] PyTorch is not installed in this Python environment. Run install.bat or launch with WSL2 for full hardware generation.",
+                    "throughput": 0,
+                    "exit_tier": "cpu",
+                    "device": self.device_name,
+                    "depth": 0,
+                }
             self.lazy_init_model()
             t0 = time.perf_counter()
             self.model.eval()
 
             # Check if tokenizer exists
             tokenizer = None
-            for t_path in ("triune_tokenizer.json", "tokenizer.json"):
-                if Path(t_path).is_file():
+            project_root = Path(__file__).resolve().parent.parent.parent
+            for t_path in (project_root / "triune_tokenizer.json", "triune_tokenizer.json", "tokenizer.json"):
+                p = Path(t_path)
+                if p.is_file():
                     try:
                         from triune.data.tokenizer import load_tokenizer
-                        tokenizer = load_tokenizer(t_path)
+                        tokenizer = load_tokenizer(p)
                         break
                     except Exception:
                         pass
@@ -195,6 +270,21 @@ if HAS_FASTAPI:
             }
 
         def step_once(self) -> Dict[str, Any]:
+            if not HAS_TORCH or TriuneTransformer is None:
+                self.step += 1
+                payload = {
+                    "step": self.step,
+                    "loss": 2.5000,
+                    "lm_loss": 2.0000,
+                    "router_loss": 0.5000,
+                    "throughput": 0,
+                    "vram_gb": 0.0,
+                    "device": self.device_name,
+                    "exit_usage": {"reflex": 38.0, "limbic": 34.0, "cortex": 28.0},
+                    "note": "Host UI Mode: Run install.bat to install PyTorch for hardware training.",
+                }
+                self.history.append(payload)
+                return payload
             self.lazy_init_model()
             t0 = time.perf_counter()
             self.step += 1
@@ -307,7 +397,6 @@ if HAS_FASTAPI:
     @router.get("/v1/models")
     async def list_models() -> Dict[str, Any]:
         """List available model checkpoints and zoo entries."""
-        from pathlib import Path
         models = [
             {"id": "triune-nano", "object": "model", "description": "8-layer MoE (CPU & Edge Optimized)"},
             {"id": "triune-small", "object": "model", "description": "14-layer MoE with 4 experts"},
@@ -326,16 +415,16 @@ if HAS_FASTAPI:
     @router.get("/v1/system/diagnostics")
     async def get_system_diagnostics() -> Dict[str, Any]:
         """Return system software stack diagnostics, GPU hardware info, and dependency check."""
-        cuda_avail = torch.cuda.is_available()
+        cuda_avail = torch.cuda.is_available() if HAS_TORCH else False
         return {
             "platform": platform.platform(),
             "python_version": platform.python_version(),
-            "pytorch_version": torch.__version__,
+            "pytorch_version": torch.__version__ if HAS_TORCH else "not_installed (Host UI Mode)",
             "cuda_available": cuda_avail,
             "device_name": pytorch_state.device_name,
-            "vram_total_gb": round(torch.cuda.get_device_properties(0).total_memory / (1024**3), 2) if cuda_avail else 0.0,
+            "vram_total_gb": round(torch.cuda.get_device_properties(0).total_memory / (1024**3), 2) if (HAS_TORCH and cuda_avail) else 0.0,
             "software_stack": {
-                "torch": True,
+                "torch": HAS_TORCH,
                 "fastapi": True,
                 "uvicorn": True,
                 "pywebview": True,
@@ -433,6 +522,8 @@ if HAS_FASTAPI:
     @router.post("/v1/dag/execute")
     async def execute_dag(req: DAGExecuteRequest) -> Dict[str, Any]:
         """Ingest raw JSON DAG graph and execute pipeline using ExecutionEngine."""
+        if dag_engine is None:
+            return {"status": "needs_torch", "message": "DAG execution engine requires PyTorch. Run install.bat or launch with WSL2."}
         graph_json = {"nodes": req.nodes, "edges": req.edges}
         res = dag_engine.execute_graph(graph_json)
         return res
@@ -517,27 +608,205 @@ if HAS_FASTAPI:
             return pytorch_state.history[-1]
         return await asyncio.to_thread(pytorch_state.step_once)
 
+    class ModelExportRequest(BaseModel):
+        model_id: str = "triune-base"
+        format: str = "safetensors"
+        output_dir: str = "exports"
+
+    class TokenizeRequest(BaseModel):
+        text: str
+
+    class UninstallModuleRequest(BaseModel):
+        id: str
+
+    class BYOKSaveRequest(BaseModel):
+        keys: Dict[str, str]
+
+    class BYOKTestRequest(BaseModel):
+        provider: str
+        key: str
+
     @router.post("/v1/sandbox/run")
     async def run_sandbox_code(req: SandboxRunRequest) -> Dict[str, Any]:
         """Safely execute Python code in PythonSandbox and capture output."""
-        old_stdout = sys.stdout
-        buf = io.StringIO()
-        sys.stdout = buf
         t0 = time.perf_counter()
         try:
-            sandbox.execute_code(req.code)
+            res = await asyncio.to_thread(sandbox.execute_code, req.code)
             t1 = time.perf_counter()
-            out = buf.getvalue()
-            sys.stdout = old_stdout
-            return {"success": True, "output": out or "Code executed successfully with no stdout output.", "exec_time_sec": round(t1 - t0, 4)}
+            exec_time = round(t1 - t0, 4)
+            if res.get("success", False):
+                out = res.get("stdout") or res.get("result") or ""
+                exported = [f"{k} = {v}" for k, v in res.items() if k not in ("success", "stdout", "stderr", "result", "error")]
+                if exported:
+                    out = (out + "\n" if out else "") + "\n".join(exported)
+                return {"success": True, "output": out or "Code executed successfully with no stdout output.", "exec_time_sec": exec_time}
+            else:
+                return {"success": False, "error": res.get("error", "Execution failed"), "output": res.get("stderr", "")}
         except Exception as err:
-            sys.stdout = old_stdout
-            return {"success": False, "error": str(err), "output": buf.getvalue()}
+            return {"success": False, "error": str(err), "output": ""}
+
+    # -------------------------------------------------------------------------
+    # System Scanner & Config Endpoints
+    # -------------------------------------------------------------------------
+    @router.get("/v1/system/scan")
+    async def get_system_scan() -> Dict[str, Any]:
+        """Perform comprehensive auto-scan of system hardware, CUDA, Python, and installed packages."""
+        return await asyncio.to_thread(module_manager.scan_hardware_and_software)
+
+    @router.get("/v1/system/config")
+    async def get_system_config() -> Dict[str, Any]:
+        """Load user configuration and custom paths."""
+        return await asyncio.to_thread(module_manager.get_config)
+
+    @router.post("/v1/system/config")
+    async def save_system_config(req: Dict[str, Any]) -> Dict[str, Any]:
+        """Save updated user configuration."""
+        return await asyncio.to_thread(module_manager.save_config, req)
+
+    # -------------------------------------------------------------------------
+    # Modules & Repos Marketplace Endpoints
+    # -------------------------------------------------------------------------
+    @router.get("/v1/modules/search")
+    async def search_modules(q: str = "", type: str = "all") -> Dict[str, Any]:
+        """Search curated registry and GitHub for available modules."""
+        return await asyncio.to_thread(module_manager.search_marketplace, q, type)
+
+    @router.get("/v1/modules/installed")
+    async def list_installed_modules() -> List[Dict[str, Any]]:
+        """List currently installed modules."""
+        return await asyncio.to_thread(module_manager.get_installed_modules)
+
+    @router.get("/v1/modules/updates")
+    async def check_module_updates() -> List[Dict[str, Any]]:
+        """Check all installed modules for version updates."""
+        return await asyncio.to_thread(module_manager.check_updates)
+
+    @router.post("/v1/modules/install")
+    async def install_module_endpoint(req: Dict[str, Any]) -> Dict[str, Any]:
+        """Install or update a module from curated registry or GitHub."""
+        return await asyncio.to_thread(module_manager.install_module, req)
+
+    @router.post("/v1/modules/uninstall")
+    async def uninstall_module_endpoint(req: UninstallModuleRequest) -> Dict[str, Any]:
+        """Uninstall a module and remove its directory."""
+        return await asyncio.to_thread(module_manager.uninstall_module, req.id)
+
+    # -------------------------------------------------------------------------
+    # Model Export Endpoints
+    # -------------------------------------------------------------------------
+    @router.post("/v1/models/export")
+    async def export_model_endpoint(req: ModelExportRequest) -> Dict[str, Any]:
+        """Export active model weights to safetensors, gguf, or onnx format."""
+        from triune.export.exporter import export_model
+        pytorch_state.lazy_init_model()
+        out_dir = Path(req.output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        ext = ".safetensors" if req.format == "safetensors" else (".bin" if req.format == "gguf" else ".onnx")
+        out_file = out_dir / f"{req.model_id}{ext}"
+        try:
+            res_path = await asyncio.to_thread(export_model, pytorch_state.model, out_file, req.format)
+            size_bytes = res_path.stat().st_size if res_path.exists() else 0
+            return {
+                "status": "success",
+                "format": req.format,
+                "path": str(res_path),
+                "size_bytes": size_bytes,
+                "message": f"Successfully exported {req.model_id} to {res_path} ({round(size_bytes / (1024*1024), 2)} MB)"
+            }
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    # -------------------------------------------------------------------------
+    # Tokenizer Endpoint
+    # -------------------------------------------------------------------------
+    @router.post("/v1/tokenizer/tokenize")
+    async def tokenize_text_endpoint(req: TokenizeRequest) -> Dict[str, Any]:
+        """Tokenize text using active tokenizer or character/word hashing fallback."""
+        text = req.text
+        if not text:
+            return {"tokens": [], "vocab_size": 4000, "tokenizer": "none"}
+        tokenizer = None
+        project_root = Path(__file__).resolve().parent.parent.parent
+        for t_path in (project_root / "triune_tokenizer.json", "triune_tokenizer.json", "tokenizer.json"):
+            p = Path(t_path)
+            if p.is_file():
+                try:
+                    from triune.data.tokenizer import load_tokenizer
+                    tokenizer = load_tokenizer(p)
+                    break
+                except Exception:
+                    pass
+        if tokenizer:
+            encoded = tokenizer.encode(text)
+            tokens = []
+            for tid in encoded.ids:
+                t_str = tokenizer.decode([tid]) or f"[{tid}]"
+                tokens.append({"id": tid, "text": t_str})
+            return {"tokens": tokens, "vocab_size": tokenizer.get_vocab_size(), "tokenizer": "BPE"}
+        else:
+            words = text.split(" ")
+            tokens = []
+            for i, w in enumerate(words):
+                tid = 1000 + (sum(ord(c) for c in w) * 7) % 31000
+                tokens.append({"id": tid, "text": w})
+            return {"tokens": tokens, "vocab_size": 4000, "tokenizer": "word-hash"}
+
+    # -------------------------------------------------------------------------
+    # Datasets Endpoint
+    # -------------------------------------------------------------------------
+    @router.get("/v1/datasets")
+    async def list_datasets() -> Dict[str, Any]:
+        """List active datasets, local files, and streaming presets."""
+        datasets = [
+            {"id": "fineweb-edu", "name": "HuggingFaceFW/fineweb-edu", "tokens": "10,000,000,000", "status": "Streaming Active", "type": "streaming"},
+            {"id": "wikitext-103", "name": "wikitext-103-raw-v1", "tokens": "103,000,000", "status": "Cached Local", "type": "hf"},
+        ]
+        for d_dir in ("data", "datasets"):
+            p = Path(d_dir)
+            if p.is_dir():
+                for f in p.glob("*.jsonl"):
+                    size_mb = round(f.stat().st_size / (1024 * 1024), 2)
+                    datasets.append({
+                        "id": f.stem,
+                        "name": f.name,
+                        "tokens": f"~{int(size_mb * 250000):,} (estimated)",
+                        "status": f"Local File ({size_mb} MB)",
+                        "type": "local"
+                    })
+        return {"datasets": datasets}
+
+    # -------------------------------------------------------------------------
+    # BYOK Provider Credentials Endpoints
+    # -------------------------------------------------------------------------
+    @router.post("/v1/byok/save")
+    async def save_byok_keys(req: BYOKSaveRequest) -> Dict[str, Any]:
+        """Save API provider keys to secure studio configuration."""
+        cfg = module_manager.get_config()
+        cfg["byok_keys"] = req.keys
+        module_manager.save_config(cfg)
+        return {"status": "saved", "message": "BYOK credentials saved securely to config."}
+
+    @router.post("/v1/byok/test")
+    async def test_byok_key(req: BYOKTestRequest) -> Dict[str, Any]:
+        """Test API provider key connection and format."""
+        provider = req.provider.lower()
+        key = req.key.strip()
+        if not key:
+            return {"provider": provider, "status": "empty", "message": "Key is empty"}
+        if provider == "openai" and not (key.startswith("sk-") or len(key) >= 20):
+            return {"provider": provider, "status": "invalid", "message": "OpenAI keys typically start with sk-"}
+        if provider == "anthropic" and not (key.startswith("sk-ant-") or len(key) >= 20):
+            return {"provider": provider, "status": "invalid", "message": "Anthropic keys typically start with sk-ant-"}
+        if provider == "huggingface" and not (key.startswith("hf_") or len(key) >= 15):
+            return {"provider": provider, "status": "invalid", "message": "HuggingFace tokens typically start with hf_"}
+        return {"provider": provider, "status": "valid", "message": f"{provider.upper()} key format validated."}
 
     @router.get("/api/plugins/nodes")
     async def get_plugin_nodes() -> List[Dict[str, Any]]:
         """Return serializable node definitions for Triune Studio Node Graph UI."""
-        return node_registry.list_nodes()
+        if node_registry is not None and hasattr(node_registry, "list_nodes"):
+            return node_registry.list_nodes()
+        return []
 
     @router.websocket("/ws/telemetry")
     async def websocket_telemetry(websocket: WebSocket) -> None:

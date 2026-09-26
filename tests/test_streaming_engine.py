@@ -95,6 +95,7 @@ def test_layer_streaming_engine_lifecycle():
     peak_vram_mb = torch.cuda.max_memory_allocated(device) / (1024 ** 2)
     print(f"Peak VRAM during full forward/backward/step: {peak_vram_mb:.2f} MB")
     assert peak_vram_mb < 500.0, f"Expected peak VRAM < 500MB, got {peak_vram_mb} MB"
+    engine.detach()
     print("✅ Layer Streaming Engine unit test passed successfully!")
 
 
@@ -140,6 +141,7 @@ def test_layer_streaming_with_centroid_optimizer():
             p.grad = None
             p._cpu_grad = None
 
+    engine.detach()
     print("✅ CentroidSteerOptimizer with Layer Streaming passed successfully!")
 
 
@@ -193,6 +195,7 @@ def test_layer_streaming_optimizer_gpu_execution():
     peak_vram_mb = torch.cuda.max_memory_allocated(device) / (1024 ** 2)
     print(f"Peak VRAM during Layer-Streaming GPU Optimizer: {peak_vram_mb:.2f} MB")
     assert peak_vram_mb < 500.0, f"Expected peak VRAM < 500MB, got {peak_vram_mb} MB"
+    engine.detach()
     print("✅ Layer-Streaming GPU Optimizer passed successfully!")
 
 
@@ -258,6 +261,7 @@ def test_streaming_gradient_numerical_parity():
             max_diff = diff
         assert torch.allclose(g1, g2, atol=1e-4, rtol=1e-3), f"Gradient mismatch in {n1}: diff {diff}"
 
+    engine.detach()
     print(f"✅ Streaming gradient numerical parity verified across all {param_count} parameters (max diff: {max_diff})")
 
 

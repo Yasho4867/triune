@@ -69,17 +69,38 @@ def generate_response(
         raise ValueError("max_new_tokens must be positive")
     formatted = f"User: {prompt}\nAssistant:"
     ids = torch.tensor(tokenizer.encode(formatted).ids, dtype=torch.long, device=device).unsqueeze(0)
-    generated, seen = [], {}
+    generated, seen = [], set()
+    
+    # Process full prompt once, initialize cache
+    cache = model.init_cache(batch_size=1)
+    logits, cache = model(ids, cache=cache, force_depth=force_depth)
+    
     for _ in range(max_new_tokens):
-        logits, _ = model(ids, force_depth=force_depth)
         next_logits = logits[0, -1].float() / temperature
-        for token_id, count in seen.items():
-            next_logits[token_id] -= repetition_penalty * count
+        
+        # Standard multiplicative repetition penalty
+        for token_id in seen:
+            if next_logits[token_id] > 0:
+                next_logits[token_id] /= repetition_penalty
+            else:
+                next_logits[token_id] *= repetition_penalty
+                
+        # Top-k filtering
+        top_k = min(50, next_logits.size(-1))
+        indices_to_remove = next_logits < torch.topk(next_logits, top_k)[0][-1]
+        next_logits[indices_to_remove] = float('-inf')
+        
         next_logits[pad_token_id] = -torch.inf
-        next_id = torch.multinomial(F.softmax(next_logits, dim=-1), num_samples=1).item()
+        
+        probs = torch.softmax(next_logits, dim=-1)
+        next_id = torch.multinomial(probs, num_samples=1).item()
         if next_id == eos_token_id:
             break
         generated.append(next_id)
-        seen[next_id] = seen.get(next_id, 0) + 1
-        ids = torch.cat((ids, torch.tensor([[next_id]], device=device)), dim=1)
+        seen.add(next_id)
+        
+        # Feed ONLY the new token with cache — O(1) per step
+        next_input = torch.tensor([[next_id]], dtype=torch.long, device=device)
+        logits, cache = model(next_input, cache=cache, force_depth=force_depth)
+        
     return tokenizer.decode(generated)

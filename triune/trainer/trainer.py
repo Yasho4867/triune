@@ -102,9 +102,11 @@ class Trainer:
 
     def resume(self, path: str | Path, *, weights_only: bool = False) -> None:
         checkpoint = load_checkpoint(self, path, load_optimizer=not weights_only)
-        self.engine.best_eval_loss = checkpoint.get("best_eval_loss", float("inf"))
-        if "depth_usage_ema" in checkpoint:
-            self.engine.depth_usage_ema = checkpoint["depth_usage_ema"].to(self.device)
+        best = checkpoint.get("best_eval_loss")
+        self.engine.best_eval_loss = best if best is not None else float("inf")
+        depth_ema = checkpoint.get("depth_usage_ema")
+        if depth_ema is not None:
+            self.engine.depth_usage_ema = depth_ema.to(self.device)
         self.engine.step = 0 if weights_only else checkpoint["step"]
 
     def compile(self) -> None:

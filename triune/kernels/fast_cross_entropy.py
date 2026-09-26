@@ -34,6 +34,9 @@ def chunked_cross_entropy_from_hidden(
     weight = lm_head.weight if isinstance(lm_head, nn.Linear) else lm_head
     bias = lm_head.bias if isinstance(lm_head, nn.Linear) else None
 
+    # Fix H-20: Chunking currently retains all autograd graphs simultaneously.
+    # For correct memory savings, use per-chunk backward or custom autograd.Function.
+    # Current implementation provides numerical chunking but not memory savings.
     for i in range(0, total_tokens, chunk_size):
         chunk_h = flat_hidden[i : i + chunk_size]
         chunk_y = flat_targets[i : i + chunk_size]
@@ -52,7 +55,9 @@ def chunked_cross_entropy_from_hidden(
 
     if valid_tokens > 0:
         return total_loss / valid_tokens
-    return total_loss
+    
+    # Fix M-8: maintain autograd graph
+    return (hidden_states.sum() * 0.0).squeeze()
 
 
 def fast_cross_entropy(
@@ -72,6 +77,9 @@ def fast_cross_entropy(
     total_loss = torch.tensor(0.0, device=logits.device, dtype=torch.float32)
     valid_tokens = 0
 
+    # Fix H-20: Chunking currently retains all autograd graphs simultaneously.
+    # For correct memory savings, use per-chunk backward or custom autograd.Function.
+    # Current implementation provides numerical chunking but not memory savings.
     for i in range(0, total_tokens, chunk_size):
         chunk_l = flat_logits[i : i + chunk_size]
         chunk_y = flat_targets[i : i + chunk_size]
@@ -87,4 +95,6 @@ def fast_cross_entropy(
 
     if valid_tokens > 0:
         return total_loss / valid_tokens
-    return total_loss
+    
+    # Fix M-8: maintain autograd graph
+    return (logits.sum() * 0.0).squeeze()

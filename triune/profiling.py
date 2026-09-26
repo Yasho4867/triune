@@ -59,7 +59,7 @@ def profile_model(
 
     for _ in range(warmup_steps):
         training_step()
-    with profile(activities=[ProfilerActivity.CPU], record_shapes=True, with_stack=True) as profiler:
+    with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True, with_stack=True) as profiler:
         for _ in range(active_steps):
             training_step()
     table = profiler.key_averages().table(sort_by="cpu_time_total", row_limit=20)

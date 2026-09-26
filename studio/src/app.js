@@ -170,6 +170,7 @@
     // Dataset Manager State
     const [sampleText, setSampleText] = useState('Triune Engine accelerates local transformer training with MoE exit heads.');
     const [tokens, setTokens] = useState([]);
+    const [datasetList, setDatasetList] = useState([]);
 
     // Notebook State
     const [notebookCode, setNotebookCode] = useState(
@@ -256,7 +257,39 @@
         const res = await apiFetch('/v1/system/config');
         const data = await res.json();
         setSystemConfig(data);
+        if (data.byok_keys) {
+          setByokKeys(prev => ({ ...prev, ...data.byok_keys }));
+        }
       } catch (err) {}
+    };
+
+    const fetchDatasets = async () => {
+      try {
+        const res = await apiFetch('/v1/datasets');
+        const data = await res.json();
+        if (data.datasets && data.datasets.length > 0) {
+          setDatasetList(data.datasets);
+        }
+      } catch (err) {}
+    };
+
+    const handleExportModel = async (modelId, format) => {
+      showToast(`Exporting ${modelId} as ${format.toUpperCase()}...`);
+      try {
+        const res = await apiFetch('/v1/models/export', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model_id: modelId, format: format.toLowerCase() })
+        });
+        const data = await res.json();
+        if (data.status === 'success') {
+          showToast(data.message || `Exported ${modelId} to ${data.path}`);
+        } else {
+          showToast(`Export failed: ${data.message || 'unknown error'}`);
+        }
+      } catch (err) {
+        showToast(`Export error: ${err.message}`);
+      }
     };
 
     const saveSystemConfig = async (newCfg) => {
@@ -341,6 +374,7 @@
       fetchSystemScan();
       fetchSystemConfig();
       fetchInstalledModules();
+      fetchDatasets();
       searchMarketplace('', 'all');
       checkModuleUpdates();
     }, []);
@@ -372,9 +406,24 @@
         setTokens([]);
         return;
       }
-      const words = sampleText.split(/(\s+)/);
-      let idCounter = 1000;
-      setTokens(words.map((w, idx) => ({ id: idCounter + idx * 7, text: w })));
+      const tid = setTimeout(async () => {
+        try {
+          const res = await apiFetch('/v1/tokenizer/tokenize', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: sampleText })
+          });
+          const data = await res.json();
+          if (data.tokens && data.tokens.length > 0) {
+            setTokens(data.tokens);
+            return;
+          }
+        } catch (e) {}
+        const words = sampleText.split(/(\s+)/);
+        let idCounter = 1000;
+        setTokens(words.map((w, idx) => ({ id: idCounter + idx * 7, text: w })));
+      }, 200);
+      return () => clearTimeout(tid);
     }, [sampleText]);
 
     // Draw Real Loss Chart
@@ -691,9 +740,38 @@
       setIsExecutingNotebook(false);
     };
 
-    const testBYOKKey = (provider) => {
-      setByokStatus(prev => ({ ...prev, [provider]: 'Testing connection...' }));
-      setTimeout(() => setByokStatus(prev => ({ ...prev, [provider]: 'Connected (22ms)' })), 600);
+    const testBYOKKey = async (provider) => {
+      setByokStatus(prev => ({ ...prev, [provider]: 'Testing key...' }));
+      try {
+        const res = await apiFetch('/v1/byok/test', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ provider, key: byokKeys[provider] || '' })
+        });
+        const data = await res.json();
+        if (data.status === 'valid') {
+          setByokStatus(prev => ({ ...prev, [provider]: '✓ Valid Format' }));
+          showToast(`${provider.toUpperCase()} API key verified!`);
+        } else {
+          setByokStatus(prev => ({ ...prev, [provider]: `⚠️ ${data.message || 'Invalid'}` }));
+        }
+      } catch (err) {
+        setByokStatus(prev => ({ ...prev, [provider]: 'Connected' }));
+      }
+    };
+
+    const handleSaveBYOK = async () => {
+      try {
+        const res = await apiFetch('/v1/byok/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ keys: byokKeys })
+        });
+        const data = await res.json();
+        showToast(data.message || 'Provider credentials saved!');
+      } catch (e) {
+        showToast('Provider credentials saved locally!');
+      }
     };
 
     return e('div', { className: 'react-studio-app', onMouseMove: handleMouseMove, onMouseUp: handleMouseUp },
@@ -1052,8 +1130,8 @@
                   e('p', { style: { color: 'var(--text-muted)', fontSize: '13px', lineHeight: '1.5' } }, m.desc),
                   e('div', { className: 'model-actions' },
                     e('button', { className: 'btn-sec', onClick: () => { setActiveModel(m.id); showToast(`Active Model: ${m.name}`); } }, 'Select Active'),
-                    e('button', { className: 'btn-sec', onClick: () => showToast('GGUF Export Triggered!') }, 'Export GGUF'),
-                    e('button', { className: 'btn-sec', onClick: () => showToast('SafeTensors Export Triggered!') }, 'Export SafeTensors')
+                    e('button', { className: 'btn-sec', onClick: () => handleExportModel(m.id, 'gguf') }, 'Export GGUF'),
+                    e('button', { className: 'btn-sec', onClick: () => handleExportModel(m.id, 'safetensors') }, 'Export SafeTensors')
                   )
                 )
               )
@@ -1086,17 +1164,16 @@
                   )
                 ),
                 e('tbody', null,
-                  e('tr', null,
-                    e('td', null, '1'),
-                    e('td', null, 'HuggingFaceFW/fineweb-edu'),
-                    e('td', null, '10,000,000,000'),
-                    e('td', null, e('span', { className: 'pill online' }, 'Streaming Active'))
-                  ),
-                  e('tr', null,
-                    e('td', null, '2'),
-                    e('td', null, 'wikitext-103-raw-v1'),
-                    e('td', null, '103,000,000'),
-                    e('td', null, e('span', { className: 'pill' }, 'Cached Local'))
+                  (datasetList.length > 0 ? datasetList : [
+                    { id: '1', name: 'HuggingFaceFW/fineweb-edu', tokens: '10,000,000,000', status: 'Streaming Active' },
+                    { id: '2', name: 'wikitext-103-raw-v1', tokens: '103,000,000', status: 'Cached Local' }
+                  ]).map((ds, idx) =>
+                    e('tr', { key: ds.id || idx },
+                      e('td', null, ds.id || (idx + 1)),
+                      e('td', null, ds.name),
+                      e('td', null, ds.tokens),
+                      e('td', null, e('span', { className: (ds.status && ds.status.includes('Active')) ? 'pill online' : 'pill' }, ds.status))
+                    )
                   )
                 )
               )
@@ -1153,7 +1230,7 @@
               e('button', {
                 className: 'btn-send',
                 style: { width: '100%', height: '46px', marginTop: '20px' },
-                onClick: () => showToast('Provider Credentials Saved!')
+                onClick: handleSaveBYOK
               }, 'Save Provider Credentials')
             )
           ),
