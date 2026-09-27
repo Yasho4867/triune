@@ -715,9 +715,9 @@
           const dataVram = await resVram.json();
           if (dataVram.total_gb !== undefined || dataVram.total !== undefined) {
             setVramUsage({
-              allocated: dataVram.allocated ?? dataVram.allocated_gb ?? 0.0,
-              reserved: dataVram.reserved ?? dataVram.reserved_gb ?? 0.0,
-              total: dataVram.total ?? dataVram.total_gb ?? 8.0,
+              allocated: (dataVram.allocated !== undefined && dataVram.allocated !== null) ? dataVram.allocated : ((dataVram.allocated_gb !== undefined && dataVram.allocated_gb !== null) ? dataVram.allocated_gb : 0.0),
+              reserved: (dataVram.reserved !== undefined && dataVram.reserved !== null) ? dataVram.reserved : ((dataVram.reserved_gb !== undefined && dataVram.reserved_gb !== null) ? dataVram.reserved_gb : 0.0),
+              total: (dataVram.total !== undefined && dataVram.total !== null) ? dataVram.total : ((dataVram.total_gb !== undefined && dataVram.total_gb !== null) ? dataVram.total_gb : 8.0),
               oom_risk: Boolean(dataVram.oom_risk)
             });
           }
@@ -1411,7 +1411,8 @@
         .map(([k, v]) => `${k}=${v}`)
         .join('\n');
       setNodes(prev => prev.map(n => n.id === selectedNodeId ? { ...n, details: detailsStr } : n));
-      const title = nodes.find(n => n.id === selectedNodeId)?.title || selectedNodeId;
+      const foundNode = nodes.find(n => n.id === selectedNodeId);
+      const title = (foundNode && foundNode.title) ? foundNode.title : selectedNodeId;
       showToast(`💾 Saved parameters for ${title}`);
     };
 
@@ -1676,7 +1677,8 @@
             ...prev,
             [nid]: { status: 'running' }
           }));
-          const nodeTitle = nodes.find(n => n.id === nid)?.title || nid;
+          const nodeObj = nodes.find(n => n.id === nid);
+          const nodeTitle = (nodeObj && nodeObj.title) ? nodeObj.title : nid;
           setDagExecutionStatus(`⚙️ Executing Node: ${nodeTitle}...`);
           await new Promise(r => setTimeout(r, 260));
 
