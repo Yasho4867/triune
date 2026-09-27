@@ -566,10 +566,17 @@
     });
     const [moduleFilter, setModuleFilter] = useState('all');
     const [moduleSearchQuery, setModuleSearchQuery] = useState('');
-    const [marketplaceData, setMarketplaceData] = useState({ curated: [], github: [], installed_count: 0 });
+    const [marketplaceData, setMarketplaceData] = useState({ curated: [], github: [], huggingface: [], installed_count: 0 });
     const [installedModules, setInstalledModules] = useState([]);
     const [availableUpdates, setAvailableUpdates] = useState([]);
     const [isSearchingModules, setIsSearchingModules] = useState(false);
+    const [marketplaceSubTab, setMarketplaceSubTab] = useState('installed');
+    const [repoCloneUrl, setRepoCloneUrl] = useState('');
+    const [repoCloneType, setRepoCloneType] = useState('auto');
+    const [repoCloneBranch, setRepoCloneBranch] = useState('main');
+    const [isCloningRepo, setIsCloningRepo] = useState(false);
+    const [activePullingModId, setActivePullingModId] = useState(null);
+    const [activeActivatingModId, setActiveActivatingModId] = useState(null);
 
     // Checkpoints & Dataset Telemetry State
     const [checkpoints, setCheckpoints] = useState([]);
@@ -804,10 +811,10 @@
       }
     };
 
-    const searchMarketplace = async (query = moduleSearchQuery, filter = moduleFilter) => {
+    const searchMarketplace = async (query = moduleSearchQuery, filter = moduleFilter, source = 'all') => {
       setIsSearchingModules(true);
       try {
-        const res = await apiFetch(`/v1/modules/search?q=${encodeURIComponent(query)}&type=${encodeURIComponent(filter)}`);
+        const res = await apiFetch(`/v1/modules/search?q=${encodeURIComponent(query)}&type=${encodeURIComponent(filter)}&source=${encodeURIComponent(source)}`);
         const data = await res.json();
         setMarketplaceData(data);
       } catch (err) {}
@@ -835,6 +842,64 @@
       } catch (err) {}
     };
 
+    const handleCloneCustomRepo = async (ev) => {
+      if (ev) ev.preventDefault();
+      if (!repoCloneUrl || !repoCloneUrl.trim()) {
+        showToast('Please enter a Git repository or Hugging Face URL.');
+        return;
+      }
+      setIsCloningRepo(true);
+      showToast(`Cloning repo: ${repoCloneUrl.trim()}...`);
+      try {
+        const res = await apiFetch('/v1/modules/clone', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            url: repoCloneUrl.trim(),
+            type: repoCloneType,
+            branch: repoCloneBranch || 'main'
+          })
+        });
+        const data = await res.json();
+        if (data.status === 'success') {
+          showToast(`✅ Successfully cloned ${data.name || 'repository'}!`);
+          setRepoCloneUrl('');
+          await fetchInstalledModules();
+          setMarketplaceSubTab('installed');
+          if (data.registered_nodes && data.registered_nodes.length > 0) {
+            showToast(`🧩 Registered DAG nodes: ${data.registered_nodes.join(', ')}`);
+          }
+        } else {
+          showToast(`❌ Clone failed: ${data.message || 'Unknown error'}`);
+        }
+      } catch (err) {
+        showToast('❌ Clone request failed. Check server connection.');
+      }
+      setIsCloningRepo(false);
+    };
+
+    const handleGitPullRepo = async (modId) => {
+      setActivePullingModId(modId);
+      showToast(`Git pulling latest changes for ${modId}...`);
+      try {
+        const res = await apiFetch('/v1/modules/pull', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: modId })
+        });
+        const data = await res.json();
+        if (data.status === 'success') {
+          showToast(`✅ ${data.message}`);
+          await fetchInstalledModules();
+        } else {
+          showToast(`⚠️ ${data.message || 'Git pull failed'}`);
+        }
+      } catch (err) {
+        showToast('Git pull request failed.');
+      }
+      setActivePullingModId(null);
+    };
+
     const installModule = async (modData) => {
       showToast(`Installing ${modData.name}...`);
       try {
@@ -846,7 +911,7 @@
         const data = await res.json();
         showToast(data.message || `Installed ${modData.name}`);
         fetchInstalledModules();
-        searchMarketplace(moduleSearchQuery, moduleFilter);
+        searchMarketplace(moduleSearchQuery, moduleFilter, 'all');
       } catch (err) {
         showToast(`Installation failed for ${modData.name}`);
       }
@@ -862,7 +927,7 @@
         const data = await res.json();
         showToast(data.message || 'Module uninstalled');
         fetchInstalledModules();
-        searchMarketplace(moduleSearchQuery, moduleFilter);
+        searchMarketplace(moduleSearchQuery, moduleFilter, 'all');
       } catch (err) {}
     };
 
@@ -1474,17 +1539,42 @@
       }
     };
 
-    const handleActivateModule = (m) => {
-      const type = (m.type || '').toLowerCase();
-      const name = (m.name || '').toLowerCase();
-      if (type === 'dataset' || name.includes('data') || name.includes('fineweb') || name.includes('wikitext')) {
-        handleSelectDataset(m);
-      } else if (type === 'adapter' || name.includes('lora')) {
-        setActiveAdapter({ name: m.name, rank: 16, path: m.installed_at });
-        showToast(`✅ Activated LoRA Adapter: ${m.name}`);
-      } else {
-        handleLoadModel(m.id || m.name);
+    const handleActivateModule = async (m) => {
+      setActiveActivatingModId(m.id);
+      showToast(`Activating ${m.name}...`);
+      try {
+        const res = await apiFetch('/v1/modules/activate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: m.id })
+        });
+        const data = await res.json();
+        if (data.status === 'success') {
+          showToast(`⚡ ${data.message}`);
+          if (data.registered_nodes && data.registered_nodes.length > 0) {
+            showToast(`🧩 Added ${data.registered_nodes.join(', ')} to DAG Canvas!`);
+          }
+          if (data.type === 'dataset') {
+            handleSelectDataset(m);
+          } else if (data.type === 'adapter') {
+            setActiveAdapter({ name: m.name, rank: 16, path: m.installed_at });
+          }
+        } else {
+          showToast(`⚠️ ${data.message || 'Activation failed'}`);
+        }
+      } catch (err) {
+        const type = (m.type || '').toLowerCase();
+        const name = (m.name || '').toLowerCase();
+        if (type === 'dataset' || name.includes('data') || name.includes('fineweb') || name.includes('wikitext')) {
+          handleSelectDataset(m);
+        } else if (type === 'adapter' || name.includes('lora')) {
+          setActiveAdapter({ name: m.name, rank: 16, path: m.installed_at });
+          showToast(`✅ Activated LoRA Adapter: ${m.name}`);
+        } else {
+          showToast(`Module ${m.name} active in Studio.`);
+        }
       }
+      setActiveActivatingModId(null);
     };
 
     const handlePurgeVRAM = async () => {
@@ -1670,7 +1760,7 @@
           e('button', { className: `nav-item ${activeTab === 'training' ? 'active' : ''}`, onClick: () => setActiveTab('training') }, e('span', { className: 'nav-icon' }, '⚡'), 'Training & Telemetry'),
           e('button', { className: `nav-item ${activeTab === 'checkpoints' ? 'active' : ''}`, onClick: () => { setActiveTab('checkpoints'); fetchCheckpoints(); } }, e('span', { className: 'nav-icon' }, '💾'), 'Checkpoints & Weights'),
           e('button', { className: `nav-item ${activeTab === 'finetune' ? 'active' : ''}`, onClick: () => setActiveTab('finetune') }, e('span', { className: 'nav-icon' }, '🎯'), 'LoRA / QLoRA Tuner'),
-          e('button', { className: `nav-item ${activeTab === 'modules' ? 'active' : ''}`, onClick: () => setActiveTab('modules') }, e('span', { className: 'nav-icon' }, '📦'), 'Modules & Repos'),
+          e('button', { className: `nav-item ${activeTab === 'modules' ? 'active' : ''}`, onClick: () => { setActiveTab('modules'); fetchInstalledModules(); searchMarketplace(); } }, e('span', { className: 'nav-icon' }, '📦'), 'Modules & Repos'),
           e('button', { className: `nav-item ${activeTab === 'environment' ? 'active' : ''}`, onClick: () => setActiveTab('environment') }, e('span', { className: 'nav-icon' }, '🖥️'), 'System & Hardware'),
           e('button', { className: `nav-item ${activeTab === 'models' ? 'active' : ''}`, onClick: () => setActiveTab('models') }, e('span', { className: 'nav-icon' }, '🧬'), 'Model Zoo & Exporters'),
           e('button', { className: `nav-item ${activeTab === 'datasets' ? 'active' : ''}`, onClick: () => setActiveTab('datasets') }, e('span', { className: 'nav-icon' }, '📊'), 'Dataset & Tokenizer'),
@@ -2501,46 +2591,124 @@
             )
           ),
 
-          // Tab 9: Modules & Repos Marketplace (Modrinth Style)
+          // Tab 9: Modules & Repos Marketplace & Ecosystem
           activeTab === 'modules' && e('div', { className: 'view-modules' },
-            e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' } },
+            e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '10px' } },
               e('div', null,
-                e('h2', { style: { fontFamily: 'Newsreader', fontSize: '24px', margin: 0 } }, 'Modules & Repos Marketplace'),
-                e('p', { style: { color: 'var(--text-muted)', fontSize: '13px', margin: '4px 0 0 0' } }, 'Browse curated model weights, LoRA adapters, datasets, custom DAG nodes, or clone ML repos directly from GitHub.')
+                e('h2', { style: { fontFamily: 'Newsreader', fontSize: '24px', margin: 0 } }, 'Modules & Repos Ecosystem'),
+                e('p', { style: { color: 'var(--text-muted)', fontSize: '13px', margin: '4px 0 0 0' } }, 'Clone remote Git repositories, explore Hugging Face models & datasets, and dynamically register custom DAG node extensions.')
               ),
-              e('button', { className: 'btn-sec', onClick: checkModuleUpdates }, '🔄 Check for Updates')
-            ),
-
-            // Search Bar & Filter Chips
-            e('div', { style: { display: 'flex', gap: '12px', marginBottom: '16px', alignItems: 'center' } },
-              e('input', {
-                style: { flex: 1, height: '42px', padding: '0 14px', background: 'var(--bg-input)', border: '1px solid var(--border-color)', borderRadius: '6px', fontSize: '13.5px', color: 'var(--text-main)' },
-                placeholder: 'Search curated modules or GitHub repos (e.g., starcoder, lora, fine-web)...',
-                value: moduleSearchQuery,
-                onChange: ev => {
-                  setModuleSearchQuery(ev.target.value);
-                  searchMarketplace(ev.target.value, moduleFilter);
-                }
-              }),
-              e('select', {
-                style: { height: '42px', padding: '0 12px', background: 'var(--bg-input)', border: '1px solid var(--border-color)', borderRadius: '6px', fontSize: '13px', color: 'var(--text-main)' },
-                value: moduleFilter,
-                onChange: ev => {
-                  setModuleFilter(ev.target.value);
-                  searchMarketplace(moduleSearchQuery, ev.target.value);
-                }
-              },
-                e('option', { value: 'all' }, 'All Types'),
-                e('option', { value: 'model' }, 'Model Weights'),
-                e('option', { value: 'adapter' }, 'LoRA Adapters'),
-                e('option', { value: 'dataset' }, 'Datasets'),
-                e('option', { value: 'plugin' }, 'DAG Plugins'),
-                e('option', { value: 'framework' }, 'Framework Tools')
+              e('div', { style: { display: 'flex', gap: '8px' } },
+                e('button', { className: 'btn-sec', onClick: () => { fetchInstalledModules(); searchMarketplace(moduleSearchQuery, moduleFilter, 'all'); checkModuleUpdates(); } }, '🔄 Refresh All'),
+                e('button', { className: 'btn-sec', onClick: checkModuleUpdates }, '🔔 Check Updates')
               )
             ),
 
+            // Direct Repository Cloner Box
+            e('div', { className: 'repo-cloner-box' },
+              e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+                e('span', { style: { fontSize: '16px' } }, '📥'),
+                e('h3', { style: { fontFamily: 'Newsreader', fontSize: '17px', margin: 0, fontWeight: '600' } }, 'Clone Remote Repository (GitHub / Hugging Face)'),
+                e('span', { className: 'repo-git-pill', style: { marginLeft: 'auto' } }, 'git clone --depth 1')
+              ),
+              e('p', { style: { color: 'var(--text-muted)', fontSize: '12.5px', margin: '4px 0 0 0' } }, 'Enter any remote Git URL or Hugging Face repository to clone locally. Detected DAG node plugins, model weights, and datasets will be automatically registered.'),
+              e('form', { className: 'repo-cloner-form', onSubmit: handleCloneCustomRepo },
+                e('input', {
+                  style: { flex: '2 1 280px', height: '38px', padding: '0 12px', background: 'var(--bg-input)', border: '1px solid var(--border-color)', borderRadius: '6px', fontSize: '13px', color: 'var(--text-main)' },
+                  placeholder: 'https://github.com/username/repo.git or https://huggingface.co/org/model',
+                  value: repoCloneUrl,
+                  onChange: ev => setRepoCloneUrl(ev.target.value)
+                }),
+                e('select', {
+                  style: { flex: '1 1 150px', height: '38px', padding: '0 10px', background: 'var(--bg-input)', border: '1px solid var(--border-color)', borderRadius: '6px', fontSize: '12.5px', color: 'var(--text-main)' },
+                  value: repoCloneType,
+                  onChange: ev => setRepoCloneType(ev.target.value)
+                },
+                  e('option', { value: 'auto' }, 'Auto Detect Type'),
+                  e('option', { value: 'plugin' }, '🧩 Custom DAG Plugin'),
+                  e('option', { value: 'model' }, '⚖️ Model Weights'),
+                  e('option', { value: 'adapter' }, '🎯 LoRA Adapter'),
+                  e('option', { value: 'dataset' }, '📊 Dataset (.jsonl)'),
+                  e('option', { value: 'general' }, '📦 General Repo')
+                ),
+                e('input', {
+                  style: { flex: '0 1 120px', height: '38px', padding: '0 10px', background: 'var(--bg-input)', border: '1px solid var(--border-color)', borderRadius: '6px', fontSize: '12.5px', color: 'var(--text-main)' },
+                  placeholder: 'Branch (main)',
+                  value: repoCloneBranch,
+                  onChange: ev => setRepoCloneBranch(ev.target.value)
+                }),
+                e('button', {
+                  type: 'submit',
+                  className: 'btn-send',
+                  disabled: isCloningRepo,
+                  style: { height: '38px', padding: '0 18px', fontSize: '13px', whiteSpace: 'nowrap' }
+                }, isCloningRepo ? '⏳ Cloning...' : '📥 Clone & Register')
+              )
+            ),
+
+            // Subtabs Navigation
+            e('div', { className: 'repo-subtabs' },
+              e('button', {
+                className: `repo-subtab-btn ${marketplaceSubTab === 'installed' ? 'active' : ''}`,
+                onClick: () => setMarketplaceSubTab('installed')
+              }, `💾 Installed & Cloned Repos (${installedModules.length})`),
+              e('button', {
+                className: `repo-subtab-btn ${marketplaceSubTab === 'curated' ? 'active' : ''}`,
+                onClick: () => setMarketplaceSubTab('curated')
+              }, `🌟 Curated & Verified (${marketplaceData && marketplaceData.curated ? marketplaceData.curated.length : 0})`),
+              e('button', {
+                className: `repo-subtab-btn ${marketplaceSubTab === 'huggingface' ? 'active' : ''}`,
+                onClick: () => {
+                  setMarketplaceSubTab('huggingface');
+                  if (!marketplaceData || !marketplaceData.huggingface || marketplaceData.huggingface.length === 0) {
+                    searchMarketplace(moduleSearchQuery || 'triune', moduleFilter, 'huggingface');
+                  }
+                }
+              }, `🤗 Hugging Face Hub (${marketplaceData && marketplaceData.huggingface ? marketplaceData.huggingface.length : 0})`),
+              e('button', {
+                className: `repo-subtab-btn ${marketplaceSubTab === 'github' ? 'active' : ''}`,
+                onClick: () => {
+                  setMarketplaceSubTab('github');
+                  if (!marketplaceData || !marketplaceData.github || marketplaceData.github.length === 0) {
+                    searchMarketplace(moduleSearchQuery || 'transformer', moduleFilter, 'github');
+                  }
+                }
+              }, `🐙 GitHub ML (${marketplaceData && marketplaceData.github ? marketplaceData.github.length : 0})`)
+            ),
+
+            // Search Bar & Filter Chips
+            e('div', { style: { display: 'flex', gap: '10px', marginBottom: '18px', alignItems: 'center', flexWrap: 'wrap' } },
+              e('input', {
+                style: { flex: '1 1 260px', height: '40px', padding: '0 14px', background: 'var(--bg-input)', border: '1px solid var(--border-color)', borderRadius: '6px', fontSize: '13px', color: 'var(--text-main)' },
+                placeholder: marketplaceSubTab === 'huggingface' ? 'Search Hugging Face Hub (e.g. gpt2, llama, fineweb, wikitext)...' : (marketplaceSubTab === 'github' ? 'Search GitHub ML repos (e.g. flash-attention, bitsandbytes)...' : 'Search modules, plugins, adapters, datasets...'),
+                value: moduleSearchQuery,
+                onChange: ev => setModuleSearchQuery(ev.target.value),
+                onKeyDown: ev => { if (ev.key === 'Enter') searchMarketplace(moduleSearchQuery, moduleFilter, marketplaceSubTab === 'installed' ? 'all' : marketplaceSubTab); }
+              }),
+              e('select', {
+                style: { height: '40px', padding: '0 12px', background: 'var(--bg-input)', border: '1px solid var(--border-color)', borderRadius: '6px', fontSize: '13px', color: 'var(--text-main)' },
+                value: moduleFilter,
+                onChange: ev => {
+                  setModuleFilter(ev.target.value);
+                  searchMarketplace(moduleSearchQuery, ev.target.value, marketplaceSubTab === 'installed' ? 'all' : marketplaceSubTab);
+                }
+              },
+                e('option', { value: 'all' }, 'All Types'),
+                e('option', { value: 'plugin' }, '🧩 DAG Plugins'),
+                e('option', { value: 'model' }, '⚖️ Model Weights'),
+                e('option', { value: 'adapter' }, '🎯 LoRA Adapters'),
+                e('option', { value: 'dataset' }, '📊 Datasets'),
+                e('option', { value: 'framework' }, '⚙️ Framework Tools')
+              ),
+              e('button', {
+                className: 'btn-sec',
+                style: { height: '40px', padding: '0 16px', fontSize: '13px' },
+                onClick: () => searchMarketplace(moduleSearchQuery, moduleFilter, marketplaceSubTab === 'installed' ? 'all' : marketplaceSubTab)
+              }, isSearchingModules ? '⏳ Searching...' : '🔍 Search')
+            ),
+
             // Updates Available Banner
-            availableUpdates && availableUpdates.length > 0 && e('div', { style: { background: '#fffbeb', border: '1px solid #fde68a', padding: '14px 18px', borderRadius: '8px', marginBottom: '16px' } },
+            availableUpdates && availableUpdates.length > 0 && e('div', { style: { background: '#fffbeb', border: '1px solid #fde68a', padding: '14px 18px', borderRadius: '8px', marginBottom: '18px' } },
               e('h4', { style: { color: '#92400e', margin: '0 0 6px 0', fontSize: '14px' } }, `🔔 ${availableUpdates.length} Module Update(s) Available`),
               e('div', { style: { display: 'flex', gap: '10px', flexWrap: 'wrap' } },
                 (availableUpdates || []).map(up =>
@@ -2554,82 +2722,203 @@
               )
             ),
 
-            // Curated Recommendations Grid
-            e('h3', { style: { fontFamily: 'Newsreader', fontSize: '18px', marginTop: '16px', marginBottom: '8px' } }, 'Curated Recommendations'),
-            e('div', { className: 'modules-grid' },
-              (marketplaceData && marketplaceData.curated ? marketplaceData.curated : []).map(mod =>
-                e('div', { key: mod.id, className: 'module-card' },
-                  e('div', null,
-                    e('div', { className: 'module-header' },
-                      e('span', { className: 'module-title' }, mod.name),
-                      e('span', { className: 'badge-update', style: { background: 'var(--bg-surface)', color: 'var(--primary)', borderColor: 'var(--border-color)' } }, `v${mod.version}`)
-                    ),
-                    e('div', { className: 'module-author' }, `By ${mod.author} • ${mod.type.toUpperCase()}`),
-                    e('div', { className: 'module-desc' }, mod.description),
-                    e('div', { className: 'module-tags' },
-                      mod.tags && mod.tags.map((t, idx) => e('span', { key: idx, className: 'module-tag' }, t)),
-                      mod.requires_cuda && e('span', { className: 'module-tag', style: { background: '#fee2e2', color: '#991b1b' } }, 'CUDA Required')
+            // Subtab 1: Installed & Cloned Repositories
+            marketplaceSubTab === 'installed' && e('div', null,
+              installedModules.length === 0 ?
+                e('div', { style: { textAlign: 'center', padding: '40px 20px', background: 'var(--bg-card)', border: '1px dashed var(--border-color)', borderRadius: '8px' } },
+                  e('div', { style: { fontSize: '32px', marginBottom: '8px' } }, '📦'),
+                  e('h4', { style: { margin: '0 0 6px 0', fontFamily: 'Newsreader', fontSize: '18px' } }, 'No Repositories or Modules Installed Yet'),
+                  e('p', { style: { color: 'var(--text-muted)', fontSize: '13px', maxWidth: '520px', margin: '0 auto 16px auto' } }, 'Use the Cloner bar above to clone any Git or Hugging Face repository, or switch to Curated & Verified to install custom loss DAG plugins, base weights, and datasets.')
+                ) :
+                e('div', { style: { display: 'flex', flexDirection: 'column', gap: '12px' } },
+                  installedModules.map(m =>
+                    e('div', { key: m.id, className: 'repo-card-installed' },
+                      e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '8px' } },
+                        e('div', null,
+                          e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
+                            e('span', { style: { fontWeight: '700', fontSize: '15px' } }, m.name),
+                            e('span', { className: 'repo-git-pill' }, `🌿 ${m.git_info && m.git_info.branch ? m.git_info.branch : 'local'} • 🏷️ ${(m.git_info && m.git_info.commit ? m.git_info.commit : (m.version || 'v1.0')).slice(0, 8)}`),
+                            e('span', { className: 'badge-update', style: { background: 'var(--bg-surface)', color: 'var(--primary)', borderColor: 'var(--border-color)', fontSize: '11px' } }, (m.type || 'module').toUpperCase())
+                          ),
+                          e('div', { style: { fontSize: '12px', color: 'var(--text-muted)', marginTop: '3px' } }, `By ${m.author || 'User'} • ${m.installed_at || ''}`)
+                        ),
+                        e('div', { style: { display: 'flex', gap: '8px', alignItems: 'center' } },
+                          m.git_info && m.git_info.is_git && e('button', {
+                            className: 'btn-sec',
+                            style: { padding: '5px 12px', fontSize: '12px' },
+                            disabled: activePullingModId === m.id,
+                            onClick: () => handleGitPullRepo(m.id)
+                          }, activePullingModId === m.id ? '⏳ Pulling...' : '🔄 Git Pull'),
+                          e('button', {
+                            className: 'btn-sec',
+                            style: { padding: '5px 12px', fontSize: '12px', background: '#ecfdf5', borderColor: '#a7f3d0', color: '#065f46' },
+                            disabled: activeActivatingModId === m.id,
+                            onClick: () => handleActivateModule(m)
+                          }, activeActivatingModId === m.id ? '⚡ Activating...' : '⚡ Activate in Studio'),
+                          e('button', { className: 'btn-purge', style: { padding: '5px 10px', fontSize: '12px' }, onClick: () => uninstallModule(m.id) }, '🗑️ Remove')
+                        )
+                      ),
+                      e('div', { style: { fontSize: '13px', color: 'var(--text-main)', lineHeight: '1.4' } }, m.description || 'Locally installed module repository.'),
+                      // Detected Artifacts & Capabilities Row
+                      e('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' } },
+                        ((m.registered_nodes && m.registered_nodes.length > 0) || (m.artifacts && m.artifacts.nodes && m.artifacts.nodes.length > 0)) &&
+                          e('span', { className: 'repo-artifact-badge plugin' }, `🧩 DAG Nodes: ${(m.registered_nodes || m.artifacts.nodes).join(', ')}`),
+                        m.artifacts && m.artifacts.weights && m.artifacts.weights.length > 0 &&
+                          e('span', { className: 'repo-artifact-badge model' }, `⚖️ Weights: ${m.artifacts.weights.slice(0, 2).join(', ')}`),
+                        m.artifacts && m.artifacts.adapters && m.artifacts.adapters.length > 0 &&
+                          e('span', { className: 'repo-artifact-badge adapter' }, `🎯 Adapter: ${m.artifacts.adapters.join(', ')}`),
+                        m.artifacts && m.artifacts.datasets && m.artifacts.datasets.length > 0 &&
+                          e('span', { className: 'repo-artifact-badge dataset' }, `📊 Dataset: ${m.artifacts.datasets.join(', ')}`),
+                        m.artifacts && m.artifacts.requirements &&
+                          e('span', { className: 'repo-git-pill' }, '📦 requirements.txt'),
+                        e('span', { style: { fontSize: '11px', color: 'var(--text-dim)', marginLeft: 'auto' } }, `${m.file_count || 0} files • ${m.size_mb ? m.size_mb + ' MB' : '0 MB'}`)
+                      )
                     )
-                  ),
-                  e('div', { className: 'module-footer' },
-                    e('span', { style: { fontSize: '11px', color: 'var(--text-dim)' } }, mod.size_mb ? `${mod.size_mb} MB` : 'Remote Repo'),
-                    mod.installed ?
-                      e('div', { style: { display: 'flex', gap: '6px' } },
-                        e('span', { style: { fontSize: '12px', color: 'var(--accent-sage)', fontWeight: '600', alignSelf: 'center' } }, '✓ Installed'),
-                        e('button', { className: 'btn-purge', onClick: () => uninstallModule(mod.id) }, 'Remove')
-                      ) :
-                      e('button', { className: 'btn-send', style: { height: '32px', padding: '0 14px', fontSize: '12px' }, onClick: () => installModule(mod) }, 'Install')
                   )
                 )
-              )
             ),
 
-            // GitHub Repositories Section (if searching)
-            marketplaceData && marketplaceData.github && marketplaceData.github.length > 0 && e('div', { style: { marginTop: '24px' } },
-              e('h3', { style: { fontFamily: 'Newsreader', fontSize: '18px', marginBottom: '8px' } }, 'GitHub Repositories'),
+            // Subtab 2: Curated & Verified
+            marketplaceSubTab === 'curated' && e('div', null,
               e('div', { className: 'modules-grid' },
-                (marketplaceData.github || []).map(gh =>
-                  e('div', { key: gh.id, className: 'module-card' },
+                (marketplaceData && marketplaceData.curated ? marketplaceData.curated : []).map(mod =>
+                  e('div', { key: mod.id, className: 'module-card' },
                     e('div', null,
                       e('div', { className: 'module-header' },
-                        e('span', { className: 'module-title' }, gh.name),
-                        e('span', { className: 'module-tag' }, `★ ${gh.stars}`)
+                        e('span', { className: 'module-title' }, mod.name),
+                        e('span', { className: 'badge-update', style: { background: 'var(--bg-surface)', color: 'var(--primary)', borderColor: 'var(--border-color)' } }, `v${mod.version}`)
                       ),
-                      e('div', { className: 'module-author' }, `GitHub: ${gh.author}`),
-                      e('div', { className: 'module-desc' }, gh.description),
+                      e('div', { className: 'module-author' }, `By ${mod.author} • ${(mod.type || '').toUpperCase()}`),
+                      e('div', { className: 'module-desc' }, mod.description),
                       e('div', { className: 'module-tags' },
-                        gh.tags && gh.tags.map((t, idx) => e('span', { key: idx, className: 'module-tag' }, t))
+                        mod.tags && mod.tags.map((t, idx) => e('span', { key: idx, className: 'module-tag' }, t)),
+                        mod.requires_cuda && e('span', { className: 'module-tag', style: { background: '#fee2e2', color: '#991b1b' } }, 'CUDA Required')
                       )
                     ),
                     e('div', { className: 'module-footer' },
-                      e('a', { href: gh.repo_url, target: '_blank', style: { fontSize: '11px', color: 'var(--primary)' } }, 'View on GitHub ↗'),
-                      gh.installed ?
-                        e('span', { style: { fontSize: '12px', color: 'var(--accent-sage)' } }, '✓ Cloned') :
-                        e('button', { className: 'btn-send', style: { height: '32px', padding: '0 14px', fontSize: '12px' }, onClick: () => installModule(gh) }, 'Clone & Install')
+                      e('span', { style: { fontSize: '11px', color: 'var(--text-dim)' } }, mod.size_mb ? `${mod.size_mb} MB` : 'Local Builtin'),
+                      mod.installed ?
+                        e('div', { style: { display: 'flex', gap: '6px' } },
+                          e('span', { style: { fontSize: '12px', color: 'var(--accent-sage)', fontWeight: '600', alignSelf: 'center' } }, '✓ Installed'),
+                          e('button', { className: 'btn-purge', onClick: () => uninstallModule(mod.id) }, 'Remove')
+                        ) :
+                        e('button', { className: 'btn-send', style: { height: '32px', padding: '0 14px', fontSize: '12px' }, onClick: () => installModule(mod) }, 'Install')
                     )
                   )
                 )
               )
             ),
 
-            // Installed Modules List
-            e('h3', { style: { fontFamily: 'Newsreader', fontSize: '18px', marginTop: '24px', marginBottom: '8px' } }, `Installed Modules (${installedModules.length})`),
-            installedModules.length === 0 ?
-              e('p', { style: { color: 'var(--text-dim)', fontSize: '13px' } }, 'No additional modules installed yet. Install recommendations above.') :
-              e('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
-                installedModules.map(m =>
-                  e('div', { key: m.id, className: 'software-item' },
-                    e('div', null,
-                      e('span', { style: { fontWeight: '600', fontSize: '14px' } }, m.name),
-                      e('span', { style: { fontSize: '11px', color: 'var(--text-dim)', marginLeft: '10px' } }, `Location: ${m.installed_at || 'C:\\TriuneStudio\\modules'}`)
-                    ),
-                    e('div', { style: { display: 'flex', gap: '8px' } },
-                      e('button', { className: 'btn-sec', style: { padding: '4px 10px', fontSize: '12px' }, onClick: () => handleActivateModule(m) }, 'Activate in Studio'),
-                      e('button', { className: 'btn-purge', onClick: () => uninstallModule(m.id) }, 'Uninstall')
+            // Subtab 3: Hugging Face Hub
+            marketplaceSubTab === 'huggingface' && e('div', null,
+              isSearchingModules ?
+                e('div', { style: { textAlign: 'center', padding: '40px', color: 'var(--text-muted)' } }, '⏳ Searching Hugging Face Hub...') :
+                (!marketplaceData || !marketplaceData.huggingface || marketplaceData.huggingface.length === 0 ?
+                  e('div', { style: { textAlign: 'center', padding: '40px 20px', background: 'var(--bg-card)', border: '1px dashed var(--border-color)', borderRadius: '8px' } },
+                    e('div', { style: { fontSize: '32px', marginBottom: '8px' } }, '🤗'),
+                    e('h4', { style: { margin: '0 0 6px 0', fontFamily: 'Newsreader', fontSize: '18px' } }, 'Search the Hugging Face Hub'),
+                    e('p', { style: { color: 'var(--text-muted)', fontSize: '13px', maxWidth: '480px', margin: '0 auto 16px auto' } }, 'Enter a model or dataset keyword in the search bar above (e.g., fineweb, wikitext, starcoder, gpt2) to browse remote models and datasets.'),
+                    e('div', { style: { display: 'flex', gap: '8px', justifyContent: 'center', flexWrap: 'wrap' } },
+                      ['fineweb-edu', 'wikitext', 'gpt2', 'open-web-math'].map(kw =>
+                        e('button', {
+                          key: kw,
+                          className: 'btn-sec',
+                          style: { fontSize: '12px' },
+                          onClick: () => { setModuleSearchQuery(kw); searchMarketplace(kw, moduleFilter, 'huggingface'); }
+                        }, `Search "${kw}"`)
+                      )
+                    )
+                  ) :
+                  e('div', { className: 'modules-grid' },
+                    marketplaceData.huggingface.map(hf =>
+                      e('div', { key: hf.id, className: 'module-card' },
+                        e('div', null,
+                          e('div', { className: 'module-header' },
+                            e('span', { className: 'module-title', style: { wordBreak: 'break-all' } }, hf.name),
+                            e('span', { className: 'badge-update', style: { background: '#fef3c7', color: '#92400e', borderColor: '#fde68a' } }, (hf.type || 'model').toUpperCase())
+                          ),
+                          e('div', { className: 'module-author' }, `Hugging Face: ${hf.author} • ❤️ ${hf.likes || 0} • 📥 ${hf.downloads || 0}`),
+                          e('div', { className: 'module-desc' }, hf.description || 'Hugging Face repository resource.'),
+                          e('div', { className: 'module-tags' },
+                            hf.tags && hf.tags.map((t, idx) => e('span', { key: idx, className: 'module-tag' }, t))
+                          )
+                        ),
+                        e('div', { className: 'module-footer' },
+                          e('a', { href: hf.repo_url, target: '_blank', rel: 'noreferrer', style: { fontSize: '11px', color: 'var(--primary)' } }, 'View on HF Hub ↗'),
+                          e('div', { style: { display: 'flex', gap: '6px' } },
+                            hf.type === 'dataset' && e('button', {
+                              className: 'btn-sec',
+                              style: { height: '30px', padding: '0 10px', fontSize: '11px' },
+                              onClick: () => {
+                                setDatasetInfo(prev => ({ ...prev, name: hf.id }));
+                                setActiveTab('datasets');
+                                showToast(`Loaded ${hf.id} into Dataset Manager!`);
+                              }
+                            }, '📊 Stream Dataset'),
+                            hf.installed ?
+                              e('span', { style: { fontSize: '12px', color: 'var(--accent-sage)', fontWeight: '600', alignSelf: 'center' } }, '✓ Cloned') :
+                              e('button', {
+                                className: 'btn-send',
+                                style: { height: '30px', padding: '0 12px', fontSize: '11px' },
+                                onClick: () => {
+                                  setRepoCloneUrl(hf.repo_url);
+                                  setRepoCloneType(hf.type || 'model');
+                                  handleCloneCustomRepo();
+                                }
+                              }, '📥 Clone Repo')
+                          )
+                        )
+                      )
                     )
                   )
                 )
-              )
+            ),
+
+            // Subtab 4: GitHub ML Repositories
+            marketplaceSubTab === 'github' && e('div', null,
+              isSearchingModules ?
+                e('div', { style: { textAlign: 'center', padding: '40px', color: 'var(--text-muted)' } }, '⏳ Searching GitHub...') :
+                (!marketplaceData || !marketplaceData.github || marketplaceData.github.length === 0 ?
+                  e('div', { style: { textAlign: 'center', padding: '40px 20px', background: 'var(--bg-card)', border: '1px dashed var(--border-color)', borderRadius: '8px' } },
+                    e('div', { style: { fontSize: '32px', marginBottom: '8px' } }, '🐙'),
+                    e('h4', { style: { margin: '0 0 6px 0', fontFamily: 'Newsreader', fontSize: '18px' } }, 'Search GitHub ML Repositories'),
+                    e('p', { style: { color: 'var(--text-muted)', fontSize: '13px', maxWidth: '480px', margin: '0 auto 16px auto' } }, 'Enter keywords to find open-source PyTorch models, custom attention kernels, and optimizer tools from GitHub.'),
+                    e('div', { style: { display: 'flex', gap: '8px', justifyContent: 'center', flexWrap: 'wrap' } },
+                      ['transformer', 'flash-attention', 'bitsandbytes', 'muon-optimizer'].map(kw =>
+                        e('button', {
+                          key: kw,
+                          className: 'btn-sec',
+                          style: { fontSize: '12px' },
+                          onClick: () => { setModuleSearchQuery(kw); searchMarketplace(kw, moduleFilter, 'github'); }
+                        }, `Search "${kw}"`)
+                      )
+                    )
+                  ) :
+                  e('div', { className: 'modules-grid' },
+                    marketplaceData.github.map(gh =>
+                      e('div', { key: gh.id, className: 'module-card' },
+                        e('div', null,
+                          e('div', { className: 'module-header' },
+                            e('span', { className: 'module-title', style: { wordBreak: 'break-all' } }, gh.name),
+                            e('span', { className: 'module-tag' }, `★ ${gh.stars || 0}`)
+                          ),
+                          e('div', { className: 'module-author' }, `GitHub: ${gh.author}`),
+                          e('div', { className: 'module-desc' }, gh.description || 'Open source GitHub repository.'),
+                          e('div', { className: 'module-tags' },
+                            gh.tags && gh.tags.map((t, idx) => e('span', { key: idx, className: 'module-tag' }, t))
+                          )
+                        ),
+                        e('div', { className: 'module-footer' },
+                          e('a', { href: gh.repo_url, target: '_blank', rel: 'noreferrer', style: { fontSize: '11px', color: 'var(--primary)' } }, 'View on GitHub ↗'),
+                          gh.installed ?
+                            e('span', { style: { fontSize: '12px', color: 'var(--accent-sage)', fontWeight: '600' } }, '✓ Cloned') :
+                            e('button', { className: 'btn-send', style: { height: '32px', padding: '0 14px', fontSize: '12px' }, onClick: () => installModule(gh) }, 'Clone & Install')
+                        )
+                      )
+                    )
+                  )
+                )
+            )
           ),
 
           // Tab 10: System & Hardware Auto-Scanner

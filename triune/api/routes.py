@@ -1479,19 +1479,63 @@ if HAS_FASTAPI:
     # Modules & Repos Marketplace Endpoints
     # -------------------------------------------------------------------------
     @router.get("/v1/modules/search")
-    async def search_modules(q: str = "", type: str = "all") -> Dict[str, Any]:
-        """Search curated registry and GitHub for available modules."""
-        return await asyncio.to_thread(module_manager.search_marketplace, q, type)
+    async def search_modules(q: str = "", type: str = "all", source: str = "all") -> Dict[str, Any]:
+        """Search curated registry, GitHub, and Hugging Face Hub for available modules."""
+        return await asyncio.to_thread(module_manager.search_marketplace, q, type, source)
 
     @router.get("/v1/modules/installed")
     async def list_installed_modules() -> List[Dict[str, Any]]:
-        """List currently installed modules."""
+        """List currently installed modules with live disk inspection and Git metadata."""
         return await asyncio.to_thread(module_manager.get_installed_modules)
 
     @router.get("/v1/modules/updates")
     async def check_module_updates() -> List[Dict[str, Any]]:
         """Check all installed modules for version updates."""
         return await asyncio.to_thread(module_manager.check_updates)
+
+    @router.post("/v1/modules/clone")
+    async def clone_module_repo(req: Dict[str, Any]) -> Dict[str, Any]:
+        """Clone any Git or Hugging Face repository, inspect contents, and register DAG nodes."""
+        url = req.get("url") or req.get("repo_url", "")
+        mod_type = req.get("type", "auto")
+        branch = req.get("branch", "main")
+        name = req.get("name")
+        return await asyncio.to_thread(module_manager.clone_repository, url, mod_type, branch, name)
+
+    @router.post("/v1/modules/pull")
+    async def pull_module_repo(req: Dict[str, Any]) -> Dict[str, Any]:
+        """Perform git pull on a cloned repository to synchronize upstream commits."""
+        module_id = req.get("id") or req.get("module_id", "")
+        return await asyncio.to_thread(module_manager.git_pull, module_id)
+
+    @router.post("/v1/modules/activate")
+    async def activate_module_endpoint(req: Dict[str, Any]) -> Dict[str, Any]:
+        """Activate an installed module, discover and register DAG nodes, or bind weights/datasets."""
+        module_id = req.get("id") or req.get("module_id", "")
+        mods = module_manager.get_installed_modules()
+        mod = next((m for m in mods if m["id"] == module_id), None)
+        if not mod:
+            return {"status": "error", "message": f"Module {module_id} not found."}
+
+        mod_type = mod.get("type", "general")
+        p = Path(mod.get("installed_at", ""))
+        res = {"status": "success", "type": mod_type, "name": mod["name"]}
+
+        if mod_type == "plugin" or mod.get("registered_nodes"):
+            nodes = module_manager.discover_and_register_nodes(p)
+            res["message"] = f"Activated plugin! {len(nodes)} DAG node(s) registered in Studio."
+            res["registered_nodes"] = nodes
+        elif mod_type == "model":
+            weights = mod.get("artifacts", {}).get("weights", [])
+            res["message"] = f"Model weights registered ({', '.join(weights) if weights else 'available in engine'})."
+        elif mod_type == "adapter":
+            res["message"] = f"LoRA adapter active at {p}."
+        elif mod_type == "dataset":
+            datasets = mod.get("artifacts", {}).get("datasets", [])
+            res["message"] = f"Dataset active ({datasets[0] if datasets else 'ready for streaming'})."
+        else:
+            res["message"] = f"Module {mod['name']} active in Studio."
+        return res
 
     @router.post("/v1/modules/install")
     async def install_module_endpoint(req: Dict[str, Any]) -> Dict[str, Any]:

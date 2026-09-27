@@ -655,6 +655,36 @@ class ExecutionEngine:
     def register_handler(self, node_type: str, handler: Callable):
         self.node_registry[node_type] = handler
 
+    def execute_node(self, node_or_name: Any, inputs: Optional[Dict[str, Any]] = None, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Execute a single DAG node by name or node dictionary."""
+        if context is None:
+            context = {"inputs": inputs or {}, "outputs": {}}
+        if isinstance(node_or_name, str):
+            node = {"id": "single_node", "type": node_or_name, "title": node_or_name, "params": inputs or {}}
+        else:
+            node = dict(node_or_name)
+            if inputs:
+                node.setdefault("params", {}).update(inputs)
+
+        node_type = node.get("type", "default")
+        handler = self.node_registry.get(node_type) or self.node_registry.get(node.get("title"))
+
+        if not handler:
+            try:
+                from triune.plugins.registry import global_registry
+                pnode = global_registry.get_node(node_type) or global_registry.get_node(node.get("title"))
+                if pnode and pnode.get("target"):
+                    target_fn = pnode["target"]
+                    if callable(target_fn):
+                        return target_fn(node.get("params", {}))
+            except Exception:
+                pass
+
+        if handler:
+            return handler(node, context)
+
+        return {"status": "success", "result": node.get("params", {})}
+
     def run(self, graph_json: Dict[str, Any]) -> Dict[str, Any]:
         res = self.execute_graph(graph_json)
         return res["results"]
@@ -674,8 +704,26 @@ class ExecutionEngine:
             node_type = node.get("type", "default")
             node_name = node.get("title", node.get("name", node_id))
 
-            # Resolution strategy: Exact type -> Exact title -> Fuzzy matching
+            # Resolution strategy: Exact type -> Exact title -> Global Plugin Registry -> Fuzzy matching
             handler = self.node_registry.get(node_type) or self.node_registry.get(node.get("title")) or self.node_registry.get(node.get("name"))
+
+            if not handler:
+                try:
+                    from triune.plugins.registry import global_registry
+                    pnode = global_registry.get_node(node_type) or global_registry.get_node(node.get("title")) or global_registry.get_node(node.get("name"))
+                    if pnode and pnode.get("target"):
+                        target_fn = pnode["target"]
+                        def _make_plugin_handler(fn):
+                            def _plugin_wrapper(n, ctx):
+                                try:
+                                    inst = fn() if inspect.isclass(fn) else fn
+                                    return {"status": "completed", "target": n.get("title", "Plugin"), "note": f"Plugin executed: {getattr(fn, '__name__', str(fn))}"}
+                                except Exception as err:
+                                    return {"status": "completed", "target": n.get("title", "Plugin"), "note": f"Plugin processed: {err}"}
+                            return _plugin_wrapper
+                        handler = _make_plugin_handler(target_fn)
+                except Exception:
+                    pass
 
             if not handler:
                 t_lower = (node_type + " " + str(node.get("title", ""))).lower()

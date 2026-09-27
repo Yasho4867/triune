@@ -98,6 +98,63 @@ class TestTriuneEcosystem(unittest.TestCase):
         path = export_safetensors(model, "scratch/model_test.safetensors")
         self.assertTrue(path.exists())
 
+    def test_module_manager_search(self):
+        """Verify ModuleManager returns curated components and handles multi-source queries."""
+        from triune.modules.manager import ModuleManager
+        mgr = ModuleManager()
+        results = mgr.search_marketplace(query="", module_type="all", source="curated")
+        self.assertIn("curated", results)
+        self.assertGreater(len(results["curated"]), 0)
+        # Verify custom-loss-nodes is present in curated registry
+        loss_mod = next((m for m in results["curated"] if m["id"] == "custom-loss-nodes"), None)
+        self.assertIsNotNone(loss_mod, "custom-loss-nodes should be in curated registry")
+        self.assertEqual(loss_mod["type"], "plugin")
+
+    def test_module_manager_inspect_and_register_nodes(self):
+        """Verify dynamic discovery and registration of DAG nodes from an installed module."""
+        import tempfile
+        import shutil
+        from pathlib import Path
+        from triune.modules.manager import ModuleManager
+        from triune.plugins.registry import global_registry
+        from triune.execution.dag import ExecutionEngine
+
+        temp_dir = Path(tempfile.mkdtemp(prefix="triune_mod_test_"))
+        try:
+            # Create a sample plugin script with a custom registered DAG node
+            script_path = temp_dir / "my_custom_node.py"
+            script_content = '''
+from triune.plugins.registry import register_node
+
+@register_node("DynamicEchoNode", category="Plugin", description="Dynamic test node")
+def dynamic_echo_handler(inputs: dict) -> dict:
+    val = inputs.get("val", 0)
+    return {"result": val * 10}
+'''
+            script_path.write_text(script_content, encoding="utf-8")
+
+            # Also create a dummy weights file
+            weights_path = temp_dir / "adapter_model.safetensors"
+            weights_path.write_bytes(b"dummy_safetensors_bytes")
+
+            mgr = ModuleManager()
+            inspection = mgr.inspect_directory(temp_dir)
+            self.assertGreater(inspection["file_count"], 0)
+            self.assertIn("adapter_model.safetensors", inspection["artifacts"]["weights"])
+            self.assertIn("my_custom_node.py", inspection["artifacts"]["nodes"])
+
+            # Test dynamic registration
+            discovered = mgr.discover_and_register_nodes(temp_dir)
+            self.assertIn("DynamicEchoNode", discovered)
+            self.assertIn("DynamicEchoNode", global_registry._nodes)
+
+            # Test execution of dynamically registered node via ExecutionEngine
+            engine = ExecutionEngine()
+            out = engine.execute_node("DynamicEchoNode", {"val": 7})
+            self.assertEqual(out.get("result"), 70)
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main()

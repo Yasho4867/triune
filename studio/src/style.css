@@ -1484,4 +1484,119 @@ body {
   flex-wrap: wrap;
 }
 
+/* Enhanced Modules & Repos Cloner and Git Styling */
+.repo-cloner-box {
+  background: #ffffff;
+  border: 1px solid var(--border-color);
+  border-left: 4px solid var(--accent-terracotta, #9a3412);
+  border-radius: 8px;
+  padding: 16px 20px;
+  margin-bottom: 20px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+}
+
+.repo-cloner-form {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.repo-git-pill {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: #f1f5f9;
+  color: #334155;
+  border: 1px solid #cbd5e1;
+  padding: 2px 7px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.repo-artifact-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.repo-artifact-badge.plugin {
+  background: #f3e8ff;
+  color: #6b21a8;
+  border: 1px solid #d8b4fe;
+}
+.repo-artifact-badge.model {
+  background: #dbeafe;
+  color: #1e40af;
+  border: 1px solid #bfdbfe;
+}
+.repo-artifact-badge.adapter {
+  background: #ecfdf5;
+  color: #065f46;
+  border: 1px solid #a7f3d0;
+}
+.repo-artifact-badge.dataset {
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #fde68a;
+}
+
+.repo-subtabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.repo-subtab-btn {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  color: var(--text-main);
+  padding: 7px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.repo-subtab-btn:hover {
+  background: var(--bg-surface);
+  border-color: var(--primary);
+}
+
+.repo-subtab-btn.active {
+  background: var(--accent-olive, #2b4c3f) !important;
+  color: #ffffff !important;
+  border-color: var(--accent-olive, #2b4c3f) !important;
+  font-weight: 600;
+}
+
+.repo-card-installed {
+  background: #ffffff;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+}
+
+.repo-card-installed:hover {
+  border-color: var(--accent-olive, #2b4c3f);
+  box-shadow: 0 4px 12px rgba(43, 76, 63, 0.08);
+}
+
+
 
