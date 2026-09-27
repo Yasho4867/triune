@@ -1321,3 +1321,52 @@ body {
   max-height: 100px;
   overflow-y: auto;
 }
+
+/* HF Dataset Stream & Preset Chips */
+.stream-hf-card {
+  background: #ffffff;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 20px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+}
+
+.hf-preset-container {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  background: #fdfbf7;
+  border: 1px dashed var(--border-color);
+  border-radius: 6px;
+}
+
+.preset-chip.active-preset {
+  background: var(--accent-olive, #2b4c3f) !important;
+  color: #ffffff !important;
+  border-color: var(--accent-olive, #2b4c3f) !important;
+  font-weight: 600;
+}
+
+.hf-stream-form-grid {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  margin-top: 14px;
+  background: #faf8f5;
+  padding: 14px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+}
+
+.hf-token-highlight-box {
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+  border-left: 4px solid #2563eb;
+  border-radius: 8px;
+  padding: 18px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+}
+

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+os.environ["HF_HUB_DISABLE_XET"] = "1"
 import asyncio
 import io
 import json
@@ -210,9 +212,36 @@ if HAS_FASTAPI:
             self.dataset_name = "HuggingFaceFW/fineweb-edu"
             self.dataset_type = "streaming"
             self.total_tokens_trained = 0
+            self.tokens_trained = 0
             self.current_batch_preview = ""
             self.active_checkpoint: Optional[str] = None
             self.last_sample_decode = ""
+
+            # Hugging Face Direct Streaming State & Authentication
+            self.hf_token = os.environ.get("HF_TOKEN", "") or os.environ.get("HUGGING_FACE_HUB_TOKEN", "")
+            if not self.hf_token and hasattr(module_manager, "get_config"):
+                try:
+                    byok = module_manager.get_config().get("byok_keys", {})
+                    self.hf_token = byok.get("huggingface", "")
+                    if self.hf_token:
+                        os.environ["HF_TOKEN"] = self.hf_token
+                        os.environ["HUGGING_FACE_HUB_TOKEN"] = self.hf_token
+                except Exception:
+                    pass
+            self.is_streaming_hf = False
+            self.hf_dataset_name = "HuggingFaceFW/fineweb-edu"
+            self.hf_config: Optional[str] = "sample-10BT"
+            self.hf_split: str = "train"
+            self.hf_text_column: str = "text"
+            self.hf_stream_dataset: Any = None
+            self.hf_stream_iter: Any = None
+            self.hf_stream_buffer: List[List[int]] = []
+            self.hf_stream_stats: Dict[str, Any] = {
+                "total_samples_ingested": 0,
+                "columns_detected": [],
+                "sample_preview": "",
+                "last_error": None,
+            }
 
             if HAS_TORCH:
                 self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -310,28 +339,252 @@ if HAS_FASTAPI:
             print(f"[Triune Engine] Loaded 6-Layer MoE TriuneTransformer (32k vocab, 4 experts) on {self.device_name}.")
             self.load_training_data()
 
+        def connect_hf_stream(self, dataset_name: str, config: Optional[str] = None, split: str = "train", text_column: Optional[str] = None) -> Dict[str, Any]:
+            """Connect directly to any Hugging Face dataset via streaming API with optional authentication."""
+            self.load_tokenizer()
+            token = self.hf_token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN") or None
+            if token and (token.startswith("hf_testtoken") or token == "dummy" or len(token) < 10):
+                token = None
+
+            try:
+                import datasets
+            except ImportError:
+                raise RuntimeError("The 'datasets' package is required to stream from Hugging Face.")
+
+            load_kwargs: Dict[str, Any] = {
+                "split": split,
+                "streaming": True,
+            }
+            if config:
+                load_kwargs["name"] = config
+            if token:
+                load_kwargs["token"] = token
+
+            print(f"[Triune Engine] Connecting to Hugging Face stream: '{dataset_name}' (config: {config}, split: {split}, token: {'[ACTIVE]' if token else '[UNAUTHENTICATED]'})...")
+            try:
+                ds = datasets.load_dataset(dataset_name, **load_kwargs)
+                test_iter = iter(ds)
+                first_sample = next(test_iter)
+            except Exception as e:
+                if token:
+                    print(f"[Triune Engine] Streaming with token failed ({e}). Retrying unauthenticated...")
+                    load_kwargs.pop("token", None)
+                    ds = datasets.load_dataset(dataset_name, **load_kwargs)
+                    test_iter = iter(ds)
+                    first_sample = next(test_iter)
+                else:
+                    raise RuntimeError(f"Could not stream from dataset '{dataset_name}': {e}")
+
+            keys = list(first_sample.keys()) if isinstance(first_sample, dict) else []
+            col = text_column
+            if not col:
+                candidates = ["text", "content", "story", "prompt", "sentence", "article", "document", "input", "instruction", "body", "code"]
+                for c in candidates:
+                    if c in first_sample and isinstance(first_sample[c], str) and first_sample[c].strip():
+                        col = c
+                        break
+                if not col:
+                    for k, v in first_sample.items():
+                        if isinstance(v, str) and len(v.strip()) > 5:
+                            col = k
+                            break
+            if not col and keys:
+                col = keys[0]
+
+            raw_preview = str(first_sample.get(col, ""))[:250] if isinstance(first_sample, dict) else str(first_sample)[:250]
+            preview = raw_preview.replace("\n", " ").strip()
+
+            self.hf_dataset_name = dataset_name
+            self.hf_config = config
+            self.hf_split = split
+            self.hf_text_column = col or "text"
+            self.hf_stream_dataset = ds
+            self.hf_stream_iter = iter(ds)
+            self.hf_stream_buffer = []
+            self.is_streaming_hf = True
+            self.dataset_name = dataset_name
+            self.dataset_type = "hf_streaming"
+            self.dataset_path = dataset_name
+            self.hf_stream_stats = {
+                "source": "huggingface",
+                "total_samples_ingested": 1,
+                "columns_detected": keys,
+                "sample_preview": preview,
+                "last_error": None,
+            }
+
+            self._refill_stream_buffer(target_chunks=20)
+            log_msg = f"[HF STREAM] Successfully connected to '{dataset_name}' (split: {split}, col: '{self.hf_text_column}'). Pre-buffered {len(self.hf_stream_buffer)} sequences."
+            self.logs.insert(0, log_msg)
+            print(f"[Triune Engine] {log_msg}")
+
+            return {
+                "status": "success",
+                "is_streaming": True,
+                "dataset_name": dataset_name,
+                "config": config,
+                "split": split,
+                "text_column": self.hf_text_column,
+                "columns": keys,
+                "sample_preview": preview,
+                "buffered_chunks": len(self.hf_stream_buffer),
+                "message": log_msg,
+            }
+
+        def connect_url_stream(self, url: str, text_column: Optional[str] = None) -> Dict[str, Any]:
+            """Connect directly to an external dataset file via HTTP/HTTPS URL streaming."""
+            self.load_tokenizer()
+            import datasets
+
+            print(f"[Triune Engine] Connecting to external URL stream: '{url}'...")
+            ext = url.split("?")[0].split(".")[-1].lower()
+            if ext in ("jsonl", "json"):
+                ds = datasets.load_dataset("json", data_files=url, split="train", streaming=True)
+            elif ext == "parquet":
+                ds = datasets.load_dataset("parquet", data_files=url, split="train", streaming=True)
+            elif ext in ("csv", "tsv"):
+                ds = datasets.load_dataset("csv", data_files=url, split="train", streaming=True)
+            else:
+                ds = datasets.load_dataset("text", data_files=url, split="train", streaming=True)
+
+            test_iter = iter(ds)
+            first_sample = next(test_iter)
+            keys = list(first_sample.keys()) if isinstance(first_sample, dict) else []
+            col = text_column or ("text" if "text" in keys else (keys[0] if keys else "text"))
+            raw_preview = str(first_sample.get(col, ""))[:250] if isinstance(first_sample, dict) else str(first_sample)[:250]
+            preview = raw_preview.replace("\n", " ").strip()
+
+            self.hf_dataset_name = url
+            self.hf_config = None
+            self.hf_split = "train"
+            self.hf_text_column = col
+            self.hf_stream_dataset = ds
+            self.hf_stream_iter = iter(ds)
+            self.hf_stream_buffer = []
+            self.is_streaming_hf = True
+            self.dataset_name = url.split("/")[-1] or "Remote URL Stream"
+            self.dataset_type = "url_streaming"
+            self.dataset_path = url
+            self.hf_stream_stats = {
+                "source": "url",
+                "total_samples_ingested": 1,
+                "columns_detected": keys,
+                "sample_preview": preview,
+                "last_error": None,
+            }
+
+            self._refill_stream_buffer(target_chunks=20)
+            log_msg = f"[URL STREAM] Connected to external dataset '{url}'. Pre-buffered {len(self.hf_stream_buffer)} sequences."
+            self.logs.insert(0, log_msg)
+            print(f"[Triune Engine] {log_msg}")
+
+            return {
+                "status": "success",
+                "is_streaming": True,
+                "dataset_name": url,
+                "text_column": col,
+                "columns": keys,
+                "sample_preview": preview,
+                "buffered_chunks": len(self.hf_stream_buffer),
+                "message": log_msg,
+            }
+
+        def _refill_stream_buffer(self, target_chunks: int = 16) -> None:
+            """Fill the streaming token buffer from active stream iterator."""
+            if not self.hf_stream_iter or not self.tokenizer:
+                return
+
+            chunk_size = self.seq_len + 1
+            sep_id = self.tokenizer.token_to_id("[SEP]") or self.tokenizer.token_to_id("[EOS]") or 2
+            attempts = 0
+            token_accumulator: List[int] = []
+
+            while len(self.hf_stream_buffer) < target_chunks and attempts < 100:
+                attempts += 1
+                try:
+                    sample = next(self.hf_stream_iter)
+                    self.hf_stream_stats["total_samples_ingested"] += 1
+                    if isinstance(sample, dict):
+                        text = sample.get(self.hf_text_column, "")
+                        if not text and "text" in sample:
+                            text = sample.get("text", "")
+                        elif not text and "content" in sample:
+                            text = sample.get("content", "")
+                        elif not text and "story" in sample:
+                            text = sample.get("story", "")
+                    else:
+                        text = str(sample)
+
+                    if not text or not str(text).strip():
+                        continue
+
+                    encoded_ids = self.tokenizer.encode(str(text)).ids
+                    if not encoded_ids:
+                        continue
+
+                    token_accumulator.extend(encoded_ids)
+                    token_accumulator.append(sep_id)
+
+                    while len(token_accumulator) >= chunk_size:
+                        chunk = token_accumulator[:chunk_size]
+                        del token_accumulator[:chunk_size]
+                        self.hf_stream_buffer.append(chunk)
+                        if len(self.hf_stream_buffer) >= target_chunks:
+                            break
+                except StopIteration:
+                    if self.hf_stream_dataset is not None:
+                        try:
+                            self.hf_stream_iter = iter(self.hf_stream_dataset)
+                        except Exception:
+                            break
+                    else:
+                        break
+                except Exception as err:
+                    print(f"[Stream Warning] Sample fetch notice: {err}")
+                    self.hf_stream_stats["last_error"] = str(err)
+                    break
+
         def load_training_data(self, dataset_path: Optional[str] = None):
             self.load_tokenizer()
             if dataset_path:
                 self.dataset_path = dataset_path
 
-            if self.dataset_path in ("fineweb-edu", "HuggingFaceFW/fineweb-edu", "streaming"):
-                self.dataset_name = "HuggingFaceFW/fineweb-edu"
-                self.dataset_type = "streaming"
-                p = Path("data/fineweb_sample.jsonl")
-            elif self.dataset_path in ("wikitext-103", "wikitext"):
-                self.dataset_name = "wikitext-103-raw-v1"
-                self.dataset_type = "streaming"
-                p = Path("data/fineweb_sample.jsonl")
-            else:
-                p = Path(self.dataset_path)
-                if not p.is_file():
-                    for alt in ("data/fineweb_sample.jsonl", "data/finetune.jsonl"):
-                        if Path(alt).is_file():
-                            p = Path(alt)
-                            break
-                self.dataset_name = p.name if p.is_file() else "FineWeb-Edu Stream"
-                self.dataset_type = "local" if (p.is_file() and not self.dataset_name.startswith("fineweb")) else "streaming"
+            # Direct HTTP/HTTPS URL streaming
+            if self.dataset_path.startswith("http://") or self.dataset_path.startswith("https://"):
+                try:
+                    self.connect_url_stream(self.dataset_path)
+                    return
+                except Exception as err:
+                    print(f"[Triune Engine] Notice: Could not stream URL '{self.dataset_path}': {err}")
+
+            # Hugging Face dataset identifier (e.g. username/repo, roneneldan/TinyStories, etc.)
+            is_hf = ("/" in self.dataset_path and not Path(self.dataset_path).is_file()) or self.dataset_path in (
+                "fineweb-edu", "HuggingFaceFW/fineweb-edu", "streaming", "wikitext", "wikitext-103", "openwebtext", "roneneldan/TinyStories", "tiiuae/falcon-refinedweb"
+            )
+
+            if is_hf:
+                hf_name = self.dataset_path
+                hf_cfg = None
+                if hf_name in ("fineweb-edu", "streaming"):
+                    hf_name = "HuggingFaceFW/fineweb-edu"
+                    hf_cfg = "sample-10BT"
+                elif hf_name in ("wikitext", "wikitext-103"):
+                    hf_name = "wikitext"
+                    hf_cfg = "wikitext-103-raw-v1"
+                try:
+                    self.connect_hf_stream(hf_name, config=hf_cfg)
+                    return
+                except Exception as err:
+                    print(f"[Triune Engine] Notice: Could not stream '{hf_name}' directly ({err}). Checking local cached samples.")
+
+            p = Path(self.dataset_path)
+            if not p.is_file():
+                for alt in ("data/fineweb_sample.jsonl", "data/finetune.jsonl"):
+                    if Path(alt).is_file():
+                        p = Path(alt)
+                        break
+            self.dataset_name = p.name if p.is_file() else "FineWeb-Edu Stream"
+            self.dataset_type = "local" if p.is_file() else "streaming"
 
             texts = []
             if p.is_file():
@@ -352,13 +605,12 @@ if HAS_FASTAPI:
                     print(f"[Triune Engine] Error reading dataset {p}: {err}")
 
             if not texts:
-                texts = [
-                    "The architecture of modern deep learning transformers utilizes multi-head attention and feed-forward networks.",
-                    "Gated Linear Attention provides linear computational complexity with respect to sequence length while preserving state-of-the-art capacity.",
-                    "Mixture of Experts routes tokens dynamically to specialized sub-networks, achieving high capacity with sparse cost.",
-                    "Centroid steering optimizer aligns low-rank parameter trajectories across decentralized representations, regularizing curvature.",
-                    "Triune Transformer unifies reflex, limbic, and cortex hierarchical exit heads for dynamic computational depth.",
-                ]
+                # If local file missing, attempt to stream TinyStories directly from Hugging Face!
+                try:
+                    self.connect_hf_stream("roneneldan/TinyStories")
+                    return
+                except Exception:
+                    pass
 
             all_token_ids = []
             if self.tokenizer:
@@ -367,11 +619,6 @@ if HAS_FASTAPI:
                         all_token_ids.extend(self.tokenizer.encode(t).ids)
                     except Exception:
                         pass
-
-            if not all_token_ids:
-                for t in texts:
-                    for w in t.split():
-                        all_token_ids.append((abs(hash(w)) % 31900) + 100)
 
             chunk_size = self.seq_len + 1
             chunks = []
@@ -383,7 +630,8 @@ if HAS_FASTAPI:
 
             self.data_chunks = chunks
             self.data_idx = 0
-            log_msg = f"[DATASET] Active stream source: '{self.dataset_name}' ({self.dataset_type}) | {len(chunks)} sequences ({len(all_token_ids):,} tokens)."
+            self.is_streaming_hf = False
+            log_msg = f"[DATASET] Active dataset source: '{self.dataset_name}' ({self.dataset_type}) | {len(chunks)} sequences ({len(all_token_ids):,} tokens)."
             self.logs.insert(0, log_msg)
             print(f"[Triune Engine] {log_msg}")
 
@@ -509,12 +757,30 @@ if HAS_FASTAPI:
             if not self.data_chunks:
                 self.load_training_data()
 
-            # Assemble batch from real dataset
+            # Assemble batch from real streaming buffer or local dataset
             batch_tensors = []
-            for _ in range(self.batch_size):
-                chunk = self.data_chunks[self.data_idx % len(self.data_chunks)]
-                batch_tensors.append(torch.tensor(chunk, dtype=torch.long))
-                self.data_idx += 1
+            if self.is_streaming_hf:
+                if len(self.hf_stream_buffer) < self.batch_size:
+                    self._refill_stream_buffer(target_chunks=self.batch_size * 4)
+
+                if len(self.hf_stream_buffer) >= self.batch_size:
+                    for _ in range(self.batch_size):
+                        chunk = self.hf_stream_buffer.pop(0)
+                        batch_tensors.append(torch.tensor(chunk, dtype=torch.long))
+                else:
+                    if not self.data_chunks:
+                        self.load_training_data()
+                    for _ in range(self.batch_size):
+                        chunk = self.data_chunks[self.data_idx % len(self.data_chunks)]
+                        batch_tensors.append(torch.tensor(chunk, dtype=torch.long))
+                        self.data_idx += 1
+            else:
+                if not self.data_chunks:
+                    self.load_training_data()
+                for _ in range(self.batch_size):
+                    chunk = self.data_chunks[self.data_idx % len(self.data_chunks)]
+                    batch_tensors.append(torch.tensor(chunk, dtype=torch.long))
+                    self.data_idx += 1
 
             batch = torch.stack(batch_tensors).to(self.device)
             x = batch[:, :-1]
@@ -529,9 +795,9 @@ if HAS_FASTAPI:
                     raw_decoded = self.tokenizer.decode(x[0].tolist(), skip_special_tokens=True)
                     self.current_batch_preview = raw_decoded.replace("Ġ", " ").replace("Ċ", "\n").replace("  ", " ").strip()
                 except Exception:
-                    self.current_batch_preview = f"Sequence chunk #{self.data_idx}"
+                    self.current_batch_preview = f"Stream token chunk #{self.step}"
             else:
-                self.current_batch_preview = f"Sequence chunk #{self.data_idx}"
+                self.current_batch_preview = f"Stream token chunk #{self.step}"
 
             res = self.model(x)
             if isinstance(res, tuple):
@@ -581,9 +847,10 @@ if HAS_FASTAPI:
                 "exit_usage": {"reflex": reflex_pct, "limbic": limbic_pct, "cortex": cortex_pct},
                 "tokens_trained": self.total_tokens_trained,
                 "batch_preview": self.current_batch_preview,
-                "dataset_name": self.dataset_name,
+                "dataset_name": self.hf_dataset_name if self.is_streaming_hf else self.dataset_name,
                 "dataset_type": self.dataset_type,
                 "active_checkpoint": self.active_checkpoint,
+                "is_streaming": self.is_streaming_hf,
             }
 
             self.history.append(payload)
@@ -945,13 +1212,18 @@ if HAS_FASTAPI:
             "device": pytorch_state.device_name,
             "last_sample": pytorch_state.last_sample_decode,
             "dataset": {
-                "name": pytorch_state.dataset_name,
+                "name": pytorch_state.hf_dataset_name if pytorch_state.is_streaming_hf else pytorch_state.dataset_name,
                 "type": pytorch_state.dataset_type,
                 "total_tokens": pytorch_state.total_tokens_trained,
                 "active_batch_preview": pytorch_state.current_batch_preview,
-                "sequences_count": len(pytorch_state.data_chunks),
+                "sequences_count": len(pytorch_state.hf_stream_buffer) if pytorch_state.is_streaming_hf else len(pytorch_state.data_chunks),
                 "batch_size": pytorch_state.batch_size,
                 "seq_len": pytorch_state.seq_len,
+                "is_streaming": pytorch_state.is_streaming_hf,
+                "hf_config": pytorch_state.hf_config,
+                "hf_split": pytorch_state.hf_split,
+                "hf_text_column": pytorch_state.hf_text_column,
+                "hf_token_configured": bool(pytorch_state.hf_token or os.environ.get("HF_TOKEN")),
             },
             "active_checkpoint": pytorch_state.active_checkpoint,
         }
@@ -1318,11 +1590,38 @@ if HAS_FASTAPI:
 
     class DatasetSelectRequest(BaseModel):
         dataset_path: str
+        config: Optional[str] = None
+        split: str = "train"
+        text_column: Optional[str] = None
+
+    class DatasetStreamConnectRequest(BaseModel):
+        dataset_name: str
+        config: Optional[str] = None
+        split: str = "train"
+        text_column: Optional[str] = None
 
     @router.post("/v1/datasets/select")
     async def select_dataset_endpoint(req: DatasetSelectRequest) -> Dict[str, Any]:
         """Activate dataset for live training, LoRA, and DAG pipeline."""
-        pytorch_state.load_training_data(req.dataset_path)
+        p_str = req.dataset_path.strip()
+        if p_str.startswith("http://") or p_str.startswith("https://"):
+            try:
+                res = await asyncio.to_thread(pytorch_state.connect_url_stream, p_str, req.text_column)
+                return res
+            except Exception as err:
+                return {"status": "error", "message": f"Failed to stream from URL '{p_str}': {err}"}
+        
+        is_hf = ("/" in p_str and not Path(p_str).is_file()) or p_str in (
+            "fineweb-edu", "HuggingFaceFW/fineweb-edu", "streaming", "wikitext", "wikitext-103", "openwebtext", "roneneldan/TinyStories", "tiiuae/falcon-refinedweb"
+        )
+        if is_hf:
+            try:
+                res = await asyncio.to_thread(pytorch_state.connect_hf_stream, p_str, req.config, req.split, req.text_column)
+                return res
+            except Exception as err:
+                return {"status": "error", "message": f"Failed to stream Hugging Face dataset '{p_str}': {err}"}
+
+        pytorch_state.load_training_data(p_str)
         return {
             "status": "success",
             "dataset_path": pytorch_state.dataset_path,
@@ -1330,15 +1629,56 @@ if HAS_FASTAPI:
             "message": f"Active dataset set to {pytorch_state.dataset_path}"
         }
 
+    @router.post("/v1/datasets/stream/connect")
+    async def connect_dataset_stream_endpoint(req: DatasetStreamConnectRequest) -> Dict[str, Any]:
+        """Connect directly to any Hugging Face dataset or HTTP URL for live training streaming."""
+        name = req.dataset_name.strip()
+        if not name:
+            return {"status": "error", "message": "Dataset identifier or URL cannot be empty."}
+
+        try:
+            if name.startswith("http://") or name.startswith("https://"):
+                res = await asyncio.to_thread(pytorch_state.connect_url_stream, name, req.text_column)
+            else:
+                res = await asyncio.to_thread(pytorch_state.connect_hf_stream, name, req.config, req.split, req.text_column)
+            return res
+        except Exception as exc:
+            return {"status": "error", "message": f"Could not stream from '{name}': {exc}"}
+
+    @router.get("/v1/datasets/stream/status")
+    async def get_dataset_stream_status() -> Dict[str, Any]:
+        """Get live telemetry and buffer status of active dataset stream."""
+        return {
+            "is_streaming": pytorch_state.is_streaming_hf,
+            "dataset_name": pytorch_state.hf_dataset_name if pytorch_state.is_streaming_hf else pytorch_state.dataset_name,
+            "dataset_type": pytorch_state.dataset_type,
+            "config": pytorch_state.hf_config,
+            "split": pytorch_state.hf_split,
+            "text_column": pytorch_state.hf_text_column,
+            "buffered_chunks": len(pytorch_state.hf_stream_buffer),
+            "stats": pytorch_state.hf_stream_stats,
+            "hf_token_configured": bool(pytorch_state.hf_token or os.environ.get("HF_TOKEN")),
+            "active_batch_preview": pytorch_state.current_batch_preview,
+        }
+
     # -------------------------------------------------------------------------
     # BYOK Provider Credentials Endpoints
     # -------------------------------------------------------------------------
     @router.post("/v1/byok/save")
     async def save_byok_keys(req: BYOKSaveRequest) -> Dict[str, Any]:
-        """Save API provider keys to secure studio configuration."""
+        """Save API provider keys to secure studio configuration and runtime environment."""
         cfg = module_manager.get_config()
         cfg["byok_keys"] = req.keys
         module_manager.save_config(cfg)
+
+        hf_tok = req.keys.get("huggingface", "").strip()
+        if hf_tok:
+            os.environ["HF_TOKEN"] = hf_tok
+            os.environ["HUGGING_FACE_HUB_TOKEN"] = hf_tok
+            pytorch_state.hf_token = hf_tok
+            log_msg = "[AUTH] Hugging Face Access Token registered and active in runtime."
+            pytorch_state.logs.insert(0, log_msg)
+            return {"status": "saved", "message": "BYOK credentials saved securely. Hugging Face Access Token activated!"}
         return {"status": "saved", "message": "BYOK credentials saved securely to config."}
 
     @router.post("/v1/byok/test")
@@ -1352,8 +1692,43 @@ if HAS_FASTAPI:
             return {"provider": provider, "status": "invalid", "message": "OpenAI keys typically start with sk-"}
         if provider == "anthropic" and not (key.startswith("sk-ant-") or len(key) >= 20):
             return {"provider": provider, "status": "invalid", "message": "Anthropic keys typically start with sk-ant-"}
-        if provider == "huggingface" and not (key.startswith("hf_") or len(key) >= 15):
-            return {"provider": provider, "status": "invalid", "message": "HuggingFace tokens typically start with hf_"}
+        if provider == "huggingface":
+            if not (key.startswith("hf_") or len(key) >= 15):
+                return {"provider": provider, "status": "invalid", "message": "Hugging Face tokens typically start with hf_"}
+            # Live verification with Hugging Face Hub whoami endpoint
+            try:
+                hf_req = urllib.request.Request(
+                    "https://huggingface.co/api/whoami-v2",
+                    headers={
+                        "Authorization": f"Bearer {key}",
+                        "User-Agent": "TriuneStudio/2.1"
+                    }
+                )
+                with urllib.request.urlopen(hf_req, timeout=10.0) as resp:
+                    if resp.status == 200:
+                        user_info = json.loads(resp.read().decode("utf-8"))
+                        username = user_info.get("name", "user")
+                        user_type = user_info.get("type", "user")
+                        orgs = [o.get("name") for o in user_info.get("orgs", []) if o.get("name")]
+                        org_str = f" • Orgs: {', '.join(orgs)}" if orgs else ""
+
+                        # Apply to live environment
+                        os.environ["HF_TOKEN"] = key
+                        os.environ["HUGGING_FACE_HUB_TOKEN"] = key
+                        pytorch_state.hf_token = key
+
+                        return {
+                            "provider": provider,
+                            "status": "valid",
+                            "user": username,
+                            "message": f"✓ Authenticated as @{username} [{user_type}]{org_str}. Full gated dataset streaming enabled!"
+                        }
+            except urllib.error.HTTPError as hf_err:
+                if hf_err.code in (401, 403):
+                    return {"provider": provider, "status": "invalid", "message": f"Authentication failed: Invalid Hugging Face token (HTTP {hf_err.code})."}
+                return {"provider": provider, "status": "warning", "message": f"Hugging Face Hub returned HTTP {hf_err.code}."}
+            except Exception as exc:
+                return {"provider": provider, "status": "valid", "message": f"Token format valid (offline notice: {exc})."}
         return {"provider": provider, "status": "valid", "message": f"{provider.upper()} key format validated."}
 
     @router.get("/api/plugins/nodes")

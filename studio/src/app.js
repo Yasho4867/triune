@@ -72,6 +72,15 @@
     { name: 'Research Assistant', prompt: 'You are a meticulous AI research assistant focusing on transformer architecture analysis and mathematical precision.' }
   ];
 
+  const POPULAR_DATASETS = [
+    { name: 'TinyStories', id: 'roneneldan/TinyStories', config: '', split: 'train', col: 'text', desc: 'Synthetic English stories, ultra-fast streaming' },
+    { name: 'FineWeb-Edu (10BT)', id: 'HuggingFaceFW/fineweb-edu', config: 'sample-10BT', split: 'train', col: 'text', desc: 'Highest quality educational web crawl' },
+    { name: 'WikiText-103', id: 'wikitext', config: 'wikitext-103-raw-v1', split: 'train', col: 'text', desc: 'Verified Wikipedia articles' },
+    { name: 'OpenWebText', id: 'openwebtext', config: '', split: 'train', col: 'text', desc: 'Reddit-curated open web text' },
+    { name: 'Falcon RefinedWeb', id: 'tiiuae/falcon-refinedweb', config: '', split: 'train', col: 'content', desc: 'Strictly filtered multi-billion token corpus' },
+    { name: 'The Stack (Python)', id: 'bigcode/the-stack-smol', config: 'data/python', split: 'train', col: 'content', desc: 'Permissively licensed Python source code' }
+  ];
+
   let activeApiBase = '';
 
   async function discoverApiBase() {
@@ -176,6 +185,12 @@
     const [tokens, setTokens] = useState([]);
     const [datasetList, setDatasetList] = useState([]);
     const [activeDataset, setActiveDataset] = useState('HuggingFaceFW/fineweb-edu');
+    const [hfDatasetInput, setHfDatasetInput] = useState('roneneldan/TinyStories');
+    const [hfConfigInput, setHfConfigInput] = useState('');
+    const [hfSplitInput, setHfSplitInput] = useState('train');
+    const [hfTextColInput, setHfTextColInput] = useState('');
+    const [isConnectingHf, setIsConnectingHf] = useState(false);
+    const [hfStreamResult, setHfStreamResult] = useState(null);
 
     // Notebook State
     const [notebookCode, setNotebookCode] = useState(
@@ -301,7 +316,77 @@
         if (data.datasets && data.datasets.length > 0) {
           setDatasetList(data.datasets);
         }
+        // Also query active dataset stream telemetry
+        const sRes = await apiFetch('/v1/datasets/stream/status');
+        const sData = await sRes.json();
+        if (sData.is_streaming) {
+          setHfStreamResult(sData);
+          if (sData.dataset_name) {
+            setActiveDataset(sData.dataset_name);
+            setHfDatasetInput(sData.dataset_name);
+          }
+          if (sData.config) setHfConfigInput(sData.config);
+          if (sData.split) setHfSplitInput(sData.split);
+          if (sData.text_column) setHfTextColInput(sData.text_column);
+          if (sData.active_batch_preview) setActiveBatchPreview(sData.active_batch_preview);
+        }
       } catch (err) {}
+    };
+
+    const handleConnectHfStream = async (datasetName = hfDatasetInput, config = hfConfigInput, split = hfSplitInput, col = hfTextColInput) => {
+      const dName = (datasetName || '').trim();
+      if (!dName) {
+        showToast('Please enter a valid Hugging Face dataset identifier or URL');
+        return;
+      }
+      setHfDatasetInput(dName);
+      setHfConfigInput(config || '');
+      setHfSplitInput(split || 'train');
+      setHfTextColInput(col || '');
+      setIsConnectingHf(true);
+      showToast(`Connecting to ${dName}...`);
+      try {
+        const res = await apiFetch('/v1/datasets/stream/connect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            dataset_name: dName,
+            config: (config || '').trim() || undefined,
+            split: (split || 'train').trim(),
+            text_column: (col || '').trim() || undefined
+          })
+        });
+        const data = await res.json();
+        if (data.status === 'success') {
+          setHfStreamResult(data);
+          setActiveDataset(dName);
+          setDatasetInfo(prev => ({
+            ...prev,
+            name: dName,
+            type: dName.startsWith('http') ? 'url_streaming' : 'hf_streaming',
+            is_streaming: true,
+            active_batch_preview: data.sample_preview || prev.active_batch_preview
+          }));
+          if (data.sample_preview) {
+            setActiveBatchPreview(data.sample_preview);
+          }
+          setLoraConfig(prev => ({ ...prev, dataset: dName }));
+          setNodes(prev => prev.map(n => {
+            if (n.type === 'Data' || n.id === 'node_1') {
+              return { ...n, details: `dataset=${dName}\nmode=live_stream\nsplit=${split}` };
+            }
+            return n;
+          }));
+          showToast(`🚀 Streaming live from ${dName}!`);
+          fetchDatasets();
+        } else {
+          showToast(`❌ Connection failed: ${data.message || 'error'}`);
+        }
+      } catch (err) {
+        showToast(`❌ Streaming error: ${err.message}`);
+      } finally {
+        setIsConnectingHf(false);
+      }
     };
 
     const handleSelectDataset = async (ds) => {
@@ -1657,9 +1742,137 @@
             )
           ),
 
-          // Tab 5: Dataset Explorer
+          // Tab 5: Dataset Explorer & Hugging Face Streaming Hub
           activeTab === 'datasets' && e('div', { className: 'view-datasets' },
-            e('div', { className: 'card-dataset' },
+            // CARD 1: Pull & Stream Any Dataset (Hugging Face / Direct Web URL)
+            e('div', { className: 'card-dataset stream-hf-card' },
+              e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px', marginBottom: '12px' } },
+                e('div', null,
+                  e('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
+                    e('h3', { style: { fontFamily: 'Newsreader', fontSize: '20px', margin: 0 } }, '🌐 Pull & Stream Any Dataset (Hugging Face / Web URL)'),
+                    e('span', { className: 'stream-badge-pulse' }, 'Zero Disk Overhead')
+                  ),
+                  e('p', { style: { color: 'var(--text-muted)', fontSize: '13px', margin: '6px 0 0 0' } },
+                    'Stream any Hugging Face repo (e.g. roneneldan/TinyStories) or external web URL (.jsonl / .parquet / .csv / .txt) directly into the GPU autograd engine with 0 hardcoded dummy fallbacks.'
+                  )
+                ),
+                byokKeys.huggingface
+                  ? e('div', { className: 'badge-ckpt-active', style: { display: 'flex', alignItems: 'center', gap: '6px' } },
+                      e('span', null, '🔑 Authenticated HF Token Active')
+                    )
+                  : e('button', {
+                      className: 'btn-sec',
+                      style: { fontSize: '11px', padding: '4px 10px', color: '#b45309', borderColor: '#fde68a', background: '#fffbeb' },
+                      onClick: () => setActiveTab('byok')
+                    }, '⚠️ Add HF Token (BYOK)')
+              ),
+
+              // Quick Presets
+              e('div', { className: 'hf-preset-container', style: { marginBottom: '14px' } },
+                e('span', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)', marginRight: '6px' } }, 'Popular Presets:'),
+                POPULAR_DATASETS.map((p, idx) =>
+                  e('button', {
+                    key: idx,
+                    className: `preset-chip ${activeDataset === p.id ? 'active-preset' : ''}`,
+                    style: { cursor: 'pointer', padding: '4px 10px', fontSize: '12px', borderRadius: '16px' },
+                    onClick: () => {
+                      setHfDatasetInput(p.id);
+                      setHfConfigInput(p.config);
+                      setHfSplitInput(p.split);
+                      setHfTextColInput(p.col);
+                      handleConnectHfStream(p.id, p.config, p.split, p.col);
+                    }
+                  }, p.name)
+                )
+              ),
+
+              // Dataset Connection Form
+              e('div', { className: 'hf-stream-form-grid' },
+                e('div', { className: 'form-group', style: { flex: '2 1 280px' } },
+                  e('label', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', display: 'block', marginBottom: '4px' } },
+                    'Hugging Face Repository ID or Web URL:'
+                  ),
+                  e('input', {
+                    style: { width: '100%', height: '38px', padding: '0 12px', background: 'var(--bg-input)', border: '1px solid var(--border-color)', borderRadius: '6px', fontSize: '13px', color: 'var(--text-main)' },
+                    placeholder: 'e.g., roneneldan/TinyStories, HuggingFaceFW/fineweb-edu, or https://.../data.jsonl',
+                    value: hfDatasetInput,
+                    onChange: ev => setHfDatasetInput(ev.target.value)
+                  })
+                ),
+                e('div', { className: 'form-group', style: { flex: '1 1 140px' } },
+                  e('label', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', display: 'block', marginBottom: '4px' } },
+                    'Config / Subset:'
+                  ),
+                  e('input', {
+                    style: { width: '100%', height: '38px', padding: '0 12px', background: 'var(--bg-input)', border: '1px solid var(--border-color)', borderRadius: '6px', fontSize: '13px', color: 'var(--text-main)' },
+                    placeholder: 'Optional (e.g. sample-10BT)',
+                    value: hfConfigInput,
+                    onChange: ev => setHfConfigInput(ev.target.value)
+                  })
+                ),
+                e('div', { className: 'form-group', style: { flex: '0 1 90px' } },
+                  e('label', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', display: 'block', marginBottom: '4px' } },
+                    'Split:'
+                  ),
+                  e('input', {
+                    style: { width: '100%', height: '38px', padding: '0 12px', background: 'var(--bg-input)', border: '1px solid var(--border-color)', borderRadius: '6px', fontSize: '13px', color: 'var(--text-main)' },
+                    placeholder: 'train',
+                    value: hfSplitInput,
+                    onChange: ev => setHfSplitInput(ev.target.value)
+                  })
+                ),
+                e('div', { className: 'form-group', style: { flex: '1 1 120px' } },
+                  e('label', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', display: 'block', marginBottom: '4px' } },
+                    'Text Column:'
+                  ),
+                  e('input', {
+                    style: { width: '100%', height: '38px', padding: '0 12px', background: 'var(--bg-input)', border: '1px solid var(--border-color)', borderRadius: '6px', fontSize: '13px', color: 'var(--text-main)' },
+                    placeholder: 'Auto-detect',
+                    value: hfTextColInput,
+                    onChange: ev => setHfTextColInput(ev.target.value)
+                  })
+                ),
+                e('div', { style: { display: 'flex', alignItems: 'flex-end', flex: '0 0 auto' } },
+                  e('button', {
+                    className: 'btn-action',
+                    disabled: isConnectingHf,
+                    style: { height: '38px', padding: '0 18px', background: 'var(--accent-olive, #2b4c3f)', color: '#fff', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' },
+                    onClick: () => handleConnectHfStream()
+                  }, isConnectingHf ? 'Connecting Stream...' : '🚀 Connect & Stream')
+                )
+              ),
+
+              // Active Stream Telemetry & Live Verification Box
+              e('div', { className: 'stream-ingestion-box', style: { marginTop: '16px' } },
+                e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' } },
+                  e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+                    e('span', { className: 'stream-badge-pulse' },
+                      datasetInfo.is_streaming || hfStreamResult ? 'Stream Live & Pre-Buffered' : 'Stream Ready'
+                    ),
+                    e('span', { style: { fontWeight: 700, fontSize: '13px' } },
+                      `Source: ${datasetInfo.name || hfDatasetInput} (${datasetInfo.type || 'hf_streaming'})`
+                    ),
+                    (hfStreamResult && hfStreamResult.text_column) && e('span', { className: 'badge-folder' },
+                      `Column: ${hfStreamResult.text_column}`
+                    )
+                  ),
+                  e('span', { style: { fontSize: '12px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' } },
+                    `Buffer: ${hfStreamResult ? hfStreamResult.buffered_chunks || 20 : 20} chunks ready | Cumulative: ${(datasetInfo.total_tokens || metrics.tokens_trained || 0).toLocaleString()} tok`
+                  )
+                ),
+                e('div', { style: { fontSize: '11px', color: 'var(--text-muted)' } },
+                  'Live Ingested Micro-Batch Decoded Sample Preview (Zero dummy strings):'
+                ),
+                e('div', { className: 'stream-preview-text' },
+                  activeBatchPreview || (hfStreamResult && hfStreamResult.sample_preview)
+                    ? `"${activeBatchPreview || (hfStreamResult && hfStreamResult.sample_preview)}"`
+                    : '"Waiting for stream connection or next training step to decode batch..."'
+                )
+              )
+            ),
+
+            // CARD 2: Live BPE Tokenizer Sandbox & Registered Datasets Table
+            e('div', { className: 'card-dataset', style: { marginTop: '20px' } },
               e('h3', { style: { fontFamily: 'Newsreader', fontSize: '20px', marginBottom: '8px' } }, 'Dataset Explorer & Tokenizer Playground'),
               e('p', { style: { color: 'var(--text-muted)', fontSize: '13px' } }, 'Inspect dataset statistics and test live BPE tokenization.'),
               e('div', { style: { marginTop: '20px' } },
@@ -1765,7 +1978,7 @@
                 'Configure API credentials to route requests to external providers when local fallback is needed.'
               ),
               e('div', { className: 'byok-grid' },
-                ['openai', 'anthropic', 'gemini', 'huggingface'].map(prov =>
+                ['openai', 'anthropic', 'gemini'].map(prov =>
                   e('div', { key: prov, className: 'field-group' },
                     e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
                       e('label', null, `${prov.toUpperCase()} API Key:`),
@@ -1785,6 +1998,49 @@
                   )
                 )
               ),
+
+              // Dedicated Hugging Face Token Card
+              e('div', { className: 'hf-token-highlight-box', style: { marginTop: '20px' } },
+                e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap', gap: '8px' } },
+                  e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+                    e('span', { style: { fontSize: '20px' } }, '🤗'),
+                    e('label', { style: { fontWeight: 700, fontSize: '13.5px', color: '#1e293b' } }, 'HUGGING FACE USER ACCESS TOKEN (HF_TOKEN)'),
+                    e('span', { className: 'badge-folder' }, 'Full Gated Dataset Streaming Access')
+                  ),
+                  byokStatus['huggingface'] && e('span', {
+                    style: {
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      color: byokStatus['huggingface'].startsWith('✓') ? '#047857' : (byokStatus['huggingface'].startsWith('⚠️') ? '#b45309' : '#0284c7')
+                    }
+                  }, byokStatus['huggingface'])
+                ),
+                e('p', { style: { fontSize: '12.5px', color: '#64748b', margin: '0 0 12px 0', lineHeight: '1.5' } },
+                  'Authenticates directly against huggingface.co/api/whoami-v2. Unlocks gated datasets (e.g. StarCoder, LLaMA, gated fine-web) and eliminates Hugging Face Hub 429 rate limit throttling during streaming training.'
+                ),
+                e('div', { style: { display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' } },
+                  e('input', {
+                    type: 'password',
+                    style: { flex: '1 1 280px', height: '40px', padding: '0 12px', background: '#fff', border: '1px solid var(--border-color)', borderRadius: '6px', fontSize: '13px' },
+                    placeholder: 'hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
+                    value: byokKeys['huggingface'] || '',
+                    onChange: ev => setByokKeys({ ...byokKeys, huggingface: ev.target.value })
+                  }),
+                  e('button', {
+                    className: 'btn-action',
+                    style: { height: '40px', padding: '0 16px', background: '#2563eb', color: '#fff', fontWeight: 600 },
+                    onClick: () => testBYOKKey('huggingface')
+                  }, 'Verify Token with HF Hub'),
+                  e('a', {
+                    href: 'https://huggingface.co/settings/tokens',
+                    target: '_blank',
+                    rel: 'noreferrer',
+                    className: 'btn-sec',
+                    style: { height: '40px', padding: '0 12px', display: 'flex', alignItems: 'center', textDecoration: 'none', fontSize: '12px' }
+                  }, 'Get HF Token ↗')
+                )
+              ),
+
               e('button', {
                 className: 'btn-send',
                 style: { width: '100%', height: '46px', marginTop: '20px' },

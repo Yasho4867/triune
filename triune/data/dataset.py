@@ -22,6 +22,8 @@ class TokenStreamDataset(IterableDataset):
         offset: int = 0,
         dataset_name: str = "HuggingFaceFW/fineweb-edu",
         dataset_config: str | None = "sample-10BT",
+        split: str = "train",
+        token: str | None = None,
     ) -> None:
         self.tokenizer = tokenizer
         self.seq_len = seq_len
@@ -31,22 +33,26 @@ class TokenStreamDataset(IterableDataset):
         self.offset = offset
         self.dataset_name = dataset_name
         self.dataset_config = dataset_config
+        self.split = split
+        self.token = token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
 
     def _stream(self):
         import os
+        token_val = self.token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN") or None
         if os.path.exists(self.dataset_name):
             ext = os.path.splitext(self.dataset_name)[1].lower()
             if ext in (".jsonl", ".json"):
-                return load_dataset("json", data_files=self.dataset_name, split="train", streaming=True)
+                return load_dataset("json", data_files=self.dataset_name, split=self.split, streaming=True)
             elif ext == ".parquet":
-                return load_dataset("parquet", data_files=self.dataset_name, split="train", streaming=True)
+                return load_dataset("parquet", data_files=self.dataset_name, split=self.split, streaming=True)
             elif ext in (".txt", ".md", ".py", ".c", ".cpp"):
-                return load_dataset("text", data_files=self.dataset_name, split="train", streaming=True)
+                return load_dataset("text", data_files=self.dataset_name, split=self.split, streaming=True)
         return load_dataset(
             self.dataset_name,
             name=self.dataset_config,
-            split="train",
+            split=self.split,
             streaming=True,
+            token=token_val,
             download_config=DownloadConfig(max_retries=10, resume_download=True),
         )
 
