@@ -1370,3 +1370,118 @@ body {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
 }
 
+/* Category Specific Node Accents */
+.node-card-react[data-category="Data"] .node-head, .node-card-data .node-head {
+  border-top: 3px solid #0284c7;
+}
+.node-card-react[data-category="Model"] .node-head, .node-card-model .node-head {
+  border-top: 3px solid #7c3aed;
+}
+.node-card-react[data-category="Optimizer"] .node-head, .node-card-optimizer .node-head {
+  border-top: 3px solid #059669;
+}
+.node-card-react[data-category="Loss"] .node-head, .node-card-loss .node-head {
+  border-top: 3px solid #e11d48;
+}
+.node-card-react[data-category="Runtime"] .node-head, .node-card-runtime .node-head {
+  border-top: 3px solid #d97706;
+}
+.node-card-react[data-category="Evaluation"] .node-head, .node-card-evaluation .node-head {
+  border-top: 3px solid #0d9488;
+}
+.node-card-react[data-category="Export"] .node-head, .node-card-export .node-head {
+  border-top: 3px solid #475569;
+}
+
+/* Node Library Catalog Modal */
+.node-library-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 20, 20, 0.65);
+  backdrop-filter: blur(4px);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.node-library-modal {
+  background: #ffffff;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  width: 950px;
+  max-width: 95vw;
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.2);
+  overflow: hidden;
+}
+
+.node-library-header {
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #faf8f5;
+}
+
+.node-library-search-bar {
+  padding: 14px 24px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  border-bottom: 1px solid var(--border-color);
+  background: #fff;
+  flex-wrap: wrap;
+}
+
+.node-library-grid {
+  padding: 20px 24px;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+  background: #fdfbf7;
+}
+
+.node-catalog-card {
+  background: #ffffff;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  transition: all 0.15s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+}
+
+.node-catalog-card:hover {
+  border-color: var(--accent-olive, #2b4c3f);
+  box-shadow: 0 4px 12px rgba(43, 76, 63, 0.1);
+  transform: translateY(-2px);
+}
+
+.node-catalog-ports {
+  display: flex;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-muted);
+  margin: 6px 0;
+  flex-wrap: wrap;
+}
+
+.node-toolbar-scroll {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+

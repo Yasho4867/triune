@@ -6,16 +6,357 @@
   const e = React.createElement;
   const { useState, useEffect, useRef } = React;
 
-  // Preset Configurations
+  // Comprehensive Built-in Node Catalog (30 Architectural, Optimizer & Runtime Components)
+  const BUILTIN_NODE_CATALOG = [
+    // Data & Tokenization
+    {
+      name: 'HuggingFaceStreamer',
+      title: 'Hugging Face Streamer',
+      category: 'Data',
+      description: 'Streams training batches directly from any Hugging Face Hub dataset (e.g. roneneldan/TinyStories, HuggingFaceFW/fineweb-edu, wikitext) with zero disk footprint.',
+      inputs: [],
+      outputs: ['dataset_stream', 'text_sample'],
+      details: 'dataset_name=roneneldan/TinyStories\nsplit=train\nconfig=\ntext_column=text\nbuffer_size=20'
+    },
+    {
+      name: 'URLDatasetStreamer',
+      title: 'URL Dataset Streamer',
+      category: 'Data',
+      description: 'Streams remote .jsonl, .parquet, .csv, or .txt corpus directly over HTTP/HTTPS with live buffer prefetching.',
+      inputs: [],
+      outputs: ['dataset_stream', 'text_sample'],
+      details: 'url=https://example.com/corpus.jsonl\ntext_column=text\nbuffer_size=20'
+    },
+    {
+      name: 'LocalFileReader',
+      title: 'Local File Reader',
+      category: 'Data',
+      description: 'Reads local text or JSONL training corpora from disk with sequence chunking.',
+      inputs: [],
+      outputs: ['dataset', 'text_samples'],
+      details: 'file_path=data/fineweb_sample.jsonl\nbatch_size=4\nseq_len=64'
+    },
+    {
+      name: 'BPETokenizer',
+      title: 'BPE Tokenizer',
+      category: 'Data',
+      description: 'Byte-Pair Encoding tokenizer with 32,000 vocabulary, fast encode/decode, and vocabulary mapping.',
+      inputs: ['text'],
+      outputs: ['tokens', 'token_ids'],
+      details: 'vocab_size=32000\npad_token=[PAD]\neos_token=[EOS]'
+    },
+    {
+      name: 'CyclingDataLoader',
+      title: 'Cycling DataLoader',
+      category: 'Data',
+      description: 'Continuous micro-batch generator with sequence padding and micro-batch accumulation.',
+      inputs: ['tokens'],
+      outputs: ['input_ids', 'targets'],
+      details: 'batch_size=4\nseq_len=64\nshuffle=True'
+    },
+
+    // Model Architecture & Layers
+    {
+      name: 'TriuneTransformer',
+      title: 'Triune MoE Transformer',
+      category: 'Model',
+      description: 'Full Mixture-of-Experts core transformer with Vectorised GLA attention and dynamic hierarchical exit heads.',
+      inputs: ['input_ids'],
+      outputs: ['logits', 'exit_logits', 'cache'],
+      details: 'vocab_size=32000\nhidden_dim=1536\nnum_layers=24\nnum_heads=12\nnum_experts=8\nuse_fp4=True'
+    },
+    {
+      name: 'VectorisedGLA',
+      title: 'Vectorised GLA Attention',
+      category: 'Model',
+      description: 'Gated Linear Attention layer with fast parallel training chunks and O(1) recurrent inference state cache.',
+      inputs: ['hidden_states'],
+      outputs: ['attention_out', 'gla_cache'],
+      details: 'hidden_dim=1536\nnum_heads=12\nhead_dim=128\ngate_low_rank_dim=16'
+    },
+    {
+      name: 'HybridAttention',
+      title: 'Hybrid GLA + RoPE Attention',
+      category: 'Model',
+      description: 'Vectorized GLA attention combined with Rotary Position Embeddings (RoPE) for long-context numerical stability.',
+      inputs: ['hidden_states', 'rope_cos_sin'],
+      outputs: ['attention_out'],
+      details: 'hidden_dim=1536\nnum_heads=12\nuse_rope=True\nrope_max_seq_len=4096'
+    },
+    {
+      name: 'MoE_FFN',
+      title: 'Sparse MoE FFN Layer',
+      category: 'Model',
+      description: 'Sparse Mixture-of-Experts FeedForward network with Gumbel-Softmax top-k gating, centroid tracking, and shared expert.',
+      inputs: ['hidden_states'],
+      outputs: ['moe_out', 'routing_weights', 'centroid_dist'],
+      details: 'num_experts=8\ntop_k=2\nshared_expert=True\ncapacity_multiplier=1.25'
+    },
+    {
+      name: 'DepthRouter',
+      title: 'Hierarchical Depth Router',
+      category: 'Model',
+      description: 'Hierarchical Exit Head Router: Reflex (Layer 6), Limbic (Layer 16), and Cortex (Layer 24).',
+      inputs: ['hidden_states'],
+      outputs: ['exit_choice', 'router_weights'],
+      details: 'reflex_exit_layer=6\nlimbic_exit_layer=16\ntarget_depth_dist=[0.34, 0.33, 0.33]'
+    },
+    {
+      name: 'FP8Linear',
+      title: 'FP8 Scaled Linear',
+      category: 'Model',
+      description: 'Hardware-accelerated FP8 (E4M3) scaled matrix multiplication with dynamic forward/backward scaling.',
+      inputs: ['x'],
+      outputs: ['linear_out'],
+      details: 'in_features=1536\nout_features=1536\nbias=False\ndtype=fp8_e4m3fn'
+    },
+    {
+      name: 'FP4Linear',
+      title: 'NVFP4 Microscaling Linear',
+      category: 'Model',
+      description: 'NVFP4 microscaling precision linear layer for Blackwell and Ada Lovelace architectures.',
+      inputs: ['x'],
+      outputs: ['linear_out'],
+      details: 'in_features=1536\nout_features=1536\nblock_size=16'
+    },
+    {
+      name: 'RMSNorm',
+      title: 'Fast RMSNorm',
+      category: 'Model',
+      description: 'Root Mean Square Normalization with custom Triton kernel and epsilon scaling.',
+      inputs: ['x'],
+      outputs: ['norm_out'],
+      details: 'dim=1536\neps=1e-6'
+    },
+    {
+      name: 'LoRAAdapter',
+      title: 'LoRA Adapter Layer',
+      category: 'Model',
+      description: 'Parameter-Efficient Low-Rank Adaptation (LoRA) injection layer for fine-tuning.',
+      inputs: ['base_layer'],
+      outputs: ['adapted_layer'],
+      details: 'rank=16\nalpha=32.0\ndropout=0.05\ntarget_modules=[q_proj, v_proj, out_proj]'
+    },
+
+    // Optimizers & Schedulers
+    {
+      name: 'CentroidSteerOptimizer',
+      title: 'CentroidSteer Optimizer',
+      category: 'Optimizer',
+      description: 'GaLore low-rank SVD projection combined with dynamic centroid steering and orthogonal complement updates.',
+      inputs: ['model_parameters', 'loss'],
+      outputs: ['optimizer_state'],
+      details: 'lr=1e-4\nbetas=[0.9, 0.95]\nweight_decay=0.01\nsteer_scale=0.20\ngalore_rank=128'
+    },
+    {
+      name: 'MuonOptimizer',
+      title: 'Muon Matrix Optimizer',
+      category: 'Optimizer',
+      description: 'Newton-Schulz iteration orthogonal matrix momentum optimizer for high-throughput parameter updates.',
+      inputs: ['model_parameters', 'loss'],
+      outputs: ['optimizer_state'],
+      details: 'lr=0.02\nmomentum=0.95\nns_steps=5'
+    },
+    {
+      name: 'AdamWOptimizer',
+      title: 'AdamW Optimizer',
+      category: 'Optimizer',
+      description: 'Standard AdamW optimizer with decoupled weight decay for 1D parameters, biases, and normalization weights.',
+      inputs: ['model_parameters', 'loss'],
+      outputs: ['optimizer_state'],
+      details: 'lr=1e-4\nbetas=[0.9, 0.999]\neps=1e-8\nweight_decay=0.01'
+    },
+    {
+      name: 'CosineLRScheduler',
+      title: 'Cosine LR Scheduler',
+      category: 'Optimizer',
+      description: 'Cosine annealing learning rate schedule with linear warmup.',
+      inputs: ['optimizer'],
+      outputs: ['scheduled_lr'],
+      details: 'warmup_steps=200\ntotal_steps=50000\nmin_lr_ratio=0.1'
+    },
+
+    // Loss Functions & Kernels
+    {
+      name: 'FastCrossEntropy',
+      title: 'Fast Cross-Entropy Loss',
+      category: 'Loss',
+      description: 'Fused chunked cross-entropy loss function with autograd gradient graph preservation.',
+      inputs: ['logits', 'targets'],
+      outputs: ['loss'],
+      details: 'ignore_index=-100\nchunk_size=2048\nlabel_smoothing=0.0'
+    },
+    {
+      name: 'RouterZLoss',
+      title: 'Router Stability Z-Loss',
+      category: 'Loss',
+      description: 'Auxiliary router stability loss (logsumexp^2 penalty) to prevent router logit drift.',
+      inputs: ['router_logits'],
+      outputs: ['z_loss'],
+      details: 'coeff=1e-3'
+    },
+
+    // Runtime & System
+    {
+      name: 'LayerStreamingEngine',
+      title: 'Layer Streaming Engine',
+      category: 'Runtime',
+      description: 'CPU-GPU ping-pong layer streaming with pinned memory buffers for training large models on 8GB VRAM.',
+      inputs: ['model'],
+      outputs: ['streaming_model'],
+      details: 'prefetch=True\npin_memory=True\nd2h_async=True'
+    },
+    {
+      name: 'VRAMProfiler',
+      title: 'VRAM Profiler',
+      category: 'Runtime',
+      description: 'Real-time GPU memory profiler: allocated, reserved, peak VRAM, and fragmentation leak detection.',
+      inputs: [],
+      outputs: ['vram_stats', 'oom_risk'],
+      details: 'device=cuda:0\nalert_threshold_gb=7.2'
+    },
+    {
+      name: 'PythonSandbox',
+      title: 'Python Isolated Sandbox',
+      category: 'Runtime',
+      description: 'Subprocess-isolated Python execution sandbox with memory caps and execution timeout.',
+      inputs: ['code'],
+      outputs: ['result', 'stdout', 'stderr'],
+      details: 'timeout=10\nmax_memory_mb=256'
+    },
+    {
+      name: 'WandbLogger',
+      title: 'WandB Telemetry Logger',
+      category: 'Runtime',
+      description: 'Weights & Biases cloud telemetry logger for loss curves, throughput, and exit head distribution.',
+      inputs: ['metrics'],
+      outputs: ['log_status'],
+      details: 'project=triune-moe\nentity=\nlog_freq_steps=10'
+    },
+
+    // Evaluation & Fine-Tuning
+    {
+      name: 'TrainingStep',
+      title: 'Autograd Training Step',
+      category: 'Evaluation',
+      description: 'Executes one autograd training step with gradient accumulation, clipping, and telemetry.',
+      inputs: ['model', 'optimizer', 'data_batch'],
+      outputs: ['step_metrics', 'loss'],
+      details: 'grad_accum_steps=4\nmax_grad_norm=1.0'
+    },
+    {
+      name: 'PerplexityEvaluator',
+      title: 'Perplexity Evaluator',
+      category: 'Evaluation',
+      description: 'Computes validation loss, token prediction perplexity, and expert routing utilization.',
+      inputs: ['model', 'val_dataset'],
+      outputs: ['perplexity', 'val_loss'],
+      details: 'eval_steps=50\nbatch_size=4'
+    },
+    {
+      name: 'LoRAFineTuner',
+      title: 'LoRA Fine-Tuner Engine',
+      category: 'Evaluation',
+      description: 'End-to-end parameter-efficient fine-tuning loop with periodic evaluation and checkpointing.',
+      inputs: ['model', 'lora_config', 'dataset'],
+      outputs: ['finetuned_adapter'],
+      details: 'epochs=3\nlr=2e-4\nsave_adapter=True'
+    },
+
+    // Export & Deployment
+    {
+      name: 'SafeTensorsExport',
+      title: 'SafeTensors Exporter',
+      category: 'Export',
+      description: 'Exports model weights in SafeTensors format with memory-deduplicated tied embeddings.',
+      inputs: ['model'],
+      outputs: ['safetensors_file'],
+      details: 'filename=model.safetensors\ninclude_optimizer=False'
+    },
+    {
+      name: 'GGUFExport',
+      title: 'GGUF Multi-Bit Quantizer',
+      category: 'Export',
+      description: 'Quantizes and exports model weights to GGUF format for llama.cpp and Ollama inference.',
+      inputs: ['model'],
+      outputs: ['gguf_file'],
+      details: 'quantization=Q4_K_M\nfilename=model.gguf'
+    },
+    {
+      name: 'ONNXExport',
+      title: 'ONNX Graph Exporter',
+      category: 'Export',
+      description: 'Exports model computational graph to ONNX for TensorRT and ONNX Runtime acceleration.',
+      inputs: ['model'],
+      outputs: ['onnx_file'],
+      details: 'opset_version=17\ndynamic_axes=True'
+    }
+  ];
+
+  // Preset Configurations with Full Real PyTorch Architecture Pipelines
   const DAG_PRESETS = {
-    moe_inference: {
-      name: 'MoE Training Pipeline',
+    moe_training: {
+      name: 'MoE Streaming Pre-training',
       nodes: [
-        { id: 'node_1', title: 'DataLoader(FineWeb)', type: 'Data', x: 40, y: 60, details: 'dataset=FineWeb' },
+        { id: 'node_1', title: 'Hugging Face Streamer', type: 'Data', x: 40, y: 60, details: 'dataset_name=roneneldan/TinyStories\nsplit=train\nbuffer_size=20' },
+        { id: 'node_2', title: 'BPE Tokenizer', type: 'Data', x: 340, y: 60, details: 'vocab_size=32000\npad_token=[PAD]\neos_token=[EOS]' },
+        { id: 'node_3', title: 'Triune MoE Transformer', type: 'Model', x: 640, y: 60, details: 'vocab_size=32000\nhidden_dim=1536\nnum_layers=24\nnum_experts=8\nuse_fp4=True' },
+        { id: 'node_4', title: 'CentroidSteer Optimizer', type: 'Optimizer', x: 940, y: 60, details: 'lr=1e-4\nsteer_scale=0.20\ngalore_rank=128' },
+        { id: 'node_5', title: 'Autograd Training Step', type: 'Evaluation', x: 1240, y: 60, details: 'grad_accum_steps=4\nmax_grad_norm=1.0' },
+        { id: 'node_6', title: 'SafeTensors Exporter', type: 'Export', x: 1540, y: 60, details: 'filename=model.safetensors' }
+      ],
+      edges: [
+        { id: 'e1', source: 'node_1', target: 'node_2' },
+        { id: 'e2', source: 'node_2', target: 'node_3' },
+        { id: 'e3', source: 'node_3', target: 'node_4' },
+        { id: 'e4', source: 'node_4', target: 'node_5' },
+        { id: 'e5', source: 'node_5', target: 'node_6' }
+      ]
+    },
+    muon_layer_streaming: {
+      name: 'Muon + Layer Streaming (8GB VRAM)',
+      nodes: [
+        { id: 'node_1', title: 'Cycling DataLoader', type: 'Data', x: 40, y: 60, details: 'batch_size=4\nseq_len=64\nshuffle=True' },
+        { id: 'node_2', title: 'Layer Streaming Engine', type: 'Runtime', x: 340, y: 60, details: 'prefetch=True\npin_memory=True\nd2h_async=True' },
+        { id: 'node_3', title: 'Triune MoE Transformer', type: 'Model', x: 640, y: 60, details: 'vocab_size=32000\nhidden_dim=1536\nnum_layers=24' },
+        { id: 'node_4', title: 'Muon Matrix Optimizer', type: 'Optimizer', x: 940, y: 60, details: 'lr=0.02\nmomentum=0.95\nns_steps=5' },
+        { id: 'node_5', title: 'Autograd Training Step', type: 'Evaluation', x: 1240, y: 60, details: 'grad_accum_steps=4\nmax_grad_norm=1.0' },
+        { id: 'node_6', title: 'VRAM Profiler', type: 'Runtime', x: 1540, y: 60, details: 'device=cuda:0\nalert_threshold_gb=7.2' }
+      ],
+      edges: [
+        { id: 'e1', source: 'node_1', target: 'node_2' },
+        { id: 'e2', source: 'node_2', target: 'node_3' },
+        { id: 'e3', source: 'node_3', target: 'node_4' },
+        { id: 'e4', source: 'node_4', target: 'node_5' },
+        { id: 'e5', source: 'node_5', target: 'node_6' }
+      ]
+    },
+    lora_finetune: {
+      name: 'LoRA Fine-Tune Pipeline',
+      nodes: [
+        { id: 'node_1', title: 'Local File Reader', type: 'Data', x: 40, y: 60, details: 'file_path=data/fineweb_sample.jsonl\nbatch_size=4' },
         { id: 'node_2', title: 'BPE Tokenizer', type: 'Data', x: 340, y: 60, details: 'vocab_size=32000' },
-        { id: 'node_3', title: 'TriuneTransformer', type: 'Model', x: 640, y: 60, details: 'vocab_size=32000\nhidden_dim=1536\nnum_layers=24\nuse_fp4=True' },
-        { id: 'node_4', title: 'CentroidSteerOptimizer', type: 'Optimizer', x: 940, y: 60, details: 'lr=1e-4\nsteer_scale=0.20' },
-        { id: 'node_5', title: 'CheckpointSaver', type: 'Export', x: 1240, y: 60, details: 'format=safetensors' }
+        { id: 'node_3', title: 'LoRA Adapter Layer', type: 'Model', x: 640, y: 60, details: 'rank=16\nalpha=32.0\ndropout=0.05' },
+        { id: 'node_4', title: 'Triune MoE Transformer', type: 'Model', x: 940, y: 60, details: 'vocab_size=32000\nhidden_dim=1536' },
+        { id: 'node_5', title: 'LoRA Fine-Tuner Engine', type: 'Evaluation', x: 1240, y: 60, details: 'epochs=3\nlr=2e-4\nsave_adapter=True' },
+        { id: 'node_6', title: 'SafeTensors Exporter', type: 'Export', x: 1540, y: 60, details: 'filename=lora_adapter.safetensors' }
+      ],
+      edges: [
+        { id: 'e1', source: 'node_1', target: 'node_2' },
+        { id: 'e2', source: 'node_2', target: 'node_3' },
+        { id: 'e3', source: 'node_3', target: 'node_4' },
+        { id: 'e4', source: 'node_4', target: 'node_5' },
+        { id: 'e5', source: 'node_5', target: 'node_6' }
+      ]
+    },
+    depth_routing_inference: {
+      name: 'Dynamic Depth Router Multi-Exit',
+      nodes: [
+        { id: 'node_1', title: 'Hugging Face Streamer', type: 'Data', x: 40, y: 60, details: 'dataset_name=roneneldan/TinyStories' },
+        { id: 'node_2', title: 'BPE Tokenizer', type: 'Data', x: 340, y: 60, details: 'vocab_size=32000' },
+        { id: 'node_3', title: 'Triune MoE Transformer', type: 'Model', x: 640, y: 60, details: 'vocab_size=32000\nhidden_dim=1536\nnum_layers=24' },
+        { id: 'node_4', title: 'Hierarchical Depth Router', type: 'Model', x: 940, y: 60, details: 'reflex_exit_layer=6\nlimbic_exit_layer=16' },
+        { id: 'node_5', title: 'Perplexity Evaluator', type: 'Evaluation', x: 1240, y: 60, details: 'eval_steps=50\nbatch_size=4' }
       ],
       edges: [
         { id: 'e1', source: 'node_1', target: 'node_2' },
@@ -24,32 +365,38 @@
         { id: 'e4', source: 'node_4', target: 'node_5' }
       ]
     },
-    lora_finetune: {
-      name: 'LoRA Fine-Tune',
+    fp8_quantization_export: {
+      name: 'FP8 Quantization & Multi-Export',
       nodes: [
-        { id: 'node_1', title: 'JSONL Reader', type: 'Data', x: 40, y: 60, details: 'dataset_path=finetune.jsonl' },
-        { id: 'node_2', title: 'LoRAConfig', type: 'Model', x: 340, y: 60, details: 'rank=16\nalpha=32.0\ndropout=0.05\ntarget_modules=[\'q_proj\',\'v_proj\',\'out_proj\',\'0\',\'2\']' },
-        { id: 'node_3', title: 'TriuneFineTuner', type: 'Optimizer', x: 640, y: 60, details: 'epochs=3\nbatch_size=8\nlr=1e-4' },
-        { id: 'node_4', title: 'SafeTensors Export', type: 'Export', x: 940, y: 60, details: 'export_formats=[\'safetensors\']' }
+        { id: 'node_1', title: 'Triune MoE Transformer', type: 'Model', x: 40, y: 60, details: 'vocab_size=32000\nhidden_dim=1536\nnum_layers=24' },
+        { id: 'node_2', title: 'FP8 Scaled Linear', type: 'Model', x: 340, y: 60, details: 'in_features=1536\nout_features=1536\ndtype=fp8_e4m3fn' },
+        { id: 'node_3', title: 'SafeTensors Exporter', type: 'Export', x: 640, y: 60, details: 'filename=model_fp8.safetensors' },
+        { id: 'node_4', title: 'GGUF Multi-Bit Quantizer', type: 'Export', x: 940, y: 60, details: 'quantization=Q4_K_M\nfilename=model.gguf' },
+        { id: 'node_5', title: 'ONNX Graph Exporter', type: 'Export', x: 1240, y: 60, details: 'opset_version=17' }
       ],
       edges: [
         { id: 'e1', source: 'node_1', target: 'node_2' },
         { id: 'e2', source: 'node_2', target: 'node_3' },
-        { id: 'e3', source: 'node_3', target: 'node_4' }
+        { id: 'e3', source: 'node_2', target: 'node_4' },
+        { id: 'e4', source: 'node_2', target: 'node_5' }
       ]
     },
-    inference: {
-      name: 'Inference',
+    hybrid_gla_rope: {
+      name: 'Hybrid GLA + RoPE Attention',
       nodes: [
-        { id: 'node_1', title: 'TextInput', type: 'Data', x: 40, y: 60, details: 'Source: Chat Playground' },
-        { id: 'node_2', title: 'TriuneTransformer', type: 'Model', x: 340, y: 60, details: 'vocab_size=32000\nhidden_dim=1536\nnum_layers=24' },
-        { id: 'node_3', title: 'ExitHeadRouter', type: 'Model', x: 640, y: 60, details: 'reflex_exit_layer=6\nlimbic_exit_layer=16' },
-        { id: 'node_4', title: 'TextOutput', type: 'Export', x: 940, y: 60, details: 'Target: Chat Playground' }
+        { id: 'node_1', title: 'Hugging Face Streamer', type: 'Data', x: 40, y: 60, details: 'dataset_name=HuggingFaceFW/fineweb-edu' },
+        { id: 'node_2', title: 'BPE Tokenizer', type: 'Data', x: 340, y: 60, details: 'vocab_size=32000' },
+        { id: 'node_3', title: 'Hybrid GLA + RoPE Attention', type: 'Model', x: 640, y: 60, details: 'hidden_dim=1536\nuse_rope=True\nrope_max_seq_len=4096' },
+        { id: 'node_4', title: 'Vectorised GLA Attention', type: 'Model', x: 940, y: 60, details: 'hidden_dim=1536\nnum_heads=12\nhead_dim=128' },
+        { id: 'node_5', title: 'Fast Cross-Entropy Loss', type: 'Loss', x: 1240, y: 60, details: 'ignore_index=-100\nchunk_size=2048' },
+        { id: 'node_6', title: 'AdamW Optimizer', type: 'Optimizer', x: 1540, y: 60, details: 'lr=1e-4\nweight_decay=0.01' }
       ],
       edges: [
         { id: 'e1', source: 'node_1', target: 'node_2' },
         { id: 'e2', source: 'node_2', target: 'node_3' },
-        { id: 'e3', source: 'node_3', target: 'node_4' }
+        { id: 'e3', source: 'node_3', target: 'node_4' },
+        { id: 'e4', source: 'node_4', target: 'node_5' },
+        { id: 'e5', source: 'node_5', target: 'node_6' }
       ]
     }
   };
@@ -153,8 +500,8 @@
     const canvasRef = useRef(null);
 
     // Visual Node Graph State
-    const [nodes, setNodes] = useState(DAG_PRESETS.moe_inference.nodes);
-    const [edges, setEdges] = useState(DAG_PRESETS.moe_inference.edges);
+    const [nodes, setNodes] = useState(DAG_PRESETS.moe_training.nodes);
+    const [edges, setEdges] = useState(DAG_PRESETS.moe_training.edges);
     const [draggingNodeId, setDraggingNodeId] = useState(null);
     const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
     const [connectingFromId, setConnectingFromId] = useState(null);
@@ -163,6 +510,9 @@
     const [nodeExecOutputs, setNodeExecOutputs] = useState({});
     const [activeRunningNodeId, setActiveRunningNodeId] = useState(null);
     const [showCustomNodeModal, setShowCustomNodeModal] = useState(false);
+    const [showNodeLibraryModal, setShowNodeLibraryModal] = useState(false);
+    const [nodeSearchQuery, setNodeSearchQuery] = useState('');
+    const [selectedNodeCategory, setSelectedNodeCategory] = useState('All');
     const [customNodeTitle, setCustomNodeTitle] = useState('');
     const [customNodeType, setCustomNodeType] = useState('Model');
     const [customNodeDetails, setCustomNodeDetails] = useState('');
@@ -813,19 +1163,47 @@
       showToast(`Deleted Node [${nodeId}]`);
     };
 
-    const handleAddNode = (type) => {
-      const newId = `node_${nodes.length + 1}`;
-      const titles = { Data: 'Custom Data Node', Model: 'LoRA Adapter Node', Optimizer: 'AdamW Optimizer', Export: 'Exporter Node' };
+    const handleSpawnCatalogNode = (nodeIdentifier) => {
+      const item = BUILTIN_NODE_CATALOG.find(n => n.name === nodeIdentifier || n.title === nodeIdentifier);
+      const newId = `node_${Date.now().toString().slice(-4)}_${nodes.length + 1}`;
+      const defaultTitle = item ? item.title : (typeof nodeIdentifier === 'string' ? nodeIdentifier : 'Custom Node');
+      const category = item ? item.category : 'Custom';
+      const details = item ? item.details : `Type: ${category}\nState: Ready`;
+
+      // Calculate neat grid placement
+      const col = nodes.length % 5;
+      const row = Math.floor(nodes.length / 5);
       const newNode = {
         id: newId,
-        title: titles[type] || 'Custom Node',
-        type: type,
-        x: 60 + nodes.length * 40,
-        y: 100 + (nodes.length % 3) * 30,
-        details: `Type: ${type}\nState: Ready`
+        title: defaultTitle,
+        type: category,
+        x: 60 + col * 300,
+        y: 80 + row * 180,
+        details: details
       };
-      setNodes([...nodes, newNode]);
-      showToast(`Added ${type} Node`);
+      setNodes(prev => [...prev, newNode]);
+      setShowNodeLibraryModal(false);
+      showToast(`Spawned [${defaultTitle}] on canvas`);
+    };
+
+    const handleAddNode = (type) => {
+      const firstOfType = BUILTIN_NODE_CATALOG.find(n => n.category === type);
+      if (firstOfType) {
+        handleSpawnCatalogNode(firstOfType.name);
+      } else {
+        const newId = `node_${nodes.length + 1}`;
+        const titles = { Data: 'Custom Data Node', Model: 'LoRA Adapter Node', Optimizer: 'AdamW Optimizer', Export: 'Exporter Node' };
+        const newNode = {
+          id: newId,
+          title: titles[type] || 'Custom Node',
+          type: type,
+          x: 60 + (nodes.length % 5) * 280,
+          y: 80 + Math.floor(nodes.length / 5) * 160,
+          details: `Type: ${type}\nState: Ready`
+        };
+        setNodes(prev => [...prev, newNode]);
+        showToast(`Added ${type} Node`);
+      }
     };
 
     const handleCreateCustomNode = () => {
@@ -1210,6 +1588,73 @@
         )
       ),
 
+      // Node Library Catalog Modal (30+ Built-in Architecture Components)
+      showNodeLibraryModal && e('div', { className: 'node-library-modal-overlay', onClick: () => setShowNodeLibraryModal(false) },
+        e('div', { className: 'node-library-modal', onClick: ev => ev.stopPropagation() },
+          e('div', { className: 'node-library-header' },
+            e('div', null,
+              e('h3', { style: { fontFamily: 'Newsreader', fontSize: '20px', margin: 0 } }, 'Triune Architectural Node Library'),
+              e('div', { style: { fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' } }, '30+ Built-in PyTorch MoE, GLA, Optimizer, Loss, Runtime & Export Components')
+            ),
+            e('button', {
+              className: 'node-delete-btn',
+              style: { fontSize: '18px', padding: '4px 10px', background: 'transparent', border: 'none', cursor: 'pointer' },
+              onClick: () => setShowNodeLibraryModal(false)
+            }, '✕')
+          ),
+          e('div', { className: 'node-library-search-bar' },
+            e('input', {
+              type: 'text',
+              placeholder: 'Search nodes by name, description, or component (e.g. Muon, FP8, GLA, MoE, LoRA, Streaming)...',
+              value: nodeSearchQuery,
+              onChange: ev => setNodeSearchQuery(ev.target.value),
+              style: { flex: 1, minWidth: '240px', padding: '8px 12px', borderRadius: '6px', border: '1px solid var(--border-color)', fontSize: '13px' }
+            }),
+            e('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap' } },
+              ['All', 'Data', 'Model', 'Optimizer', 'Loss', 'Runtime', 'Evaluation', 'Export'].map(cat =>
+                e('button', {
+                  key: cat,
+                  className: `preset-chip ${selectedNodeCategory === cat ? 'active-preset' : ''}`,
+                  onClick: () => setSelectedNodeCategory(cat)
+                }, cat)
+              )
+            )
+          ),
+          e('div', { className: 'node-library-grid' },
+            BUILTIN_NODE_CATALOG
+              .filter(item => {
+                const matchesCat = selectedNodeCategory === 'All' || item.category === selectedNodeCategory;
+                const q = nodeSearchQuery.toLowerCase().trim();
+                const matchesQuery = !q || item.name.toLowerCase().includes(q) || item.title.toLowerCase().includes(q) || item.description.toLowerCase().includes(q);
+                return matchesCat && matchesQuery;
+              })
+              .map(item =>
+                e('div', { key: item.name, className: 'node-catalog-card', 'data-category': item.category },
+                  e('div', null,
+                    e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' } },
+                      e('div', { style: { fontWeight: 700, fontSize: '14px', color: 'var(--text-main)' } }, item.title),
+                      e('span', { className: 'node-type-tag', style: { fontSize: '10px' } }, item.category)
+                    ),
+                    e('p', { style: { fontSize: '12px', color: 'var(--text-muted)', lineHeight: '1.45', margin: '4px 0 8px 0' } }, item.description),
+                    e('div', { className: 'node-catalog-ports' },
+                      item.inputs && item.inputs.length > 0 && e('span', null, `In: [${item.inputs.join(', ')}]`),
+                      item.outputs && item.outputs.length > 0 && e('span', null, `Out: [${item.outputs.join(', ')}]`)
+                    )
+                  ),
+                  e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px', paddingTop: '10px', borderTop: '1px solid #f0ede6' } },
+                    e('span', { style: { fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-dim)' } }, item.name),
+                    e('button', {
+                      className: 'btn-action',
+                      style: { fontSize: '11.5px', padding: '4px 10px', background: 'var(--accent-olive, #2b4c3f)', color: '#fff' },
+                      onClick: () => handleSpawnCatalogNode(item.name)
+                    }, '+ Add to Canvas')
+                  )
+                )
+              )
+          )
+        )
+      ),
+
       // Sidebar Navigation
       e('aside', { className: 'react-sidebar' },
         e('div', { className: 'react-brand' },
@@ -1434,10 +1879,16 @@
               ),
               e('div', { className: 'node-canvas-header' },
                 e('h3', { style: { fontFamily: 'Newsreader', fontSize: '18px' } }, 'ComfyUI-Style Visual DAG Node Canvas'),
-                e('div', { className: 'canvas-toolbar' },
-                  e('button', { className: 'btn-icon-tool', onClick: () => handleAddNode('Data') }, '+ Data Node'),
-                  e('button', { className: 'btn-icon-tool', onClick: () => handleAddNode('Model') }, '+ Model Node'),
-                  e('button', { className: 'btn-icon-tool', onClick: () => handleAddNode('Optimizer') }, '+ Optimizer'),
+                e('div', { className: 'canvas-toolbar node-toolbar-scroll' },
+                  e('button', { className: 'btn-icon-tool', onClick: () => handleSpawnCatalogNode('HuggingFaceStreamer') }, '+ HF Streamer'),
+                  e('button', { className: 'btn-icon-tool', onClick: () => handleSpawnCatalogNode('TriuneTransformer') }, '+ MoE Model'),
+                  e('button', { className: 'btn-icon-tool', onClick: () => handleSpawnCatalogNode('VectorisedGLA') }, '+ GLA Attention'),
+                  e('button', { className: 'btn-icon-tool', onClick: () => handleSpawnCatalogNode('DepthRouter') }, '+ Depth Router'),
+                  e('button', { className: 'btn-icon-tool', onClick: () => handleSpawnCatalogNode('CentroidSteerOptimizer') }, '+ CentroidSteer'),
+                  e('button', { className: 'btn-icon-tool', onClick: () => handleSpawnCatalogNode('MuonOptimizer') }, '+ Muon'),
+                  e('button', { className: 'btn-icon-tool', onClick: () => handleSpawnCatalogNode('LayerStreamingEngine') }, '+ Layer Stream'),
+                  e('button', { className: 'btn-icon-tool', onClick: () => handleSpawnCatalogNode('SafeTensorsExport') }, '+ Export'),
+                  e('button', { className: 'btn-action', style: { background: 'var(--accent-terracotta, #9a3412)', color: '#fff' }, onClick: () => setShowNodeLibraryModal(true) }, '📚 Node Library (30+)'),
                   e('button', { className: 'btn-icon-tool', onClick: () => setShowCustomNodeModal(true) }, '+ Custom Node'),
                   e('button', { className: 'btn-action start', onClick: handleExecuteDAG }, 'Run DAG Engine')
                 )
@@ -1508,6 +1959,7 @@
                   return e('div', {
                     key: n.id,
                     className: cardClass,
+                    'data-category': n.type,
                     style: { left: `${n.x}px`, top: `${n.y}px` },
                     onMouseDown: ev => handleMouseDown(ev, n.id)
                   },
