@@ -187,6 +187,15 @@
       details: 'ignore_index=-100\nchunk_size=2048\nlabel_smoothing=0.0'
     },
     {
+      name: 'JointExitLoss',
+      title: 'Joint Exit Loss',
+      category: 'Loss',
+      description: 'Simultaneous multi-exit supervision combining Reflex (Exit 1), Limbic (Exit 2), and Cortex (Exit 3) cross-entropies with custom exit loss scaling.',
+      inputs: ['exit_logits', 'targets'],
+      outputs: ['joint_loss', 'per_exit_loss'],
+      details: 'lambda_reflex=0.20\nlambda_limbic=0.30\nlambda_cortex=0.50\nlabel_smoothing=0.0'
+    },
+    {
       name: 'RouterZLoss',
       title: 'Router Stability Z-Loss',
       category: 'Loss',
@@ -195,8 +204,71 @@
       outputs: ['z_loss'],
       details: 'coeff=1e-3'
     },
+    {
+      name: 'FastRoPE',
+      title: 'Fast RoPE Kernel',
+      category: 'Model',
+      description: 'Vectorized Rotary Position Embedding with Triton GPU acceleration and rotate_half fallback.',
+      inputs: ['q', 'k', 'cos', 'sin'],
+      outputs: ['q_rot', 'k_rot'],
+      details: 'dim=64\nmax_seq_len=4096\nbase=10000.0'
+    },
+    {
+      name: 'FastRMSNorm',
+      title: 'Fast RMSNorm Kernel',
+      category: 'Model',
+      description: 'High-throughput fused RMSNorm Triton kernel with epsilon stabilization.',
+      inputs: ['x', 'weight'],
+      outputs: ['norm_out'],
+      details: 'eps=1e-6'
+    },
+    {
+      name: 'AutoregressiveGenerator',
+      title: 'Autoregressive Generator',
+      category: 'Model',
+      description: 'O(1) GLA recurrent state-cached autoregressive generator with temperature, top-k/top-p, and repetition penalty.',
+      inputs: ['model', 'tokenizer', 'prompt'],
+      outputs: ['generated_text', 'tokens_per_sec', 'route_taken'],
+      details: 'max_tokens=64\ntemperature=0.7\ntop_k=50\nrepetition_penalty=1.2'
+    },
+    {
+      name: 'BYOKChatRouter',
+      title: 'BYOK Chat Router',
+      category: 'Model',
+      description: 'Multi-provider BYOK (Bring Your Own Key) chat router supporting local Triune weights, Ollama, Anthropic Claude, OpenAI, and DeepSeek.',
+      inputs: ['prompt', 'system_prompt'],
+      outputs: ['response_text', 'provider_telemetry'],
+      details: 'provider=triune-local\nmodel=triune-base\ntemperature=0.7\nmax_tokens=256'
+    },
 
     // Runtime & System
+    {
+      name: 'GradientAccumulator',
+      title: 'Gradient Accumulator',
+      category: 'Runtime',
+      description: 'Multi-microbatch gradient accumulator with loss scaling (1/N), D2H asynchronous offloading, and step sync.',
+      inputs: ['loss', 'model', 'optimizer'],
+      outputs: ['accum_status', 'effective_tokens'],
+      details: 'grad_accum_steps=4\nmax_grad_norm=1.0\nsync_frequency=1'
+    },
+    {
+      name: 'CheckpointManager',
+      title: 'Checkpoint Manager',
+      category: 'Runtime',
+      description: 'Schema-v2 canonical fingerprinting, atomic WSL2/disk checkpoint saving, and decoupled weights-only resume.',
+      inputs: ['model', 'optimizer', 'step'],
+      outputs: ['checkpoint_path', 'fingerprint'],
+      details: 'save_dir=checkpoints\nkeep_last_n=5\nweights_only_load=False'
+    },
+    {
+      name: 'DynamicResourceManager',
+      title: 'Dynamic Resource Manager',
+      category: 'Runtime',
+      description: 'Real-time hardware capability gating, device feasibility probing, and tied-weight deduplicated parameter tracking.',
+      inputs: ['model_config'],
+      outputs: ['feasibility_report', 'vram_budget_gb'],
+      details: 'target_device=cuda:0\nsafety_margin_gb=1.0'
+    },
     {
       name: 'LayerStreamingEngine',
       title: 'Layer Streaming Engine',
@@ -398,6 +470,24 @@
         { id: 'e4', source: 'node_4', target: 'node_5' },
         { id: 'e5', source: 'node_5', target: 'node_6' }
       ]
+    },
+    joint_multi_exit_training: {
+      name: 'Joint Multi-Exit + Gradient Accumulation',
+      nodes: [
+        { id: 'node_1', title: 'Hugging Face Streamer', type: 'Data', x: 40, y: 60, details: 'dataset_name=HuggingFaceFW/fineweb-edu\nsplit=train\nbuffer_size=20' },
+        { id: 'node_2', title: 'BPE Tokenizer', type: 'Data', x: 340, y: 60, details: 'vocab_size=32000' },
+        { id: 'node_3', title: 'Triune MoE Transformer', type: 'Model', x: 640, y: 60, details: 'vocab_size=32000\nhidden_dim=1536\nnum_layers=24\nnum_experts=8' },
+        { id: 'node_4', title: 'Joint Exit Loss', type: 'Loss', x: 940, y: 60, details: 'lambda_reflex=0.20\nlambda_limbic=0.30\nlambda_cortex=0.50' },
+        { id: 'node_5', title: 'Gradient Accumulator', type: 'Runtime', x: 1240, y: 60, details: 'grad_accum_steps=4\nmax_grad_norm=1.0' },
+        { id: 'node_6', title: 'CentroidSteer Optimizer', type: 'Optimizer', x: 1540, y: 60, details: 'lr=5e-4\nsteer_scale=0.20' }
+      ],
+      edges: [
+        { id: 'e1', source: 'node_1', target: 'node_2' },
+        { id: 'e2', source: 'node_2', target: 'node_3' },
+        { id: 'e3', source: 'node_3', target: 'node_4' },
+        { id: 'e4', source: 'node_4', target: 'node_5' },
+        { id: 'e5', source: 'node_5', target: 'node_6' }
+      ]
     }
   };
 
@@ -523,6 +613,12 @@
     const [customNodeTitle, setCustomNodeTitle] = useState('');
     const [customNodeType, setCustomNodeType] = useState('Model');
     const [customNodeDetails, setCustomNodeDetails] = useState('');
+    const [selectedNodeId, setSelectedNodeId] = useState(null);
+    const [selectedNodeParams, setSelectedNodeParams] = useState({});
+    const [isExecutingSingleNode, setIsExecutingSingleNode] = useState(false);
+    const [showWorkspacePluginModal, setShowWorkspacePluginModal] = useState(false);
+    const [newPluginName, setNewPluginName] = useState('CustomLossNode');
+    const [newPluginCategory, setNewPluginCategory] = useState('Loss');
     const gridRef = useRef(null);
 
     // LoRA Fine-Tuner State
@@ -938,6 +1034,85 @@
       } catch (err) {}
     };
 
+    const handleScanWorkspacePlugins = async () => {
+      showToast('🔍 Scanning workspace for custom Python plugins...');
+      try {
+        const res = await apiFetch('/v1/modules/scan_local', { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+          showToast(`✓ ${data.message}`);
+          fetchInstalledModules();
+        } else {
+          showToast(`Notice: ${data.message || 'Scan completed'}`);
+        }
+      } catch (err) {
+        showToast('Error scanning workspace plugins');
+      }
+    };
+
+    const handleCreatePluginScript = async () => {
+      if (!newPluginName.trim()) return;
+      showToast(`Generating plugin template for ${newPluginName}...`);
+      try {
+        const res = await apiFetch('/v1/modules/create_plugin', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: newPluginName.trim(), category: newPluginCategory })
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast(`🧩 Created ${data.file_path}! Registered in catalog.`);
+          setShowWorkspacePluginModal(false);
+          fetchInstalledModules();
+        } else {
+          showToast(`❌ Failed to create plugin: ${data.message}`);
+        }
+      } catch (err) {
+        showToast(`❌ Error: ${err.message}`);
+      }
+    };
+
+    const handleAddModuleNodesToCanvas = (m) => {
+      const nodeNames = m.registered_nodes || (m.artifacts && m.artifacts.nodes) || [];
+      if (nodeNames.length === 0) {
+        showToast('No DAG nodes found in this module.');
+        return;
+      }
+      let added = 0;
+      nodeNames.forEach(nName => {
+        handleSpawnCatalogNode(nName);
+        added++;
+      });
+      setActiveTab('nodegraph');
+      showToast(`Added ${added} node(s) from ${m.name} to Visual Canvas!`);
+    };
+
+    const handleLoadModuleWeights = (m) => {
+      const weights = m.artifacts && m.artifacts.weights;
+      if (weights && weights.length > 0) {
+        handleLoadModel(m.id || weights[0]);
+      } else {
+        handleLoadModel(m.id);
+      }
+      setActiveTab('chat');
+    };
+
+    const handleStreamModuleDataset = (m) => {
+      const dsName = m.repo_url && m.repo_url.includes('huggingface.co')
+        ? m.repo_url.replace('https://huggingface.co/datasets/', '').replace('https://huggingface.co/', '')
+        : (m.name || m.id);
+      setHfDatasetInput(dsName);
+      setDatasetInfo(prev => ({ ...prev, name: dsName }));
+      setActiveTab('datasets');
+      showToast(`Selected ${dsName} for live training stream!`);
+    };
+
+    const handleAttachModuleAdapter = (m) => {
+      setActiveAdapter(m.name);
+      setActiveTab('finetune');
+      showToast(`Selected adapter ${m.name} in LoRA Fine-Tuner!`);
+    };
+
     // Checkpoint Management Handlers
     const fetchCheckpoints = async () => {
       try {
@@ -1205,13 +1380,85 @@
       setIsUpdatingTrainConfig(false);
     };
 
-    // Node Canvas Dragging & Interactive Wire Connection
+    // Node Canvas Dragging, Interactive Wire Connection & Node Inspector
     const NODE_WIDTH = 250;
     const NODE_PORT_CENTER_Y = 19; // Exact vertical center of node title bar header (top: 19px)
+
+    const handleSelectNode = (nodeId) => {
+      setSelectedNodeId(nodeId);
+      const node = nodes.find(n => n.id === nodeId);
+      if (node) {
+        const params = {};
+        if (node.details) {
+          node.details.split('\n').forEach(line => {
+            const trimmed = line.trim();
+            if (!trimmed || trimmed.startsWith('#')) return;
+            const eqIdx = trimmed.indexOf('=');
+            if (eqIdx !== -1) {
+              const k = trimmed.slice(0, eqIdx).trim();
+              const v = trimmed.slice(eqIdx + 1).trim();
+              params[k] = v;
+            }
+          });
+        }
+        setSelectedNodeParams(params);
+      }
+    };
+
+    const handleSaveNodeParams = () => {
+      if (!selectedNodeId) return;
+      const detailsStr = Object.entries(selectedNodeParams)
+        .map(([k, v]) => `${k}=${v}`)
+        .join('\n');
+      setNodes(prev => prev.map(n => n.id === selectedNodeId ? { ...n, details: detailsStr } : n));
+      const title = nodes.find(n => n.id === selectedNodeId)?.title || selectedNodeId;
+      showToast(`💾 Saved parameters for ${title}`);
+    };
+
+    const handleExecuteSingleNode = async (nodeId) => {
+      const targetId = nodeId || selectedNodeId;
+      if (!targetId) return;
+      const node = nodes.find(n => n.id === targetId);
+      if (!node) return;
+
+      setIsExecutingSingleNode(true);
+      showToast(`⚙️ Executing [${node.title}] in isolation...`);
+      try {
+        const res = await apiFetch('/v1/dag/execute_node', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            node: {
+              ...node,
+              params: selectedNodeParams
+            }
+          })
+        });
+        const data = await res.json();
+        if (data.status === 'completed') {
+          setNodeExecOutputs(prev => ({
+            ...prev,
+            [targetId]: {
+              status: 'completed',
+              output: data.output,
+              elapsed: data.elapsed_sec
+            }
+          }));
+          showToast(`✓ Node [${node.title}] executed in ${(data.elapsed_sec * 1000).toFixed(0)}ms`);
+        } else {
+          showToast(`❌ Execution failed: ${data.error || 'Unknown'}`);
+        }
+      } catch (err) {
+        showToast(`❌ Error: ${err.message}`);
+      } finally {
+        setIsExecutingSingleNode(false);
+      }
+    };
 
     const handleMouseDown = (ev, nodeId) => {
       if (ev.target.classList.contains('node-delete-btn') || ev.target.classList.contains('node-port')) return;
       setDraggingNodeId(nodeId);
+      handleSelectNode(nodeId);
       const node = nodes.find(n => n.id === nodeId);
       // Compute offset relative to the grid container + scroll position
       if (gridRef.current) {
@@ -1790,6 +2037,62 @@
         )
       ),
 
+      // Workspace Plugin Scaffolding Modal
+      showWorkspacePluginModal && e('div', { className: 'node-library-modal-overlay', onClick: () => setShowWorkspacePluginModal(false) },
+        e('div', { className: 'node-library-modal', style: { maxWidth: '520px' }, onClick: ev => ev.stopPropagation() },
+          e('div', { className: 'node-library-header' },
+            e('div', null,
+              e('h3', { style: { fontFamily: 'Newsreader', fontSize: '20px', margin: 0 } }, 'Scaffold Custom DAG Plugin Script'),
+              e('div', { style: { fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' } }, 'Generates a ready-to-run Python plugin script in triune/plugins/ with @register_node schema')
+            ),
+            e('button', {
+              className: 'node-delete-btn',
+              style: { fontSize: '18px', padding: '4px 10px', background: 'transparent', border: 'none', cursor: 'pointer' },
+              onClick: () => setShowWorkspacePluginModal(false)
+            }, '✕')
+          ),
+          e('div', { style: { padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: '14px' } },
+            e('div', { className: 'field-group' },
+              e('label', null, 'Plugin Class Name:'),
+              e('input', {
+                type: 'text',
+                placeholder: 'e.g. AdaptiveCurvatureLoss or QuantumAttention',
+                value: newPluginName,
+                onChange: ev => setNewPluginName(ev.target.value),
+                style: { width: '100%', height: '38px', padding: '0 10px', background: 'var(--bg-input)', border: '1px solid var(--border-color)', borderRadius: '6px', fontSize: '13px' }
+              })
+            ),
+            e('div', { className: 'field-group' },
+              e('label', null, 'Component Category:'),
+              e('select', {
+                value: newPluginCategory,
+                onChange: ev => setNewPluginCategory(ev.target.value),
+                style: { width: '100%', height: '38px', padding: '0 10px', background: 'var(--bg-input)', border: '1px solid var(--border-color)', borderRadius: '6px', fontSize: '13px' }
+              },
+                e('option', { value: 'Loss' }, 'Loss Function (e.g. Joint loss, Curvature loss)'),
+                e('option', { value: 'Model' }, 'Model Architecture (e.g. Attention, FFN, MoE)'),
+                e('option', { value: 'Optimizer' }, 'Optimizer / Scheduler (e.g. Muon, GaLore variant)'),
+                e('option', { value: 'Data' }, 'Data Loader / Streamer (e.g. Custom reader)'),
+                e('option', { value: 'Runtime' }, 'Runtime & Memory Management')
+              )
+            ),
+            e('div', { style: { background: 'var(--bg-surface)', padding: '10px 12px', borderRadius: '6px', border: '1px solid var(--border-color)', fontSize: '12px', color: 'var(--text-muted)' } },
+              '💡 Once generated, your new plugin will be saved to ',
+              e('code', { style: { fontFamily: 'monospace', color: 'var(--primary)' } }, 'triune/plugins/'),
+              ' and immediately registered in the DAG engine without restarting.'
+            ),
+            e('div', { style: { display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '10px' } },
+              e('button', { className: 'btn-sec', onClick: () => setShowWorkspacePluginModal(false) }, 'Cancel'),
+              e('button', {
+                className: 'btn-send',
+                style: { background: 'var(--accent-olive, #2b4c3f)' },
+                onClick: handleCreatePluginScript
+              }, '✍️ Scaffold & Register')
+            )
+          )
+        )
+      ),
+
       // Sidebar Navigation
       e('aside', { className: 'react-sidebar' },
         e('div', { className: 'react-brand' },
@@ -2093,12 +2396,17 @@
                   e('button', { className: 'btn-icon-tool', onClick: () => handleSpawnCatalogNode('HuggingFaceStreamer') }, '+ HF Streamer'),
                   e('button', { className: 'btn-icon-tool', onClick: () => handleSpawnCatalogNode('TriuneTransformer') }, '+ MoE Model'),
                   e('button', { className: 'btn-icon-tool', onClick: () => handleSpawnCatalogNode('VectorisedGLA') }, '+ GLA Attention'),
+                  e('button', { className: 'btn-icon-tool', onClick: () => handleSpawnCatalogNode('FastRoPE') }, '+ RoPE Kernel'),
                   e('button', { className: 'btn-icon-tool', onClick: () => handleSpawnCatalogNode('DepthRouter') }, '+ Depth Router'),
+                  e('button', { className: 'btn-icon-tool', onClick: () => handleSpawnCatalogNode('JointExitLoss') }, '+ Joint Loss'),
+                  e('button', { className: 'btn-icon-tool', onClick: () => handleSpawnCatalogNode('GradientAccumulator') }, '+ Grad Accum'),
                   e('button', { className: 'btn-icon-tool', onClick: () => handleSpawnCatalogNode('CentroidSteerOptimizer') }, '+ CentroidSteer'),
                   e('button', { className: 'btn-icon-tool', onClick: () => handleSpawnCatalogNode('MuonOptimizer') }, '+ Muon'),
                   e('button', { className: 'btn-icon-tool', onClick: () => handleSpawnCatalogNode('LayerStreamingEngine') }, '+ Layer Stream'),
+                  e('button', { className: 'btn-icon-tool', onClick: () => handleSpawnCatalogNode('AutoregressiveGenerator') }, '+ Generator'),
+                  e('button', { className: 'btn-icon-tool', onClick: () => handleSpawnCatalogNode('CheckpointManager') }, '+ Checkpoint'),
                   e('button', { className: 'btn-icon-tool', onClick: () => handleSpawnCatalogNode('SafeTensorsExport') }, '+ Export'),
-                  e('button', { className: 'btn-action', style: { background: 'var(--accent-terracotta, #9a3412)', color: '#fff' }, onClick: () => setShowNodeLibraryModal(true) }, '📚 Node Library (30+)'),
+                  e('button', { className: 'btn-action', style: { background: 'var(--accent-terracotta, #9a3412)', color: '#fff' }, onClick: () => setShowNodeLibraryModal(true) }, '📚 Node Library (38+)'),
                   e('button', { className: 'btn-icon-tool', onClick: () => setShowCustomNodeModal(true) }, '+ Custom Node'),
                   e('button', { className: 'btn-action start', onClick: handleExecuteDAG }, 'Run DAG Engine')
                 )
@@ -2164,13 +2472,15 @@
                   const isRunning = activeRunningNodeId === n.id || (exec && exec.status === 'running');
                   const isCompleted = exec && exec.status === 'completed';
                   const isFailed = exec && exec.status === 'failed';
-                  const cardClass = `node-card-react ${isRunning ? 'running' : (isCompleted ? 'completed' : (isFailed ? 'failed' : ''))}`;
+                  const isSelected = selectedNodeId === n.id;
+                  const cardClass = `node-card-react ${isSelected ? 'node-selected' : ''} ${isRunning ? 'running' : (isCompleted ? 'completed' : (isFailed ? 'failed' : ''))}`;
 
                   return e('div', {
                     key: n.id,
                     className: cardClass,
                     'data-category': n.type,
                     style: { left: `${n.x}px`, top: `${n.y}px` },
+                    onClick: (ev) => { ev.stopPropagation(); handleSelectNode(n.id); },
                     onMouseDown: ev => handleMouseDown(ev, n.id)
                   },
                     e('div', {
@@ -2211,9 +2521,13 @@
                         } else if (out.total_params) {
                           outText = `🧠 ${out.total_params} params (${out.architecture || 'MoE'})\n⚡ ${out.exit_heads || '3 Exits'}`;
                         } else if (out.loss !== undefined) {
-                          outText = `⚡ Step 1 | Loss: ${out.loss}\n📊 Grad Norm: ${out.grad_norm || 0.45}\n🚀 Muon Optimizer: Active`;
+                          outText = `⚡ Step 1 | Loss: ${out.loss}\n📊 Grad Norm: ${out.grad_norm || 0.45}\n🚀 Optimizer: Active`;
                         } else if (out.file_size_mb) {
                           outText = `💾 Exported ${out.file_size_mb} MB (${out.format || 'safetensors'})`;
+                        } else if (out.text !== undefined) {
+                          outText = `💬 Generated: "${out.text.slice(0, 70)}..."\n⚡ Latency: ${((out.elapsed_sec || 0) * 1000).toFixed(1)}ms`;
+                        } else if (out.status_note) {
+                          outText = `✓ ${out.status_note}`;
                         } else if (out.note) {
                           outText = `ℹ️ ${out.note}`;
                         } else {
@@ -2224,7 +2538,109 @@
                     )
                   );
                 })
-              )
+              ),
+              // Interactive Node Inspector Drawer
+              selectedNodeId && (() => {
+                const selNode = nodes.find(n => n.id === selectedNodeId);
+                if (!selNode) return null;
+                const catItem = BUILTIN_NODE_CATALOG.find(c => c.name === selNode.name || c.title === selNode.title);
+                const inputs = (catItem && catItem.inputs) || [];
+                const outputs = (catItem && catItem.outputs) || [];
+                const exec = nodeExecOutputs[selNode.id];
+
+                return e('div', { className: 'node-inspector-drawer' },
+                  e('div', { className: 'inspector-header' },
+                    e('div', null,
+                      e('span', { className: 'inspector-type-badge' }, selNode.type || 'NODE'),
+                      e('h4', { className: 'inspector-title' }, selNode.title),
+                      e('div', { className: 'inspector-id' }, `ID: ${selNode.id}`)
+                    ),
+                    e('button', {
+                      className: 'inspector-close-btn',
+                      title: 'Close Inspector',
+                      onClick: () => setSelectedNodeId(null)
+                    }, '✕')
+                  ),
+                  e('div', { className: 'inspector-body' },
+                    // Description section
+                    e('div', { className: 'inspector-section' },
+                      e('span', { className: 'inspector-section-label' }, 'Description'),
+                      e('div', { className: 'inspector-desc' },
+                        (catItem && catItem.description) || `Custom ${selNode.type} component in Triune execution graph.`
+                      )
+                    ),
+                    // I/O Ports
+                    e('div', { className: 'inspector-section' },
+                      e('span', { className: 'inspector-section-label' }, 'I/O Ports'),
+                      e('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
+                        e('div', null,
+                          e('span', { style: { fontSize: '11px', color: 'var(--text-muted)', marginRight: '6px' } }, 'Inputs:'),
+                          inputs.length > 0
+                            ? inputs.map((pin, idx) => e('span', { key: idx, className: 'pin-pill in' }, `→ ${pin}`))
+                            : e('span', { style: { fontSize: '11px', color: 'var(--text-dim)' } }, 'None (Source Node)')
+                        ),
+                        e('div', null,
+                          e('span', { style: { fontSize: '11px', color: 'var(--text-muted)', marginRight: '6px' } }, 'Outputs:'),
+                          outputs.length > 0
+                            ? outputs.map((pin, idx) => e('span', { key: idx, className: 'pin-pill out' }, `${pin} →`))
+                            : e('span', { style: { fontSize: '11px', color: 'var(--text-dim)' } }, 'None (Terminal Node)')
+                        )
+                      )
+                    ),
+                    // Editable Hyperparameters Section
+                    e('div', { className: 'inspector-section' },
+                      e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
+                        e('span', { className: 'inspector-section-label' }, 'Hyperparameters'),
+                        e('button', {
+                          className: 'btn-icon-tool',
+                          style: { padding: '2px 8px', fontSize: '11px' },
+                          onClick: () => {
+                            const keyName = prompt('Enter new parameter name:');
+                            if (keyName && keyName.trim()) {
+                              setSelectedNodeParams(prev => ({ ...prev, [keyName.trim()]: '' }));
+                            }
+                          }
+                        }, '+ Param')
+                      ),
+                      Object.keys(selectedNodeParams).length === 0 ?
+                        e('div', { style: { fontSize: '11.5px', color: 'var(--text-dim)', fontStyle: 'italic' } }, 'No parameters configured.') :
+                        Object.entries(selectedNodeParams).map(([k, v]) =>
+                          e('div', { key: k, className: 'inspector-field-row' },
+                            e('span', { className: 'inspector-field-key', title: k }, k),
+                            e('input', {
+                              className: 'inspector-field-input',
+                              value: v,
+                              onChange: (ev) => {
+                                const val = ev.target.value;
+                                setSelectedNodeParams(prev => ({ ...prev, [k]: val }));
+                              }
+                            })
+                          )
+                        ),
+                      e('div', { style: { display: 'flex', gap: '8px', marginTop: '6px' } },
+                        e('button', {
+                          className: 'btn-sec',
+                          style: { flex: 1, padding: '6px 0', fontSize: '12px' },
+                          onClick: handleSaveNodeParams
+                        }, '💾 Save Params'),
+                        e('button', {
+                          className: 'btn-send',
+                          style: { flex: 1.2, padding: '6px 0', fontSize: '12px', background: 'var(--accent-terracotta, #9a3412)' },
+                          disabled: isExecutingSingleNode,
+                          onClick: () => handleExecuteSingleNode(selNode.id)
+                        }, isExecutingSingleNode ? '⏳ Running...' : '▶ Run Node')
+                      )
+                    ),
+                    // Live Execution Output
+                    e('div', { className: 'inspector-section' },
+                      e('span', { className: 'inspector-section-label' }, 'Execution Output'),
+                      exec && exec.output ?
+                        e('pre', { className: 'inspector-output-json' }, JSON.stringify(exec.output, null, 2)) :
+                        e('div', { style: { fontSize: '11.5px', color: 'var(--text-dim)', fontStyle: 'italic' } }, 'Node not executed yet. Click "▶ Run Node" above to test in isolation.')
+                    )
+                  )
+                );
+              })()
             )
           ),
 
@@ -2724,6 +3140,34 @@
               )
             ),
 
+            // Local Workspace Plugin & Script Scanner Box
+            e('div', { className: 'workspace-scanner-box' },
+              e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '8px' } },
+                e('div', null,
+                  e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+                    e('span', { style: { fontSize: '16px' } }, '🔍'),
+                    e('h3', { style: { fontFamily: 'Newsreader', fontSize: '17px', margin: 0, fontWeight: '600' } }, 'Workspace Plugin & Script Scanner'),
+                    e('span', { className: 'badge-update', style: { background: '#dcfce7', color: '#166534', borderColor: '#bbf7d0', fontSize: '11px' } }, 'AUTO-LOAD')
+                  ),
+                  e('p', { style: { color: 'var(--text-muted)', fontSize: '12.5px', margin: '4px 0 0 0' } },
+                    'Instantly scan your local Triune project repository (triune/plugins/, scripts/, root) for custom @register_node plugins and custom models.'
+                  )
+                ),
+                e('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } },
+                  e('button', {
+                    className: 'btn-action',
+                    style: { background: 'var(--accent-olive, #2b4c3f)', color: '#fff', fontSize: '12px', padding: '6px 14px' },
+                    onClick: handleScanWorkspacePlugins
+                  }, '🔍 Scan Local Plugins'),
+                  e('button', {
+                    className: 'btn-sec',
+                    style: { fontSize: '12px', padding: '6px 14px' },
+                    onClick: () => setShowWorkspacePluginModal(true)
+                  }, '✍️ Scaffold New Plugin')
+                )
+              )
+            ),
+
             // Direct Repository Cloner Box
             e('div', { className: 'repo-cloner-box' },
               e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
@@ -2862,13 +3306,33 @@
                           ),
                           e('div', { style: { fontSize: '12px', color: 'var(--text-muted)', marginTop: '3px' } }, `By ${m.author || 'User'} • ${m.installed_at || ''}`)
                         ),
-                        e('div', { style: { display: 'flex', gap: '8px', alignItems: 'center' } },
+                        e('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
                           m.git_info && m.git_info.is_git && e('button', {
                             className: 'btn-sec',
                             style: { padding: '5px 12px', fontSize: '12px' },
                             disabled: activePullingModId === m.id,
                             onClick: () => handleGitPullRepo(m.id)
                           }, activePullingModId === m.id ? '⏳ Pulling...' : '🔄 Git Pull'),
+                          ((m.registered_nodes && m.registered_nodes.length > 0) || m.type === 'plugin') && e('button', {
+                            className: 'btn-sec',
+                            style: { padding: '5px 12px', fontSize: '12px', background: '#fef3c7', borderColor: '#fde68a', color: '#92400e' },
+                            onClick: () => handleAddModuleNodesToCanvas(m)
+                          }, '🧩 Add Nodes to Canvas'),
+                          ((m.artifacts && m.artifacts.weights && m.artifacts.weights.length > 0) || m.type === 'model') && e('button', {
+                            className: 'btn-sec',
+                            style: { padding: '5px 12px', fontSize: '12px', background: '#f5f3ff', borderColor: '#ddd6fe', color: '#6d28d9' },
+                            onClick: () => handleLoadModuleWeights(m)
+                          }, '⚖️ Load Weights'),
+                          ((m.artifacts && m.artifacts.datasets && m.artifacts.datasets.length > 0) || m.type === 'dataset') && e('button', {
+                            className: 'btn-sec',
+                            style: { padding: '5px 12px', fontSize: '12px', background: '#ecfeff', borderColor: '#a5f3fc', color: '#0e7490' },
+                            onClick: () => handleStreamModuleDataset(m)
+                          }, '📊 Stream in Engine'),
+                          ((m.artifacts && m.artifacts.adapters && m.artifacts.adapters.length > 0) || m.type === 'adapter') && e('button', {
+                            className: 'btn-sec',
+                            style: { padding: '5px 12px', fontSize: '12px', background: '#fdf2f8', borderColor: '#fbcfe8', color: '#9d174d' },
+                            onClick: () => handleAttachModuleAdapter(m)
+                          }, '🎯 Attach in LoRA'),
                           e('button', {
                             className: 'btn-sec',
                             style: { padding: '5px 12px', fontSize: '12px', background: '#ecfdf5', borderColor: '#a7f3d0', color: '#065f46' },

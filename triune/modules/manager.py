@@ -623,6 +623,106 @@ class ModuleManager:
             if path_str and Path(path_str).exists():
                 self.discover_and_register_nodes(Path(path_str))
 
+    def scan_workspace_plugins(self, workspace_dir: str | Path | None = None) -> dict[str, Any]:
+        """Scan workspace directories for Python scripts defining custom DAG nodes."""
+        if workspace_dir:
+            base_search = Path(workspace_dir)
+        else:
+            base_search = Path(__file__).resolve().parent.parent.parent
+
+        search_dirs = [
+            base_search / "triune" / "plugins",
+            base_search / "plugins",
+            base_search / "scripts",
+            base_search / "custom_nodes",
+        ]
+        scanned_paths = []
+        all_discovered = []
+
+        from triune.plugins.registry import global_registry
+
+        for s_dir in search_dirs:
+            if s_dir.exists() and s_dir.is_dir():
+                scanned_paths.append(str(s_dir))
+                nodes = self.discover_and_register_nodes(s_dir)
+                for n in nodes:
+                    if n not in all_discovered:
+                        all_discovered.append(n)
+
+        # Also scan standalone plugin files in workspace root
+        for py_file in base_search.glob("plugin_*.py"):
+            scanned_paths.append(str(py_file))
+            nodes = self.discover_and_register_nodes(base_search)
+            for n in nodes:
+                if n not in all_discovered:
+                    all_discovered.append(n)
+            break
+
+        total_registered = len(global_registry._nodes)
+        return {
+            "success": True,
+            "scanned_paths": scanned_paths,
+            "discovered_nodes": all_discovered,
+            "total_registered_nodes": total_registered,
+            "message": f"Scanned workspace: {len(all_discovered)} custom node(s) discovered across {len(scanned_paths)} path(s)."
+        }
+
+    def create_custom_plugin_template(self, name: str, category: str = "Custom", destination_dir: Optional[str] = None) -> dict[str, Any]:
+        """Create a boilerplate Python plugin file with @register_node decorator ready for instant execution."""
+        clean_name = "".join(c if c.isalnum() or c == "_" else "_" for c in name.strip())
+        if not clean_name:
+            clean_name = "CustomNode"
+
+        if destination_dir:
+            target_dir = Path(destination_dir)
+        else:
+            target_dir = Path(__file__).resolve().parent.parent / "plugins"
+
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target_file = target_dir / f"plugin_{clean_name.lower()}.py"
+
+        content = f'''"""Custom Triune Studio Node Plugin: {clean_name}."""
+
+from __future__ import annotations
+from typing import Any, Dict
+from triune.plugins.registry import register_node
+
+
+@register_node(
+    name="{clean_name}",
+    category="{category}",
+    description="Custom user-defined visual DAG node for Triune Studio.",
+    inputs=["in_data"],
+    outputs=["out_data"]
+)
+class {clean_name}:
+    """Custom processor node."""
+
+    def __init__(self, multiplier: float = 1.0, mode: str = "standard"):
+        self.multiplier = multiplier
+        self.mode = mode
+
+    def __call__(self, in_data: Any = None) -> Dict[str, Any]:
+        return {{
+            "status": "success",
+            "node": "{clean_name}",
+            "mode": self.mode,
+            "multiplier": self.multiplier,
+            "result": "Processed by {clean_name}"
+        }}
+'''
+        target_file.write_text(content, encoding="utf-8")
+
+        # Immediately auto-discover into global registry
+        self.discover_and_register_nodes(target_dir)
+
+        return {
+            "success": True,
+            "node_name": clean_name,
+            "file_path": str(target_file),
+            "message": f"Created custom plugin template at {target_file.name}. It is now registered in the Studio node catalog!"
+        }
+
     # -------------------------------------------------------------------------
     # Module Installation (Curated / Builtin / Pip / Cloned)
     # -------------------------------------------------------------------------

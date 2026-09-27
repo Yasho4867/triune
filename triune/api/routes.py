@@ -1221,6 +1221,19 @@ if HAS_FASTAPI:
                 "results": {}
             }
 
+    @router.post("/v1/dag/execute_node")
+    async def execute_dag_node(req: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute a single DAG node in isolation with immediate response."""
+        if dag_engine is None:
+            return {"status": "needs_torch", "message": "DAG execution engine requires PyTorch."}
+        try:
+            node = req.get("node", req)
+            context = req.get("context", {})
+            res = dag_engine.execute_single_node(node, context)
+            return res
+        except Exception as e:
+            return {"status": "failed", "error": str(e)}
+
     @router.get("/v1/vram/stats")
     async def get_vram_stats() -> Dict[str, Any]:
         """Return live VRAM profiling stats and OOM warning status."""
@@ -1652,6 +1665,20 @@ if HAS_FASTAPI:
         """Uninstall a module and remove its directory."""
         return await asyncio.to_thread(module_manager.uninstall_module, req.id)
 
+    @router.post("/v1/modules/scan_local")
+    async def scan_local_workspace(req: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Scan workspace for Python scripts defining custom DAG nodes and register them."""
+        path = (req or {}).get("path")
+        return await asyncio.to_thread(module_manager.scan_workspace_plugins, path)
+
+    @router.post("/v1/modules/create_plugin")
+    async def create_plugin_template_endpoint(req: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a boilerplate Python plugin file with @register_node decorator."""
+        name = req.get("name", "CustomNode")
+        category = req.get("category", "Custom")
+        dest = req.get("destination_dir")
+        return await asyncio.to_thread(module_manager.create_custom_plugin_template, name, category, dest)
+
     # -------------------------------------------------------------------------
     # Model Export Endpoints
     # -------------------------------------------------------------------------
@@ -1881,6 +1908,8 @@ if HAS_FASTAPI:
         return {"provider": provider, "status": "valid", "message": f"{provider.upper()} key format validated."}
 
     @router.get("/api/plugins/nodes")
+    @router.get("/v1/plugins/nodes")
+    @router.get("/v1/plugins")
     async def get_plugin_nodes() -> List[Dict[str, Any]]:
         """Return serializable node definitions for Triune Studio Node Graph UI."""
         if node_registry is not None and hasattr(node_registry, "list_nodes"):
