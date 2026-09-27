@@ -497,6 +497,13 @@
     const [exitUsage, setExitUsage] = useState({ reflex: 38.0, limbic: 34.0, cortex: 28.0 });
     const [telemetryLogs, setTelemetryLogs] = useState([]);
     const [lastSample, setLastSample] = useState('');
+    const [trainBatchSize, setTrainBatchSize] = useState(4);
+    const [trainSeqLen, setTrainSeqLen] = useState(64);
+    const [trainGradAccum, setTrainGradAccum] = useState(4);
+    const [trainLR, setTrainLR] = useState('0.0005');
+    const [trainWarmup, setTrainWarmup] = useState(500);
+    const [trainDepthMode, setTrainDepthMode] = useState('cortex');
+    const [isUpdatingTrainConfig, setIsUpdatingTrainConfig] = useState(false);
     const canvasRef = useRef(null);
 
     // Visual Node Graph State
@@ -1158,6 +1165,44 @@
       } catch (e) {
         showToast('Network error – could not reach backend engine');
       }
+    };
+
+    // Apply Live Training Hyperparameters to PyTorch Engine
+    const handleApplyTrainingHyperparams = async () => {
+      setIsUpdatingTrainConfig(true);
+      try {
+        const res = await apiFetch('/v1/training/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            batch_size: parseInt(trainBatchSize) || 4,
+            seq_len: parseInt(trainSeqLen) || 64,
+            grad_accum_steps: parseInt(trainGradAccum) || 4,
+            depth_mode: trainDepthMode,
+            lr_peak: parseFloat(trainLR) || 5e-4,
+            warmup_steps: parseInt(trainWarmup) || 500
+          })
+        });
+        const data = await res.json();
+        if (data.status === 'updated') {
+          showToast(`⚡ ${data.message || 'Hyperparameters applied to PyTorch Engine!'}`);
+          setDatasetInfo(prev => ({
+            ...prev,
+            batch_size: data.batch_size,
+            seq_len: data.seq_len,
+            grad_accum_steps: data.grad_accum_steps,
+            depth_mode: data.depth_mode,
+            lr_peak: data.lr_peak,
+            warmup_steps: data.warmup_steps,
+            current_lr: data.current_lr
+          }));
+        } else {
+          showToast(`⚠️ Notice: ${data.message || 'Config update unconfirmed'}`);
+        }
+      } catch (err) {
+        showToast('Network error: Could not reach training config endpoint');
+      }
+      setIsUpdatingTrainConfig(false);
     };
 
     // Node Canvas Dragging & Interactive Wire Connection
@@ -1890,26 +1935,101 @@
                 }, '💾 Checkpoint Browser ➔')
               )
             ),
+            // Interactive Training Hyperparameters & Depth Supervision Bar
+            e('div', { className: 'training-hyperparams-bar' },
+              e('div', { className: 'hyperparams-header' },
+                e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
+                  e('span', { className: 'preset-title', style: { margin: 0 } }, '⚙️ Engine Hyperparameters & Depth Supervision:'),
+                  e('span', { className: 'badge-eff-tokens' },
+                    `Effective: ${(parseInt(trainBatchSize) * parseInt(trainSeqLen) * parseInt(trainGradAccum)).toLocaleString()} tokens/step`
+                  )
+                ),
+                e('button', {
+                  className: 'btn-action-apply',
+                  disabled: isUpdatingTrainConfig,
+                  onClick: handleApplyTrainingHyperparams
+                }, isUpdatingTrainConfig ? 'Applying...' : '⚡ Apply Hyperparameters')
+              ),
+              e('div', { className: 'hyperparams-controls-grid' },
+                e('div', { className: 'hyperparam-col' },
+                  e('label', null, 'Micro Batch Size:'),
+                  e('select', { value: trainBatchSize, onChange: ev => setTrainBatchSize(parseInt(ev.target.value)) },
+                    e('option', { value: 2 }, '2 sequences'),
+                    e('option', { value: 4 }, '4 sequences (Standard)'),
+                    e('option', { value: 8 }, '8 sequences'),
+                    e('option', { value: 16 }, '16 sequences')
+                  )
+                ),
+                e('div', { className: 'hyperparam-col' },
+                  e('label', null, 'Sequence Length:'),
+                  e('select', { value: trainSeqLen, onChange: ev => setTrainSeqLen(parseInt(ev.target.value)) },
+                    e('option', { value: 64 }, '64 tokens (Fast)'),
+                    e('option', { value: 128 }, '128 tokens'),
+                    e('option', { value: 256 }, '256 tokens'),
+                    e('option', { value: 512 }, '512 tokens (Context)')
+                  )
+                ),
+                e('div', { className: 'hyperparam-col' },
+                  e('label', null, 'Gradient Accumulation:'),
+                  e('select', { value: trainGradAccum, onChange: ev => setTrainGradAccum(parseInt(ev.target.value)) },
+                    e('option', { value: 1 }, '1x (1 micro-batch)'),
+                    e('option', { value: 2 }, '2x accumulation'),
+                    e('option', { value: 4 }, '4x accumulation (Recommended)'),
+                    e('option', { value: 8 }, '8x accumulation (Large)'),
+                    e('option', { value: 16 }, '16x accumulation (Dense)')
+                  )
+                ),
+                e('div', { className: 'hyperparam-col' },
+                  e('label', null, 'Depth Mode (Supervision):'),
+                  e('select', { value: trainDepthMode, onChange: ev => setTrainDepthMode(ev.target.value) },
+                    e('option', { value: 'cortex' }, 'Full Cortex (100% Backbone Grad)'),
+                    e('option', { value: 'joint' }, 'Joint Multi-Exit (Simultaneous All Exits)'),
+                    e('option', { value: 'dynamic' }, 'Dynamic Router (Adaptive Depth)')
+                  )
+                ),
+                e('div', { className: 'hyperparam-col' },
+                  e('label', null, 'Peak Learning Rate:'),
+                  e('select', { value: trainLR, onChange: ev => setTrainLR(ev.target.value) },
+                    e('option', { value: '0.0001' }, '1e-4 (Gentle)'),
+                    e('option', { value: '0.0003' }, '3e-4 (Moderate)'),
+                    e('option', { value: '0.0005' }, '5e-4 (Recommended)'),
+                    e('option', { value: '0.0008' }, '8e-4 (Fast Converge)'),
+                    e('option', { value: '0.001' }, '1e-3 (Aggressive)')
+                  )
+                ),
+                e('div', { className: 'hyperparam-col' },
+                  e('label', null, 'Warmup Steps:'),
+                  e('input', {
+                    type: 'number',
+                    min: 0,
+                    max: 5000,
+                    step: 50,
+                    value: trainWarmup,
+                    onChange: ev => setTrainWarmup(parseInt(ev.target.value) || 0)
+                  })
+                )
+              )
+            ),
             e('div', { className: 'metrics-cards-grid' },
               e('div', { className: 'card-stat' },
                 e('div', { className: 'stat-label' }, 'Total Loss'),
                 e('div', { className: 'stat-value' }, metrics.loss !== undefined ? metrics.loss.toFixed(4) : '0.0000'),
-                e('div', { className: 'stat-sub' }, 'Batch Size: 8 | Grad Accum: 4 | LR: 1e-4')
+                e('div', { className: 'stat-sub' }, `Batch: ${datasetInfo.batch_size || 4} | Accum: ${datasetInfo.grad_accum_steps || metrics.grad_accum_steps || 4}x | LR: ${(metrics.lr || datasetInfo.current_lr || 0.0005).toExponential(1)}`)
               ),
               e('div', { className: 'card-stat' },
                 e('div', { className: 'stat-label' }, 'Global Steps'),
                 e('div', { className: 'stat-value' }, metrics.step || 0),
-                e('div', { className: 'stat-sub' }, 'Target: 50,000 Steps')
+                e('div', { className: 'stat-sub' }, `Tokens: ${(datasetInfo.total_tokens || metrics.tokens_trained || 0).toLocaleString()}`)
               ),
               e('div', { className: 'card-stat' },
                 e('div', { className: 'stat-label' }, 'Exit Head Ratio'),
                 e('div', { className: 'stat-value' }, `R:${exitUsage.reflex}% L:${exitUsage.limbic}% C:${exitUsage.cortex}%`),
-                e('div', { className: 'stat-sub' }, 'Reflex / Limbic / Cortex')
+                e('div', { className: 'stat-sub' }, `Mode: ${(datasetInfo.depth_mode || metrics.depth_mode || trainDepthMode).toUpperCase()}`)
               ),
               e('div', { className: 'card-stat' },
                 e('div', { className: 'stat-label' }, 'Throughput'),
                 e('div', { className: 'stat-value' }, metrics.throughput || 0),
-                e('div', { className: 'stat-sub' }, 'Tokens / sec')
+                e('div', { className: 'stat-sub' }, `${((datasetInfo.batch_size || 4) * (datasetInfo.seq_len || 64) * (datasetInfo.grad_accum_steps || metrics.grad_accum_steps || 4)).toLocaleString()} tok/step`)
               )
             ),
             // Live Dataset Streaming Telemetry & Batch Ingestion Box

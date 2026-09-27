@@ -8,6 +8,7 @@ import asyncio
 import io
 import json
 import time
+import math
 import sys
 import traceback
 import platform
@@ -208,6 +209,12 @@ if HAS_FASTAPI:
             self.data_idx = 0
             self.batch_size = 4
             self.seq_len = 64
+            self.grad_accum_steps = 4
+            self.depth_mode = "cortex"  # "cortex" (full 6-layer backbone) | "joint" (all 3 exits) | "dynamic" (router)
+            self.lr_peak = 5e-4
+            self.warmup_steps = 500
+            self.min_lr = 1e-5
+            self.current_lr = 5e-4
             self.dataset_path = "data/fineweb_sample.jsonl"
             self.dataset_name = "HuggingFaceFW/fineweb-edu"
             self.dataset_type = "streaming"
@@ -275,6 +282,15 @@ if HAS_FASTAPI:
             ]
             self.training_task: Optional[asyncio.Task] = None
 
+        def get_scheduled_lr(self, step: int) -> float:
+            """Cosine learning rate schedule with linear warmup."""
+            if step < self.warmup_steps:
+                return max(self.min_lr, self.lr_peak * float(step + 1) / max(1, self.warmup_steps))
+            decay_steps = 25000
+            progress = min(1.0, float(step - self.warmup_steps) / float(max(1, decay_steps - self.warmup_steps)))
+            cosine_factor = 0.5 * (1.0 + math.cos(math.pi * progress))
+            return max(self.min_lr, self.min_lr + (self.lr_peak - self.min_lr) * cosine_factor)
+
         def load_tokenizer(self):
             if self.tokenizer is not None:
                 return self.tokenizer
@@ -311,7 +327,7 @@ if HAS_FASTAPI:
                 use_fp4=False,
                 use_fp8=False,
             ).to(self.device)
-            self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=1e-4)
+            self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.current_lr, weight_decay=0.01)
 
             # Auto-restore latest studio checkpoint if available
             ckpt_dir = Path("checkpoints")
@@ -752,21 +768,43 @@ if HAS_FASTAPI:
             t0 = time.perf_counter()
             self.step += 1
             self.model.train()
+
+            # Dynamic Warmup & Cosine Decay LR Scheduling
+            self.current_lr = self.get_scheduled_lr(self.step)
+            if self.optimizer:
+                for g in self.optimizer.param_groups:
+                    g["lr"] = self.current_lr
+
             self.optimizer.zero_grad()
 
             if not self.data_chunks:
                 self.load_training_data()
 
-            # Assemble batch from real streaming buffer or local dataset
-            batch_tensors = []
-            if self.is_streaming_hf:
-                if len(self.hf_stream_buffer) < self.batch_size:
-                    self._refill_stream_buffer(target_chunks=self.batch_size * 4)
+            accum_total_loss = 0.0
+            accum_lm_loss = 0.0
+            accum_z_loss = 0.0
+            accum_tokens = 0
+            reflex_pct, limbic_pct, cortex_pct = 34.0, 33.0, 33.0
 
-                if len(self.hf_stream_buffer) >= self.batch_size:
-                    for _ in range(self.batch_size):
-                        chunk = self.hf_stream_buffer.pop(0)
-                        batch_tensors.append(torch.tensor(chunk, dtype=torch.long))
+            # Gradient Accumulation Micro-Batch Loop
+            for micro_idx in range(self.grad_accum_steps):
+                # Assemble micro-batch from real streaming buffer or local dataset
+                batch_tensors = []
+                if self.is_streaming_hf:
+                    if len(self.hf_stream_buffer) < self.batch_size:
+                        self._refill_stream_buffer(target_chunks=self.batch_size * 4)
+
+                    if len(self.hf_stream_buffer) >= self.batch_size:
+                        for _ in range(self.batch_size):
+                            chunk = self.hf_stream_buffer.pop(0)
+                            batch_tensors.append(torch.tensor(chunk, dtype=torch.long))
+                    else:
+                        if not self.data_chunks:
+                            self.load_training_data()
+                        for _ in range(self.batch_size):
+                            chunk = self.data_chunks[self.data_idx % len(self.data_chunks)]
+                            batch_tensors.append(torch.tensor(chunk, dtype=torch.long))
+                            self.data_idx += 1
                 else:
                     if not self.data_chunks:
                         self.load_training_data()
@@ -774,73 +812,96 @@ if HAS_FASTAPI:
                         chunk = self.data_chunks[self.data_idx % len(self.data_chunks)]
                         batch_tensors.append(torch.tensor(chunk, dtype=torch.long))
                         self.data_idx += 1
-            else:
-                if not self.data_chunks:
-                    self.load_training_data()
-                for _ in range(self.batch_size):
-                    chunk = self.data_chunks[self.data_idx % len(self.data_chunks)]
-                    batch_tensors.append(torch.tensor(chunk, dtype=torch.long))
-                    self.data_idx += 1
 
-            batch = torch.stack(batch_tensors).to(self.device)
-            x = batch[:, :-1]
-            targets = batch[:, 1:].contiguous()
-            # Record cumulative tokens trained
-            tokens_in_step = x.numel()
-            self.total_tokens_trained += tokens_in_step
+                batch = torch.stack(batch_tensors).to(self.device)
+                x = batch[:, :-1]
+                targets = batch[:, 1:].contiguous()
+                accum_tokens += x.numel()
 
-            # Decode current batch sample for live ingestion transparency
-            if self.tokenizer:
-                try:
-                    raw_decoded = self.tokenizer.decode(x[0].tolist(), skip_special_tokens=True)
-                    self.current_batch_preview = raw_decoded.replace("Ġ", " ").replace("Ċ", "\n").replace("  ", " ").strip()
-                except Exception:
-                    self.current_batch_preview = f"Stream token chunk #{self.step}"
-            else:
-                self.current_batch_preview = f"Stream token chunk #{self.step}"
+                # Decode current batch sample for live ingestion transparency
+                if micro_idx == 0:
+                    if self.tokenizer:
+                        try:
+                            raw_decoded = self.tokenizer.decode(x[0].tolist(), skip_special_tokens=True)
+                            self.current_batch_preview = raw_decoded.replace("Ġ", " ").replace("Ċ", "\n").replace("  ", " ").strip()
+                        except Exception:
+                            self.current_batch_preview = f"Stream token chunk #{self.step}"
+                    else:
+                        self.current_batch_preview = f"Stream token chunk #{self.step}"
 
-            res = self.model(x)
-            if isinstance(res, tuple):
-                logits = res[0]
-                route_logits = res[1] if len(res) > 1 else None
-                lm_loss = self.loss_fn(logits.view(-1, 32000), targets.view(-1))
-                if route_logits is not None and route_logits.numel() > 0:
-                    z_loss = torch.logsumexp(route_logits, dim=-1).pow(2).mean()
-                    total_loss = lm_loss + 1e-3 * z_loss
-                    probs = torch.softmax(route_logits, dim=-1)
-                    flat_probs = probs.reshape(-1, probs.size(-1)).mean(dim=0)
-                    reflex_pct = round(float(flat_probs[0].item()) * 100, 1) if flat_probs.numel() > 0 else 34.0
-                    limbic_pct = round(float(flat_probs[1].item()) * 100, 1) if flat_probs.numel() > 1 else 33.0
-                    cortex_pct = round(max(0.0, 100.0 - reflex_pct - limbic_pct), 1)
-                else:
+                # Forward pass routed by depth supervision mode
+                if self.depth_mode == "cortex":
+                    # Full Cortex Pretraining: 100% gradient backpropagation to all 6 layers and final_head
+                    res = self.model(x, force_depth=2)
+                    logits = res[0] if isinstance(res, tuple) else res
+                    lm_loss = self.loss_fn(logits.view(-1, 32000), targets.view(-1))
                     z_loss = torch.tensor(0.0, device=self.device)
-                    total_loss = lm_loss
-                    reflex_pct, limbic_pct, cortex_pct = 34.0, 33.0, 33.0
-            else:
-                logits = res
-                lm_loss = self.loss_fn(logits.view(-1, 32000), targets.view(-1))
-                z_loss = torch.tensor(0.0, device=self.device)
-                total_loss = lm_loss
-                reflex_pct, limbic_pct, cortex_pct = 34.0, 33.0, 33.0
+                    micro_loss = lm_loss
+                    reflex_pct, limbic_pct, cortex_pct = 0.0, 0.0, 100.0
 
-            total_loss.backward()
+                elif self.depth_mode == "joint":
+                    # Joint Multi-Exit Supervision: all 3 exit heads and intermediate layers receive simultaneous gradients
+                    reflex_logits, limbic_logits, cortex_logits, route_logits = self.model.forward_all_exits(x, update_stats=True)
+                    loss_ref = self.loss_fn(reflex_logits.view(-1, 32000), targets.view(-1))
+                    loss_limb = self.loss_fn(limbic_logits.view(-1, 32000), targets.view(-1))
+                    loss_cort = self.loss_fn(cortex_logits.view(-1, 32000), targets.view(-1))
+                    lm_loss = 0.33 * loss_ref + 0.33 * loss_limb + 0.34 * loss_cort
+                    if route_logits is not None and route_logits.numel() > 0:
+                        z_loss = torch.logsumexp(route_logits, dim=-1).pow(2).mean()
+                        micro_loss = lm_loss + 1e-3 * z_loss
+                    else:
+                        z_loss = torch.tensor(0.0, device=self.device)
+                        micro_loss = lm_loss
+                    reflex_pct, limbic_pct, cortex_pct = 33.3, 33.3, 33.4
+
+                else:
+                    # Dynamic Adaptive Router with Load Balancing Z-Loss
+                    res = self.model(x)
+                    if isinstance(res, tuple):
+                        logits = res[0]
+                        route_logits = res[1] if len(res) > 1 else None
+                        lm_loss = self.loss_fn(logits.view(-1, 32000), targets.view(-1))
+                        if route_logits is not None and route_logits.numel() > 0:
+                            z_loss = torch.logsumexp(route_logits, dim=-1).pow(2).mean()
+                            micro_loss = lm_loss + 1e-3 * z_loss
+                            probs = torch.softmax(route_logits, dim=-1)
+                            flat_probs = probs.reshape(-1, probs.size(-1)).mean(dim=0)
+                            reflex_pct = round(float(flat_probs[0].item()) * 100, 1) if flat_probs.numel() > 0 else 34.0
+                            limbic_pct = round(float(flat_probs[1].item()) * 100, 1) if flat_probs.numel() > 1 else 33.0
+                            cortex_pct = round(max(0.0, 100.0 - reflex_pct - limbic_pct), 1)
+                        else:
+                            z_loss = torch.tensor(0.0, device=self.device)
+                            micro_loss = lm_loss
+                            reflex_pct, limbic_pct, cortex_pct = 34.0, 33.0, 33.0
+                    else:
+                        logits = res
+                        lm_loss = self.loss_fn(logits.view(-1, 32000), targets.view(-1))
+                        z_loss = torch.tensor(0.0, device=self.device)
+                        micro_loss = lm_loss
+                        reflex_pct, limbic_pct, cortex_pct = 34.0, 33.0, 33.0
+
+                scaled_loss = micro_loss / self.grad_accum_steps
+                scaled_loss.backward()
+
+                accum_total_loss += float(micro_loss.item()) / self.grad_accum_steps
+                accum_lm_loss += float(lm_loss.item()) / self.grad_accum_steps
+                accum_z_loss += float(z_loss.item()) / self.grad_accum_steps
+
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
             self.optimizer.step()
 
-            loss_val = float(total_loss.item())
-            lm_val = float(lm_loss.item())
-            z_val = float(z_loss.item())
+            self.total_tokens_trained += accum_tokens
 
             t1 = time.perf_counter()
             dt = max(0.001, t1 - t0)
-            tok_per_sec = int((self.batch_size * self.seq_len) / dt)
+            tok_per_sec = int(accum_tokens / dt)
             vram_stats = VRAMProfiler.get_vram_stats(self.device)
 
             payload = {
                 "step": self.step,
-                "loss": round(loss_val, 4),
-                "lm_loss": round(lm_val, 4),
-                "router_loss": round(z_val, 4),
+                "loss": round(accum_total_loss, 4),
+                "lm_loss": round(accum_lm_loss, 4),
+                "router_loss": round(accum_z_loss, 4),
                 "throughput": tok_per_sec,
                 "vram_gb": vram_stats.get("allocated_gb", 0.0),
                 "device": self.device_name,
@@ -851,6 +912,10 @@ if HAS_FASTAPI:
                 "dataset_type": self.dataset_type,
                 "active_checkpoint": self.active_checkpoint,
                 "is_streaming": self.is_streaming_hf,
+                "grad_accum_steps": self.grad_accum_steps,
+                "depth_mode": self.depth_mode,
+                "lr": round(self.current_lr, 7),
+                "tokens_in_step": accum_tokens,
             }
 
             self.history.append(payload)
@@ -1219,6 +1284,12 @@ if HAS_FASTAPI:
                 "sequences_count": len(pytorch_state.hf_stream_buffer) if pytorch_state.is_streaming_hf else len(pytorch_state.data_chunks),
                 "batch_size": pytorch_state.batch_size,
                 "seq_len": pytorch_state.seq_len,
+                "grad_accum_steps": pytorch_state.grad_accum_steps,
+                "depth_mode": pytorch_state.depth_mode,
+                "lr_peak": pytorch_state.lr_peak,
+                "warmup_steps": pytorch_state.warmup_steps,
+                "current_lr": pytorch_state.current_lr,
+                "effective_batch_tokens": pytorch_state.batch_size * pytorch_state.seq_len * pytorch_state.grad_accum_steps,
                 "is_streaming": pytorch_state.is_streaming_hf,
                 "hf_config": pytorch_state.hf_config,
                 "hf_split": pytorch_state.hf_split,
@@ -1226,6 +1297,12 @@ if HAS_FASTAPI:
                 "hf_token_configured": bool(pytorch_state.hf_token or os.environ.get("HF_TOKEN")),
             },
             "active_checkpoint": pytorch_state.active_checkpoint,
+            "grad_accum_steps": pytorch_state.grad_accum_steps,
+            "depth_mode": pytorch_state.depth_mode,
+            "lr_peak": pytorch_state.lr_peak,
+            "warmup_steps": pytorch_state.warmup_steps,
+            "current_lr": pytorch_state.current_lr,
+            "effective_batch_tokens": pytorch_state.batch_size * pytorch_state.seq_len * pytorch_state.grad_accum_steps,
         }
 
     @router.post("/v1/training/start")
@@ -1256,6 +1333,10 @@ if HAS_FASTAPI:
         batch_size: Optional[int] = None
         seq_len: Optional[int] = None
         lr: Optional[float] = None
+        lr_peak: Optional[float] = None
+        warmup_steps: Optional[int] = None
+        grad_accum_steps: Optional[int] = None
+        depth_mode: Optional[str] = None
         dataset_path: Optional[str] = None
 
     class ModelLoadRequest(BaseModel):
@@ -1306,21 +1387,45 @@ if HAS_FASTAPI:
 
     @router.post("/v1/training/config")
     async def update_training_config(req: TrainingConfigRequest) -> Dict[str, Any]:
-        """Update live training parameters (batch size, learning rate, dataset)."""
+        """Update live training parameters (batch size, seq len, grad accum, depth mode, learning rate, dataset)."""
         if req.batch_size is not None and req.batch_size > 0:
             pytorch_state.batch_size = req.batch_size
         if req.seq_len is not None and req.seq_len > 0:
             pytorch_state.seq_len = req.seq_len
-        if req.lr is not None and req.lr > 0 and pytorch_state.optimizer:
-            for g in pytorch_state.optimizer.param_groups:
-                g["lr"] = req.lr
+        if req.grad_accum_steps is not None and req.grad_accum_steps > 0:
+            pytorch_state.grad_accum_steps = req.grad_accum_steps
+        if req.depth_mode in ("cortex", "joint", "dynamic"):
+            pytorch_state.depth_mode = req.depth_mode
+        if req.lr_peak is not None and req.lr_peak > 0:
+            pytorch_state.lr_peak = req.lr_peak
+        if req.warmup_steps is not None and req.warmup_steps >= 0:
+            pytorch_state.warmup_steps = req.warmup_steps
+        if req.lr is not None and req.lr > 0:
+            pytorch_state.lr_peak = req.lr
+            pytorch_state.current_lr = req.lr
+            if pytorch_state.optimizer:
+                for g in pytorch_state.optimizer.param_groups:
+                    g["lr"] = req.lr
         if req.dataset_path:
             pytorch_state.load_training_data(req.dataset_path)
+
+        eff_tokens = pytorch_state.batch_size * pytorch_state.seq_len * pytorch_state.grad_accum_steps
+        log_msg = f"[CONFIG] Hyperparameters updated: Batch={pytorch_state.batch_size}, SeqLen={pytorch_state.seq_len}, Accum={pytorch_state.grad_accum_steps}x (Tokens/Step={eff_tokens:,}), DepthMode={pytorch_state.depth_mode.upper()}, PeakLR={pytorch_state.lr_peak}"
+        pytorch_state.logs.insert(0, log_msg)
+        print(f"[Triune Engine] {log_msg}")
+
         return {
             "status": "updated",
             "batch_size": pytorch_state.batch_size,
             "seq_len": pytorch_state.seq_len,
+            "grad_accum_steps": pytorch_state.grad_accum_steps,
+            "depth_mode": pytorch_state.depth_mode,
+            "lr_peak": pytorch_state.lr_peak,
+            "warmup_steps": pytorch_state.warmup_steps,
+            "current_lr": pytorch_state.current_lr,
+            "effective_batch_tokens": eff_tokens,
             "dataset_path": pytorch_state.dataset_path,
+            "message": log_msg,
         }
 
     @router.post("/v1/models/load")
