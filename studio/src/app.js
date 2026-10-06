@@ -1587,8 +1587,16 @@
           const statusRes = await apiFetch('/v1/training/status');
           const statusData = await statusRes.json();
           setIsTraining(statusData.is_training);
+          if (statusData.active_model) {
+            setActiveModel(statusData.active_model);
+          }
           if (statusData.dataset) {
             setDatasetInfo(statusData.dataset);
+            if (statusData.dataset.batch_size) setTrainBatchSize(statusData.dataset.batch_size);
+            if (statusData.dataset.seq_len) setTrainSeqLen(statusData.dataset.seq_len);
+            if (statusData.dataset.grad_accum_steps) setTrainGradAccum(statusData.dataset.grad_accum_steps);
+            if (statusData.dataset.depth_mode) setTrainDepthMode(statusData.dataset.depth_mode);
+            if (statusData.dataset.current_lr) setTrainLR(String(statusData.dataset.current_lr));
             if (statusData.dataset.active_batch_preview) {
               setActiveBatchPreview(statusData.dataset.active_batch_preview);
             }
@@ -2156,8 +2164,15 @@
           try {
             const res = await apiFetch('/v1/training/status');
             const data = await res.json();
+            if (data.active_model) {
+              setActiveModel(data.active_model);
+            }
             if (data.dataset) {
               setDatasetInfo(data.dataset);
+              if (data.dataset.batch_size) setTrainBatchSize(data.dataset.batch_size);
+              if (data.dataset.seq_len) setTrainSeqLen(data.dataset.seq_len);
+              if (data.dataset.grad_accum_steps) setTrainGradAccum(data.dataset.grad_accum_steps);
+              if (data.dataset.depth_mode) setTrainDepthMode(data.dataset.depth_mode);
               if (data.dataset.active_batch_preview) {
                 setActiveBatchPreview(data.dataset.active_batch_preview);
               }
@@ -2454,17 +2469,32 @@
       }
     };
 
+    const handleLoadDAGPreset = (presetKey) => {
+      const preset = DAG_PRESETS[presetKey];
+      if (preset) {
+        setNodes(preset.nodes);
+        setEdges(preset.edges);
+        showToast(`Loaded Preset: ${preset.name}`);
+      }
+    };
+
     const handleSelectModelPreset = async (presetId) => {
       const preset = MODEL_PRESETS.find(p => p.id === presetId) || MODEL_PRESETS[0];
+      const newBatchSize = preset.layers > 8 ? 2 : 4;
+      const newSeqLen = preset.layers > 8 ? 64 : 128;
       setActiveModel(preset.id);
-      setTrainBatchSize(prev => Math.min(prev || 4, preset.layers > 8 ? 2 : 4));
-      setTrainSeqLen(prev => Math.min(prev || 64, preset.layers > 8 ? 64 : 128));
+      setTrainBatchSize(newBatchSize);
+      setTrainSeqLen(newSeqLen);
+      setTrainDepthMode('dynamic');
       setDatasetInfo(prev => ({
         ...prev,
         num_layers: preset.layers,
         hidden_dim: preset.hidden_dim,
         num_heads: preset.heads,
-        num_experts: preset.experts_routed
+        num_experts: preset.experts_routed,
+        batch_size: newBatchSize,
+        seq_len: newSeqLen,
+        depth_mode: 'dynamic'
       }));
 
       // Update Node Editor DAG if applicable
@@ -2474,34 +2504,30 @@
       }
 
       try {
-        const payload = {
-          nodes: [
-            {
-              id: 'model-core',
-              name: 'TriuneTransformer',
-              type: 'TriuneTransformer',
-              config: {
-                num_layers: preset.layers,
-                hidden_dim: preset.hidden_dim,
-                heads: preset.heads,
-                head_dim: preset.head_dim,
-                experts_routed: preset.experts_routed,
-                experts_shared: preset.experts_shared,
-                depth_mode: 'dynamic',
-                balance_loss_weight: 0.3
-              }
-            }
-          ],
-          edges: []
-        };
-        await apiFetch('/v1/dag/compile_to_training', {
+        const res = await apiFetch('/v1/models/preset', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
+          body: JSON.stringify({
+            preset_id: preset.id,
+            num_layers: preset.layers,
+            hidden_dim: preset.hidden_dim,
+            num_heads: preset.heads,
+            head_dim: preset.head_dim,
+            num_experts: preset.experts_routed,
+            batch_size: newBatchSize,
+            seq_len: newSeqLen,
+            depth_mode: 'dynamic'
+          })
         });
+        const data = await res.json();
+        if (data && data.profile) {
+          setHardwareProfile(data.profile);
+          if (data.profile.gpu_offload_pct !== undefined) setGpuOffloadPct(data.profile.gpu_offload_pct);
+          if (data.profile.gpu_layers !== undefined) setGpuLayers(data.profile.gpu_layers);
+        }
       } catch (err) {}
 
-      showToast(`Loaded ${preset.name}: Synced Architecture, Nodes & Training Engine`);
+      showToast(`Loaded ${preset.name}: Synced Across Model Zoo, Training Hub, DAG & Engine`);
     };
 
 
@@ -2968,6 +2994,31 @@
           const pStr = pCount >= 1000000 ? `${(pCount / 1000000).toFixed(1)}M` : pCount.toLocaleString();
           const lCount = data.num_layers || 6;
           showToast(`Compiled DAG: ${pStr} params (${lCount}L MoE, ${activeNodes.length} nodes) updated on live PyTorch engine`);
+          if (data.active_model) {
+            setActiveModel(data.active_model);
+          }
+          if (data.profile) {
+            setHardwareProfile(data.profile);
+            if (data.profile.gpu_offload_pct !== undefined) setGpuOffloadPct(data.profile.gpu_offload_pct);
+            if (data.profile.gpu_layers !== undefined) setGpuLayers(data.profile.gpu_layers);
+          }
+          if (data.applied_config) {
+            const ac = data.applied_config;
+            if (ac.batch_size) setTrainBatchSize(ac.batch_size);
+            if (ac.seq_len) setTrainSeqLen(ac.seq_len);
+            if (ac.grad_accum_steps) setTrainGradAccum(ac.grad_accum_steps);
+            if (ac.depth_mode) setTrainDepthMode(ac.depth_mode);
+            if (ac.lr) setTrainLR(String(ac.lr));
+            setDatasetInfo(prev => ({
+              ...prev,
+              batch_size: ac.batch_size || prev.batch_size,
+              seq_len: ac.seq_len || prev.seq_len,
+              grad_accum_steps: ac.grad_accum_steps || prev.grad_accum_steps,
+              depth_mode: ac.depth_mode || prev.depth_mode,
+              num_layers: (ac.model_architecture && ac.model_architecture.num_layers) || prev.num_layers,
+              hidden_dim: (ac.model_architecture && ac.model_architecture.hidden_dim) || prev.hidden_dim,
+            }));
+          }
           if (data.metrics) {
             setMetrics(prev => ({ ...prev, ...data.metrics }));
           }
@@ -3696,14 +3747,6 @@
       showToast(`Registered Custom Node: ${newNode.title}`);
     };
 
-    const handleLoadDAGPreset = (presetKey) => {
-      const preset = DAG_PRESETS[presetKey];
-      if (preset) {
-        setNodes(preset.nodes);
-        setEdges(preset.edges);
-        showToast(`Loaded Preset: ${preset.name}`);
-      }
-    };
 
     const handleSaveCheckpoint = async () => {
       showToast('Saving model checkpoint to disk...');
@@ -4606,8 +4649,13 @@
             ),
 
             // Model & Config Pills
-            e('span', { className: 'pill' }, `Model: ${activeModel}`),
-            e('span', { className: 'pill' }, `Precision: ${precision}`)
+            e('span', {
+              className: 'pill',
+              style: { cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '5px', borderColor: 'var(--accent-olive, #2b4c3f)', color: 'var(--accent-olive, #2b4c3f)', fontWeight: 600 },
+              title: 'Click to open Architecture Zoo & Model Presets',
+              onClick: () => setActiveTab('models')
+            }, [renderIcon('models', 12), `Model: ${activeModel}`]),
+            e('span', { className: 'pill' }, `Precision: ${trainPrecision || precision}`)
           )
         ),
 
@@ -4666,7 +4714,18 @@
               e('div', { className: 'route-select-row' },
                 e('div', null,
                   e('label', { style: { marginRight: '8px', fontWeight: 600 } }, 'Model:'),
-                  e('select', { value: activeModel, onChange: ev => { setActiveModel(ev.target.value); showToast(`Active Model: ${ev.target.value}`); } },
+                  e('select', {
+                    value: activeModel,
+                    onChange: ev => {
+                      const val = ev.target.value;
+                      if (val.startsWith('triune-')) {
+                        handleSelectModelPreset(val);
+                      } else {
+                        setActiveModel(val);
+                        showToast(`Active BYOK Model: ${val}`);
+                      }
+                    }
+                  },
                     e('option', { value: 'triune-base' }, 'Triune-Base (Local Native MoE 32k)'),
                     e('option', { value: 'triune-small' }, 'Triune-Small (Canonical 6L MoE)'),
                     e('option', { value: 'triune-nano' }, 'Triune-Nano (Edge / Embedded 4L)'),
@@ -4739,6 +4798,61 @@
 
           // Tab 2: Training Dashboard & Live Telemetry
           activeTab === 'training' && e('div', { className: 'view-training' },
+            // Active Architecture & Model Preset Switcher Banner
+            e('div', {
+              style: {
+                padding: '12px 18px',
+                marginBottom: '12px',
+                background: 'var(--bg-card, #fcfbfa)',
+                borderRadius: '8px',
+                border: '1px solid var(--border-color, #ded9cd)',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: '12px',
+                boxShadow: '0 1px 3px rgba(0,0,0,0.03)'
+              }
+            },
+              e('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' } },
+                e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+                  e('span', { style: { display: 'flex', alignItems: 'center' } }, renderIcon('models', 18, { color: 'var(--accent-olive, #2b4c3f)' })),
+                  e('span', { style: { fontFamily: 'Newsreader, Georgia, serif', fontSize: '17px', fontWeight: 600 } }, 'Active Architecture:'),
+                  e('select', {
+                    value: activeModel,
+                    onChange: ev => handleSelectModelPreset(ev.target.value),
+                    style: {
+                      fontFamily: 'var(--font-mono, Consolas)',
+                      fontSize: '13px',
+                      fontWeight: 600,
+                      padding: '4px 10px',
+                      borderRadius: '6px',
+                      background: 'var(--bg-surface, #ede9df)',
+                      border: '1px solid var(--border-color, #ded9cd)',
+                      color: 'var(--text-main)',
+                      cursor: 'pointer'
+                    }
+                  },
+                    MODEL_PRESETS.map(p => e('option', { key: p.id, value: p.id }, `${p.name} (${p.params})`))
+                  )
+                ),
+                e('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' } },
+                  e('span', { className: 'model-spec-chip' }, `${datasetInfo.num_layers || 6} Layers`),
+                  e('span', { className: 'model-spec-chip' }, `${datasetInfo.hidden_dim || 256} Dim`),
+                  e('span', { className: 'model-spec-chip' }, `${datasetInfo.num_heads || 4} Heads`),
+                  e('span', { className: 'model-spec-chip' }, `${datasetInfo.num_experts || 4} Experts`),
+                  e('span', { className: 'model-spec-chip' }, `Depth: ${(datasetInfo.depth_mode || trainDepthMode).toUpperCase()}`)
+                )
+              ),
+              e('div', { style: { display: 'flex', gap: '8px', alignItems: 'center' } },
+                e('button', {
+                  className: 'btn-sec',
+                  style: { fontSize: '11.5px', padding: '5px 12px' },
+                  onClick: () => setActiveTab('models')
+                }, [renderIcon('models', 12, { marginRight: '5px' }), 'Open Model Zoo', renderIcon('arrowRight', 10, { marginLeft: '4px' })])
+              )
+            ),
+
             // Active Checkpoint Quick Status Bar
             e('div', { className: 'ckpt-card-header', style: { padding: '10px 16px', marginBottom: '0px' } },
               e('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' } },
@@ -4764,7 +4878,7 @@
               e('div', { className: 'card-stat' },
                 e('div', { className: 'stat-label' }, 'Total Loss'),
                 e('div', { className: 'stat-value' }, (metrics.loss !== undefined && metrics.loss !== null) ? Number(metrics.loss).toFixed(4) : '--'),
-                e('div', { className: 'stat-sub' }, `Batch: ${datasetInfo.batch_size || 4} | Accum: ${datasetInfo.grad_accum_steps || metrics.grad_accum_steps || 4}x | LR: ${(metrics.lr || datasetInfo.current_lr || 0.0005).toExponential(1)}`)
+                e('div', { className: 'stat-sub' }, `Batch: ${trainBatchSize || datasetInfo.batch_size || 4} | Accum: ${trainGradAccum || datasetInfo.grad_accum_steps || 4}x | LR: ${Number(trainLR || 0.0005).toExponential(1)}`)
               ),
               e('div', { className: 'card-stat' },
                 e('div', { className: 'stat-label' }, 'Global Steps'),
@@ -4774,12 +4888,12 @@
               e('div', { className: 'card-stat' },
                 e('div', { className: 'stat-label' }, 'Exit Head Ratio'),
                 e('div', { className: 'stat-value' }, (metrics.step && metrics.step > 0) ? `R:${exitUsage.reflex}% L:${exitUsage.limbic}% C:${exitUsage.cortex}%` : '--'),
-                e('div', { className: 'stat-sub' }, `Mode: ${(datasetInfo.depth_mode || metrics.depth_mode || trainDepthMode).toUpperCase()}`)
+                e('div', { className: 'stat-sub' }, `Mode: ${(trainDepthMode || datasetInfo.depth_mode || 'dynamic').toUpperCase()}`)
               ),
               e('div', { className: 'card-stat' },
                 e('div', { className: 'stat-label' }, 'Throughput'),
                 e('div', { className: 'stat-value' }, metrics.throughput ? `${metrics.throughput} tok/s` : '--'),
-                e('div', { className: 'stat-sub' }, `${((datasetInfo.batch_size || 4) * (datasetInfo.seq_len || 64) * (datasetInfo.grad_accum_steps || metrics.grad_accum_steps || 4)).toLocaleString()} tok/step`)
+                e('div', { className: 'stat-sub' }, `${((trainBatchSize || datasetInfo.batch_size || 4) * (trainSeqLen || datasetInfo.seq_len || 64) * (trainGradAccum || datasetInfo.grad_accum_steps || 4)).toLocaleString()} tok/step`)
               )
             ),
             // Live Dataset Streaming Telemetry & Batch Ingestion Box
