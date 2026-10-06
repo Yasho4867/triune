@@ -7,6 +7,7 @@ executes nodes, and passes tensor data and text prompts between nodes.
 from __future__ import annotations
 
 import collections
+import inspect
 import time
 from typing import Any, Callable, Dict, List, Optional
 

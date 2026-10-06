@@ -33,16 +33,22 @@ except ImportError:
 from pathlib import Path
 
 try:
-    from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+    from fastapi import APIRouter, Response, WebSocket, WebSocketDisconnect
     from pydantic import BaseModel
 
     HAS_FASTAPI = True
 except ImportError:
     HAS_FASTAPI = False
     APIRouter = None
+    Response = None
     WebSocket = None
     WebSocketDisconnect = Exception
     BaseModel = object
+
+try:
+    from triune.optim import CentroidSteerOptimizer
+except ImportError:
+    CentroidSteerOptimizer = None
 
 try:
     from triune.execution import ExecutionEngine
