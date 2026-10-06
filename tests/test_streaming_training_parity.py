@@ -316,6 +316,50 @@ class StreamingTrainingParityTest(unittest.TestCase):
                 
         engine.detach()
 
+    def test_seeded_train_mode_numerical_parity(self):
+        """H-22: With identical RNG seeding, train-mode (Gumbel routing) outputs and grads must match."""
+        model_ref, model_str, engine = create_paired_models(self.device, seed=606)
+        model_ref.train()
+        model_str.train()
+        opt_str = torch.optim.AdamW(model_str.parameters(), lr=1e-3)
+        engine.set_optimizer(opt_str)
+
+        torch.manual_seed(7)
+        inputs = torch.randint(0, 128, (2, 8), device=self.device)
+
+        torch.manual_seed(1234)
+        if self.device.type == "cuda":
+            torch.cuda.manual_seed_all(1234)
+        logits_ref, route_ref = model_ref(inputs)
+        depth_ref = model_ref.last_depth_choice.clone()
+        logits_ref.pow(2).mean().backward()
+
+        torch.manual_seed(1234)
+        if self.device.type == "cuda":
+            torch.cuda.manual_seed_all(1234)
+        engine.zero_grad()
+        logits_str, route_str = model_str(inputs)
+        depth_str = model_str.last_depth_choice.clone()
+        logits_str.pow(2).mean().backward()
+
+        self.assertTrue(torch.equal(depth_ref.cpu(), depth_str.cpu()), "Gumbel depth routing diverged in train mode")
+        torch.testing.assert_close(logits_str.float().cpu(), logits_ref.float().cpu(), rtol=1e-4, atol=1e-5)
+        torch.testing.assert_close(route_str.float().cpu(), route_ref.float().cpu(), rtol=1e-4, atol=1e-5)
+
+        for (name, p_ref), (_, p_str) in zip(model_ref.named_parameters(), model_str.named_parameters()):
+            g_ref = p_ref.grad
+            g_str = getattr(p_str, "_cpu_grad", None)
+            if g_str is None:
+                g_str = p_str.grad
+            self.assertEqual(g_ref is None, g_str is None, f"Grad presence mismatch for {name}")
+            if g_ref is not None:
+                torch.testing.assert_close(
+                    g_str.float().cpu(), g_ref.float().cpu(), rtol=1e-4, atol=1e-5,
+                    msg=f"Train-mode grad diverged for {name}",
+                )
+
+        engine.detach()
+
     def test_gradient_accumulation_parity(self):
         """Phase 6: Gradient accumulation parity between 1 large batch and N microbatches."""
         for num_accum in (1, 2, 4):

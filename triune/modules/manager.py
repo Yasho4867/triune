@@ -52,8 +52,22 @@ class ModuleManager:
         self.github_client = self.repo_client  # Backward compatibility
         self.registry = self._load_curated_registry()
 
+        # Seed starter curated modules if fresh setup
+        if not self.installed_file.exists() or len(self.get_installed_modules()) == 0:
+            self._seed_starter_modules()
+
         # Auto-discover and register all DAG nodes from previously installed modules
         self._auto_register_installed_nodes()
+
+    def _seed_starter_modules(self) -> None:
+        """Seed starter curated modules on initial setup so the ecosystem is ready immediately."""
+        starter_ids = ["custom-loss-nodes", "code-assistant-lora", "fineweb-sample-10k"]
+        for sid in starter_ids:
+            try:
+                self.install_module({"id": sid})
+            except Exception:
+                pass
+
 
     def _load_curated_registry(self) -> list[dict[str, Any]]:
         reg_file = Path(__file__).parent / "registry.json"
@@ -472,8 +486,13 @@ class ModuleManager:
                 zip_url = f"{base_gh}/archive/refs/heads/{branch}.zip"
                 tmp_zip = target_folder / "repo.zip"
                 urllib.request.urlretrieve(zip_url, tmp_zip)
+                target_resolved = target_folder.resolve()
                 with zipfile.ZipFile(tmp_zip, "r") as z:
-                    z.extractall(target_folder)
+                    for member in z.infolist():
+                        member_path = (target_folder / member.filename).resolve()
+                        if target_resolved not in member_path.parents and member_path != target_resolved:
+                            raise ValueError(f"ZipSlip security violation: entry {member.filename} escapes destination")
+                        z.extract(member, target_folder)
                 tmp_zip.unlink(missing_ok=True)
                 git_success = True
             except Exception as e2:
@@ -603,13 +622,22 @@ class ModuleManager:
                     spec.loader.exec_module(mod)
 
                     # Look for items with _triune_node_schema or registered classes
+                    is_internal = "triune/plugins" in str(module_dir).replace("\\", "/")
                     for attr_name in dir(mod):
                         obj = getattr(mod, attr_name)
                         schema = getattr(obj, "_triune_node_schema", None)
                         if schema and isinstance(schema, dict) and "name" in schema:
-                            node_name = schema["name"]
-                            schema["module_source"] = str(module_dir)
-                            global_registry._nodes[node_name] = schema
+                            raw_node_name = schema["name"]
+                            core_names = global_registry.get_core_node_names() if hasattr(global_registry, "get_core_node_names") else set()
+                            if raw_node_name in core_names and not is_internal:
+                                clean_mod = py_file.parent.name or py_file.stem
+                                node_name = f"community.{clean_mod}.{raw_node_name}"
+                            else:
+                                node_name = raw_node_name
+                            schema_copy = dict(schema)
+                            schema_copy["name"] = node_name
+                            schema_copy["module_source"] = str(module_dir)
+                            global_registry._nodes[node_name] = schema_copy
                             discovered.append(node_name)
             except Exception as e:
                 print(f"[Plugin Discovery Note] Could not load {py_file}: {e}")
@@ -889,3 +917,7 @@ class {clean_name}:
                     pass
 
         return updates_available
+
+
+# Canonical ModuleManager singleton for Studio and API
+module_manager = ModuleManager()

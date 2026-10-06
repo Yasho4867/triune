@@ -192,7 +192,7 @@ class TriuneTransformer(nn.Module):
                 return logits, route_logits, balance_loss
             return logits, route_logits
 
-        final_logits = torch.empty(B, T, self.final_head.out_features, device=device, dtype=x.dtype)
+        final_logits = None
         for d in (0, 1, 2):
             idx = (depth_choice == d).nonzero(as_tuple=True)[0]
             if idx.numel() == 0:
@@ -228,20 +228,25 @@ class TriuneTransformer(nn.Module):
                 x_d, d_cache = self._run_layers(x_d, self.router_prefix_layers, self.num_layers, cache=d_cache)
                 logits_d = self.final_head(self.final_norm(x_d))
 
-            # Fix C-1: out-of-place to preserve autograd graph
-            final_logits = final_logits.index_copy(0, idx, logits_d)
+            # Fix C-1: out-of-place to preserve autograd graph, match logits_d dtype under autocast
+            if final_logits is None:
+                final_logits = torch.empty(B, T, self.final_head.out_features, device=device, dtype=logits_d.dtype)
+            final_logits = final_logits.index_copy(0, idx, logits_d.to(final_logits.dtype))
             if cache is not None and d_cache is not None:
                 for l_idx, entry in enumerate(d_cache):
                     if entry is not None and isinstance(entry, tuple) and entry[0] is not None:
                         s_d, off = entry
                         if new_cache[l_idx] is not None and isinstance(new_cache[l_idx], tuple) and new_cache[l_idx][0] is not None:
                             new_s, _ = new_cache[l_idx]
-                            new_s = new_s.index_copy(0, idx, s_d)
+                            new_s = new_s.index_copy(0, idx, s_d.to(new_s.dtype))
                             new_cache[l_idx] = (new_s, off)
                         else:
                             full_s = torch.zeros(B, *s_d.shape[1:], device=device, dtype=s_d.dtype)
                             full_s = full_s.index_copy(0, idx, s_d)
                             new_cache[l_idx] = (full_s, off)
+
+        if final_logits is None:
+            final_logits = torch.empty(B, T, self.final_head.out_features, device=device, dtype=x_prefix.dtype)
 
         if cache is not None:
             return final_logits, new_cache

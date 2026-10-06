@@ -170,7 +170,7 @@ class TriuneFineTuner:
             for _ in range(max(4, epochs * 2)):
                 token_batches.append(torch.randint(1, min(vocab_size, 4000), (seq_len + 1,), dtype=torch.long))
 
-        print(f"🚀 Starting LoRA Fine-Tuning: {len(token_batches)} batches -> {output_dir}")
+        print(f"[LoRA Fine-Tuning] Starting: {len(token_batches)} batches -> {output_dir}")
         self.model.train()
         loss_fn = nn.CrossEntropyLoss()
 

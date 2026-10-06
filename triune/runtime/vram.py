@@ -46,7 +46,7 @@ class VRAMProfiler:
             return False
         used_pct = stats["allocated_gb"] / stats["total_gb"]
         if used_pct >= threshold_pct:
-            print(f"⚠️ VRAM OOM Warning: High memory usage ({used_pct * 100:.1f}%)! Offloading recommended.")
+            print(f"[VRAM] OOM Warning: High memory usage ({used_pct * 100:.1f}%)! Offloading recommended.")
             return True
         return False
 
@@ -73,7 +73,7 @@ class AutoOffloader:
 
     def offload_layer(self, layer_name: str, layer_module: torch.nn.Module) -> None:
         """Move specific layer module weights to CPU RAM."""
-        print(f"🔄 Offloading layer [{layer_name}] to CPU RAM...")
+        print(f"[VRAM] Offloading layer [{layer_name}] to CPU RAM...")
         for p in layer_module.parameters():
             if p.device.type != self.offload_device.type:
                 self.original_devices[layer_name] = p.device
@@ -84,6 +84,6 @@ class AutoOffloader:
 
     def restore_layer(self, layer_name: str, layer_module: torch.nn.Module, target_device: torch.device) -> None:
         """Restore layer module weights back to target GPU device."""
-        print(f"⚡ Restoring layer [{layer_name}] back to GPU {target_device}...")
+        print(f"[VRAM] Restoring layer [{layer_name}] back to GPU {target_device}...")
         for p in layer_module.parameters():
             p.data = p.data.to(target_device)

@@ -1,8 +1,20 @@
 """Custom Loss & Router DAG Nodes Plugin for Triune Studio."""
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
+try:
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    HAS_TORCH = True
+except ImportError:
+    HAS_TORCH = False
+    class _DummyModule:
+        def __init__(self, *args, **kwargs): pass
+    class _NN:
+        Module = _DummyModule
+    nn = _NN()
+    torch = None
+    F = None
+
 from triune.plugins.registry import register_node
 
 

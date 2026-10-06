@@ -14,7 +14,7 @@ def install_checkpoint_signal_handlers(trainer) -> None:
         return
 
     def save_and_reraise(signum, _frame):
-        print(f"\n⚠️ Received signal {signum}; saving checkpoint...")
+        print(f"\n[Signal] Received signal {signum}; saving checkpoint...")
         try:
             trainer.save_latest(trainer.engine.step, 0.0)
         except Exception:

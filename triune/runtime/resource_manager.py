@@ -509,7 +509,7 @@ class DynamicResourceManager:
         total_bytes = props.total_memory
         max_allowed_bytes = total_bytes * safety_ceiling_pct
 
-        print(f"🛡️ [Resource Manager] Initiating safe staged GPU transfer (force={force})...", flush=True)
+        print(f"[Resource Manager] Initiating safe staged GPU transfer (force={force})...", flush=True)
 
         try:
             # 1. Transfer non-layer parameters first (embeddings, router, heads)
@@ -538,17 +538,17 @@ class DynamicResourceManager:
             # Removed self-defeating final model.to() call that bulk-transfers everything
             # model.to(device=device, dtype=dtype)
             allocated_gb = torch.cuda.memory_allocated(device) / (1024 ** 3)
-            print(f"✅ [Resource Manager] Staged transfer complete. Allocated: {allocated_gb:.2f}/{total_bytes/(1024**3):.2f} GB", flush=True)
+            print(f"[Resource Manager] Staged transfer complete. Allocated: {allocated_gb:.2f}/{total_bytes/(1024**3):.2f} GB", flush=True)
             return model
 
         except torch.cuda.OutOfMemoryError as oom_err:
-            print(f"❌ [Resource Manager] Physical CUDA OutOfMemory during model transfer: {oom_err}", flush=True)
+            print(f"[Resource Manager] Physical CUDA OutOfMemory during model transfer: {oom_err}", flush=True)
             model.to(device=torch.device("cpu"))
             gc.collect()
             torch.cuda.empty_cache()
             raise
         except Exception as err:
-            print(f"❌ [Resource Manager] GPU transfer failed: {err}. Rolling back to CPU...", flush=True)
+            print(f"[Resource Manager] GPU transfer failed: {err}. Rolling back to CPU...", flush=True)
             model.to(device=torch.device("cpu"))
             gc.collect()
             torch.cuda.empty_cache()

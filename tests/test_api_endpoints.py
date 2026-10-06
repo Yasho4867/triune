@@ -1,130 +1,160 @@
-import urllib.request
-import json
-import time
+"""In-process API regression tests for the Studio node graph endpoints."""
 
-time.sleep(1)
+from __future__ import annotations
 
-# 1. Test GET /v1/plugins
-print("--- 1. Testing GET /v1/plugins ---")
-req = urllib.request.urlopen('http://localhost:8000/v1/plugins')
-raw = req.read().decode('utf-8')
-print("Raw /v1/plugins response:", repr(raw[:150]))
-plugins = json.loads(raw)
-print(f"Discovered {len(plugins)} registered plugins in global_registry")
-for p in plugins[-8:]:
-    print(f"  - {p['name']} ({p.get('category', 'unknown')}): inputs={p.get('inputs')} outputs={p.get('outputs')}")
+import unittest
 
-# 2. Test POST /v1/modules/scan_local
-print("\n--- 2. Testing POST /v1/modules/scan_local ---")
-req = urllib.request.Request(
-    'http://localhost:8000/v1/modules/scan_local',
-    data=json.dumps({}).encode('utf-8'),
-    headers={'Content-Type': 'application/json'}
-)
-res = urllib.request.urlopen(req)
-scan_result = json.loads(res.read().decode('utf-8'))
-print(f"Scan Success: {scan_result.get('success')}")
-print(f"Scanned Paths: {len(scan_result.get('scanned_paths', []))}")
-print(f"Discovered Nodes: {scan_result.get('discovered_nodes')}")
-print(f"Total Registered Nodes: {scan_result.get('total_registered_nodes')}")
-print(f"Message: {scan_result.get('message')}")
+from fastapi.testclient import TestClient
 
-# 2b. Test POST /v1/modules/create_plugin
-print("\n--- 2b. Testing POST /v1/modules/create_plugin ---")
-req = urllib.request.Request(
-    'http://localhost:8000/v1/modules/create_plugin',
-    data=json.dumps({"name": "TestAutoScaffoldLoss", "category": "Loss"}).encode('utf-8'),
-    headers={'Content-Type': 'application/json'}
-)
-res = urllib.request.urlopen(req)
-create_result = json.loads(res.read().decode('utf-8'))
-print(f"Plugin Creation: {create_result.get('success')}")
-print(f"Created File: {create_result.get('file_path')}")
-print(f"Node Registered: {create_result.get('node_name')}")
+from triune.api.server import create_app
 
-# 2c. Rescan workspace to verify dynamic discovery
-print("\n--- 2c. Rescanning workspace ---")
-req = urllib.request.Request(
-    'http://localhost:8000/v1/modules/scan_local',
-    data=json.dumps({}).encode('utf-8'),
-    headers={'Content-Type': 'application/json'}
-)
-res = urllib.request.urlopen(req)
-rescan_result = json.loads(res.read().decode('utf-8'))
-print(f"Discovered Nodes on Rescan: {rescan_result.get('discovered_nodes')}")
-print(f"Total Registered Nodes: {rescan_result.get('total_registered_nodes')}")
 
-# 3. Test POST /v1/dag/execute_node for JointExitLoss
-print("\n--- 3. Testing POST /v1/dag/execute_node (JointExitLoss) ---")
-node_payload = {
-    'node': {
-        'id': 'test_joint_loss_1',
-        'type': 'Loss',
-        'name': 'JointExitLoss',
-        'title': 'Joint Exit Loss',
-        'params': {
-            'lambda_reflex': '0.20',
-            'lambda_limbic': '0.30',
-            'lambda_cortex': '0.50'
+class TestStudioApiEndpoints(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.client = TestClient(create_app())
+
+    def test_plugins_endpoint_returns_serializable_nodes(self) -> None:
+        response = self.client.get("/v1/plugins")
+        self.assertEqual(response.status_code, 200)
+        nodes = response.json()
+        self.assertIsInstance(nodes, list)
+        self.assertTrue(any(node["name"] == "TriuneTransformer" for node in nodes))
+
+    def test_execute_single_specification_nodes(self) -> None:
+        cases = (
+            {"id": "joint-loss", "type": "JointExitLoss", "params": {"lambda_reflex": 0.2}},
+            {"id": "rope", "type": "FastRoPE", "params": {"dim": 64, "max_seq_len": 2048}},
+            {"id": "accumulator", "type": "GradientAccumulator", "params": {"grad_accum_steps": 4}},
+        )
+        for node in cases:
+            with self.subTest(node=node["type"]):
+                response = self.client.post("/v1/dag/execute_node", json={"node": node})
+                self.assertEqual(response.status_code, 200)
+                payload = response.json()
+                self.assertIn(payload["status"], {"success", "completed"})
+                self.assertIn("output", payload)
+
+
+    def test_dag_compile_to_training(self) -> None:
+        payload = {
+            "nodes": [
+                {
+                    "id": "node-data",
+                    "type": "HuggingFaceStreamer",
+                    "config": {
+                        "dataset_name": {"value": "roneneldan/TinyStories"},
+                        "split": {"value": "train"},
+                        "config": {"value": "default"},
+                        "text_column": {"value": "text"},
+                    },
+                },
+                {
+                    "id": "node-loader",
+                    "type": "DataLoader",
+                    "params": {
+                        "batch_size": 2,
+                        "seq_len": 32,
+                    },
+                },
+                {
+                    "id": "node-router",
+                    "type": "HierarchicalDepthRouter",
+                    "details": "depth_mode=joint\nbalance_loss_weight=0.45",
+                },
+                {
+                    "id": "node-opt",
+                    "type": "CentroidSteerOptimizer",
+                    "params": {
+                        "lr": 0.0003,
+                        "muon_lr": 0.015,
+                        "steer_scale": 0.25,
+                    },
+                },
+                {
+                    "id": "node-accum",
+                    "type": "GradientAccumulator",
+                    "params": {
+                        "grad_accum_steps": 2,
+                    },
+                },
+            ],
+            "edges": [],
         }
-    }
-}
-req = urllib.request.Request(
-    'http://localhost:8000/v1/dag/execute_node',
-    data=json.dumps(node_payload).encode('utf-8'),
-    headers={'Content-Type': 'application/json'}
-)
-res = urllib.request.urlopen(req)
-node_result = json.loads(res.read().decode('utf-8'))
-print(f"Node Status: {node_result.get('status')}")
-print(f"Elapsed: {node_result.get('elapsed_sec')}s")
-print(f"Output: {node_result.get('output')}")
+        response = self.client.post("/v1/dag/compile_to_training", json=payload)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["status"], "success")
+        applied = data["applied_config"]
+        self.assertEqual(applied.get("batch_size"), 2)
+        self.assertEqual(applied.get("seq_len"), 32)
+        self.assertEqual(applied.get("depth_mode"), "joint")
+        self.assertEqual(applied.get("balance_loss_weight"), 0.45)
+        self.assertEqual(applied.get("lr"), 0.0003)
+        self.assertEqual(applied.get("muon_lr"), 0.015)
+        self.assertEqual(applied.get("steer_scale"), 0.25)
+        self.assertEqual(applied.get("grad_accum_steps"), 2)
+        self.assertIn("dataset", applied)
 
-# 4. Test POST /v1/dag/execute_node for FastRoPE
-print("\n--- 4. Testing POST /v1/dag/execute_node (FastRoPE) ---")
-rope_payload = {
-    'node': {
-        'id': 'test_rope_1',
-        'type': 'Model',
-        'name': 'FastRoPE',
-        'title': 'Fast RoPE',
-        'params': {
-            'dim': '64',
-            'max_seq_len': '2048'
+        engine_state = data["current_engine_state"]
+        self.assertEqual(engine_state["batch_size"], 2)
+        self.assertEqual(engine_state["seq_len"], 32)
+        self.assertEqual(engine_state["depth_mode"], "joint")
+        self.assertEqual(engine_state["lr"], 0.0003)
+        self.assertEqual(engine_state["grad_accum_steps"], 2)
+
+        # Alias route check
+        alias_response = self.client.post("/v1/model/compile_dag", json=payload)
+        self.assertEqual(alias_response.status_code, 200)
+        self.assertEqual(alias_response.json()["status"], "success")
+
+    def test_live_optimizer_update(self) -> None:
+        payload = {
+            "lr": 0.00015,
+            "muon_lr": 0.012,
+            "centroid_lr": 0.0002,
+            "steer_scale": 0.35,
+            "momentum": 0.92,
         }
-    }
-}
-req = urllib.request.Request(
-    'http://localhost:8000/v1/dag/execute_node',
-    data=json.dumps(rope_payload).encode('utf-8'),
-    headers={'Content-Type': 'application/json'}
-)
-res = urllib.request.urlopen(req)
-rope_result = json.loads(res.read().decode('utf-8'))
-print(f"RoPE Status: {rope_result.get('status')}")
-print(f"Output: {rope_result.get('output')}")
+        response = self.client.post("/v1/training/optimizer", json=payload)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["status"], "success")
+        self.assertAlmostEqual(data["lr"], 0.00015)
+        self.assertAlmostEqual(data["muon_lr"], 0.012)
+        self.assertAlmostEqual(data["centroid_lr"], 0.0002)
+        self.assertAlmostEqual(data["steer_scale"], 0.35)
+        self.assertAlmostEqual(data["momentum"], 0.92)
 
-# 5. Test POST /v1/dag/execute_node for GradientAccumulator
-print("\n--- 5. Testing POST /v1/dag/execute_node (GradientAccumulator) ---")
-accum_payload = {
-    'node': {
-        'id': 'test_accum_1',
-        'type': 'Runtime',
-        'name': 'GradientAccumulator',
-        'title': 'Gradient Accumulator',
-        'params': {
-            'grad_accum_steps': '4'
+    def test_router_temperature_update(self) -> None:
+        payload = {
+            "temperature": 0.85,
+            "balance_loss_weight": 0.4,
         }
-    }
-}
-req = urllib.request.Request(
-    'http://localhost:8000/v1/dag/execute_node',
-    data=json.dumps(accum_payload).encode('utf-8'),
-    headers={'Content-Type': 'application/json'}
-)
-res = urllib.request.urlopen(req)
-accum_result = json.loads(res.read().decode('utf-8'))
-print(f"Accum Status: {accum_result.get('status')}")
-print(f"Output: {accum_result.get('output')}")
+        response = self.client.post("/v1/model/router/temperature", json=payload)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["status"], "success")
+        self.assertAlmostEqual(data["temperature"], 0.85)
+        self.assertAlmostEqual(data["balance_loss_weight"], 0.4)
 
-print("\nALL API VALIDATION TESTS PASSED!")
+    def test_single_training_step(self) -> None:
+        from triune.api.routes import pytorch_state
+        pytorch_state.batch_size = 1
+        pytorch_state.seq_len = 16
+        pytorch_state.grad_accum_steps = 1
+        pytorch_state.is_streaming_hf = False
+        pytorch_state.dataset_path = "data/fineweb_sample.jsonl"
+        pytorch_state.load_training_data("data/fineweb_sample.jsonl")
+
+        response = self.client.post("/v1/training/step", json={})
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("step", data)
+        self.assertIn("loss", data)
+        self.assertGreaterEqual(data["step"], 1)
+        self.assertGreaterEqual(data["loss"], 0.0)
+
+
+if __name__ == "__main__":
+    unittest.main()

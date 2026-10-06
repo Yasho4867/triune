@@ -3,6 +3,7 @@ and zero-dummy-phrase training steps with RealPyTorchEngineState and FastAPI rou
 """
 
 import os
+os.environ["TRIUNE_TESTING"] = "1"
 import sys
 import unittest
 import asyncio
@@ -21,6 +22,10 @@ class TestLiveApiStreaming(unittest.TestCase):
         cls.app = FastAPI()
         cls.app.include_router(router)
         cls.client = TestClient(cls.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        pytorch_state.stop_prefetch_worker()
 
     def test_01_byok_save_and_test(self):
         """Verify saving and testing Hugging Face token via BYOK endpoints."""
@@ -72,6 +77,7 @@ class TestLiveApiStreaming(unittest.TestCase):
 
     def test_04_training_step_uses_streamed_tokens(self):
         """Verify POST /v1/training/step consumes from the streaming buffer and updates batch preview."""
+        pytorch_state.lazy_init_model()
         initial_tokens = pytorch_state.tokens_trained
         step_res = self.client.post("/v1/training/step")
         self.assertEqual(step_res.status_code, 200)
@@ -85,4 +91,7 @@ class TestLiveApiStreaming(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    res = unittest.main(exit=False)
+    pytorch_state.stop_prefetch_worker()
+    import os
+    os._exit(0 if res.result.wasSuccessful() else 1)

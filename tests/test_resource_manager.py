@@ -151,8 +151,8 @@ def test_safe_to_device():
         head_dim=32,
         num_experts=2,
         router_prefix_layers=1,
-        reflex_exit_layer=1,
-        limbic_exit_layer=2,
+        reflex_exit_layer=2,
+        limbic_exit_layer=3,
     )
     loaded_model = DynamicResourceManager.safe_to_device(
         model, device=device, dtype=torch.bfloat16, force=True

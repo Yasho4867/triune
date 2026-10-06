@@ -83,6 +83,75 @@ class TestKernelSuite(unittest.TestCase):
         chunked_loss = chunked_cross_entropy_from_hidden(hidden, lm_head, targets, chunk_size=8)
         self.assertTrue(torch.allclose(expected_loss, chunked_loss, atol=1e-4))
 
+    def test_fast_cross_entropy_grad_parity(self):
+        """H-20: chunked CE gradient must match F.cross_entropy, including ignore_index rows."""
+        torch.manual_seed(0)
+        logits = torch.randn(64, 300, dtype=torch.float64, requires_grad=True)
+        targets = torch.randint(0, 300, (64,))
+        targets[::5] = -100
+        ref = F.cross_entropy(logits, targets, ignore_index=-100)
+        (g_ref,) = torch.autograd.grad(ref * 2.5, logits)
+
+        logits2 = logits.detach().clone().requires_grad_(True)
+        out = fast_cross_entropy(logits2, targets, chunk_size=7)
+        (out * 2.5).backward()
+        self.assertTrue(torch.allclose(ref, out.to(ref.dtype), atol=1e-6))
+        self.assertTrue(torch.allclose(g_ref, logits2.grad, atol=1e-6))
+
+    def test_chunked_from_hidden_grad_parity(self):
+        """H-20: fused linear+CE must produce identical grads for hidden, weight and bias."""
+        torch.manual_seed(1)
+        hidden = torch.randn(2, 20, 48, dtype=torch.float64, requires_grad=True)
+        head = nn.Linear(48, 150, bias=True).double()
+        targets = torch.randint(0, 150, (2, 20))
+        targets[0, :3] = -100
+
+        ref = F.cross_entropy(head(hidden).reshape(-1, 150), targets.reshape(-1), ignore_index=-100)
+        g_h, g_w, g_b = torch.autograd.grad(ref, (hidden, head.weight, head.bias))
+
+        hidden2 = hidden.detach().clone().requires_grad_(True)
+        head.zero_grad()
+        out = chunked_cross_entropy_from_hidden(hidden2, head, targets, chunk_size=6)
+        out.backward()
+        self.assertTrue(torch.allclose(ref, out.to(ref.dtype), atol=1e-6))
+        self.assertTrue(torch.allclose(g_h, hidden2.grad, atol=1e-6))
+        self.assertTrue(torch.allclose(g_w, head.weight.grad, atol=1e-6))
+        self.assertTrue(torch.allclose(g_b, head.bias.grad, atol=1e-6))
+
+    def test_chunked_ce_all_ignored(self):
+        logits = torch.randn(4000, 50, requires_grad=True)
+        targets = torch.full((4000,), -100)
+        out = fast_cross_entropy(logits, targets, chunk_size=512)
+        out.backward()
+        self.assertEqual(out.item(), 0.0)
+        self.assertTrue(torch.all(logits.grad == 0))
+
+        hidden = torch.randn(10, 16, requires_grad=True)
+        head = nn.Linear(16, 30, bias=False)
+        out2 = chunked_cross_entropy_from_hidden(hidden, head, torch.full((10,), -100), chunk_size=4)
+        out2.backward()
+        self.assertEqual(out2.item(), 0.0)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for memory measurement")
+    def test_chunked_from_hidden_saves_memory(self):
+        """H-20: peak memory must stay far below materializing the full [N, V] logits."""
+        dev = torch.device("cuda")
+        N, D, V, chunk = 8192, 256, 32000, 512
+        hidden = torch.randn(N, D, device=dev, requires_grad=True)
+        head = nn.Linear(D, V, bias=False).to(dev)
+        targets = torch.randint(0, V, (N,), device=dev)
+        full_logits_bytes = N * V * 4  # fp32 logits alone ~1 GB
+
+        torch.cuda.synchronize()
+        torch.cuda.reset_peak_memory_stats()
+        base = torch.cuda.memory_allocated()
+        loss = chunked_cross_entropy_from_hidden(hidden, head, targets, chunk_size=chunk)
+        loss.backward()
+        torch.cuda.synchronize()
+        peak_extra = torch.cuda.max_memory_allocated() - base
+        self.assertLess(peak_extra, full_logits_bytes * 0.25,
+                        f"peak extra {peak_extra/1e6:.1f} MB vs full logits {full_logits_bytes/1e6:.1f} MB")
+
 
 if __name__ == "__main__":
     unittest.main()

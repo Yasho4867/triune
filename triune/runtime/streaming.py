@@ -257,7 +257,7 @@ class LayerStreamingEngine:
         if optimizer is not None:
             self.optimizer = optimizer
 
-        print("⚡ [Layer Streaming] Initializing memory virtualization...", flush=True)
+        print("[Layer Streaming] Initializing memory virtualization...", flush=True)
 
         # 1. Root non-layer components stay resident on GPU (~100MB)
         layer_ids = {id(l) for l in self.layers}
@@ -302,7 +302,7 @@ class LayerStreamingEngine:
                 should_pin = False
 
         if should_pin:
-            print("🚀 [Layer Streaming] Pinned host RAM enabled for high-throughput PCIe DMA.", flush=True)
+            print("[Layer Streaming] Pinned host RAM enabled for high-throughput PCIe DMA.", flush=True)
             for layer in self.layers:
                 for t in list(layer.parameters()) + list(layer.buffers()):
                     if not t._cpu_data.is_pinned():
@@ -312,21 +312,21 @@ class LayerStreamingEngine:
                         except Exception:
                             pass
         else:
-            print("💡 [Layer Streaming] Host RAM pinning bypassed to conserve host memory pages.", flush=True)
+            print("[Layer Streaming] Host RAM pinning bypassed to conserve host memory pages.", flush=True)
 
         # 4. Streams for asynchronous PCIe prefetching and D2H gradient transfer
         dev = self.device
         if dev.type == "cuda" and self.config.async_prefetch:
             try:
                 self.prefetch_stream = torch.cuda.Stream(device=dev)
-                print("⚡ [Layer Streaming] Secondary CUDA prefetch stream active.", flush=True)
+                print("[Layer Streaming] Secondary CUDA prefetch stream active.", flush=True)
             except Exception:
                 self.prefetch_stream = None
 
         if dev.type == "cuda":
             try:
                 self.d2h_stream = torch.cuda.Stream(device=dev)
-                print("⚡ [Layer Streaming] Dedicated CUDA D2H transfer stream active.", flush=True)
+                print("[Layer Streaming] Dedicated CUDA D2H transfer stream active.", flush=True)
             except Exception:
                 self.d2h_stream = None
         else:
@@ -512,7 +512,7 @@ class LayerStreamingEngine:
         self.model._layer_streaming_active = True
         self.is_attached = True
         allocated_mb = torch.cuda.memory_allocated(self.device) / (1024 ** 2) if self.device.type == "cuda" else 0.0
-        print(f"✅ [Layer Streaming] Active. Root components on GPU ({allocated_mb:.1f} MB); all 24 layers streaming from CPU RAM.", flush=True)
+        print(f"[Layer Streaming] Active. Root components on GPU ({allocated_mb:.1f} MB); all {len(self.layers)} layers streaming from CPU RAM.", flush=True)
 
     def cleanup_resident_layers(self) -> None:
         """Universal exception recovery: releases all resident/prefetched layers, restores

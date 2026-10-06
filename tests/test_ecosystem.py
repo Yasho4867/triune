@@ -2,6 +2,9 @@
 
 import sys
 import unittest
+import warnings
+warnings.filterwarnings("ignore", message=".*httpx.*")
+warnings.filterwarnings("ignore", message=".*starlette.testclient.*")
 import torch
 
 import triune

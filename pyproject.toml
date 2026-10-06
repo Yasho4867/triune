@@ -43,6 +43,7 @@ dependencies = [
 studio = [
     "fastapi>=0.100.0",
     "uvicorn>=0.22.0",
+    "httpx>=0.24.0",
     "pywebview>=4.0.0",
 ]
 train = [
@@ -57,6 +58,7 @@ dev = [
 all = [
     "fastapi>=0.100.0",
     "uvicorn>=0.22.0",
+    "httpx>=0.24.0",
     "pywebview>=4.0.0",
     "wandb>=0.15.0",
     "bitsandbytes>=0.41.0",

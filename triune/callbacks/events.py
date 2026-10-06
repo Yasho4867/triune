@@ -25,7 +25,7 @@ class EventEmitter:
                 try:
                     listener(*args, **kwargs)
                 except Exception as err:
-                    print(f"⚠️ EventEmitter listener error for '{event_name}': {err}")
+                    print(f"[Warning] EventEmitter listener error for '{event_name}': {err}")
 
     # Standard Hooks
     def emit_node_start(self, node_id: str, node_type: str, params: Dict[str, Any]) -> None:

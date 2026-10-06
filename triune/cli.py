@@ -52,7 +52,7 @@ def main() -> None:
     elif args.command == "serve":
         from triune.api import run_server
 
-        print(f"🚀 Starting Triune API Server on http://{args.host}:{args.port}")
+        print(f"[Triune] Starting Triune API Server on http://{args.host}:{args.port}")
         run_server(host=args.host, port=args.port)
     elif args.command == "chat":
         from scripts.chat import main as chat_main
@@ -72,7 +72,7 @@ def main() -> None:
 
         config = build_config({})
         plan = MemoryPlanner.estimate_vram(config, target_vram_gb=args.vram_gb)
-        print("🧠 VRAM Memory Plan Estimate:")
+        print("[Triune] VRAM Memory Plan Estimate:")
         print(f"   Parameters: {plan.total_params:,} ({plan.param_memory_gb} GB)")
         print(f"   Optimizer State: {plan.optimizer_memory_gb} GB")
         print(f"   Activation Memory: {plan.activation_memory_gb} GB")
