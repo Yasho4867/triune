@@ -553,6 +553,8 @@ if HAS_FASTAPI:
             self.warmup_steps = 500
             self.min_lr = 1e-5
             self.current_lr = 5e-4
+            self.lr_cycle_start_step = 0
+            self.lr_cycle_steps = 25000
             self.dataset_path = "data/fineweb_sample.jsonl"
             self.dataset_name = "HuggingFaceFW/fineweb-edu"
             self.dataset_type = "streaming"
@@ -783,11 +785,13 @@ if HAS_FASTAPI:
                 pass
 
         def get_scheduled_lr(self, step: int) -> float:
-            """Cosine learning rate schedule with linear warmup."""
-            if step < self.warmup_steps:
-                return max(self.min_lr, self.lr_peak * float(step + 1) / max(1, self.warmup_steps))
-            decay_steps = 25000
-            progress = min(1.0, float(step - self.warmup_steps) / float(max(1, decay_steps - self.warmup_steps)))
+            """Cosine learning rate schedule with linear warmup and warm-restart support."""
+            cycle_start = getattr(self, "lr_cycle_start_step", 0)
+            cycle_steps = getattr(self, "lr_cycle_steps", 25000)
+            rel_step = max(0, step - cycle_start)
+            if rel_step < self.warmup_steps:
+                return max(self.min_lr, self.lr_peak * float(rel_step + 1) / max(1, self.warmup_steps))
+            progress = min(1.0, float(max(0, rel_step - self.warmup_steps)) / float(max(1, cycle_steps - self.warmup_steps)))
             cosine_factor = 0.5 * (1.0 + math.cos(math.pi * progress))
             return max(self.min_lr, self.min_lr + (self.lr_peak - self.min_lr) * cosine_factor)
 
@@ -1645,6 +1649,8 @@ if HAS_FASTAPI:
                 "lr": float(self.lr_peak),
                 "min_lr": float(self.min_lr),
                 "warmup_steps": int(self.warmup_steps),
+                "cycle_start_step": int(getattr(self, "lr_cycle_start_step", 0)),
+                "cycle_steps": int(getattr(self, "lr_cycle_steps", 25000)),
             }
 
         @property
@@ -2959,6 +2965,10 @@ if HAS_FASTAPI:
         if target_lr is not None and target_lr > 0:
             pytorch_state.lr_peak = float(target_lr)
             pytorch_state.current_lr = float(target_lr)
+            # Warm restart cosine cycle from current training step
+            pytorch_state.lr_cycle_start_step = pytorch_state.step
+            pytorch_state.lr_cycle_steps = 25000
+            pytorch_state.total_steps = pytorch_state.step + 25000
             if pytorch_state.optimizer is not None:
                 if hasattr(pytorch_state.optimizer, "set_lr"):
                     pytorch_state.optimizer.set_lr(float(target_lr))
@@ -3364,6 +3374,9 @@ if HAS_FASTAPI:
         if req.lr is not None and req.lr > 0:
             pytorch_state.current_lr = req.lr
             pytorch_state.lr_peak = req.lr
+            pytorch_state.lr_cycle_start_step = pytorch_state.step
+            pytorch_state.lr_cycle_steps = 25000
+            pytorch_state.total_steps = pytorch_state.step + 25000
             if pytorch_state.optimizer is not None:
                 if hasattr(pytorch_state.optimizer, "set_lr"):
                     pytorch_state.optimizer.set_lr(req.lr)

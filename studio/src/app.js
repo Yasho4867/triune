@@ -2107,7 +2107,8 @@
               if (statusData.dataset.seq_len) setTrainSeqLen(statusData.dataset.seq_len);
               if (statusData.dataset.grad_accum_steps) setTrainGradAccum(statusData.dataset.grad_accum_steps);
               if (statusData.dataset.depth_mode) setTrainDepthMode(statusData.dataset.depth_mode);
-              if (statusData.dataset.current_lr) setTrainLR(String(statusData.dataset.current_lr));
+              if (statusData.dataset.lr_peak) setTrainLR(String(statusData.dataset.lr_peak));
+              else if (statusData.lr_peak) setTrainLR(String(statusData.lr_peak));
             }
             if (statusData.dataset.active_batch_preview) {
               setActiveBatchPreview(statusData.dataset.active_batch_preview);
@@ -3662,7 +3663,13 @@
             e('label', null, 'Peak Learning Rate:'),
             e('select', {
               value: trainLR,
-              onChange: ev => { setTrainLR(ev.target.value); setSelectedHwPreset('custom'); }
+              onChange: ev => {
+                const newLR = ev.target.value;
+                lastManualConfigEditRef.current = Date.now();
+                setTrainLR(newLR);
+                setSelectedHwPreset('custom');
+                handleApplyHardwareTune({ preset: 'custom', lr: parseFloat(newLR) });
+              }
             },
               e('option', { value: '0.0001' }, '1e-4 (Gentle)'),
               e('option', { value: '0.0003' }, '3e-4 (Moderate)'),
@@ -3679,7 +3686,12 @@
               max: 5000,
               step: 50,
               value: trainWarmup,
-              onChange: ev => { setTrainWarmup(parseInt(ev.target.value) || 0); setSelectedHwPreset('custom'); }
+              onChange: ev => {
+                const w = parseInt(ev.target.value) || 0;
+                lastManualConfigEditRef.current = Date.now();
+                setTrainWarmup(w);
+                setSelectedHwPreset('custom');
+              }
             })
           )
         ),
