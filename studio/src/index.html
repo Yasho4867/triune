@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>Triune Studio – Advanced AI Engine & Visual Research IDE</title>
   
   <!-- Classic editorial fonts; the Modern edition uses Inter for all workspace text. -->
@@ -27,6 +27,32 @@
       (document.body || document.documentElement).appendChild(errDiv);
       return false;
     };
+  </script>
+  <script>
+    // Guard against unintended browser UI viewport zooming from touchpad pinch, Ctrl+Scroll, or hotkeys
+    (function() {
+      window.addEventListener('wheel', function(e) {
+        if (e.ctrlKey) {
+          if (!e.target || !e.target.closest || !e.target.closest('.node-grid-area')) {
+            e.preventDefault();
+          }
+        }
+      }, { passive: false });
+
+      document.addEventListener('gesturestart', function(e) { e.preventDefault(); }, { passive: false });
+      document.addEventListener('gesturechange', function(e) { e.preventDefault(); }, { passive: false });
+      document.addEventListener('gestureend', function(e) { e.preventDefault(); }, { passive: false });
+
+      window.addEventListener('keydown', function(e) {
+        if (e.ctrlKey || e.metaKey) {
+          var k = e.key;
+          if (k === '+' || k === '-' || k === '=' || k === '_' || k === '0' ||
+              e.keyCode === 187 || e.keyCode === 189 || e.keyCode === 107 || e.keyCode === 109 || e.keyCode === 96 || e.keyCode === 48) {
+            e.preventDefault();
+          }
+        }
+      });
+    })();
   </script>
   <script src="vendor/react.production.min.js"></script>
   <script src="vendor/react-dom.production.min.js"></script>

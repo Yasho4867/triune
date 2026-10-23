@@ -162,6 +162,8 @@ public partial class MainWindow : Window
         await StudioView.EnsureCoreWebView2Async();
         StudioView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = true;
         StudioView.CoreWebView2.Settings.IsStatusBarEnabled = false;
+        StudioView.CoreWebView2.Settings.IsZoomControlEnabled = false;
+        StudioView.CoreWebView2.Settings.IsPinchZoomEnabled = false;
         StudioView.CoreWebView2.NavigationStarting += (_, args) =>
         {
             if (Uri.TryCreate(args.Uri, UriKind.Absolute, out var target) &&

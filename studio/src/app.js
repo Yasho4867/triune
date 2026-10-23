@@ -4562,19 +4562,32 @@
       setConnectingFromId(null);
     };
 
-    const handleCanvasWheel = (ev) => {
-      ev.preventDefault();
-      const zoomFactor = ev.deltaY < 0 ? 1.08 : 0.92;
-      const newZoom = Math.min(Math.max(canvasZoom * zoomFactor, 0.25), 2.5);
-      const rect = gridRef.current.getBoundingClientRect();
-      const mouseScreenX = ev.clientX - rect.left;
-      const mouseScreenY = ev.clientY - rect.top;
-      setCanvasPan(prev => ({
-        x: mouseScreenX - (mouseScreenX - prev.x) * (newZoom / canvasZoom),
-        y: mouseScreenY - (mouseScreenY - prev.y) * (newZoom / canvasZoom)
-      }));
-      setCanvasZoom(newZoom);
-    };
+    // Non-passive wheel handler attached directly to canvas DOM element to strictly
+    // prevent browser window zoom while zooming canvas nodes smoothly
+    useEffect(() => {
+      const grid = gridRef.current;
+      if (!grid || activeTab !== 'nodegraph') return;
+      const onGridWheel = (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const zoomFactor = ev.deltaY < 0 ? 1.08 : 0.92;
+        setCanvasZoom(prevZoom => {
+          const newZoom = Math.min(Math.max(prevZoom * zoomFactor, 0.25), 2.5);
+          if (gridRef.current) {
+            const rect = gridRef.current.getBoundingClientRect();
+            const mouseScreenX = ev.clientX - rect.left;
+            const mouseScreenY = ev.clientY - rect.top;
+            setCanvasPan(prevPan => ({
+              x: mouseScreenX - (mouseScreenX - prevPan.x) * (newZoom / prevZoom),
+              y: mouseScreenY - (mouseScreenY - prevPan.y) * (newZoom / prevZoom)
+            }));
+          }
+          return newZoom;
+        });
+      };
+      grid.addEventListener('wheel', onGridWheel, { passive: false });
+      return () => grid.removeEventListener('wheel', onGridWheel);
+    }, [activeTab]);
 
     // Keep drags and wires alive when the pointer leaves the canvas, and make
     // the same gestures work with touch and pen input.
@@ -6450,8 +6463,7 @@
                   backgroundPosition: `${canvasPan.x}px ${canvasPan.y}px, ${canvasPan.x}px ${canvasPan.y}px, ${canvasPan.x}px ${canvasPan.y}px, ${canvasPan.x}px ${canvasPan.y}px, ${canvasPan.x}px ${canvasPan.y}px`,
                   backgroundSize: `${20 * canvasZoom}px ${20 * canvasZoom}px, ${20 * canvasZoom}px ${20 * canvasZoom}px, ${20 * canvasZoom}px ${20 * canvasZoom}px, ${100 * canvasZoom}px ${100 * canvasZoom}px, ${100 * canvasZoom}px ${100 * canvasZoom}px`
                 },
-                onPointerDown: handleCanvasMouseDown,
-                onWheel: handleCanvasWheel
+                onPointerDown: handleCanvasMouseDown
               },
                 // Viewport Container with 2D Pan and Zoom Transform
                 e('div', {

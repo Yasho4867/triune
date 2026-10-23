@@ -58,6 +58,11 @@
   }
 }
 
+html, body {
+  touch-action: pan-x pan-y;
+  -webkit-text-size-adjust: 100%;
+}
+
 body {
   background-color: var(--bg-dark);
   color: var(--text-main);
