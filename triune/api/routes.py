@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import os
 os.environ["HF_HUB_DISABLE_XET"] = "1"
+import ipaddress
 import asyncio
 import warnings
 warnings.filterwarnings("ignore", message=".*httpx.*")
 warnings.filterwarnings("ignore", message=".*starlette.testclient.*")
 import io
 import json
+import hmac
 import time
 import math
 import sys
@@ -33,13 +35,15 @@ except ImportError:
 from pathlib import Path
 
 try:
-    from fastapi import APIRouter, Response, WebSocket, WebSocketDisconnect
+    from fastapi import APIRouter, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
     from pydantic import BaseModel
 
     HAS_FASTAPI = True
 except ImportError:
     HAS_FASTAPI = False
     APIRouter = None
+    HTTPException = None
+    Request = None
     Response = None
     WebSocket = None
     WebSocketDisconnect = Exception
@@ -143,6 +147,108 @@ def sanitize_text(text: str) -> str:
     return text
 
 
+def _checkpoint_architecture(checkpoint: Dict[str, Any], fallback: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
+    """Resolve the Triune architecture recorded by a checkpoint, including legacy Studio saves.
+
+    Older Studio checkpoints only recorded vocab/width/depth. Recover the remaining
+    shape-defining fields from their state-dict keys and use the current architecture
+    only for properties that cannot be inferred from tensor shapes (for example the
+    GLA head split and router-prefix placement).
+    """
+    from triune.model.base import CANONICAL_MODEL_SPECS
+
+    config = checkpoint.get("config", {})
+    config = config if isinstance(config, dict) else {}
+    state = checkpoint.get("model_state", checkpoint)
+    if not isinstance(state, dict):
+        raise ValueError("Checkpoint does not contain a model state dictionary.")
+    if any(str(key).startswith("_orig_mod.") for key in state):
+        state = {str(key).removeprefix("_orig_mod."): value for key, value in state.items()}
+
+    def tensor_shape(key: str) -> tuple[int, ...] | None:
+        value = state.get(key)
+        shape = getattr(value, "shape", None)
+        return tuple(int(dim) for dim in shape) if shape is not None else None
+
+    embed_shape = tensor_shape("token_embed.weight")
+    hidden_dim = int(config.get("hidden_dim") or (embed_shape[1] if embed_shape and len(embed_shape) == 2 else fallback.get("hidden_dim", 256)))
+    vocab_size = int(config.get("vocab_size") or (embed_shape[0] if embed_shape and len(embed_shape) == 2 else fallback.get("vocab_size", 32000)))
+
+    layer_ids = []
+    expert_ids = []
+    exit_ids = []
+    import re
+    for key in state:
+        key = str(key).removeprefix("_orig_mod.")
+        match = re.match(r"layers\.(\d+)\.", key)
+        if match:
+            layer_ids.append(int(match.group(1)))
+        match = re.match(r"layers\.\d+\.ffn\.experts\.(\d+)\.", key)
+        if match:
+            expert_ids.append(int(match.group(1)))
+        match = re.match(r"layers\.(\d+)\.exit_head\.weight$", key)
+        if match:
+            exit_ids.append(int(match.group(1)))
+
+    num_layers = int(config.get("num_layers") or (max(layer_ids) + 1 if layer_ids else fallback.get("num_layers", 6)))
+    num_experts = int(config.get("num_experts") or (max(expert_ids) + 1 if expert_ids else fallback.get("num_experts", 4)))
+    num_heads = int(config.get("num_heads") or fallback.get("num_heads", 0))
+    head_dim = int(config.get("head_dim") or fallback.get("head_dim", 64))
+    if hidden_dim != int(fallback.get("hidden_dim", -1)) or num_heads <= 0 or num_heads * head_dim != hidden_dim:
+        head_dim = int(config.get("head_dim") or 64)
+        if hidden_dim % head_dim:
+            raise ValueError(
+                f"Cannot infer GLA head dimensions for checkpoint width {hidden_dim}; "
+                "the checkpoint must include num_heads and head_dim metadata."
+            )
+        num_heads = hidden_dim // head_dim
+
+    overrides: Dict[str, Any] = {
+        "vocab_size": vocab_size,
+        "hidden_dim": hidden_dim,
+        "num_layers": num_layers,
+        "num_heads": num_heads,
+        "head_dim": head_dim,
+        "num_experts": num_experts,
+        # Legacy checkpoints omit router-prefix metadata; preserve the
+        # selected/canonical architecture value instead of the module default.
+        "router_prefix_layers": int(config.get("router_prefix_layers") or fallback.get("router_prefix_layers", 1)),
+    }
+    for key in (
+        "router_prefix_layers", "reflex_exit_layer", "limbic_exit_layer",
+        "target_depth_dist", "balance_coef", "precision", "use_fp4", "use_fp8",
+        "streaming_fp8_weights", "use_layer_streaming", "chunk_size",
+    ):
+        if config.get(key) is not None:
+            overrides[key] = config[key]
+    if len(exit_ids) >= 2:
+        overrides.setdefault("reflex_exit_layer", min(exit_ids))
+        overrides.setdefault("limbic_exit_layer", max(exit_ids))
+
+    saved_model_id = config.get("model_id") or config.get("preset_id")
+    if saved_model_id:
+        model_id = str(saved_model_id)
+    else:
+        # Older checkpoints lack a model ID. Resolve the label from the actual
+        # tensor dimensions instead of reusing whichever preset the UI selected
+        # before loading (which could otherwise label a Small checkpoint as Base).
+        model_id = next((spec_id for spec_id, spec in CANONICAL_MODEL_SPECS.items()
+                         if spec.vocab_size == vocab_size
+                         and spec.hidden_dim == hidden_dim
+                         and spec.num_layers == num_layers
+                         and spec.num_heads == num_heads
+                         and spec.head_dim == head_dim
+                         and spec.num_experts == num_experts
+                         and spec.router_prefix_layers == overrides["router_prefix_layers"]
+                         and spec.reflex_exit_layer == overrides.get("reflex_exit_layer", spec.reflex_exit_layer)
+                         and spec.limbic_exit_layer == overrides.get("limbic_exit_layer", spec.limbic_exit_layer)),
+                        "triune-custom")
+    if model_id not in CANONICAL_MODEL_SPECS:
+        # Preserve the custom architecture values while using a validated base spec.
+        model_id = "triune-custom"
+    return model_id, overrides
+
+
 if HAS_FASTAPI:
     router = APIRouter()
     dag_engine = ExecutionEngine() if ExecutionEngine is not None else None
@@ -153,7 +259,7 @@ if HAS_FASTAPI:
     else:
         class FallbackModuleManager:
             def get_config(self): return {"byok_keys": {}, "theme": "retro"}
-            def save_config(self, c): pass
+            def save_config(self, c, **kwargs): pass
             def search_marketplace(self, q="", mod_type="all", source="all"): return {"results": []}
             def search_modules(self, q, t): return []
             def get_installed_modules(self): return []
@@ -175,8 +281,9 @@ if HAS_FASTAPI:
         def __init__(self) -> None:
             self.active_connections: list[WebSocket] = []
 
-        async def connect(self, websocket: WebSocket) -> None:
-            await websocket.accept()
+        async def connect(self, websocket: WebSocket, *, accept: bool = True) -> None:
+            if accept:
+                await websocket.accept()
             self.active_connections.append(websocket)
 
         def disconnect(self, websocket: WebSocket) -> None:
@@ -198,6 +305,39 @@ if HAS_FASTAPI:
     telemetry_manager = TelemetryConnectionManager()
 
     # BYOK External Provider Callers
+    def _provider_timeout_message() -> str:
+        return (
+            f"The cloud provider did not respond before Triune's {_provider_request_timeout():g}-second request timeout. "
+            "This is provider/network wait time, not local model inference; check provider status and quota, then retry."
+        )
+
+    def _byok_error_message(exc: Exception) -> str:
+        """Return a provider failure without leaking URLs, request headers, or credentials."""
+        if isinstance(exc, urllib.error.HTTPError):
+            reason = exc.reason or "request rejected"
+            if exc.code == 401:
+                return "provider rejected the API key (HTTP 401). Check that the saved key is current, valid, and for this provider; HTTP 401 is an authentication failure, not a rate/quota response."
+            if exc.code == 403:
+                return "provider denied access (HTTP 403). Check key permissions, project access, and whether this model is enabled."
+            if exc.code == 429:
+                return "provider rate or quota limit reached (HTTP 429). Check the account's limits and retry after the reset."
+            return f"provider returned HTTP {exc.code} ({reason}). Check provider status and request settings."
+        if isinstance(exc, urllib.error.URLError):
+            if isinstance(exc.reason, (TimeoutError, asyncio.TimeoutError)) or "timed out" in str(exc.reason).lower():
+                return _provider_timeout_message()
+            return f"could not connect to provider ({exc.reason}). Check network access and try again."
+        if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
+            return _provider_timeout_message()
+        return f"{type(exc).__name__}: provider request could not be completed."
+
+    def _provider_request_timeout() -> float:
+        """Keep slower free-tier cloud responses from failing at the old 30-second cutoff."""
+        try:
+            configured = float(os.environ.get("TRIUNE_PROVIDER_TIMEOUT_SECONDS", "90"))
+        except (TypeError, ValueError):
+            configured = 90.0
+        return max(15.0, min(configured, 300.0))
+
     def _call_openai_api(messages: List[Dict[str, str]], api_key: str, model: str = "gpt-4o-mini", temperature: float = 0.7, max_tokens: int = 2048) -> str:
         url = "https://api.openai.com/v1/chat/completions"
         payload = json.dumps({
@@ -215,11 +355,11 @@ if HAS_FASTAPI:
                 "User-Agent": "TriuneStudio/2.1",
             }
         )
-        with urllib.request.urlopen(req, timeout=30.0) as resp:
+        with urllib.request.urlopen(req, timeout=_provider_request_timeout()) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             return data["choices"][0]["message"]["content"]
 
-    def _call_anthropic_api(messages: List[Dict[str, str]], api_key: str, model: str = "claude-3-5-sonnet-20241022", temperature: float = 0.7, max_tokens: int = 2048) -> str:
+    def _call_anthropic_api(messages: List[Dict[str, str]], api_key: str, model: str = "claude-3-5-sonnet-latest", temperature: float = 0.7, max_tokens: int = 2048) -> str:
         url = "https://api.anthropic.com/v1/messages"
         system_msg = ""
         user_msgs = []
@@ -234,7 +374,6 @@ if HAS_FASTAPI:
             "model": model,
             "messages": user_msgs,
             "max_tokens": max(64, min(max_tokens, 8192)),
-            "temperature": temperature,
         }
         if system_msg:
             payload_dict["system"] = system_msg
@@ -249,12 +388,12 @@ if HAS_FASTAPI:
                 "User-Agent": "TriuneStudio/2.1",
             }
         )
-        with urllib.request.urlopen(req, timeout=30.0) as resp:
+        with urllib.request.urlopen(req, timeout=_provider_request_timeout()) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             return data["content"][0]["text"]
 
-    def _call_gemini_api(messages: List[Dict[str, str]], api_key: str, model: str = "gemini-1.5-flash", temperature: float = 0.7, max_tokens: int = 2048) -> str:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    def _call_gemini_api(messages: List[Dict[str, str]], api_key: str, model: str = "gemini-3.8-flash", temperature: float = 0.7, max_tokens: int = 2048) -> str:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
         contents = []
         system_instruction = None
         for m in messages:
@@ -279,11 +418,18 @@ if HAS_FASTAPI:
         req = urllib.request.Request(
             url,
             data=payload,
-            headers={"Content-Type": "application/json", "User-Agent": "TriuneStudio/2.1"}
+            headers={"Content-Type": "application/json", "x-goog-api-key": api_key, "User-Agent": "TriuneStudio/2.1"}
         )
-        with urllib.request.urlopen(req, timeout=30.0) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            return data["candidates"][0]["content"]["parts"][0]["text"]
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(req, timeout=_provider_request_timeout()) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    return data["candidates"][0]["content"]["parts"][0]["text"]
+            except urllib.error.HTTPError as h_err:
+                if h_err.code in (503, 429) and attempt < 2:
+                    time.sleep(1.0 * (attempt + 1))
+                    continue
+                raise
 
     class HFRestStreamReader:
         """Streaming reader for Hugging Face datasets via the dataset-server REST API.
@@ -363,6 +509,7 @@ if HAS_FASTAPI:
         def __init__(self):
             self.step = 0
             self.is_training = False
+            self.active_generation_cancel: Optional[threading.Event] = None
             self.model = None
             self.optimizer = None
             self.tokenizer = None
@@ -389,11 +536,13 @@ if HAS_FASTAPI:
                 "router_prefix_layers": 1,
                 "reflex_exit_layer": 2,
                 "limbic_exit_layer": 4,
-                "depth_mode": "cortex",
+                "depth_mode": "dynamic",
                 "balance_loss_weight": 0.3,
             }
             self._token_accumulator: List[int] = []
-            self.depth_mode = "cortex"  # "cortex" (full 6-layer backbone) | "joint" (all 3 exits) | "dynamic" (router)
+            self.depth_mode = "dynamic"  # "cortex" (full backbone) | "joint" (all 3 exits) | "dynamic" (router) — user-selected, persisted
+            self.streaming_engine = None
+            self.placement_info: Dict[str, Any] = {}
             self.balance_loss_weight = 0.3
             self.router_temp = 1.0
             self.steer_scale = 0.20
@@ -411,6 +560,8 @@ if HAS_FASTAPI:
             self.tokens_trained = 0
             self.current_batch_preview = ""
             self.active_checkpoint: Optional[str] = None
+            self.weights_loaded = False
+            self.active_adapter: Optional[Dict[str, Any]] = None
             self.last_sample_decode = ""
             self._prefetch_thread: Optional[threading.Thread] = None
             self._prefetch_running = True
@@ -426,6 +577,20 @@ if HAS_FASTAPI:
                         os.environ["HUGGING_FACE_HUB_TOKEN"] = self.hf_token
                 except Exception:
                     pass
+
+            # Weights & Biases Experiment Telemetry Integration
+            self.wandb_key = os.environ.get("WANDB_API_KEY", "")
+            if not self.wandb_key and hasattr(module_manager, "get_config"):
+                try:
+                    byok = module_manager.get_config().get("byok_keys", {})
+                    self.wandb_key = byok.get("wandb", "")
+                    if self.wandb_key:
+                        os.environ["WANDB_API_KEY"] = self.wandb_key
+                except Exception:
+                    pass
+            self.wandb_run: Any = None
+            self.wandb_url: Optional[str] = None
+            self.wandb_project: str = "triune-transformer"
             self.is_streaming_hf = False
             self.hf_dataset_name = "HuggingFaceFW/fineweb-edu"
             self.hf_config: Optional[str] = "sample-10BT"
@@ -442,25 +607,55 @@ if HAS_FASTAPI:
             }
 
             if HAS_TORCH:
-                self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-                self.device_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else f"CPU ({platform.processor() or 'x86_64'})"
-                self.loss_fn = nn.CrossEntropyLoss(ignore_index=0)
+                self.cuda_init_error: Optional[str] = None
+                self.cuda_runtime_version = getattr(torch.version, "cuda", None)
+                self.cuda_available = False
+                self.device = torch.device("cpu")
+                self.device_name = f"CPU ({platform.processor() or 'x86_64'})"
+                if torch.cuda.is_available():
+                    try:
+                        torch.cuda.init()
+                        torch.cuda.set_device(0)
+                        # Touch the actual allocator and synchronize so startup
+                        # cannot report a CUDA device that fails on first use.
+                        _cuda_probe = torch.empty(1, device="cuda:0")
+                        torch.cuda.synchronize(0)
+                        del _cuda_probe
+                        self.device = torch.device("cuda:0")
+                        self.device_name = torch.cuda.get_device_name(0)
+                        self.cuda_available = True
+                    except Exception as exc:
+                        self.cuda_init_error = f"CUDA initialization failed: {exc}"
+                        print(f"[Triune Engine] {self.cuda_init_error}; using CPU.")
+                self.pad_token_id = 0
+                self.z_loss_coef = 1e-3
+                self.loss_fn = nn.CrossEntropyLoss(ignore_index=self.pad_token_id, reduction="none")
+                self.router_loss_fn = nn.CrossEntropyLoss()
                 self.logs: List[str] = [
                     f"[SYSTEM] PyTorch {torch.__version__} engine initialized on {self.device_name}.",
                     "[ENGINE] TriuneTransformer MoE Engine ready for real training and inference.",
                 ]
+                if self.cuda_init_error:
+                    self.logs.insert(0, f"[GPU] {self.cuda_init_error}")
             else:
                 self.device = "cpu"
                 self.device_name = f"Host UI Mode ({platform.processor() or 'x86_64'})"
+                self.pad_token_id = 0
+                self.z_loss_coef = 1e-3
                 self.loss_fn = None
+                self.router_loss_fn = None
                 self.logs: List[str] = [
                     f"[SYSTEM] Studio running in Host UI Mode on {self.device_name}.",
                     "[ENGINE] PyTorch not available in current process. Run with WSL2 for full GPU acceleration.",
                 ]
             print(f"[Triune Engine] Initializing Native Engine on: {self.device_name}")
 
+            self.training_engine: Any = None
             self.history: List[Dict[str, Any]] = []
             self.training_task: Optional[asyncio.Task] = None
+            self.worker_lock = threading.Lock()
+            self.stop_event = threading.Event()
+            self.run_id = 0
             self._restore_persisted_session_state()
 
         def _restore_persisted_session_state(self):
@@ -476,6 +671,8 @@ if HAS_FASTAPI:
                             self.step = data["step"]
                         if data.get("active_checkpoint"):
                             self.active_checkpoint = data["active_checkpoint"]
+                        if "active_adapter" in data:
+                            self.active_adapter = data["active_adapter"]
                         if data.get("dataset_name"):
                             self.dataset_name = data["dataset_name"]
                         if "batch_size" in data and data["batch_size"] > 0:
@@ -494,6 +691,13 @@ if HAS_FASTAPI:
                             self.active_model_id = data["active_model_id"]
                         if data.get("architecture_spec"):
                             self.architecture_spec = data["architecture_spec"]
+                        if data.get("depth_mode") in ("cortex", "joint", "dynamic"):
+                            self.depth_mode = data["depth_mode"]
+                        if data.get("lr_peak"):
+                            self.lr_peak = float(data["lr_peak"])
+                            self.current_lr = float(data["lr_peak"])
+                        if "warmup_steps" in data and data["warmup_steps"] is not None:
+                            self.warmup_steps = int(data["warmup_steps"])
                 except Exception:
                     pass
 
@@ -505,7 +709,7 @@ if HAS_FASTAPI:
                     try:
                         latest = ckpts[0]
                         if HAS_TORCH:
-                            ckpt_data = torch.load(latest, map_location="cpu", weights_only=False)
+                            ckpt_data = torch.load(latest, map_location="cpu", weights_only=True)
                             ckpt_tokens = ckpt_data.get("total_tokens_trained", ckpt_data.get("tokens_trained", 0))
                             ckpt_step = ckpt_data.get("step", 0)
                             if not ckpt_tokens and ckpt_step > 0:
@@ -530,6 +734,23 @@ if HAS_FASTAPI:
                 print(msg)
                 self._save_persisted_session_state()
 
+            # Auto-restore active checkpoint weights on startup
+            if HAS_TORCH and ckpt_dir.is_dir():
+                target_ckpt = None
+                if self.active_checkpoint and (ckpt_dir / self.active_checkpoint).is_file():
+                    target_ckpt = ckpt_dir / self.active_checkpoint
+                elif ckpts:
+                    target_ckpt = ckpts[0]
+
+                if target_ckpt is not None:
+                    try:
+                        self.load_model_checkpoint(target_ckpt, restore_optimizer=False)
+                        loaded_msg = f"[Triune Engine] Auto-restored weights from active checkpoint: {target_ckpt.name}"
+                        self.logs.insert(0, loaded_msg)
+                        print(loaded_msg)
+                    except Exception as exc:
+                        self.logs.insert(0, f"[Triune Engine] Startup checkpoint {target_ckpt.name} bypassed: {exc}")
+
         def _save_persisted_session_state(self):
             """Persist session cumulative tokens and metadata to checkpoints/session_state.json."""
             try:
@@ -540,6 +761,7 @@ if HAS_FASTAPI:
                     "tokens_trained": self.tokens_trained,
                     "step": self.step,
                     "active_checkpoint": self.active_checkpoint,
+                    "active_adapter": getattr(self, "active_adapter", None),
                     "dataset_name": self.dataset_name,
                     "hf_dataset_name": self.hf_dataset_name if self.is_streaming_hf else self.dataset_name,
                     "batch_size": self.batch_size,
@@ -550,6 +772,9 @@ if HAS_FASTAPI:
                     "precision": getattr(self, "precision", "bf16"),
                     "active_model_id": getattr(self, "active_model_id", "triune-small"),
                     "architecture_spec": getattr(self, "architecture_spec", {}),
+                    "depth_mode": getattr(self, "depth_mode", "dynamic"),
+                    "lr_peak": getattr(self, "lr_peak", None),
+                    "warmup_steps": getattr(self, "warmup_steps", None),
                     "updated_at": time.time(),
                 }
                 with open(session_file, "w", encoding="utf-8") as f:
@@ -582,134 +807,84 @@ if HAS_FASTAPI:
             return self.tokenizer
 
         def reconfigure_architecture(self, preset_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
-            """Rebuild TriuneTransformer architecture and optimizer to match specified preset or custom parameters."""
-            ARCH_PRESETS = {
-                "triune-nano": {
-                    "preset_id": "triune-nano",
-                    "name": "Triune-Nano (Edge / Embedded)",
-                    "tier": "Edge & Mobile",
-                    "num_layers": 4,
-                    "hidden_dim": 192,
-                    "num_heads": 4,
-                    "head_dim": 48,
-                    "num_experts": 2,
-                    "experts_routed": 2,
-                    "experts_shared": 1,
-                    "router_prefix_layers": 1,
-                    "reflex_exit_layer": 2,
-                    "limbic_exit_layer": 3,
-                    "recommended_batch": 4,
-                    "recommended_seq": 64,
-                    "params": "18.5M params",
-                },
-                "triune-small": {
-                    "preset_id": "triune-small",
-                    "name": "Triune-Small (Canonical 6L MoE)",
-                    "tier": "Production Baseline",
-                    "num_layers": 6,
-                    "hidden_dim": 256,
-                    "num_heads": 4,
-                    "head_dim": 64,
-                    "num_experts": 4,
-                    "experts_routed": 4,
-                    "experts_shared": 1,
-                    "router_prefix_layers": 1,
-                    "reflex_exit_layer": 2,
-                    "limbic_exit_layer": 4,
-                    "recommended_batch": 4,
-                    "recommended_seq": 64,
-                    "params": "33.8M params",
-                },
-                "triune-medium": {
-                    "preset_id": "triune-medium",
-                    "name": "Triune-Medium (Reasoning & Code)",
-                    "tier": "High Capacity",
-                    "num_layers": 12,
-                    "hidden_dim": 512,
-                    "num_heads": 8,
-                    "head_dim": 64,
-                    "num_experts": 8,
-                    "experts_routed": 8,
-                    "experts_shared": 1,
-                    "router_prefix_layers": 2,
-                    "reflex_exit_layer": 4,
-                    "limbic_exit_layer": 8,
-                    "recommended_batch": 2,
-                    "recommended_seq": 128,
-                    "params": "142M params",
-                },
-                "triune-large": {
-                    "preset_id": "triune-large",
-                    "name": "Triune-Large (High-Capacity MoE)",
-                    "tier": "Research Scale",
-                    "num_layers": 16,
-                    "hidden_dim": 768,
-                    "num_heads": 12,
-                    "head_dim": 64,
-                    "num_experts": 8,
-                    "experts_routed": 8,
-                    "experts_shared": 2,
-                    "router_prefix_layers": 2,
-                    "reflex_exit_layer": 5,
-                    "limbic_exit_layer": 10,
-                    "recommended_batch": 1,
-                    "recommended_seq": 128,
-                    "params": "385M params",
-                },
-                "triune-1b": {
-                    "preset_id": "triune-1b",
-                    "name": "Triune-1B (Frontier MoE)",
-                    "tier": "Billion-Scale Baseline",
-                    "num_layers": 24,
-                    "hidden_dim": 1536,
-                    "num_heads": 16,
-                    "head_dim": 96,
-                    "num_experts": 8,
-                    "experts_routed": 8,
-                    "experts_shared": 2,
-                    "router_prefix_layers": 3,
-                    "reflex_exit_layer": 8,
-                    "limbic_exit_layer": 16,
-                    "recommended_batch": 1,
-                    "recommended_seq": 128,
-                    "params": "1.24B params",
-                },
-            }
+            """Rebuild TriuneTransformer architecture and optimizer using canonical ModelSpec."""
+            from triune.model.base import build_model_from_spec, get_model_spec
 
             p_id = preset_id or getattr(self, "active_model_id", "triune-small") or "triune-small"
-            base = ARCH_PRESETS.get(p_id, ARCH_PRESETS["triune-small"]).copy()
-            if preset_id not in ARCH_PRESETS and preset_id:
-                base["name"] = f"Triune-Custom ({preset_id})"
-                base["preset_id"] = preset_id
+            spec_overrides = {
+                k: kwargs[k]
+                for k in (
+                    "vocab_size",
+                    "num_layers",
+                    "hidden_dim",
+                    "num_heads",
+                    "head_dim",
+                    "num_experts",
+                    "router_prefix_layers",
+                    "reflex_exit_layer",
+                    "limbic_exit_layer",
+                    "target_depth_dist",
+                    "balance_coef",
+                    "depth_mode",
+                    "use_fp4",
+                    "use_fp8",
+                    "precision",
+                )
+                if k in kwargs and kwargs[k] is not None
+            }
+            if "balance_loss_weight" in kwargs and kwargs["balance_loss_weight"] is not None:
+                spec_overrides["balance_coef"] = float(kwargs["balance_loss_weight"])
+                self.balance_loss_weight = float(kwargs["balance_loss_weight"])
+            if "depth_mode" in spec_overrides:
+                self.depth_mode = str(spec_overrides["depth_mode"])
 
-            for k in ("num_layers", "hidden_dim", "num_heads", "head_dim", "num_experts", "depth_mode", "balance_loss_weight"):
-                if k in kwargs and kwargs[k] is not None:
-                    base[k] = kwargs[k]
-
-            L = base["num_layers"]
-            r_prefix = max(1, min(base.get("router_prefix_layers", 1), max(1, L - 3)))
-            r_reflex = max(r_prefix + 1, min(base.get("reflex_exit_layer", max(2, L // 3)), max(r_prefix + 1, L - 2)))
-            r_limbic = max(r_reflex + 1, min(base.get("limbic_exit_layer", max(3, (2 * L) // 3)), max(r_reflex + 1, L - 1)))
-            base["router_prefix_layers"] = r_prefix
-            base["reflex_exit_layer"] = r_reflex
-            base["limbic_exit_layer"] = r_limbic
-            base["hidden_dim"] = base["num_heads"] * base["head_dim"]
+            spec = get_model_spec(p_id, **spec_overrides)
+            base = spec.to_dict()
+            base["balance_loss_weight"] = float(getattr(self, "balance_loss_weight", spec.balance_coef))
+            self.precision = spec.precision
 
             if HAS_TORCH and TriuneTransformer is not None:
                 self.load_tokenizer()
-                self.model = TriuneTransformer(
-                    vocab_size=32000,
-                    hidden_dim=base["hidden_dim"],
-                    num_layers=base["num_layers"],
-                    num_heads=base["num_heads"],
-                    head_dim=base["head_dim"],
-                    num_experts=base["num_experts"],
-                    router_prefix_layers=r_prefix,
-                    reflex_exit_layer=r_reflex,
-                    limbic_exit_layer=r_limbic,
-                    use_fp4=False,
-                    use_fp8=False,
-                ).to(self.device)
+                total_p, _ = spec.compute_exact_params()
+                exec_spec = spec
+
+                # Zero fake or silent downgrades: always instantiate the real user-chosen model architecture
+                self.model = build_model_from_spec(exec_spec)
+                self.model.model_spec = spec
+
+                num_layers = spec.num_layers
+                pct = getattr(self, "gpu_offload_pct", 100)
+                requested_gpu_layers = getattr(self, "gpu_layers", None)
+                if "gpu_layers" in kwargs and kwargs["gpu_layers"] is not None:
+                    requested_gpu_layers = int(kwargs["gpu_layers"])
+                if requested_gpu_layers is None:
+                    requested_gpu_layers = max(0, min(num_layers, int(round((pct / 100.0) * num_layers))))
+
+                if self.device.type == "cuda":
+                    if total_p > 150_000_000 or requested_gpu_layers < num_layers or getattr(spec, "use_layer_streaming", False):
+                        if hasattr(self.model, "enable_gradient_checkpointing"):
+                            self.model.enable_gradient_checkpointing()
+                        layer_bytes = (total_p * 2) / max(1, num_layers)
+                        # Allocate up to 2.5GB of GPU VRAM for resident layers, leaving VRAM for embeddings, activations, and buffers
+                        max_safe_resident = max(2, min(num_layers, int((2.5 * (1024**3)) / max(1, layer_bytes))))
+                        res_layers = min(requested_gpu_layers, max_safe_resident)
+
+                        from triune.runtime.streaming import LayerStreamingEngine, StreamingConfig
+                        streaming_cfg = StreamingConfig(
+                            enabled=True,
+                            chunk_size=1,
+                            pin_memory=False,
+                            async_prefetch=True,
+                            fp8_weights=(spec.precision == "fp8" or spec.use_fp8),
+                            resident_gpu_layers=res_layers,
+                        )
+                        engine = LayerStreamingEngine(self.model, device=self.device, config=streaming_cfg)
+                        engine.attach()
+                        self.model._streaming_engine = engine
+                    else:
+                        self.model = self.model.to(self.device)
+                else:
+                    self.model = self.model.to(self.device)
 
                 from triune.optim.factory import build_optimizer
                 optim_cfg = {
@@ -730,12 +905,27 @@ if HAS_FASTAPI:
                 }
                 try:
                     self.optimizer = build_optimizer(self.model, optim_cfg)
-                except Exception as e:
+                except Exception:
                     self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.current_lr, weight_decay=0.01)
+
+                if getattr(self.model, "_streaming_engine", None) is not None:
+                    self.model._streaming_engine.set_optimizer(self.optimizer)
+
+                from triune.trainer.engine import TrainingEngine
+                self.training_engine = TrainingEngine(self)
+                self.training_engine.step = self.step
 
             self.active_model_id = p_id
             self.architecture_spec = base
-            self.gpu_layers = min(getattr(self, "gpu_layers", base["num_layers"]), base["num_layers"])
+            self.weights_loaded = False
+            if "gpu_layers" in kwargs and kwargs["gpu_layers"] is not None:
+                self.gpu_layers = max(0, min(base["num_layers"], int(kwargs["gpu_layers"])))
+                self.gpu_offload_pct = int(round((self.gpu_layers / max(1, base["num_layers"])) * 100))
+            elif getattr(self, "gpu_layers", None) is not None:
+                self.gpu_layers = max(0, min(base["num_layers"], int(self.gpu_layers)))
+            else:
+                pct = getattr(self, "gpu_offload_pct", 100)
+                self.gpu_layers = max(0, min(base["num_layers"], int(round((pct / 100.0) * base["num_layers"]))))
             if "recommended_batch" in base and "batch_size" not in kwargs:
                 self.batch_size = base["recommended_batch"]
             if "recommended_seq" in base and "seq_len" not in kwargs:
@@ -747,59 +937,128 @@ if HAS_FASTAPI:
 
             self._save_persisted_session_state()
 
-            log_msg = f"[Triune Engine] Architecture active: {base.get('name', p_id)} ({base['num_layers']}L, {base['hidden_dim']}d, {base['num_heads']}H, {base['num_experts']}E). Optimizer rebuilt."
+            log_msg = f"[Triune Engine] Architecture active: {base.get('name', p_id)} ({base['num_layers']}L, {base['hidden_dim']}d, {base['num_heads']}H, {base['num_experts']}E, {base['precision'].upper()}). Optimizer rebuilt."
             self.logs.insert(0, log_msg)
             print(log_msg)
             return base
 
+        def load_model_checkpoint(self, checkpoint_path: str | Path, *, restore_optimizer: bool = True) -> Dict[str, Any]:
+            """Load a checkpoint only after matching the model architecture and validating every weight."""
+            p = Path(checkpoint_path).resolve()
+            if not p.is_file():
+                raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
+            if p.suffix.lower() == ".safetensors":
+                from safetensors.torch import load_file
+                checkpoint = load_file(str(p), device="cpu")
+            else:
+                checkpoint = torch.load(p, map_location="cpu", weights_only=True)
+            if not isinstance(checkpoint, dict):
+                raise ValueError("Checkpoint contents must be a state dictionary or a checkpoint mapping.")
+
+            model_id, arch_overrides = _checkpoint_architecture(checkpoint, self.architecture_spec)
+            arch_overrides.update({
+                "depth_mode": checkpoint.get("config", {}).get("depth_mode", self.depth_mode)
+                if isinstance(checkpoint.get("config"), dict) else self.depth_mode,
+                "precision": checkpoint.get("config", {}).get("precision", self.precision)
+                if isinstance(checkpoint.get("config"), dict) else self.precision,
+            })
+            self.reconfigure_architecture(model_id, **arch_overrides)
+
+            state_dict = checkpoint.get("model_state", checkpoint)
+            state_dict = {
+                str(key).removeprefix("_orig_mod."): value
+                for key, value in state_dict.items()
+            }
+            # strict=True is intentional: partial/randomly initialized models must never
+            # be reported as successfully loaded trained checkpoints.
+            self.model.load_state_dict(state_dict, strict=True)
+            if getattr(self.model, "_streaming_engine", None) is None:
+                self.model.to(self.device)
+
+            if "step" in checkpoint:
+                self.step = int(checkpoint["step"])
+            config = checkpoint.get("config", {}) if isinstance(checkpoint.get("config"), dict) else {}
+            restored_tokens = checkpoint.get("total_tokens_trained", checkpoint.get("tokens_trained", 0))
+            if not restored_tokens and self.step > 0:
+                restored_tokens = self.step * int(config.get("batch_size", checkpoint.get("batch_size", 4))) \
+                    * int(config.get("seq_len", checkpoint.get("seq_len", 64))) \
+                    * int(config.get("grad_accum_steps", checkpoint.get("grad_accum_steps", 4)))
+            self.total_tokens_trained = int(restored_tokens or 0)
+            self.tokens_trained = self.total_tokens_trained
+            self.active_checkpoint = p.name
+            self.weights_loaded = True
+
+            if restore_optimizer and checkpoint.get("optimizer_state") and self.optimizer:
+                try:
+                    opt_state = checkpoint["optimizer_state"]
+                    if isinstance(self.optimizer, CentroidSteerOptimizer):
+                        if "layer_groups" in opt_state and "base_optimizer" in opt_state:
+                            self.optimizer.load_state_dict(opt_state)
+                        elif "state" in opt_state and "param_groups" in opt_state:
+                            base_p_count = sum(len(g.get("params", [])) for g in self.optimizer.base_optimizer.param_groups)
+                            saved_p_count = sum(len(g.get("params", [])) for g in opt_state.get("param_groups", []))
+                            if base_p_count == saved_p_count and len(self.optimizer.base_optimizer.param_groups) == len(opt_state.get("param_groups", [])):
+                                self.optimizer.base_optimizer.load_state_dict(opt_state)
+                            else:
+                                self.logs.insert(0, f"[CHECKPOINT] Optimizer state skipped: schema mismatch ({saved_p_count} vs {base_p_count} params). Re-initialized cleanly.")
+                    else:
+                        self.optimizer.load_state_dict(opt_state)
+                except Exception as exc:
+                    # Inference weights are valid even when an old optimizer schema is not.
+                    self.logs.insert(0, f"[CHECKPOINT] Optimizer state not restored: {exc}")
+
+            self._save_persisted_session_state()
+            return {
+                "checkpoint": p.name,
+                "step": self.step,
+                "tokens_trained": self.total_tokens_trained,
+                "architecture": self.architecture_spec,
+                "active_model": self.active_model_id,
+            }
+
         def lazy_init_model(self):
             if not HAS_TORCH or TriuneTransformer is None:
                 raise RuntimeError("PyTorch is not installed in this environment.")
+            # Only restore implicitly during first backend initialization. A
+            # model already built by an explicit preset selection is intentional
+            # (possibly fresh for training) and must never be replaced by the
+            # newest checkpoint behind the user's back.
             if self.model is not None:
                 return
 
-            self.reconfigure_architecture(getattr(self, "active_model_id", "triune-small"))
-
-            # Auto-restore latest studio checkpoint if available
-            ckpt_dir = Path("checkpoints")
-            if ckpt_dir.is_dir():
-                ckpts = sorted(ckpt_dir.glob("triune_studio_step_*.pt"), key=lambda x: x.stat().st_mtime, reverse=True)
-                if ckpts and ckpts[0].is_file():
-                    try:
-                        latest_p = ckpts[0]
-                        ckpt = torch.load(latest_p, map_location=self.device, weights_only=False)
-                        st = ckpt.get("model_state", ckpt)
-                        self.model.load_state_dict(st, strict=False)
-                        self.step = ckpt.get("step", 0)
-                        restored_tokens = ckpt.get("total_tokens_trained", ckpt.get("tokens_trained", 0))
-                        if not restored_tokens and self.step > 0:
-                            restored_tokens = self.step * self.batch_size * self.seq_len * self.grad_accum_steps
-                        self.total_tokens_trained = restored_tokens
-                        self.tokens_trained = restored_tokens
-                        if "optimizer_state" in ckpt and ckpt["optimizer_state"] and self.optimizer:
-                            try:
-                                opt_st = ckpt["optimizer_state"]
-                                if isinstance(self.optimizer, CentroidSteerOptimizer):
-                                    if "layer_groups" in opt_st and "base_optimizer" in opt_st:
-                                        self.optimizer.load_state_dict(opt_st)
-                                    elif "state" in opt_st and "param_groups" in opt_st:
-                                        try:
-                                            self.optimizer.base_optimizer.load_state_dict(opt_st)
-                                        except Exception:
-                                            pass
-                                else:
-                                    self.optimizer.load_state_dict(opt_st)
-                            except Exception:
-                                pass
-                        self.active_checkpoint = latest_p.name
-                        msg = f"[Triune Engine] Auto-restored active weights from {latest_p.name} (step {self.step})."
-                        self.logs.insert(0, msg)
-                        print(msg)
-                    except Exception as err:
-                        print(f"[Triune Engine] Checkpoint auto-load notice: {err}")
+            # Prefer the checkpoint explicitly marked active; otherwise use the most
+            # recently modified managed checkpoint. Never swallow a bad restore and
+            # continue with random weights while claiming the trained model is active.
+            active_candidates: List[Path] = []
+            if self.active_checkpoint:
+                active_candidates.extend(Path(folder) / Path(self.active_checkpoint).name for folder in ("checkpoints", "checkpoints_full"))
+            active_path = next((path for path in active_candidates if path.is_file()), None)
+            if active_path is not None:
+                checkpoint_path = active_path
+            else:
+                candidates = [path for folder in ("checkpoints", "checkpoints_full")
+                              for path in Path(folder).iterdir()
+                              if path.is_file() and path.suffix.lower() in {".pt", ".safetensors"}]
+                checkpoint_path = max(candidates, key=lambda path: path.stat().st_mtime) if candidates else None
+            if checkpoint_path is not None:
+                try:
+                    restored = self.load_model_checkpoint(checkpoint_path)
+                except Exception as err:
+                    self.weights_loaded = False
+                    self.active_checkpoint = None
+                    raise RuntimeError(
+                        f"Could not restore trained checkpoint {checkpoint_path.name}; local inference was stopped "
+                        f"instead of using random weights. {err}"
+                    ) from err
+                msg = f"[Triune Engine] Auto-restored active weights from {restored['checkpoint']} (step {restored['step']})."
+                self.logs.insert(0, msg)
+                print(msg)
+            elif self.model is None:
+                self.reconfigure_architecture(getattr(self, "active_model_id", "triune-small"))
 
             print(f"[Triune Engine] Loaded 6-Layer MoE TriuneTransformer (32k vocab, 4 experts, Centroid+Muon Optimizer) on {self.device_name}.")
-            self.load_training_data()
+            # Inference must not initialize a training corpus or open a network
+            # stream. Training's step_once/next_batch paths load data on demand.
 
         def connect_hf_stream(self, dataset_name: str, config: Optional[str] = None, split: str = "train", text_column: Optional[str] = None) -> Dict[str, Any]:
             """Connect directly to any Hugging Face dataset via streaming API with optional authentication."""
@@ -1038,6 +1297,60 @@ if HAS_FASTAPI:
                 except Exception:
                     time.sleep(0.1)
 
+        def _is_word_boundary(self, token_id: int) -> bool:
+            """Determine if a token represents the start of a whole word, whitespace, or punctuation."""
+            if not self.tokenizer:
+                return True
+            try:
+                t = self.tokenizer.id_to_token(token_id)
+                if not t:
+                    return True
+                # Special tokens like [PAD], [CLS], [SEP], [UNK], or Chat tokens
+                if (t.startswith("[") and t.endswith("]")) or (t.startswith("<|") and t.endswith("|>")):
+                    return True
+                # Byte-level BPE space prefix \u0120 or newline \u010a or whitespace
+                if t.startswith("Ġ") or t.startswith("Ċ") or t.startswith("\n") or t.startswith(" "):
+                    return True
+                # Punctuation or symbols
+                if not t[0].isalnum():
+                    return True
+                return False
+            except Exception:
+                return True
+
+        def init_wandb(self, project: Optional[str] = None, run_name: Optional[str] = None):
+            """Initialize or resume a live Weights & Biases experiment run."""
+            if self.wandb_run is not None:
+                return self.wandb_run
+            api_key = self.wandb_key or os.environ.get("WANDB_API_KEY")
+            if not api_key:
+                return None
+            try:
+                import wandb
+                wandb.login(key=api_key, relogin=False)
+                proj = project or self.wandb_project or "triune-transformer"
+                rname = run_name or f"triune-{getattr(self, 'active_model_id', 'studio')}-step{self.step}"
+                self.wandb_run = wandb.init(
+                    project=proj,
+                    name=rname,
+                    config={
+                        "model": getattr(self, "active_model_id", "triune"),
+                        "batch_size": self.batch_size,
+                        "seq_len": self.seq_len,
+                        "grad_accum_steps": self.grad_accum_steps,
+                        "depth_mode": self.depth_mode,
+                        "lr": self.current_lr,
+                        "device": self.device_name,
+                    },
+                    resume="allow",
+                )
+                self.wandb_url = getattr(self.wandb_run, "url", None)
+                self.logs.insert(0, f"[WANDB] Experiment connected to dashboard: {self.wandb_url or proj}")
+                return self.wandb_run
+            except Exception as exc:
+                self.logs.insert(0, f"[WANDB] Notice: Could not init run ({exc})")
+                return None
+
         def _refill_stream_buffer(self, target_chunks: int = 50) -> None:
             """Fill the streaming token buffer from active stream iterator."""
             if not self.hf_stream_iter or not self.tokenizer:
@@ -1086,8 +1399,22 @@ if HAS_FASTAPI:
                     self._token_accumulator.append(sep_id)
 
                     while len(self._token_accumulator) >= chunk_size:
-                        chunk = self._token_accumulator[:chunk_size]
-                        del self._token_accumulator[:chunk_size]
+                        split_idx = chunk_size
+                        # Word-boundary alignment: ensure next chunk never starts with a severed subword
+                        if split_idx < len(self._token_accumulator) and not self._is_word_boundary(self._token_accumulator[split_idx]):
+                            bt = split_idx
+                            while bt > split_idx - 16 and bt > 0 and not self._is_word_boundary(self._token_accumulator[bt]):
+                                bt -= 1
+                            if bt > 0:
+                                split_idx = bt
+
+                        chunk = self._token_accumulator[:split_idx]
+                        del self._token_accumulator[:split_idx]
+
+                        # Pad chunk to chunk_size if backtracked; CrossEntropyLoss ignores pad_token_id (0)
+                        if len(chunk) < chunk_size:
+                            chunk.extend([self.pad_token_id] * (chunk_size - len(chunk)))
+
                         self.hf_stream_buffer.append(chunk)
                         if len(self.hf_stream_buffer) >= target_chunks:
                             break
@@ -1205,11 +1532,15 @@ if HAS_FASTAPI:
 
             chunk_size = self.seq_len + 1
             chunks = []
-            for i in range(0, len(all_token_ids) - chunk_size, chunk_size):
+            for i in range(0, len(all_token_ids) - chunk_size + 1, chunk_size):
                 chunks.append(all_token_ids[i : i + chunk_size])
 
             if not chunks:
-                chunks = [[1] * chunk_size]
+                raise RuntimeError(
+                    f"Dataset '{self.dataset_name}' produced {len(all_token_ids)} token IDs; "
+                    f"at least {chunk_size} are required for seq_len={self.seq_len}. "
+                    "Check the dataset text and configured tokenizer."
+                )
 
             self.data_chunks = chunks
             self.data_idx = 0
@@ -1218,7 +1549,7 @@ if HAS_FASTAPI:
             self.logs.insert(0, log_msg)
             print(f"[Triune Engine] {log_msg}")
 
-        def generate_text(self, prompt: str, max_new_tokens: int = 64, temperature: float = 0.7, force_depth: Optional[int] = None) -> Dict[str, Any]:
+        def generate_text(self, prompt: str, max_new_tokens: int = 64, temperature: float = 0.7, force_depth: Optional[int] = None, cancel_event: Optional[threading.Event] = None, prompt_is_formatted: bool = False) -> Dict[str, Any]:
             if not HAS_TORCH or TriuneTransformer is None:
                 return {
                     "text": "[Host UI Mode] PyTorch is not available in current process. Run in WSL2 for full GPU acceleration.",
@@ -1232,264 +1563,185 @@ if HAS_FASTAPI:
                     "route": "HOST",
                 }
             self.lazy_init_model()
-            t0 = time.perf_counter()
+            if not self.weights_loaded:
+                # Auto-check if a compatible checkpoint exists in checkpoints/
+                ckpt_dir = Path("checkpoints")
+                if ckpt_dir.is_dir():
+                    ckpts = sorted(ckpt_dir.glob("*.pt"), key=lambda x: x.stat().st_mtime, reverse=True)
+                    for c_path in ckpts:
+                        try:
+                            self.load_model_checkpoint(c_path, restore_optimizer=False)
+                            break
+                        except Exception:
+                            continue
             self.model.eval()
 
             self.load_tokenizer()
-            if self.tokenizer:
-                try:
-                    ids = self.tokenizer.encode(prompt).ids
-                    eos_id = self.tokenizer.token_to_id("[SEP]") or self.tokenizer.token_to_id("[EOS]") or 2
-                except Exception:
-                    ids = [abs(hash(w)) % 31900 + 100 for w in prompt.split()] or [1]
-                    eos_id = 2
-            else:
-                ids = [abs(hash(w)) % 31900 + 100 for w in prompt.split()] or [1]
-                eos_id = 2
+            if self.tokenizer is None:
+                raise RuntimeError("Text generation requires the configured Triune tokenizer.")
+            eos_id = self.tokenizer.token_to_id("[SEP]")
+            if eos_id is None:
+                eos_id = self.tokenizer.token_to_id("[EOS]")
+            if eos_id is None:
+                raise RuntimeError("Tokenizer must define [SEP] or [EOS] for generation.")
+            from triune.inference import generate_response
 
-            if not ids:
-                ids = [1]
-
-            input_tensor = torch.tensor([ids], dtype=torch.long, device=self.device)
-            gen_ids = []
-            route_used = "CORTEX"
-
-            with torch.no_grad():
-                cache = self.model.init_cache(batch_size=1) if hasattr(self.model, "init_cache") else None
-                curr_input = input_tensor
-                for step_idx in range(max(1, min(max_new_tokens, 8192))):
-                    if cache is not None:
-                        res = self.model(curr_input, cache=cache, force_depth=force_depth)
-                    else:
-                        res = self.model(curr_input, force_depth=force_depth)
-
-                    if isinstance(res, tuple):
-                        logits = res[0]
-                        if cache is not None and len(res) > 1:
-                            cache = res[1]
-                    else:
-                        logits = res
-
-                    if force_depth is not None:
-                        route_used = ["REFLEX", "LIMBIC", "CORTEX"][min(force_depth, 2)]
-                    elif hasattr(self.model, "last_depth_choice") and self.model.last_depth_choice is not None:
-                        try:
-                            d_idx = int(self.model.last_depth_choice[0].item())
-                            route_used = ["REFLEX", "LIMBIC", "CORTEX"][min(d_idx, 2)]
-                        except Exception:
-                            pass
-
-                    next_logits = logits[0, -1].float() / max(0.01, temperature)
-
-                    # Multiplicative repetition penalty
-                    for token_id in set(ids + gen_ids):
-                        if token_id < next_logits.size(-1):
-                            if next_logits[token_id] > 0:
-                                next_logits[token_id] /= 1.2
-                            else:
-                                next_logits[token_id] *= 1.2
-
-                    # Top-k filtering (k=50)
-                    top_k = min(50, next_logits.size(-1))
-                    val, _ = torch.topk(next_logits, top_k)
-                    next_logits[next_logits < val[-1]] = float("-inf")
-
-                    probs = torch.softmax(next_logits, dim=-1)
-                    next_token = torch.multinomial(probs, 1).item() if temperature > 0.05 else torch.argmax(next_logits).item()
-
-                    if next_token == eos_id or len(gen_ids) >= max_new_tokens:
-                        break
-                    gen_ids.append(next_token)
-
-                    if cache is not None:
-                        # Feed ONLY the single newly generated token with recurrent cache - O(1) step!
-                        curr_input = torch.tensor([[next_token]], dtype=torch.long, device=self.device)
-                    else:
-                        curr_input = torch.cat([curr_input, torch.tensor([[next_token]], device=self.device)], dim=1)
-
-            t1 = time.perf_counter()
-            elapsed_sec = max(0.001, t1 - t0)
-            tok_per_sec = int(len(gen_ids) / elapsed_sec)
-
-            if self.tokenizer and gen_ids:
-                try:
-                    generated_text = sanitize_text(self.tokenizer.decode(gen_ids, skip_special_tokens=True).strip())
-                except Exception:
-                    generated_text = " ".join(str(i) for i in gen_ids)
-            elif gen_ids:
-                generated_text = f"Generated {len(gen_ids)} tokens across {route_used} tier."
-            else:
-                generated_text = f"Response processed via {route_used} exit tier."
-
+            pad_id = self.tokenizer.token_to_id("[PAD]")
+            if pad_id is None:
+                pad_id = self.pad_token_id
+            result = generate_response(
+                self.model,
+                self.tokenizer,
+                prompt,
+                device=self.device,
+                pad_token_id=pad_id,
+                eos_token_id=eos_id,
+                force_depth=force_depth,
+                temperature=temperature,
+                top_k=50,
+                repetition_penalty=1.2,
+                max_new_tokens=max_new_tokens,
+                prompt_is_formatted=prompt_is_formatted,
+                cancel_event=cancel_event,
+                return_info=True,
+            )
+            generated_text = sanitize_text(str(result["text"]))
+            if not self.weights_loaded:
+                banner = "[Notice: Model is running with initialized weights without trained checkpoint. Train this model or load weights in Checkpoints & Weights.]\n\n"
+                generated_text = f"{banner}{generated_text}"
             vram_stats = VRAMProfiler.get_vram_stats(self.device)
             return {
                 "text": generated_text,
-                "route": route_used,
-                "tokens_count": len(gen_ids),
-                "tokens_per_sec": tok_per_sec,
-                "latency_ms": round(elapsed_sec * 1000, 1),
+                "route": result["route"],
+                "tokens_count": result["tokens_count"],
+                "tokens_per_sec": int(result["tokens_per_sec"]),
+                "latency_ms": result["latency_ms"],
                 "vram_gb": vram_stats.get("allocated_gb", 0.0),
+                "checkpoint": self.active_checkpoint,
+                "weights_loaded": self.weights_loaded,
+                "cancelled": result["cancelled"],
             }
+
+        @property
+        def config(self) -> Dict[str, Any]:
+            target_dist = [0.50, 0.30, 0.20]
+            if self.model is not None and hasattr(self.model, "router") and hasattr(self.model.router, "target_depth_dist"):
+                td = self.model.router.target_depth_dist
+                target_dist = td.tolist() if hasattr(td, "tolist") else list(td)
+            return {
+                "target_depth_dist": target_dist,
+                "usage_ema_decay": 0.99,
+                "bias_strength": 0.5,
+                "balance_coef": float(getattr(self, "balance_loss_weight", 0.3)),
+                "exploration": str(getattr(self, "exploration_mode", "cosine")),
+                "exploration_steps": int(getattr(self, "exploration_steps", 500)),
+                "grad_clip": float(getattr(self, "grad_clip", 1.0)),
+                "grad_accum_steps": int(self.grad_accum_steps),
+                "total_steps": int(getattr(self, "total_steps", 25000)),
+                "depth_mode": str(getattr(self, "depth_mode", "dynamic")),
+                "log_every": 10,
+                "eval_every": 250,
+                "save_every": 500,
+                "lr": float(self.lr_peak),
+                "min_lr": float(self.min_lr),
+                "warmup_steps": int(self.warmup_steps),
+            }
+
+        @property
+        def vocab_size(self) -> int:
+            return int(getattr(self.model, "vocab_size", 32000))
+
+        @property
+        def grad_accum(self) -> int:
+            return int(self.grad_accum_steps)
+
+        def lr_schedule(self, config: dict, step: int) -> float:
+            from triune.trainer.scheduler import lr_schedule as _canonical_lr_schedule
+            return _canonical_lr_schedule(config, step)
+
+        def set_optimizer_lr(self, optimizer, lr: float) -> None:
+            from triune.trainer.scheduler import set_optimizer_lr as _canonical_set_lr
+            _canonical_set_lr(optimizer, lr)
+
+        def model_autocast(self):
+            from triune.recipes import bf16_autocast, build_fp8_precision_context, build_precision_context
+            use_fp8 = bool(getattr(self.model, "use_fp8", False) or getattr(self, "precision", "bf16") == "fp8")
+            use_fp4 = bool(getattr(self.model, "use_fp4", False) or getattr(self, "precision", "bf16") == "fp4")
+            if use_fp8:
+                return build_fp8_precision_context(device=self.device)()
+            if use_fp4:
+                return build_precision_context(use_fp4=True, device=self.device)()
+            return bf16_autocast(self.device.type if hasattr(self.device, "type") else "cpu")
+
+        def next_batch(self):
+            micro_chunks = []
+            if self.is_streaming_hf:
+                needed = self.batch_size
+                if len(self.hf_stream_buffer) < needed:
+                    self._refill_stream_buffer(target_chunks=max(40, needed * self.grad_accum_steps * 2))
+
+                if len(self.hf_stream_buffer) >= needed:
+                    for _ in range(needed):
+                        micro_chunks.append(self.hf_stream_buffer.popleft())
+                elif self.data_chunks:
+                    for _ in range(needed):
+                        chunk = self.data_chunks[self.data_idx % len(self.data_chunks)]
+                        micro_chunks.append(chunk)
+                        self.data_idx += 1
+                else:
+                    err_detail = self.hf_stream_stats.get("last_error") or "network timeout"
+                    raise RuntimeError(
+                        f"Streaming buffer starvation on dataset '{self.hf_dataset_name}'. "
+                        f"Only {len(self.hf_stream_buffer)}/{needed} sequences buffered. Last error: {err_detail}."
+                    )
+            else:
+                if not self.data_chunks:
+                    self.load_training_data()
+                for _ in range(self.batch_size):
+                    chunk = self.data_chunks[self.data_idx % len(self.data_chunks)]
+                    micro_chunks.append(chunk)
+                    self.data_idx += 1
+
+            batch = torch.tensor(micro_chunks, dtype=torch.long, device=self.device).clamp(0, self.vocab_size - 1)
+            x = batch[:, :-1]
+            targets = batch[:, 1:].contiguous()
+
+            if self.tokenizer and (self.step % 5 == 0 or not self.current_batch_preview):
+                try:
+                    self.current_batch_preview = sanitize_text(
+                        self.tokenizer.decode(x[0].tolist(), skip_special_tokens=True).strip()
+                    )
+                except Exception:
+                    self.current_batch_preview = f"Stream token chunk #{self.step}"
+
+            return x, targets
 
         def step_once(self) -> Dict[str, Any]:
             if not HAS_TORCH or TriuneTransformer is None:
-                self.step += 1
-                payload = {
-                    "step": self.step,
-                    "loss": 2.5000,
-                    "lm_loss": 2.0000,
-                    "router_loss": 0.5000,
-                    "throughput": 0,
-                    "vram_gb": 0.0,
-                    "device": self.device_name,
-                    "exit_usage": {"reflex": 38.0, "limbic": 34.0, "cortex": 28.0},
-                    "note": "Host UI Mode: Run install.bat to install PyTorch for hardware training.",
-                }
-                self.history.append(payload)
-                return payload
+                raise RuntimeError("PyTorch is unavailable; this process can display Studio but cannot train.")
 
             self.lazy_init_model()
             if not self.data_chunks and not self.is_streaming_hf:
                 self.load_training_data()
 
+            if self.training_engine is None:
+                from triune.trainer.engine import TrainingEngine
+                self.training_engine = TrainingEngine(self)
+
             t0 = time.perf_counter()
-            self.step += 1
-            self.model.train()
+            self.training_engine.step = self.step
+            step_stats = self.training_engine.step_once(advance_step=True)
+            self.step = self.training_engine.step
+            self.weights_loaded = True
+            # The in-memory model has diverged from the checkpoint it was restored from.
+            self.active_checkpoint = None
+            self.current_lr = float(step_stats["lr"])
 
-            # Dynamic Warmup & Cosine Decay LR Scheduling
-            self.current_lr = self.get_scheduled_lr(self.step)
-            if self.optimizer:
-                if hasattr(self.optimizer, "set_lr"):
-                    self.optimizer.set_lr(self.current_lr)
-                else:
-                    for g in self.optimizer.param_groups:
-                        g["lr"] = self.current_lr
-
-            self.optimizer.zero_grad()
-
-            accum_total_loss = 0.0
-            accum_lm_loss = 0.0
-            accum_z_loss = 0.0
-            accum_tokens = 0
-            reflex_pct, limbic_pct, cortex_pct = 34.0, 33.0, 33.0
-
-            amp_device = self.device.type if hasattr(self.device, "type") else "cuda"
-            use_amp = (amp_device == "cuda")
-            amp_dtype = torch.bfloat16 if (amp_device == "cuda" and torch.cuda.is_bf16_supported()) else torch.float16
-
-            # Gradient Accumulation Micro-Batch Loop
-            for micro_idx in range(self.grad_accum_steps):
-                # Assemble micro-batch from real streaming prefetch queue or local dataset
-                micro_chunks = []
-                if self.is_streaming_hf:
-                    needed = self.batch_size
-                    if len(self.hf_stream_buffer) < needed:
-                        self._refill_stream_buffer(target_chunks=max(40, needed * self.grad_accum_steps * 2))
-
-                    if len(self.hf_stream_buffer) >= needed:
-                        for _ in range(needed):
-                            micro_chunks.append(self.hf_stream_buffer.popleft())
-                    elif self.data_chunks:
-                        for _ in range(needed):
-                            chunk = self.data_chunks[self.data_idx % len(self.data_chunks)]
-                            micro_chunks.append(chunk)
-                            self.data_idx += 1
-                    else:
-                        err_detail = self.hf_stream_stats.get("last_error") or "network timeout"
-                        raise RuntimeError(
-                            f"Streaming buffer starvation on dataset '{self.hf_dataset_name}'. "
-                            f"Only {len(self.hf_stream_buffer)}/{needed} sequences buffered. Last error: {err_detail}."
-                        )
-                else:
-                    if not self.data_chunks:
-                        self.load_training_data()
-                    for _ in range(self.batch_size):
-                        chunk = self.data_chunks[self.data_idx % len(self.data_chunks)]
-                        micro_chunks.append(chunk)
-                        self.data_idx += 1
-
-                # Fast direct vectorized tensor allocation on GPU
-                batch = torch.tensor(micro_chunks, dtype=torch.long, device=self.device)
-                x = batch[:, :-1]
-                targets = batch[:, 1:].contiguous()
-                accum_tokens += x.numel()
-
-                # Live batch preview showing actual tokens currently trained
-                if micro_idx == 0 and self.tokenizer and (self.step % 5 == 0 or not self.current_batch_preview):
-                    try:
-                        self.current_batch_preview = sanitize_text(self.tokenizer.decode(x[0].tolist(), skip_special_tokens=True).strip())
-                    except Exception:
-                        self.current_batch_preview = f"Stream token chunk #{self.step}"
-
-                # Mixed Precision Autocast for RTX 5070 Tensor Cores
-                with torch.amp.autocast(device_type=amp_device, dtype=amp_dtype, enabled=use_amp):
-                    # Forward pass routed by depth supervision mode
-                    if self.depth_mode == "cortex":
-                        # Full Cortex Pretraining: 100% gradient backpropagation to all 6 layers and final_head
-                        res = self.model(x, force_depth=2)
-                        logits = res[0] if isinstance(res, tuple) else res
-                        lm_loss = self.loss_fn(logits.view(-1, 32000), targets.view(-1))
-                        z_loss = torch.tensor(0.0, device=self.device)
-                        micro_loss = lm_loss
-                        reflex_pct, limbic_pct, cortex_pct = 0.0, 0.0, 100.0
-
-                    elif self.depth_mode == "joint":
-                        # Joint Multi-Exit Supervision: all 3 exit heads and intermediate layers receive simultaneous gradients
-                        reflex_logits, limbic_logits, cortex_logits, route_logits = self.model.forward_all_exits(x, update_stats=True)
-                        loss_ref = self.loss_fn(reflex_logits.view(-1, 32000), targets.view(-1))
-                        loss_limb = self.loss_fn(limbic_logits.view(-1, 32000), targets.view(-1))
-                        loss_cort = self.loss_fn(cortex_logits.view(-1, 32000), targets.view(-1))
-                        lm_loss = 0.33 * loss_ref + 0.33 * loss_limb + 0.34 * loss_cort
-                        if route_logits is not None and route_logits.numel() > 0:
-                            z_loss = torch.logsumexp(route_logits, dim=-1).pow(2).mean()
-                            micro_loss = lm_loss + 1e-3 * z_loss
-                        else:
-                            z_loss = torch.tensor(0.0, device=self.device)
-                            micro_loss = lm_loss
-                        reflex_pct, limbic_pct, cortex_pct = 33.3, 33.3, 33.4
-
-                    else:
-                        # Dynamic Adaptive Router with Load Balancing Z-Loss and Gumbel Regularization
-                        res = self.model(x, return_balance_loss=True)
-                        if isinstance(res, tuple):
-                            logits = res[0]
-                            route_logits = res[1] if len(res) > 1 else None
-                            balance_loss = res[2] if len(res) > 2 else torch.tensor(0.0, device=self.device)
-                            lm_loss = self.loss_fn(logits.view(-1, 32000), targets.view(-1))
-                            bal_weight = getattr(self, "balance_loss_weight", 0.3)
-                            if route_logits is not None and route_logits.numel() > 0:
-                                z_loss = torch.logsumexp(route_logits, dim=-1).pow(2).mean()
-                                micro_loss = lm_loss + 1e-3 * z_loss + bal_weight * balance_loss
-                                probs = torch.softmax(route_logits, dim=-1)
-                                flat_probs = probs.reshape(-1, probs.size(-1)).mean(dim=0)
-                                reflex_pct = round(float(flat_probs[0].item()) * 100, 1) if flat_probs.numel() > 0 else 34.0
-                                limbic_pct = round(float(flat_probs[1].item()) * 100, 1) if flat_probs.numel() > 1 else 33.0
-                                cortex_pct = round(max(0.0, 100.0 - reflex_pct - limbic_pct), 1)
-                            else:
-                                z_loss = torch.tensor(0.0, device=self.device)
-                                micro_loss = lm_loss + bal_weight * balance_loss
-                                reflex_pct, limbic_pct, cortex_pct = 34.0, 33.0, 33.0
-                        else:
-                            logits = res
-                            lm_loss = self.loss_fn(logits.view(-1, 32000), targets.view(-1))
-                            z_loss = torch.tensor(0.0, device=self.device)
-                            micro_loss = lm_loss
-                            reflex_pct, limbic_pct, cortex_pct = 34.0, 33.0, 33.0
-
-                    scaled_loss = micro_loss / self.grad_accum_steps
-
-                scaled_loss.backward()
-
-                accum_total_loss += float(micro_loss.item()) / self.grad_accum_steps
-                accum_lm_loss += float(lm_loss.item()) / self.grad_accum_steps
-                accum_z_loss += float(z_loss.item()) / self.grad_accum_steps
-
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-            self.optimizer.step()
             if self.device.type == "cuda":
                 torch.cuda.synchronize()
             t1 = time.perf_counter()
             dt = max(0.0001, t1 - t0)
+            accum_tokens = int(step_stats["tokens_in_step"])
             tok_per_sec = int(accum_tokens / dt)
 
             self.total_tokens_trained += accum_tokens
@@ -1498,12 +1750,19 @@ if HAS_FASTAPI:
                 self._save_persisted_session_state()
 
             vram_stats = VRAMProfiler.get_vram_stats(self.device)
+            ema = step_stats["depth_usage_ema"].tolist()
+            reflex_pct = round(float(ema[0]) * 100.0, 1) if len(ema) > 0 else 34.0
+            limbic_pct = round(float(ema[1]) * 100.0, 1) if len(ema) > 1 else 33.0
+            cortex_pct = round(max(0.0, 100.0 - reflex_pct - limbic_pct), 1)
 
             payload = {
                 "step": self.step,
-                "loss": round(accum_total_loss, 4),
-                "lm_loss": round(accum_lm_loss, 4),
-                "router_loss": round(accum_z_loss, 4),
+                "loss": round(float(step_stats["loss"]), 4),
+                "lm_loss": round(float(step_stats["lm_loss"]), 4),
+                "router_loss": round(float(step_stats["router_loss"]), 4),
+                "balance_loss": round(float(step_stats["balance_loss"]), 4),
+                "z_loss": round(float(step_stats["z_loss"]), 4),
+                "overflow": int(step_stats["overflow"]),
                 "throughput": tok_per_sec,
                 "vram_gb": vram_stats.get("allocated_gb", 0.0),
                 "device": self.device_name,
@@ -1516,9 +1775,36 @@ if HAS_FASTAPI:
                 "is_streaming": self.is_streaming_hf,
                 "grad_accum_steps": self.grad_accum_steps,
                 "depth_mode": self.depth_mode,
+                "precision": getattr(self, "precision", "bf16"),
                 "lr": round(self.current_lr, 7),
                 "tokens_in_step": accum_tokens,
+                "wandb_url": self.wandb_url,
+                "wandb_active": bool(self.wandb_run),
             }
+
+            # Log to Weights & Biases if configured
+            if self.wandb_run is None and (self.wandb_key or os.environ.get("WANDB_API_KEY")):
+                self.init_wandb()
+
+            if self.wandb_run is not None:
+                try:
+                    import wandb
+                    wandb.log({
+                        "train/loss": payload["loss"],
+                        "train/lm_loss": payload["lm_loss"],
+                        "train/router_loss": payload["router_loss"],
+                        "train/balance_loss": payload["balance_loss"],
+                        "train/z_loss": payload["z_loss"],
+                        "train/lr": payload["lr"],
+                        "train/throughput_tok_per_sec": payload["throughput"],
+                        "train/total_tokens": payload["tokens_trained"],
+                        "system/vram_gb": payload["vram_gb"],
+                        "exit/reflex_pct": reflex_pct,
+                        "exit/limbic_pct": limbic_pct,
+                        "exit/cortex_pct": cortex_pct,
+                    }, step=self.step)
+                except Exception:
+                    pass
 
             self.history.append(payload)
             if len(self.history) > 100:
@@ -1564,15 +1850,25 @@ if HAS_FASTAPI:
                 global_emitter.emit("train_step", payload)
             return payload
 
-        async def run_training_loop(self):
-            print("[Triune Engine] Background training loop active.")
-            while self.is_training:
+        async def run_training_loop(self, current_run_id: int):
+            print(f"[Triune Engine] Background training loop active (run_id={current_run_id}).")
+            def _locked_step():
+                if self.stop_event.is_set():
+                    return None
+                with self.worker_lock:
+                    if self.stop_event.is_set() or self.run_id != current_run_id:
+                        return None
+                    return self.step_once()
+
+            while self.is_training and not self.stop_event.is_set() and self.run_id == current_run_id:
                 try:
-                    step_data = await asyncio.to_thread(self.step_once)
-                    await telemetry_manager.broadcast({"type": "step", "data": step_data})
+                    step_data = await asyncio.to_thread(_locked_step)
+                    if step_data is not None:
+                        await telemetry_manager.broadcast({"type": "training_step", "data": step_data})
                 except Exception as err:
                     print(f"[Training Loop Exception] {err}")
                 await asyncio.sleep(0.001)
+            print(f"[Triune Engine] Background training loop exited (run_id={current_run_id}).")
 
     pytorch_state = RealPyTorchEngineState()
     import atexit
@@ -1615,13 +1911,14 @@ if HAS_FASTAPI:
     @router.get("/v1/models")
     async def list_models() -> Dict[str, Any]:
         """List available model checkpoints and zoo entries."""
+        from triune.model.base import CANONICAL_MODEL_SPECS
         models = [
-            {"id": "triune-nano", "object": "model", "description": "8-layer MoE (CPU & Edge Optimized)"},
-            {"id": "triune-small", "object": "model", "description": "14-layer MoE with 4 experts"},
-            {"id": "triune-2.5b", "object": "model", "description": "18-layer MoE with 8 experts"},
-            {"id": "triune-base", "object": "model", "description": "24-layer MoE with 8 experts (Production Standard)"},
-            {"id": "triune-moe", "object": "model", "description": "32-layer MoE with 16 experts"},
-            {"id": "triune-7b", "object": "model", "description": "32-layer MoE with 8 experts"},
+            {
+                "id": k,
+                "object": "model",
+                "description": f"{v.name} ({v.num_layers}L / {v.hidden_dim}D / {v.num_experts}E)",
+            }
+            for k, v in CANONICAL_MODEL_SPECS.items()
         ]
         for cdir in ("checkpoints", "checkpoints_full"):
             p = Path(cdir)
@@ -1633,12 +1930,33 @@ if HAS_FASTAPI:
     @router.get("/v1/system/diagnostics")
     async def get_system_diagnostics() -> Dict[str, Any]:
         """Return system software stack diagnostics, GPU hardware info, and dependency check."""
-        cuda_avail = torch.cuda.is_available() if HAS_TORCH else False
+        cuda_avail = bool(getattr(pytorch_state, "cuda_available", False))
+        runtime_device = str(getattr(pytorch_state, "device", "cpu"))
+        model = getattr(pytorch_state, "model", None)
+        model_devices = sorted({str(parameter.device) for parameter in model.parameters()}) if model is not None else []
+        model_dtypes = sorted({str(parameter.dtype).replace("torch.", "") for parameter in model.parameters()}) if model is not None else []
+        allocated_gb = reserved_gb = 0.0
+        if HAS_TORCH and cuda_avail:
+            try:
+                allocated_gb = round(torch.cuda.memory_allocated(0) / (1024**3), 3)
+                reserved_gb = round(torch.cuda.memory_reserved(0) / (1024**3), 3)
+            except Exception:
+                pass
         return {
             "platform": platform.platform(),
             "python_version": platform.python_version(),
             "pytorch_version": torch.__version__ if HAS_TORCH else "not_installed (Host UI Mode)",
             "cuda_available": cuda_avail,
+            "cuda_initialized": cuda_avail and runtime_device.startswith("cuda"),
+            "cuda_runtime_version": getattr(torch.version, "cuda", None) if HAS_TORCH else None,
+            "cuda_init_error": getattr(pytorch_state, "cuda_init_error", None),
+            "runtime_device": runtime_device,
+            "model_devices": model_devices,
+            "model_dtypes": model_dtypes,
+            "model_weights_loaded": bool(getattr(pytorch_state, "weights_loaded", False)),
+            "active_checkpoint": getattr(pytorch_state, "active_checkpoint", None),
+            "vram_allocated_gb": allocated_gb,
+            "vram_reserved_gb": reserved_gb,
             "device_name": pytorch_state.device_name,
             "vram_total_gb": round(torch.cuda.get_device_properties(0).total_memory / (1024**3), 2) if (HAS_TORCH and cuda_avail) else 0.0,
             "software_stack": {
@@ -1680,45 +1998,54 @@ if HAS_FASTAPI:
 
         # Check for BYOK Provider Routing
         byok_keys = module_manager.get_config().get("byok_keys", {}) if hasattr(module_manager, "get_config") else {}
+        if not isinstance(byok_keys, dict):
+            byok_keys = {}
 
         if any(model_name.startswith(p) for p in ("openai", "gpt-", "chatgpt")):
             api_key = byok_keys.get("openai", "") or os.environ.get("OPENAI_API_KEY", "")
             if not api_key:
-                reply_text = "[BYOK Provider] OpenAI API key not found. Please add your 'sk-...' key in the BYOK Subscriptions tab in the left sidebar to chat with GPT-4o."
-                return _build_chat_response(reply_text, req.model, "OPENAI-BYOK", 0)
+                raise HTTPException(status_code=424, detail="OpenAI key is not configured. Add and save it in BYOK Subscriptions, or set OPENAI_API_KEY.")
             try:
                 t0 = time.perf_counter()
                 reply_text = await asyncio.to_thread(_call_openai_api, req.messages, api_key, model="gpt-4o-mini", temperature=req.temperature, max_tokens=req.max_tokens)
                 dt = round((time.perf_counter() - t0) * 1000, 1)
                 return _build_chat_response(reply_text, req.model, "GPT-4o", dt)
             except Exception as e:
-                return _build_chat_response(f"[OpenAI API Error] {e}", req.model, "ERROR", 0)
+                raise HTTPException(status_code=502, detail=f"OpenAI request failed: {_byok_error_message(e)}") from e
 
         elif any(model_name.startswith(p) for p in ("anthropic", "claude")):
             api_key = byok_keys.get("anthropic", "") or os.environ.get("ANTHROPIC_API_KEY", "")
             if not api_key:
-                reply_text = "[BYOK Provider] Anthropic API key not found. Please add your 'sk-ant-...' key in the BYOK Subscriptions tab in the left sidebar to chat with Claude 3.5."
-                return _build_chat_response(reply_text, req.model, "ANTHROPIC-BYOK", 0)
+                raise HTTPException(status_code=424, detail="Anthropic key is not configured. Add and save it in BYOK Subscriptions, or set ANTHROPIC_API_KEY.")
             try:
                 t0 = time.perf_counter()
-                reply_text = await asyncio.to_thread(_call_anthropic_api, req.messages, api_key, model="claude-3-5-sonnet-20241022", temperature=req.temperature, max_tokens=req.max_tokens)
+                anthropic_model = req.model if req.model.startswith("claude-") else "claude-3-5-sonnet-latest"
+                reply_text = await asyncio.to_thread(_call_anthropic_api, req.messages, api_key, model=anthropic_model, temperature=req.temperature, max_tokens=req.max_tokens)
                 dt = round((time.perf_counter() - t0) * 1000, 1)
                 return _build_chat_response(reply_text, req.model, "CLAUDE-3.5", dt)
             except Exception as e:
-                return _build_chat_response(f"[Anthropic API Error] {e}", req.model, "ERROR", 0)
+                raise HTTPException(status_code=502, detail=f"Anthropic request failed: {_byok_error_message(e)}") from e
 
         elif any(model_name.startswith(p) for p in ("google", "gemini")):
             api_key = byok_keys.get("gemini", "") or os.environ.get("GEMINI_API_KEY", "")
             if not api_key:
-                reply_text = "[BYOK Provider] Google Gemini API key not found. Please add your Gemini API key in the BYOK Subscriptions tab in the left sidebar to chat with Gemini 1.5."
-                return _build_chat_response(reply_text, req.model, "GEMINI-BYOK", 0)
+                raise HTTPException(status_code=424, detail="Google Gemini key is not configured. Add and save it in BYOK Subscriptions, or set GEMINI_API_KEY.")
             try:
                 t0 = time.perf_counter()
-                reply_text = await asyncio.to_thread(_call_gemini_api, req.messages, api_key, model="gemini-1.5-flash", temperature=req.temperature, max_tokens=req.max_tokens)
+                gemini_model = req.model if req.model.startswith("gemini-") else "gemini-3.8-flash"
+                try:
+                    reply_text = await asyncio.to_thread(_call_gemini_api, req.messages, api_key, model=gemini_model, temperature=req.temperature, max_tokens=req.max_tokens)
+                except Exception as g_err:
+                    # Fallback to gemini-1.5-flash if requested model returned 404
+                    if gemini_model != "gemini-1.5-flash" and "404" in str(g_err):
+                        reply_text = await asyncio.to_thread(_call_gemini_api, req.messages, api_key, model="gemini-1.5-flash", temperature=req.temperature, max_tokens=req.max_tokens)
+                        gemini_model = "gemini-1.5-flash"
+                    else:
+                        raise
                 dt = round((time.perf_counter() - t0) * 1000, 1)
-                return _build_chat_response(reply_text, req.model, "GEMINI-1.5", dt)
+                return _build_chat_response(reply_text, req.model, "GEMINI", dt)
             except Exception as e:
-                return _build_chat_response(f"[Gemini API Error] {e}", req.model, "ERROR", 0)
+                raise HTTPException(status_code=502, detail=f"Google Gemini request failed: {_byok_error_message(e)}") from e
 
         # Default: Local Triune MoE Engine
         force_depth = req.force_depth
@@ -1752,13 +2079,38 @@ if HAS_FASTAPI:
         else:
             effective_prompt = user_prompt
 
-        res = await asyncio.to_thread(
-            pytorch_state.generate_text,
-            effective_prompt,
-            max_new_tokens=req.max_tokens,
-            temperature=req.temperature,
-            force_depth=force_depth,
-        )
+        if pytorch_state.is_training:
+            raise HTTPException(status_code=409, detail="Pause training before starting local inference to avoid competing GPU work.")
+        if pytorch_state.active_generation_cancel is not None:
+            raise HTTPException(status_code=409, detail="A local inference request is already running.")
+        cancel_event = threading.Event()
+        pytorch_state.active_generation_cancel = cancel_event
+
+        def _locked_generate() -> Dict[str, Any]:
+            with pytorch_state.worker_lock:
+                try:
+                    if pytorch_state.is_training:
+                        raise RuntimeError("Training started while inference was being prepared; pause it and retry.")
+                    return pytorch_state.generate_text(
+                        effective_prompt,
+                        max_new_tokens=req.max_tokens,
+                        temperature=req.temperature,
+                        force_depth=force_depth,
+                        cancel_event=cancel_event,
+                        prompt_is_formatted=len(req.messages) > 1,
+                    )
+                finally:
+                    if pytorch_state.active_generation_cancel is cancel_event:
+                        pytorch_state.active_generation_cancel = None
+
+        try:
+            res = await asyncio.to_thread(_locked_generate)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Inference error: {exc}") from exc
 
         return {
             "id": "chatcmpl-triune",
@@ -1771,7 +2123,7 @@ if HAS_FASTAPI:
                         "role": "assistant",
                         "content": res["text"]
                     },
-                    "finish_reason": "stop",
+                    "finish_reason": "cancelled" if res.get("cancelled") else "stop",
                 }
             ],
             "telemetry": {
@@ -1780,8 +2132,21 @@ if HAS_FASTAPI:
                 "tokens_per_sec": res["tokens_per_sec"],
                 "tokens_count": res["tokens_count"],
                 "vram_gb": res["vram_gb"],
+                "weights_loaded": res.get("weights_loaded", False),
+                "checkpoint": res.get("checkpoint"),
+                "active_model": pytorch_state.active_model_id,
+                "device": pytorch_state.device_name,
             }
         }
+
+    @router.post("/v1/chat/cancel")
+    async def cancel_local_generation() -> Dict[str, Any]:
+        """Request cooperative cancellation of the active local token-generation loop."""
+        cancel_event = pytorch_state.active_generation_cancel
+        if cancel_event is None:
+            return {"status": "idle", "message": "No local generation is currently active."}
+        cancel_event.set()
+        return {"status": "cancelling", "message": "Local generation will stop after the current model step."}
 
     @router.post("/v1/finetune/start")
     async def start_finetune(req: FineTuneRequest) -> Dict[str, Any]:
@@ -1793,6 +2158,16 @@ if HAS_FASTAPI:
         finetune_state["status"] = "running"
         finetune_state["error"] = None
         finetune_state["step"] = 0
+        pytorch_state.active_adapter = {
+            "id": f"lora-r{req.lora_rank}",
+            "name": f"LoRA Adapter (r={req.lora_rank}, α={req.lora_alpha})",
+            "rank": req.lora_rank,
+            "alpha": req.lora_alpha,
+            "quantization": req.quantization,
+            "dataset": req.dataset_path,
+            "path": "checkpoints/lora_adapter",
+        }
+        pytorch_state._save_persisted_session_state()
 
         async def _run_finetune_job():
             try:
@@ -1821,6 +2196,9 @@ if HAS_FASTAPI:
                 finetune_state["final_loss"] = res.get("final_loss", 0.0)
                 finetune_state["output_dir"] = res.get("output_dir", "")
                 finetune_state["step"] = res.get("total_steps", 0)
+                if pytorch_state.active_adapter:
+                    pytorch_state.active_adapter["path"] = finetune_state["output_dir"] or "checkpoints/lora_adapter"
+                    pytorch_state._save_persisted_session_state()
                 pytorch_state.logs.insert(0, f"[LORA] Fine-tuning finished! Final Loss: {finetune_state['final_loss']} -> {finetune_state['output_dir']}")
             except Exception as exc:
                 finetune_state["status"] = "failed"
@@ -1829,12 +2207,50 @@ if HAS_FASTAPI:
                 finetune_state["is_running"] = False
 
         asyncio.create_task(_run_finetune_job())
-        return {"status": "started", "message": f"LoRA fine-tuning initiated for {req.epochs} epochs."}
+        return {
+            "status": "started",
+            "active_adapter": pytorch_state.active_adapter,
+            "message": f"LoRA fine-tuning initiated for {req.epochs} epochs.",
+        }
 
     @router.get("/v1/finetune/status")
     async def get_finetune_status() -> Dict[str, Any]:
         """Return live LoRA fine-tuning progress and status."""
-        return finetune_state
+        return {**finetune_state, "active_adapter": getattr(pytorch_state, "active_adapter", None)}
+
+    class AdapterActionRequest(BaseModel):
+        action: str = "attach"
+        id: Optional[str] = None
+        name: Optional[str] = None
+        path: Optional[str] = None
+        rank: int = 16
+        alpha: float = 32.0
+        quantization: str = "4-bit NF4"
+
+    @router.post("/v1/finetune/adapter")
+    async def configure_active_adapter(req: AdapterActionRequest) -> Dict[str, Any]:
+        """Attach or detach a LoRA/QLoRA adapter on the live engine state."""
+        if req.action.lower() == "detach":
+            prev = pytorch_state.active_adapter
+            pytorch_state.active_adapter = None
+            pytorch_state._save_persisted_session_state()
+            msg = f"[LORA] Detached adapter {(prev or {}).get('name', '')}."
+            pytorch_state.logs.insert(0, msg)
+            return {"status": "success", "action": "detached", "active_adapter": None, "message": msg}
+
+        adapter_info = {
+            "id": req.id or f"lora-r{req.rank}",
+            "name": req.name or f"LoRA Adapter (r={req.rank}, α={req.alpha})",
+            "path": req.path or "checkpoints/lora_adapter",
+            "rank": req.rank,
+            "alpha": req.alpha,
+            "quantization": req.quantization,
+        }
+        pytorch_state.active_adapter = adapter_info
+        pytorch_state._save_persisted_session_state()
+        msg = f"[LORA] Attached adapter {adapter_info['name']} ({adapter_info['quantization']})."
+        pytorch_state.logs.insert(0, msg)
+        return {"status": "success", "action": "attached", "active_adapter": adapter_info, "message": msg}
 
     @router.post("/v1/dag/execute")
     async def execute_dag(req: DAGExecuteRequest) -> Dict[str, Any]:
@@ -1859,14 +2275,21 @@ if HAS_FASTAPI:
 
             dag_engine.register_event_callback(_on_dag_event)
             try:
-                res = await asyncio.to_thread(dag_engine.execute_graph, graph_json)
+                res = await asyncio.to_thread(
+                    dag_engine.execute_graph,
+                    graph_json,
+                    initial_context={"_runtime_training_state": pytorch_state},
+                )
             finally:
                 dag_engine.unregister_event_callback(_on_dag_event)
 
             return {
                 "status": res.get("status", "success"),
                 "results": res.get("results", {}),
-                "context": res.get("context", {})
+                "context": res.get("context", {}),
+                "error": res.get("error"),
+                "failed_node": res.get("failed_node"),
+                "specification_nodes": res.get("specification_nodes", []),
             }
         except Exception as e:
             return {
@@ -1920,6 +2343,9 @@ if HAS_FASTAPI:
                 preset_id = get_val("preset_id", "preset", "model_preset")
                 d_mode = get_val("depth_mode", "depth")
                 b_weight = get_val("balance_loss_weight", "balance_weight")
+                prec_val = get_val("precision", "dtype")
+                fp8_val = get_val("use_fp8")
+                fp4_val = get_val("use_fp4")
 
                 reconfig_kwargs = {}
                 if layers is not None: reconfig_kwargs["num_layers"] = int(layers)
@@ -1929,13 +2355,50 @@ if HAS_FASTAPI:
                 if experts is not None: reconfig_kwargs["num_experts"] = int(experts)
                 if d_mode: reconfig_kwargs["depth_mode"] = str(d_mode).lower()
                 if b_weight is not None: reconfig_kwargs["balance_loss_weight"] = float(b_weight)
+                if prec_val: reconfig_kwargs["precision"] = str(prec_val).lower()
+                if fp8_val is not None: reconfig_kwargs["use_fp8"] = bool(fp8_val)
+                if fp4_val is not None: reconfig_kwargs["use_fp4"] = bool(fp4_val)
 
                 if preset_id or reconfig_kwargs:
                     arch = pytorch_state.reconfigure_architecture(preset_id=preset_id, **reconfig_kwargs)
                     applied["model_architecture"] = arch
 
-            # 1. Dataset Streaming
-            if ntype in ("Data", "Dataset", "HuggingFaceStreamer", "HFRestStreamReader") or any(k in title for k in ("Streamer", "Data", "Dataset")):
+            # 0b. Precision / Quantization Nodes (FP8Linear / NF4Quantizer)
+            if ntype in ("Precision", "FP8Linear", "NF4Quantizer") or any(k in title for k in ("FP8", "NF4", "Quantiz")):
+                raw_dtype = str(get_val("dtype", "precision", "quant_type", default="fp8")).lower()
+                if "fp8" in raw_dtype or "e4m3" in raw_dtype or "e5m2" in raw_dtype or "8" in raw_dtype:
+                    mapped_prec = "fp8"
+                elif "fp4" in raw_dtype or "nf4" in raw_dtype or "int4" in raw_dtype or "4" in raw_dtype:
+                    mapped_prec = "fp4"
+                elif "32" in raw_dtype:
+                    mapped_prec = "fp32"
+                else:
+                    mapped_prec = "bf16"
+                if getattr(pytorch_state, "precision", "bf16") != mapped_prec:
+                    cur_arch = getattr(pytorch_state, "architecture_spec", {}) or {}
+                    arch = pytorch_state.reconfigure_architecture(
+                        preset_id=getattr(pytorch_state, "active_model_id", "triune-small"),
+                        num_layers=cur_arch.get("num_layers"),
+                        hidden_dim=cur_arch.get("hidden_dim"),
+                        num_heads=cur_arch.get("num_heads"),
+                        head_dim=cur_arch.get("head_dim"),
+                        num_experts=cur_arch.get("num_experts"),
+                        precision=mapped_prec,
+                        batch_size=pytorch_state.batch_size,
+                        seq_len=pytorch_state.seq_len,
+                        depth_mode=pytorch_state.depth_mode,
+                    )
+                    applied["model_architecture"] = arch
+                pytorch_state.precision = mapped_prec
+                applied["precision"] = mapped_prec
+
+            # 1. Dataset Streaming (only streamer/dataset nodes, not Token IDs or DataLoader)
+            is_streamer_node = (
+                ntype in ("Dataset", "HuggingFaceStreamer", "HFRestStreamReader")
+                or any(k in title for k in ("Streamer", "Dataset", "Reader"))
+                or (ntype == "Data" and "Token" not in title and "DataLoader" not in title)
+            )
+            if is_streamer_node:
                 ds_name = get_val("dataset_name", "dataset", "dataset_path", "hf_dataset")
                 if ds_name:
                     split = get_val("split", "hf_split", default="train")
@@ -2049,12 +2512,38 @@ if HAS_FASTAPI:
                                 g["momentum"] = mom_val
                     applied["momentum"] = mom_val
 
-            # 5. Gradient Accumulation
+            # 5. Gradient Accumulation & Layer Streaming
             if ntype in ("Runtime", "GradientAccumulator") or "Accumulat" in title:
                 ga = get_val("grad_accum_steps", "grad_accum", "accumulation_steps")
                 if ga is not None:
                     pytorch_state.grad_accum_steps = max(1, int(ga))
                     applied["grad_accum_steps"] = pytorch_state.grad_accum_steps
+
+            if ntype in ("LayerStreamer", "Streaming") or ("Streamer" in title and not is_streamer_node):
+                gl = get_val("gpu_layers", "prefetch_count")
+                if gl is not None:
+                    total_l = int(getattr(pytorch_state, "architecture_spec", {}).get("num_layers", 6) or 6)
+                    pytorch_state.gpu_layers = max(0, min(total_l, int(gl)))
+                    pytorch_state.gpu_offload_pct = int(round((pytorch_state.gpu_layers / max(1, total_l)) * 100))
+                    applied["gpu_layers"] = pytorch_state.gpu_layers
+                    applied["gpu_offload_pct"] = pytorch_state.gpu_offload_pct
+
+            # 6. LoRA / QLoRA Adapter Node
+            if ntype in ("Adapter", "LoRAAdapter") or "LoRA" in title:
+                rank_val = int(get_val("rank", "lora_rank", default=16))
+                alpha_val = float(get_val("alpha", "lora_alpha", default=32.0))
+                quant_val = str(get_val("quantization", default="4-bit NF4"))
+                pytorch_state.active_adapter = {
+                    "id": f"lora-r{rank_val}",
+                    "name": f"LoRA Adapter (r={rank_val}, α={alpha_val})",
+                    "path": "checkpoints/lora_adapter",
+                    "rank": rank_val,
+                    "alpha": alpha_val,
+                    "quantization": quant_val,
+                }
+                applied["active_adapter"] = pytorch_state.active_adapter
+
+        pytorch_state._save_persisted_session_state()
 
         return {
             "status": "success",
@@ -2062,6 +2551,7 @@ if HAS_FASTAPI:
             "applied_count": len(applied),
             "active_model": getattr(pytorch_state, "active_model_id", "triune-small"),
             "architecture": getattr(pytorch_state, "architecture_spec", {}),
+            "active_adapter": getattr(pytorch_state, "active_adapter", None),
             "profile": _compute_hardware_profile(),
             "training_config": {
                 "batch_size": pytorch_state.batch_size,
@@ -2069,7 +2559,11 @@ if HAS_FASTAPI:
                 "grad_accum_steps": pytorch_state.grad_accum_steps,
                 "depth_mode": pytorch_state.depth_mode,
                 "current_lr": pytorch_state.current_lr,
+                "lr_peak": pytorch_state.lr_peak,
+                "warmup_steps": pytorch_state.warmup_steps,
                 "precision": getattr(pytorch_state, "precision", "bf16"),
+                "gpu_layers": getattr(pytorch_state, "gpu_layers", 6),
+                "gpu_offload_pct": getattr(pytorch_state, "gpu_offload_pct", 100),
             },
             "current_engine_state": {
                 "step": pytorch_state.step,
@@ -2084,6 +2578,8 @@ if HAS_FASTAPI:
                 "steer_scale": getattr(pytorch_state.optimizer, "steer_scale", getattr(pytorch_state, "steer_scale", 0.2)),
                 "centroid_lr": getattr(pytorch_state.optimizer, "expert_lr", getattr(pytorch_state, "centroid_lr", pytorch_state.current_lr)),
                 "grad_accum_steps": pytorch_state.grad_accum_steps,
+                "precision": getattr(pytorch_state, "precision", "bf16"),
+                "active_adapter": getattr(pytorch_state, "active_adapter", None),
             },
             "message": f"Successfully compiled DAG and applied {len(applied)} live parameters to PyTorch engine."
         }
@@ -2096,6 +2592,9 @@ if HAS_FASTAPI:
         try:
             node = req.get("node", req)
             context = req.get("context", {})
+            if not isinstance(context, dict):
+                raise HTTPException(status_code=400, detail="Node execution context must be a JSON object.")
+            context.setdefault("_runtime_training_state", pytorch_state)
             loop = asyncio.get_running_loop()
 
             def _on_dag_event(event_data: Dict[str, Any]):
@@ -2173,6 +2672,9 @@ if HAS_FASTAPI:
         grad_accum_steps: Optional[int] = None
         depth_mode: Optional[str] = None
         precision: Optional[str] = None
+        lr: Optional[float] = None
+        lr_peak: Optional[float] = None
+        warmup_steps: Optional[int] = None
 
     def _compute_hardware_profile() -> Dict[str, Any]:
         """Inspect active GPU/CPU hardware and construct detailed profile with presets and memory breakdown."""
@@ -2185,7 +2687,7 @@ if HAS_FASTAPI:
         supports_bf16 = False
         supports_fp8 = False
 
-        if HAS_TORCH and torch.cuda.is_available():
+        if HAS_TORCH and bool(getattr(pytorch_state, "cuda_available", False)):
             try:
                 dev = pytorch_state.device if hasattr(pytorch_state, "device") and isinstance(pytorch_state.device, torch.device) else torch.device("cuda:0")
                 props = torch.cuda.get_device_properties(dev)
@@ -2201,14 +2703,12 @@ if HAS_FASTAPI:
             except Exception:
                 pass
 
-        if not is_cuda:
-            total_vram_gb = 16.0
-            free_vram_gb = 8.0
-            used_vram_gb = 2.0
+        # A CPU-only runtime has no known VRAM budget. Never fabricate a GPU
+        # profile, because its auto-tune recommendations can trigger OOMs.
 
-        num_layers = len(getattr(pytorch_state.model, "layers", [])) if pytorch_state.model is not None else 6
-        if num_layers == 0:
-            num_layers = 6
+        arch_spec = getattr(pytorch_state, "architecture_spec", {}) or {}
+        num_layers = int(arch_spec.get("num_layers", 0) or (len(getattr(pytorch_state.model, "layers", [])) if pytorch_state.model is not None else 6) or 6)
+        hidden_dim = int(arch_spec.get("hidden_dim", getattr(pytorch_state.model, "hidden_dim", 256) if pytorch_state.model is not None else 256) or 256)
 
         gpu_offload_pct = getattr(pytorch_state, "gpu_offload_pct", 100)
         gpu_layers = getattr(pytorch_state, "gpu_layers", num_layers)
@@ -2235,20 +2735,26 @@ if HAS_FASTAPI:
         cur_accum = pytorch_state.grad_accum_steps
 
         # Real Dynamic Architecture Parameters Calculation
-        if pytorch_state.model is not None:
+        spec_total = int(arch_spec.get("total_params", 0) or 0)
+        spec_active = int(arch_spec.get("active_params", 0) or 0)
+        if spec_total > 0:
+            total_params = spec_total
+            trainable_params = spec_total
+            active_params = spec_active if spec_active > 0 else int(total_params * 0.58)
+        elif pytorch_state.model is not None:
             total_params = sum(p.numel() for p in pytorch_state.model.parameters())
             trainable_params = sum(p.numel() for p in pytorch_state.model.parameters() if p.requires_grad)
+            active_params = int(total_params * 0.58)
         else:
-            total_params = 33_840_000
+            total_params = 36_000_000
             trainable_params = total_params
-
-        active_params = int(total_params * 0.58)  # Active routed experts + shared backbone
+            active_params = 32_900_000
         prec = getattr(pytorch_state, "precision", "bf16")
-        bytes_per_param = 1.0 if prec == "fp8" else (0.5 if "4" in str(prec) else 2.0)
+        bytes_per_param = 1.0 if prec == "fp8" else (0.5 if "4" in str(prec) else (4.0 if prec == "fp32" else 2.0))
         weights_mb = round((total_params * bytes_per_param) / (1024 * 1024), 2)
         # CentroidSteer + Muon stores momentum only on 2D weights (~60% of params), saving ~30-40% over AdamW (8 bytes/param)
         opt_mb = round((trainable_params * 5.5) / (1024 * 1024), 2)
-        act_mb = round((cur_batch * cur_seq * 256 * num_layers * 20 * 2) / (1024 * 1024), 2)
+        act_mb = round((cur_batch * cur_seq * hidden_dim * num_layers * 20 * 2) / (1024 * 1024), 2)
         cuda_mb = 450.0 if is_cuda else 35.0
         total_est_mb = round(weights_mb + opt_mb + act_mb + cuda_mb, 2)
         total_est_gb = round(total_est_mb / 1024.0, 2)
@@ -2269,6 +2775,9 @@ if HAS_FASTAPI:
 
         baseline_speed = empirical_tok_s if empirical_tok_s > 0 else base_calc_tok_s
 
+        active_depth = getattr(pytorch_state, "depth_mode", "dynamic") or "dynamic"
+        active_prec = getattr(pytorch_state, "precision", "bf16") or "bf16"
+
         presets = {
             "turbo": {
                 "id": "turbo",
@@ -2276,12 +2785,12 @@ if HAS_FASTAPI:
                 "batch_size": turbo_batch,
                 "seq_len": turbo_seq,
                 "grad_accum_steps": turbo_accum,
-                "depth_mode": "cortex",
-                "precision": "bf16",
+                "depth_mode": active_depth,
+                "precision": active_prec,
                 "gpu_offload_pct": 100,
                 "gpu_layers": num_layers,
                 "effective_tokens": turbo_batch * turbo_seq * turbo_accum,
-                "estimated_vram_gb": round((weights_mb + opt_mb + ((turbo_batch * turbo_seq * 256 * num_layers * 40) / (1024 * 1024)) + cuda_mb) / 1024, 2),
+                "estimated_vram_gb": round((weights_mb + opt_mb + ((turbo_batch * turbo_seq * hidden_dim * num_layers * 40) / (1024 * 1024)) + cuda_mb) / 1024, 2),
                 "estimated_tok_s": max(10, int(baseline_speed * 1.45)),
                 "description": "Maximum throughput: 100% offload, saturates compute units with vectorized matrix tiling."
             },
@@ -2291,12 +2800,12 @@ if HAS_FASTAPI:
                 "batch_size": balanced_batch,
                 "seq_len": balanced_seq,
                 "grad_accum_steps": balanced_accum,
-                "depth_mode": "cortex",
-                "precision": "bf16",
+                "depth_mode": active_depth,
+                "precision": active_prec,
                 "gpu_offload_pct": 100,
                 "gpu_layers": num_layers,
                 "effective_tokens": balanced_batch * balanced_seq * balanced_accum,
-                "estimated_vram_gb": round((weights_mb + opt_mb + ((balanced_batch * balanced_seq * 256 * num_layers * 40) / (1024 * 1024)) + cuda_mb) / 1024, 2),
+                "estimated_vram_gb": round((weights_mb + opt_mb + ((balanced_batch * balanced_seq * hidden_dim * num_layers * 40) / (1024 * 1024)) + cuda_mb) / 1024, 2),
                 "estimated_tok_s": max(8, int(baseline_speed * 1.0)),
                 "description": "Balanced: Stable gradient convergence, modest VRAM footprint, low heat."
             },
@@ -2306,12 +2815,12 @@ if HAS_FASTAPI:
                 "batch_size": eco_batch,
                 "seq_len": eco_seq,
                 "grad_accum_steps": eco_accum,
-                "depth_mode": "cortex",
-                "precision": "bf16",
+                "depth_mode": active_depth,
+                "precision": active_prec,
                 "gpu_offload_pct": 100,
                 "gpu_layers": num_layers,
                 "effective_tokens": eco_batch * eco_seq * eco_accum,
-                "estimated_vram_gb": round((weights_mb + opt_mb + ((eco_batch * eco_seq * 256 * num_layers * 40) / (1024 * 1024)) + cuda_mb) / 1024, 2),
+                "estimated_vram_gb": round((weights_mb + opt_mb + ((eco_batch * eco_seq * hidden_dim * num_layers * 40) / (1024 * 1024)) + cuda_mb) / 1024, 2),
                 "estimated_tok_s": max(5, int(baseline_speed * 0.55)),
                 "description": "Ultra-lightweight: Keeps total VRAM minimal for background multitasking."
             },
@@ -2321,8 +2830,8 @@ if HAS_FASTAPI:
                 "batch_size": 2,
                 "seq_len": 64,
                 "grad_accum_steps": 4,
-                "depth_mode": "cortex",
-                "precision": "bf16",
+                "depth_mode": active_depth,
+                "precision": active_prec,
                 "gpu_offload_pct": 20,
                 "gpu_layers": 1,
                 "effective_tokens": 2 * 64 * 4,
@@ -2354,6 +2863,10 @@ if HAS_FASTAPI:
                 "seq_len": cur_seq,
                 "grad_accum_steps": cur_accum,
                 "depth_mode": pytorch_state.depth_mode,
+                "lr": pytorch_state.lr_peak,
+                "lr_peak": pytorch_state.lr_peak,
+                "current_lr": pytorch_state.current_lr,
+                "warmup_steps": pytorch_state.warmup_steps,
                 "effective_tokens": cur_batch * cur_seq * cur_accum,
                 "precision": getattr(pytorch_state, "precision", "bf16"),
                 "gpu_offload_pct": gpu_offload_pct,
@@ -2407,6 +2920,30 @@ if HAS_FASTAPI:
             pytorch_state.grad_accum_steps = req.grad_accum_steps
         if req.depth_mode in ("cortex", "joint", "dynamic"):
             pytorch_state.depth_mode = req.depth_mode
+            if isinstance(getattr(pytorch_state, "architecture_spec", None), dict):
+                pytorch_state.architecture_spec["depth_mode"] = req.depth_mode
+            if getattr(pytorch_state, "training_engine", None) is not None and hasattr(pytorch_state.training_engine, "config"):
+                pytorch_state.training_engine.config["depth_mode"] = req.depth_mode
+        if req.precision and req.precision.lower() in ("bf16", "fp8", "fp4", "fp16", "fp32"):
+            new_prec = req.precision.lower()
+            old_prec = getattr(pytorch_state, "precision", "bf16")
+            pytorch_state.precision = new_prec
+            if isinstance(getattr(pytorch_state, "architecture_spec", None), dict):
+                pytorch_state.architecture_spec["precision"] = new_prec
+            if (("fp8" in (new_prec, old_prec) or "fp4" in (new_prec, old_prec)) and new_prec != old_prec and pytorch_state.model is not None):
+                cur_arch = getattr(pytorch_state, "architecture_spec", {}) or {}
+                pytorch_state.reconfigure_architecture(
+                    preset_id=getattr(pytorch_state, "active_model_id", "triune-small"),
+                    num_layers=cur_arch.get("num_layers"),
+                    hidden_dim=cur_arch.get("hidden_dim"),
+                    num_heads=cur_arch.get("num_heads"),
+                    head_dim=cur_arch.get("head_dim"),
+                    num_experts=cur_arch.get("num_experts"),
+                    precision=new_prec,
+                    batch_size=pytorch_state.batch_size,
+                    seq_len=pytorch_state.seq_len,
+                    depth_mode=pytorch_state.depth_mode,
+                )
         if req.gpu_offload_pct is not None:
             pct = max(0, min(100, req.gpu_offload_pct))
             pytorch_state.gpu_offload_pct = pct
@@ -2416,9 +2953,20 @@ if HAS_FASTAPI:
             num_layers = profile["num_layers"]
             l = max(0, min(num_layers, req.gpu_layers))
             pytorch_state.gpu_layers = l
-            pytorch_state.gpu_offload_pct = int(round((l / num_layers) * 100))
-        if req.precision in ("bf16", "fp8", "fp32"):
-            pytorch_state.precision = req.precision
+            pytorch_state.gpu_offload_pct = int(round((l / max(1, num_layers)) * 100))
+
+        target_lr = req.lr if req.lr is not None else req.lr_peak
+        if target_lr is not None and target_lr > 0:
+            pytorch_state.lr_peak = float(target_lr)
+            pytorch_state.current_lr = float(target_lr)
+            if pytorch_state.optimizer is not None:
+                if hasattr(pytorch_state.optimizer, "set_lr"):
+                    pytorch_state.optimizer.set_lr(float(target_lr))
+                elif hasattr(pytorch_state.optimizer, "param_groups"):
+                    for g in pytorch_state.optimizer.param_groups:
+                        g["lr"] = float(target_lr)
+        if req.warmup_steps is not None and req.warmup_steps >= 0:
+            pytorch_state.warmup_steps = int(req.warmup_steps)
 
         pytorch_state._save_persisted_session_state()
 
@@ -2427,7 +2975,8 @@ if HAS_FASTAPI:
             f"[HARDWARE TUNER] Applied configuration: Batch={pytorch_state.batch_size}, "
             f"Context={pytorch_state.seq_len} tok, Accum={pytorch_state.grad_accum_steps}x "
             f"({eff_tokens:,} tokens/step) | GPU Offload={getattr(pytorch_state, 'gpu_offload_pct', 100)}% "
-            f"({getattr(pytorch_state, 'gpu_layers', 6)}/{profile['num_layers']} layers) | Depth={pytorch_state.depth_mode.upper()}"
+            f"({getattr(pytorch_state, 'gpu_layers', 6)}/{profile['num_layers']} layers) | "
+            f"Depth={pytorch_state.depth_mode.upper()} | Precision={getattr(pytorch_state, 'precision', 'bf16').upper()}"
         )
         pytorch_state.logs.insert(0, log_msg)
         print(f"[Triune Engine] {log_msg}")
@@ -2513,6 +3062,9 @@ if HAS_FASTAPI:
                 "seq_len": pytorch_state.seq_len,
                 "grad_accum_steps": pytorch_state.grad_accum_steps,
                 "depth_mode": pytorch_state.depth_mode,
+                "precision": getattr(pytorch_state, "precision", "bf16"),
+                "gpu_offload_pct": getattr(pytorch_state, "gpu_offload_pct", 100),
+                "gpu_layers": getattr(pytorch_state, "gpu_layers", 6),
                 "lr_peak": pytorch_state.lr_peak,
                 "warmup_steps": pytorch_state.warmup_steps,
                 "current_lr": pytorch_state.current_lr,
@@ -2523,7 +3075,12 @@ if HAS_FASTAPI:
                 "hf_text_column": pytorch_state.hf_text_column,
                 "hf_token_configured": bool(pytorch_state.hf_token or os.environ.get("HF_TOKEN")),
             },
-            "active_checkpoint": pytorch_state.active_checkpoint,
+            "active_checkpoint": pytorch_state.active_checkpoint if pytorch_state.weights_loaded else None,
+            "weights_loaded": bool(getattr(pytorch_state, "weights_loaded", False)),
+            "active_adapter": getattr(pytorch_state, "active_adapter", None),
+            "precision": getattr(pytorch_state, "precision", "bf16"),
+            "gpu_offload_pct": getattr(pytorch_state, "gpu_offload_pct", 100),
+            "gpu_layers": getattr(pytorch_state, "gpu_layers", 6),
             "grad_accum_steps": pytorch_state.grad_accum_steps,
             "depth_mode": pytorch_state.depth_mode,
             "lr_peak": pytorch_state.lr_peak,
@@ -2532,31 +3089,57 @@ if HAS_FASTAPI:
             "effective_batch_tokens": pytorch_state.batch_size * pytorch_state.seq_len * pytorch_state.grad_accum_steps,
             "active_model": getattr(pytorch_state, "active_model_id", "triune-small"),
             "architecture": getattr(pytorch_state, "architecture_spec", {}),
+            "wandb_url": pytorch_state.wandb_url,
+            "wandb_active": bool(pytorch_state.wandb_run),
         }
 
     @router.post("/v1/training/start")
     async def start_training() -> Dict[str, Any]:
         """Start real background PyTorch training loop."""
+        if not HAS_TORCH or TriuneTransformer is None:
+            raise HTTPException(status_code=503, detail="PyTorch training is unavailable in this backend environment.")
         if not pytorch_state.is_training:
             pytorch_state.is_training = True
-            pytorch_state.training_task = asyncio.create_task(pytorch_state.run_training_loop())
-        return {"status": "started", "is_training": True}
+            pytorch_state.stop_event.clear()
+            pytorch_state.run_id += 1
+            pytorch_state.training_task = asyncio.create_task(pytorch_state.run_training_loop(pytorch_state.run_id))
+        return {"status": "started", "is_training": True, "run_id": pytorch_state.run_id}
 
     @router.post("/v1/training/pause")
     async def pause_training() -> Dict[str, Any]:
         """Pause real background PyTorch training loop."""
         pytorch_state.is_training = False
+        pytorch_state.stop_event.set()
         if pytorch_state.training_task:
             pytorch_state.training_task.cancel()
             pytorch_state.training_task = None
-        return {"status": "paused", "is_training": False}
+        # Ensure underlying worker thread has released lock
+        def _wait_for_lock():
+            with pytorch_state.worker_lock:
+                pass
+        await asyncio.to_thread(_wait_for_lock)
+        return {"status": "paused", "is_training": False, "run_id": pytorch_state.run_id}
 
     @router.post("/v1/training/step")
     async def run_training_step() -> Dict[str, Any]:
         """Execute 1 REAL PyTorch step or return latest step."""
-        if pytorch_state.is_training and pytorch_state.history:
-            return pytorch_state.history[-1]
-        return await asyncio.to_thread(pytorch_state.step_once)
+        if not HAS_TORCH or TriuneTransformer is None:
+            raise HTTPException(status_code=503, detail="PyTorch training is unavailable in this backend environment.")
+        if pytorch_state.is_training:
+            if pytorch_state.history:
+                return pytorch_state.history[-1]
+            raise HTTPException(status_code=409, detail="Background training has not completed its first step yet.")
+
+        def _locked_step():
+            with pytorch_state.worker_lock:
+                if pytorch_state.is_training:
+                    raise RuntimeError("Background training became active; retry after it is paused.")
+                return pytorch_state.step_once()
+
+        try:
+            return await asyncio.to_thread(_locked_step)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @router.get("/v1/training/export")
     async def export_training_data(format: str = "csv", run_id: Optional[str] = None) -> Any:
@@ -2660,6 +3243,9 @@ if HAS_FASTAPI:
     class CheckpointSaveRequest(BaseModel):
         name: Optional[str] = None
 
+    class CheckpointExportRequest(BaseModel):
+        checkpoint_path: str
+
     @router.post("/v1/training/save_checkpoint")
     async def save_training_checkpoint(name: Optional[str] = None) -> Dict[str, Any]:
         """Save current real PyTorch model weights and optimizer state to disk."""
@@ -2668,6 +3254,8 @@ if HAS_FASTAPI:
         ckpt_dir = Path("checkpoints")
         ckpt_dir.mkdir(parents=True, exist_ok=True)
         filename = name or f"triune_studio_step_{pytorch_state.step}.pt"
+        if Path(filename).name != filename or "/" in filename or "\\" in filename or filename in {".", ".."}:
+            return {"status": "error", "message": "Checkpoint name must be a plain filename without a directory path."}
         if not filename.endswith(".pt"):
             filename += ".pt"
         ckpt_path = ckpt_dir / filename
@@ -2683,9 +3271,26 @@ if HAS_FASTAPI:
             "seq_len": pytorch_state.seq_len,
             "grad_accum_steps": pytorch_state.grad_accum_steps,
             "config": {
+                **(pytorch_state.model.model_spec.to_dict()
+                   if getattr(pytorch_state.model, "model_spec", None) is not None
+                   and hasattr(pytorch_state.model.model_spec, "to_dict")
+                   else dict(pytorch_state.architecture_spec or {})),
                 "vocab_size": 32000,
                 "hidden_dim": getattr(pytorch_state.model, "hidden_dim", 256),
                 "num_layers": len(getattr(pytorch_state.model, "layers", [])),
+                "num_heads": getattr(pytorch_state.model, "num_heads", 4),
+                "head_dim": getattr(pytorch_state.model, "head_dim", 64),
+                "num_experts": getattr(pytorch_state.model, "num_experts", 4),
+                "router_prefix_layers": getattr(pytorch_state.model, "router_prefix_layers", 1),
+                "reflex_exit_layer": getattr(pytorch_state.model, "reflex_exit_layer", 2),
+                "limbic_exit_layer": getattr(pytorch_state.model, "limbic_exit_layer", 4),
+                "depth_mode": getattr(pytorch_state, "depth_mode", "dynamic"),
+                "precision": getattr(pytorch_state, "precision", "bf16"),
+                "use_fp4": bool(getattr(pytorch_state.model, "use_fp4", False)),
+                "use_fp8": bool(getattr(pytorch_state.model, "use_fp8", False)),
+                "batch_size": pytorch_state.batch_size,
+                "seq_len": pytorch_state.seq_len,
+                "grad_accum_steps": pytorch_state.grad_accum_steps,
             }
         }
         torch.save(ckpt, ckpt_path)
@@ -2840,6 +3445,9 @@ if HAS_FASTAPI:
         batch_size: Optional[int] = None
         seq_len: Optional[int] = None
         depth_mode: Optional[str] = None
+        precision: Optional[str] = None
+        use_fp4: Optional[bool] = None
+        use_fp8: Optional[bool] = None
 
     @router.post("/v1/models/preset")
     @router.post("/v1/model/set_preset")
@@ -2855,6 +3463,9 @@ if HAS_FASTAPI:
             batch_size=req.batch_size,
             seq_len=req.seq_len,
             depth_mode=req.depth_mode,
+            precision=req.precision,
+            use_fp4=req.use_fp4,
+            use_fp8=req.use_fp8,
         )
         profile = _compute_hardware_profile()
         return {
@@ -2868,9 +3479,13 @@ if HAS_FASTAPI:
                 "grad_accum_steps": pytorch_state.grad_accum_steps,
                 "depth_mode": pytorch_state.depth_mode,
                 "current_lr": pytorch_state.current_lr,
+                "lr_peak": pytorch_state.lr_peak,
+                "warmup_steps": pytorch_state.warmup_steps,
                 "precision": getattr(pytorch_state, "precision", "bf16"),
+                "gpu_layers": getattr(pytorch_state, "gpu_layers", arch.get("num_layers", 6)),
+                "gpu_offload_pct": getattr(pytorch_state, "gpu_offload_pct", 100),
             },
-            "message": f"Successfully activated {arch.get('name', req.preset_id)} ({arch.get('num_layers')} layers, {arch.get('hidden_dim')} dim)."
+            "message": f"Successfully activated {arch.get('name', req.preset_id)} ({arch.get('num_layers')} layers, {arch.get('hidden_dim')} dim, {arch.get('precision', 'bf16').upper()})."
         }
 
     @router.post("/v1/models/load")
@@ -2878,6 +3493,8 @@ if HAS_FASTAPI:
         """Load local PyTorch checkpoint into active inference and training engine."""
         if not HAS_TORCH:
             return {"status": "error", "message": "PyTorch not available in current environment."}
+        if pytorch_state.is_training:
+            raise HTTPException(status_code=409, detail="Pause training before replacing the active model weights.")
         p = Path(req.checkpoint_path).resolve()
         if not p.is_file():
             return {"status": "error", "message": f"Checkpoint file not found: {req.checkpoint_path}"}
@@ -2885,72 +3502,47 @@ if HAS_FASTAPI:
         if p.suffix.lower() not in allowed_exts:
             return {"status": "error", "message": f"Security restriction: disallowed checkpoint format {p.suffix}"}
         try:
-            pytorch_state.lazy_init_model()
-            # CPU-first hydration to eliminate GPU VRAM spikes
-            ckpt = torch.load(p, map_location="cpu", weights_only=False)
-            state_dict = ckpt.get("model_state", ckpt)
-            pytorch_state.model.load_state_dict(state_dict, strict=False)
-            pytorch_state.model.to(pytorch_state.device)
-            if "step" in ckpt:
-                pytorch_state.step = ckpt["step"]
-            restored_tokens = ckpt.get("total_tokens_trained", ckpt.get("tokens_trained", 0))
-            if not restored_tokens and pytorch_state.step > 0:
-                cfg = ckpt.get("config", {}) if isinstance(ckpt.get("config"), dict) else {}
-                eff_b = cfg.get("batch_size", ckpt.get("batch_size", 4))
-                eff_s = cfg.get("seq_len", ckpt.get("seq_len", 64))
-                eff_a = cfg.get("grad_accum_steps", ckpt.get("grad_accum_steps", 4))
-                restored_tokens = pytorch_state.step * eff_b * eff_s * eff_a
-            pytorch_state.total_tokens_trained = restored_tokens
-            pytorch_state.tokens_trained = restored_tokens
-            pytorch_state.active_checkpoint = p.name
-            pytorch_state._save_persisted_session_state()
+            def _load_checkpoint_safely() -> Dict[str, Any]:
+                with pytorch_state.worker_lock:
+                    if pytorch_state.is_training:
+                        raise RuntimeError("Training started while the checkpoint was being selected; pause it and retry.")
+                    return pytorch_state.load_model_checkpoint(p)
 
-            # Broadcast live update to all connected UI clients
+            # Checkpoint files can be hundreds of megabytes or larger. Keep disk and
+            # model hydration off the asyncio event loop so Studio health/UI calls stay responsive.
+            restored = await asyncio.to_thread(_load_checkpoint_safely)
+            restored_tokens = restored["tokens_trained"]
+            tokens_fmt = f"{restored_tokens / 1_000_000:.2f}M tok" if restored_tokens >= 1_000_000 else f"{restored_tokens:,} tok"
+            log_msg = f"[CHECKPOINT] Loaded {p.name} into {restored['active_model']} (step {restored['step']}, {tokens_fmt})."
+            pytorch_state.logs.insert(0, log_msg)
+
             try:
-                loop = asyncio.get_running_loop()
-                asyncio.run_coroutine_threadsafe(
-                    telemetry_manager.broadcast({
-                        "type": "checkpoint_loaded",
-                        "data": {
-                            "step": pytorch_state.step,
-                            "tokens_trained": restored_tokens,
-                            "active_checkpoint": p.name
-                        }
-                    }),
-                    loop
-                )
+                await telemetry_manager.broadcast({
+                    "type": "checkpoint_loaded",
+                    "data": {
+                        "step": restored["step"],
+                        "tokens_trained": restored_tokens,
+                        "active_checkpoint": p.name,
+                        "active_model": restored["active_model"],
+                        "architecture": restored["architecture"],
+                    },
+                })
             except Exception:
                 pass
 
-            if "optimizer_state" in ckpt and ckpt["optimizer_state"] and pytorch_state.optimizer:
-                try:
-                    opt_st = ckpt["optimizer_state"]
-                    from triune.optim.centroid import CentroidSteerOptimizer
-                    if isinstance(pytorch_state.optimizer, CentroidSteerOptimizer):
-                        if "layer_groups" in opt_st and "base_optimizer" in opt_st:
-                            pytorch_state.optimizer.load_state_dict(opt_st)
-                        elif "state" in opt_st and "param_groups" in opt_st:
-                            try:
-                                pytorch_state.optimizer.base_optimizer.load_state_dict(opt_st)
-                            except Exception:
-                                pass
-                    else:
-                        pytorch_state.optimizer.load_state_dict(opt_st)
-                except Exception:
-                    pass
-
-            tokens_fmt = f"{restored_tokens / 1_000_000:.2f}M tok" if restored_tokens >= 1_000_000 else f"{restored_tokens:,} tok"
-            log_msg = f"[CHECKPOINT] Successfully loaded checkpoint from {p.name} (step: {pytorch_state.step}, tokens: {tokens_fmt})."
-            pytorch_state.logs.insert(0, log_msg)
             return {
                 "status": "success",
                 "message": log_msg,
-                "step": pytorch_state.step,
+                "step": restored["step"],
                 "checkpoint": p.name,
                 "tokens_trained": restored_tokens,
-                "tokens_formatted": tokens_fmt
+                "tokens_formatted": tokens_fmt,
+                "active_model": restored["active_model"],
+                "architecture": restored["architecture"],
+                "weights_loaded": True,
             }
         except Exception as exc:
+            pytorch_state.weights_loaded = False
             return {"status": "error", "message": f"Failed to load checkpoint: {exc}"}
 
     @router.get("/v1/checkpoints")
@@ -2992,7 +3584,7 @@ if HAS_FASTAPI:
                                 tokens_formatted = f"{tokens_num:,} tok"
 
 
-                        is_active = (pytorch_state.active_checkpoint == f.name) or (step_num is not None and step_num == pytorch_state.step)
+                        is_active = bool(pytorch_state.weights_loaded and pytorch_state.active_checkpoint == f.name)
                         ckpts.append({
                             "id": f"{cdir}/{f.name}",
                             "filename": f.name,
@@ -3011,7 +3603,7 @@ if HAS_FASTAPI:
         ckpts.sort(key=lambda x: (not x["is_active"], x["mtime"]), reverse=True)
         return {
             "checkpoints": ckpts,
-            "active_checkpoint": pytorch_state.active_checkpoint,
+            "active_checkpoint": pytorch_state.active_checkpoint if pytorch_state.weights_loaded else None,
             "current_step": pytorch_state.step
         }
 
@@ -3031,11 +3623,12 @@ if HAS_FASTAPI:
         p = Path(req.checkpoint_path)
         if not p.is_file():
             return {"status": "error", "message": f"File not found: {req.checkpoint_path}"}
-        parts = p.resolve().parts
-        if "checkpoints" not in parts and "checkpoints_full" not in parts:
+        resolved = p.resolve()
+        allowed_roots = (Path("checkpoints").resolve(), Path("checkpoints_full").resolve())
+        if not any(resolved.is_relative_to(root) for root in allowed_roots):
             return {"status": "error", "message": "Cannot delete files outside checkpoints directories."}
         try:
-            p.unlink()
+            resolved.unlink()
             log_msg = f"[CHECKPOINT] Deleted checkpoint {p.name}."
             pytorch_state.logs.insert(0, log_msg)
             if pytorch_state.active_checkpoint == p.name:
@@ -3043,6 +3636,56 @@ if HAS_FASTAPI:
             return {"status": "success", "message": log_msg}
         except Exception as e:
             return {"status": "error", "message": f"Failed to delete: {e}"}
+
+    @router.post("/v1/checkpoints/export")
+    async def export_checkpoint_endpoint(req: CheckpointExportRequest) -> Dict[str, Any]:
+        """Export the selected on-disk checkpoint, not whichever model is active."""
+        checkpoint = Path(req.checkpoint_path).resolve()
+        allowed_roots = (Path("checkpoints").resolve(), Path("checkpoints_full").resolve())
+        if not checkpoint.is_file() or checkpoint.suffix.lower() != ".pt":
+            return {"status": "error", "message": "Select an existing .pt checkpoint."}
+        if not any(checkpoint.is_relative_to(root) for root in allowed_roots):
+            return {"status": "error", "message": "Cannot export files outside the managed checkpoint directories."}
+        if not HAS_TORCH:
+            raise HTTPException(status_code=503, detail="Checkpoint export requires PyTorch.")
+        try:
+            payload = await asyncio.to_thread(torch.load, checkpoint, map_location="cpu", weights_only=True)
+            state = payload.get("model_state", payload) if isinstance(payload, dict) else payload
+            if not isinstance(state, dict):
+                raise ValueError("Checkpoint does not contain a model state dictionary.")
+            tensors: Dict[str, Any] = {}
+            seen_storage = set()
+            for key, value in state.items():
+                if not isinstance(key, str) or not torch.is_tensor(value):
+                    continue
+                tensor = value.detach().to(device="cpu").contiguous()
+                storage_id = tensor.untyped_storage().data_ptr()
+                if storage_id in seen_storage:
+                    tensor = tensor.clone()
+                else:
+                    seen_storage.add(storage_id)
+                tensors[key] = tensor
+            if not tensors:
+                raise ValueError("Checkpoint contains no model tensors to export.")
+            from safetensors.torch import save_file
+
+            out_dir = Path("exports")
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out_file = out_dir / f"{checkpoint.stem}.safetensors"
+            await asyncio.to_thread(save_file, tensors, str(out_file))
+            size_bytes = out_file.stat().st_size
+            return {
+                "status": "success",
+                "format": "safetensors",
+                "source": str(checkpoint),
+                "path": str(out_file),
+                "size_bytes": size_bytes,
+                "message": f"Exported checkpoint {checkpoint.name} to {out_file} ({round(size_bytes / (1024 * 1024), 2)} MB).",
+            }
+        except ImportError:
+            return {"status": "error", "message": "SafeTensors export requires the 'safetensors' package; no file was written."}
+        except Exception as exc:
+            return {"status": "error", "message": f"Checkpoint export failed: {exc}"}
 
     class ModelExportRequest(BaseModel):
         model_id: str = "triune-base"
@@ -3063,8 +3706,19 @@ if HAS_FASTAPI:
         key: str
 
     @router.post("/v1/sandbox/run")
-    async def run_sandbox_code(req: SandboxRunRequest) -> Dict[str, Any]:
-        """Safely execute Python code in PythonSandbox and capture output."""
+    async def run_sandbox_code(req: SandboxRunRequest, request: Request) -> Dict[str, Any]:
+        """Run restricted Python code; remote callers must explicitly opt in."""
+        peer = request.client.host if request.client else None
+        allow_remote = os.environ.get("TRIUNE_ALLOW_REMOTE_SANDBOX", "").strip().lower() in {"1", "true", "yes"}
+        try:
+            is_loopback = peer is not None and ipaddress.ip_address(peer).is_loopback
+        except ValueError:
+            is_loopback = False
+        if not is_loopback and not allow_remote:
+            raise HTTPException(
+                status_code=403,
+                detail="Python execution is limited to local clients. Direct remote use requires a valid TRIUNE_API_TOKEN and TRIUNE_ALLOW_REMOTE_SANDBOX=1.",
+            )
         t0 = time.perf_counter()
         try:
             res = await asyncio.to_thread(sandbox.execute_code, req.code)
@@ -3134,7 +3788,19 @@ if HAS_FASTAPI:
                 if _is_masked(v):
                     clean_byok[k] = existing_byok.get(k, "")
             clean_req["byok_keys"] = clean_byok
-        return await asyncio.to_thread(module_manager.save_config, clean_req)
+        try:
+            saved_cfg = await asyncio.to_thread(module_manager.save_config, clean_req)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        response = dict(saved_cfg)
+        for tok_key in ("github_token", "hf_token"):
+            if tok_key in response and response[tok_key]:
+                response[tok_key] = _mask_secret(response[tok_key])
+        if isinstance(response.get("byok_keys"), dict):
+            response["byok_keys"] = {
+                key: _mask_secret(value) for key, value in response["byok_keys"].items()
+            }
+        return response
 
     # -------------------------------------------------------------------------
     # Modules & Repos Marketplace Endpoints
@@ -3179,20 +3845,72 @@ if HAS_FASTAPI:
             return {"status": "error", "message": f"Module {module_id} not found."}
 
         mod_type = mod.get("type", "general")
-        p = Path(mod.get("installed_at", ""))
-        res = {"status": "success", "type": mod_type, "name": mod["name"]}
+        expected_path = module_manager._module_path(module_id)
+        try:
+            p = Path(mod.get("installed_at", "")).resolve()
+        except (OSError, RuntimeError):
+            return {"status": "error", "message": "Module installation path is invalid."}
+        if expected_path is None or p != expected_path or not p.is_dir():
+            return {"status": "error", "message": "Module path is outside the managed extensions directory."}
+        res: Dict[str, Any] = {"status": "success", "type": mod_type, "name": mod["name"]}
 
         if mod_type == "plugin" or mod.get("registered_nodes"):
-            nodes = module_manager.discover_and_register_nodes(p)
+            # Trust explicit curated provenance, never a registry-looking ID;
+            # remote clones can choose their own display/module ID.
+            is_trusted_curated = str(mod.get("download_url", "")).startswith("builtin://")
+            if not is_trusted_curated and req.get("confirm_untrusted") is not True:
+                return {
+                    "status": "confirmation_required",
+                    "message": (
+                        "This third-party plugin runs Python code inside the Triune process with the "
+                        "current user's permissions. Review its source before explicitly activating it."
+                    ),
+                }
+            # A remote repository remains untrusted when manually activated;
+            # do not let this endpoint bypass the manifest/strict-AST gate.
+            nodes = module_manager.discover_and_register_nodes(p, trusted=is_trusted_curated)
+            if not nodes and not is_trusted_curated:
+                return {
+                    "status": "error",
+                    "type": mod_type,
+                    "name": mod["name"],
+                    "message": (
+                        "No verified DAG plugin nodes were registered. External plugins need a "
+                        "trusted Ed25519-signed version-1 manifest, matching entrypoint hashes, "
+                        "and must pass the strict safety checks."
+                    ),
+                }
             res["message"] = f"Activated plugin! {len(nodes)} DAG node(s) registered in Studio."
             res["registered_nodes"] = nodes
         elif mod_type == "model":
             weights = mod.get("artifacts", {}).get("weights", [])
+            if weights:
+                w_path = p / weights[0]
+                if w_path.is_file() and w_path.suffix.lower() in {".pt", ".bin", ".safetensors", ".ckpt"}:
+                    pytorch_state.active_checkpoint = w_path.name
+                    pytorch_state._save_persisted_session_state()
+                    res["active_checkpoint"] = w_path.name
             res["message"] = f"Model weights registered ({', '.join(weights) if weights else 'available in engine'})."
         elif mod_type == "adapter":
-            res["message"] = f"LoRA adapter active at {p}."
+            adapter_info = {
+                "id": mod["id"],
+                "name": mod["name"],
+                "path": str(p).replace("\\", "/"),
+                "rank": 16,
+                "alpha": 32.0,
+                "quantization": "4-bit NF4",
+            }
+            pytorch_state.active_adapter = adapter_info
+            pytorch_state._save_persisted_session_state()
+            res["active_adapter"] = adapter_info
+            res["message"] = f"LoRA adapter '{mod['name']}' attached to active engine at {p}."
         elif mod_type == "dataset":
             datasets = mod.get("artifacts", {}).get("datasets", [])
+            if datasets:
+                d_path = p / datasets[0]
+                if d_path.is_file():
+                    pytorch_state.load_training_data(str(d_path))
+                    res["dataset_name"] = pytorch_state.dataset_name
             res["message"] = f"Dataset active ({datasets[0] if datasets else 'ready for streaming'})."
         else:
             res["message"] = f"Module {mod['name']} active in Studio."
@@ -3227,19 +3945,28 @@ if HAS_FASTAPI:
     # -------------------------------------------------------------------------
     @router.post("/v1/models/export")
     async def export_model_endpoint(req: ModelExportRequest) -> Dict[str, Any]:
-        """Export active model weights to safetensors, gguf, or onnx format."""
+        """Export active model weights to SafeTensors or ONNX (GGUF is unsupported)."""
         from triune.export.exporter import export_model
+        export_format = req.format.strip().lower()
+        if export_format == "gguf":
+            return {
+                "status": "error",
+                "message": "GGUF export is not implemented for Triune's architecture; no file was written.",
+            }
+        if export_format not in {"safetensors", "onnx"}:
+            return {"status": "error", "message": f"Unsupported export format: {req.format}"}
+
         pytorch_state.lazy_init_model()
         out_dir = Path(req.output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
-        ext = ".safetensors" if req.format == "safetensors" else (".bin" if req.format == "gguf" else ".onnx")
+        ext = ".safetensors" if export_format == "safetensors" else ".onnx"
         out_file = out_dir / f"{req.model_id}{ext}"
         try:
-            res_path = await asyncio.to_thread(export_model, pytorch_state.model, out_file, req.format)
+            res_path = await asyncio.to_thread(export_model, pytorch_state.model, out_file, export_format)
             size_bytes = res_path.stat().st_size if res_path.exists() else 0
             return {
                 "status": "success",
-                "format": req.format,
+                "format": export_format,
                 "path": str(res_path),
                 "size_bytes": size_bytes,
                 "message": f"Successfully exported {req.model_id} to {res_path} ({round(size_bytes / (1024*1024), 2)} MB)"
@@ -3278,14 +4005,17 @@ if HAS_FASTAPI:
                 else:
                     t_str = t_str.replace("Ġ", " ").replace("Ċ", "\n")
                 tokens.append({"id": tid, "text": t_str})
-            return {"tokens": tokens, "vocab_size": tokenizer.get_vocab_size(), "tokenizer": "BPE"}
+            return {"status": "success", "tokens": tokens, "vocab_size": tokenizer.get_vocab_size(), "tokenizer": "BPE"}
         else:
-            words = text.split(" ")
-            tokens = []
-            for i, w in enumerate(words):
-                tid = 1000 + (sum(ord(c) for c in w) * 7) % 31000
-                tokens.append({"id": tid, "text": w})
-            return {"tokens": tokens, "vocab_size": 4000, "tokenizer": "word-hash"}
+            # Never fabricate token IDs: a hash/word split looks plausible in
+            # the Studio but cannot be used to reason about the model's real
+            # vocabulary or training inputs.
+            return {
+                "status": "unavailable",
+                "tokens": [],
+                "tokenizer": None,
+                "message": "No Triune tokenizer is configured. Load a tokenizer to preview real token IDs.",
+            }
 
     # -------------------------------------------------------------------------
     # Datasets Endpoint
@@ -3455,15 +4185,34 @@ if HAS_FASTAPI:
     # -------------------------------------------------------------------------
     @router.post("/v1/byok/save")
     async def save_byok_keys(req: BYOKSaveRequest) -> Dict[str, Any]:
-        """Save API provider keys to secure studio configuration and runtime environment."""
-        cfg = module_manager.get_config()
+        """Save API provider keys to Studio configuration and the active runtime environment."""
+        supported = {"openai", "anthropic", "gemini", "huggingface", "wandb"}
+        unknown = set(req.keys) - supported
+        if unknown:
+            raise HTTPException(status_code=400, detail=f"Unsupported credential provider(s): {', '.join(sorted(unknown))}")
+        cfg = await asyncio.to_thread(module_manager.get_config)
         existing_byok = cfg.get("byok_keys", {})
         merged_byok = dict(existing_byok) if isinstance(existing_byok, dict) else {}
         for k, v in req.keys.items():
-            if not _is_masked(v):
-                merged_byok[k] = v
+            # Empty inputs mean "leave unchanged". There is no delete control in
+            # this UI, and blank defaults must never erase a credential on save.
+            value = v.strip()
+            if value and not _is_masked(value):
+                merged_byok[k] = value
         cfg["byok_keys"] = merged_byok
-        module_manager.save_config(cfg)
+        explicitly_entered = {
+            f"byok:{provider}"
+            for provider, value in req.keys.items()
+            if value.strip() and not _is_masked(value.strip())
+        }
+        try:
+            await asyncio.to_thread(
+                module_manager.save_config,
+                cfg,
+                force_secure_secrets=explicitly_entered,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
         hf_tok = req.keys.get("huggingface", "").strip()
         if hf_tok:
@@ -3472,20 +4221,56 @@ if HAS_FASTAPI:
             pytorch_state.hf_token = hf_tok
             log_msg = "[AUTH] Hugging Face Access Token registered and active in runtime."
             pytorch_state.logs.insert(0, log_msg)
-            return {"status": "saved", "message": "BYOK credentials saved securely. Hugging Face Access Token activated!"}
-        return {"status": "saved", "message": "BYOK credentials saved securely to config."}
+
+        wandb_k = req.keys.get("wandb", "").strip()
+        if wandb_k:
+            os.environ["WANDB_API_KEY"] = wandb_k
+            pytorch_state.wandb_key = wandb_k
+            log_msg = "[AUTH] Weights & Biases API Key registered and active in runtime."
+            pytorch_state.logs.insert(0, log_msg)
+            try:
+                import wandb
+                wandb.login(key=wandb_k, relogin=False)
+            except Exception:
+                pass
+
+        if hf_tok and wandb_k:
+            return {"status": "saved", "message": "BYOK credentials saved. Hugging Face and Weights & Biases activated."}
+        if hf_tok:
+            return {"status": "saved", "message": "BYOK credentials saved. Hugging Face Access Token activated for this runtime."}
+        if wandb_k:
+            return {"status": "saved", "message": "BYOK credentials saved. Weights & Biases telemetry enabled for this runtime."}
+        return {"status": "saved", "message": "BYOK credentials saved to Studio configuration."}
 
     @router.post("/v1/byok/test")
     async def test_byok_key(req: BYOKTestRequest) -> Dict[str, Any]:
-        """Test API provider key connection and format."""
+        """Verify provider credentials with a lightweight authenticated API request."""
         provider = req.provider.lower()
         key = req.key.strip()
         if not key:
             return {"provider": provider, "status": "empty", "message": "Key is empty"}
-        if provider == "openai" and not (key.startswith("sk-") or len(key) >= 20):
-            return {"provider": provider, "status": "invalid", "message": "OpenAI keys typically start with sk-"}
-        if provider == "anthropic" and not (key.startswith("sk-ant-") or len(key) >= 20):
-            return {"provider": provider, "status": "invalid", "message": "Anthropic keys typically start with sk-ant-"}
+        if provider not in {"openai", "anthropic", "gemini", "huggingface", "wandb"}:
+            raise HTTPException(status_code=400, detail=f"Unsupported credential provider: {provider}")
+
+        if provider == "wandb":
+            if len(key) < 20:
+                return {"provider": provider, "status": "invalid", "message": "Weights & Biases API key is typically a 40-character hexadecimal string."}
+            try:
+                import wandb
+                await asyncio.to_thread(wandb.login, key=key, relogin=True)
+                os.environ["WANDB_API_KEY"] = key
+                pytorch_state.wandb_key = key
+                return {
+                    "provider": provider,
+                    "status": "valid",
+                    "message": "✓ Weights & Biases authenticated successfully. Live metrics will sync to your W&B dashboard."
+                }
+            except Exception as w_err:
+                return {
+                    "provider": provider,
+                    "status": "invalid",
+                    "message": f"W&B authentication failed: {w_err}"
+                }
         if provider == "huggingface":
             if not (key.startswith("hf_") or len(key) >= 15):
                 return {"provider": provider, "status": "invalid", "message": "Hugging Face tokens typically start with hf_"}
@@ -3521,9 +4306,32 @@ if HAS_FASTAPI:
                 if hf_err.code in (401, 403):
                     return {"provider": provider, "status": "invalid", "message": f"Authentication failed: Invalid Hugging Face token (HTTP {hf_err.code})."}
                 return {"provider": provider, "status": "warning", "message": f"Hugging Face Hub returned HTTP {hf_err.code}."}
-            except Exception as exc:
-                return {"provider": provider, "status": "valid", "message": f"Token format valid (offline notice: {exc})."}
-        return {"provider": provider, "status": "valid", "message": f"{provider.upper()} key format validated."}
+            except urllib.error.URLError:
+                return {"provider": provider, "status": "warning", "message": "Could not reach Hugging Face Hub; token was not verified."}
+            except Exception:
+                return {"provider": provider, "status": "warning", "message": "Could not verify token because the Hub response was unavailable or malformed."}
+
+        if provider == "openai":
+            check_req = urllib.request.Request("https://api.openai.com/v1/models", headers={"Authorization": f"Bearer {key}", "User-Agent": "TriuneStudio/2.1"})
+        elif provider == "anthropic":
+            check_req = urllib.request.Request("https://api.anthropic.com/v1/models?limit=1", headers={"x-api-key": key, "anthropic-version": "2023-06-01", "User-Agent": "TriuneStudio/2.1"})
+        else:
+            check_req = urllib.request.Request("https://generativelanguage.googleapis.com/v1beta/models?pageSize=1", headers={"x-goog-api-key": key, "User-Agent": "TriuneStudio/2.1"})
+        try:
+            with urllib.request.urlopen(check_req, timeout=10.0) as resp:
+                if resp.status == 200:
+                    return {"provider": provider, "status": "valid", "message": f"{provider.upper()} authenticated successfully."}
+                return {"provider": provider, "status": "warning", "message": f"Provider returned HTTP {resp.status}; credential was not confirmed."}
+        except urllib.error.HTTPError as provider_err:
+            if provider_err.code in (401, 403):
+                return {"provider": provider, "status": "invalid", "message": f"Authentication rejected (HTTP {provider_err.code}). Check the key and its permissions."}
+            if provider_err.code == 429:
+                return {"provider": provider, "status": "warning", "message": "Provider accepted the request but rate-limited the check; review quota and try again."}
+            return {"provider": provider, "status": "warning", "message": f"Provider returned HTTP {provider_err.code}; check provider availability and account access."}
+        except urllib.error.URLError:
+            return {"provider": provider, "status": "warning", "message": "Could not reach provider; credential was not verified. Check network access and try again."}
+        except Exception:
+            return {"provider": provider, "status": "warning", "message": "Provider response could not be verified. Check provider availability and try again."}
 
     @router.get("/api/plugins/nodes")
     @router.get("/v1/plugins/nodes")
@@ -3546,7 +4354,28 @@ if HAS_FASTAPI:
     @router.websocket("/ws/telemetry")
     async def websocket_telemetry(websocket: WebSocket) -> None:
         """Real-time training telemetry stream."""
-        await telemetry_manager.connect(websocket)
+        peer = websocket.client.host if websocket.client else None
+        try:
+            is_loopback = peer is not None and ipaddress.ip_address(peer).is_loopback
+        except ValueError:
+            is_loopback = False
+        if not is_loopback:
+            api_token = os.environ.get("TRIUNE_API_TOKEN", "")
+            if len(api_token) < 32:
+                await websocket.close(code=1013, reason="Remote API token is not configured")
+                return
+            await websocket.accept()
+            try:
+                supplied = await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
+            except (asyncio.TimeoutError, WebSocketDisconnect):
+                await websocket.close(code=1008, reason="Authentication timed out")
+                return
+            if not hmac.compare_digest(supplied, api_token):
+                await websocket.close(code=1008, reason="Invalid bearer token")
+                return
+            await telemetry_manager.connect(websocket, accept=False)
+        else:
+            await telemetry_manager.connect(websocket)
         try:
             while True:
                 await websocket.receive_text()

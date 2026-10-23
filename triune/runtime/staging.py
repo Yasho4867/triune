@@ -1,8 +1,10 @@
 """Parameter staging architecture for layer streaming.
 
-Decouples CPU master parameter identity and optimizer state from temporary GPU
-staging tensors, eliminating mutable parameter.data swapping during forward and
-backward passes.
+Formal Invariant:
+Parameter identity (nn.Parameter Python object id and autograd graph node) never changes;
+only execution storage is redirected under an explicit staging guard. Forward-time weight
+snapshots are captured on staging so autograd backward hooks always restage the exact
+forward-time weights, preventing CPU master mutations from corrupting backward gradients.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ class StagingBuffer:
     cpu_master: torch.Tensor
     gpu_tensor: Optional[torch.Tensor] = None
     event: Optional[torch.cuda.Event] = None
+    forward_snapshot: Optional[torch.Tensor] = None
 
     def stage_to_gpu(
         self,
@@ -28,20 +31,34 @@ class StagingBuffer:
         stream: Optional[torch.cuda.Stream] = None,
         target_dtype: Optional[torch.dtype] = None,
         non_blocking: bool = True,
+        is_backward: bool = False,
     ) -> torch.Tensor:
-        """Transfers CPU master tensor to GPU staging buffer."""
+        """Transfers CPU master tensor (or forward-time snapshot during backward) to GPU staging buffer."""
+        if is_backward and self.forward_snapshot is not None:
+            source = self.forward_snapshot
+        else:
+            source = self.cpu_master
+            if torch.is_grad_enabled() or self.forward_snapshot is None:
+                self.forward_snapshot = self.cpu_master.detach().clone()
+
         dtype = target_dtype if target_dtype is not None else (
-            torch.bfloat16 if self.cpu_master.dtype == torch.float8_e4m3fn else self.cpu_master.dtype
+            torch.bfloat16 if source.dtype == torch.float8_e4m3fn else source.dtype
         )
+        can_non_blocking = bool(non_blocking and getattr(source, "is_pinned", lambda: False)())
         if stream is not None and device.type == "cuda":
             with torch.cuda.stream(stream):
-                t = self.cpu_master.to(device, non_blocking=non_blocking).to(dtype)
+                t = source.to(device, non_blocking=can_non_blocking).to(dtype)
+                if t.data_ptr() == source.data_ptr():
+                    t = t.clone()
                 ev = torch.cuda.Event()
                 ev.record(stream)
                 self.event = ev
                 self.gpu_tensor = t
         else:
-            self.gpu_tensor = self.cpu_master.to(device, non_blocking=non_blocking).to(dtype)
+            t = source.to(device, non_blocking=can_non_blocking).to(dtype)
+            if t.data_ptr() == source.data_ptr():
+                t = t.clone()
+            self.gpu_tensor = t
             self.event = None
         return self.gpu_tensor
 
@@ -52,11 +69,14 @@ class StagingBuffer:
                 self.event.synchronize()
                 self.event = None
             self.cpu_master.copy_(self.gpu_tensor.to(self.cpu_master.dtype), non_blocking=non_blocking)
+        self.forward_snapshot = None
 
-    def release_gpu(self) -> None:
+    def release_gpu(self, clear_snapshot: bool = False) -> None:
         """Releases the temporary GPU execution tensor and resets pointers to CPU master."""
         self.gpu_tensor = None
         self.event = None
+        if clear_snapshot:
+            self.forward_snapshot = None
         self.param.data = self.cpu_master
 
 
@@ -80,18 +100,32 @@ class FP8StagingBuffer(StagingBuffer):
         target_dtype: Optional[torch.dtype] = None,
         non_blocking: bool = True,
         use_hardware_fp8: bool = False,
+        is_backward: bool = False,
     ) -> torch.Tensor:
-        """Transfers CPU master to GPU as quantized FP8 tensor with scaling metadata."""
-        if device.type != "cuda":
-            self.gpu_tensor = self.cpu_master
-            return self.gpu_tensor
+        """Transfers CPU master (or forward snapshot during backward) to GPU as quantized FP8 tensor with scaling metadata."""
+        if is_backward and self.forward_snapshot is not None:
+            source = self.forward_snapshot
+        else:
+            source = self.cpu_master
+            if torch.is_grad_enabled() or self.forward_snapshot is None:
+                self.forward_snapshot = self.cpu_master.detach().clone()
 
         compute_dtype = target_dtype if target_dtype is not None else (
-            torch.bfloat16 if self.cpu_master.dtype == torch.float8_e4m3fn else self.cpu_master.dtype
+            torch.bfloat16 if source.dtype == torch.float8_e4m3fn else source.dtype
         )
 
+        can_non_blocking = bool(non_blocking and getattr(source, "is_pinned", lambda: False)())
+        if device.type != "cuda":
+            t = source.to(device, non_blocking=can_non_blocking).to(compute_dtype)
+            if t.data_ptr() == source.data_ptr():
+                t = t.clone()
+            self.gpu_tensor = t
+            return self.gpu_tensor
+
         def _do_quantize():
-            gpu_master = self.cpu_master.to(device, non_blocking=non_blocking).to(compute_dtype)
+            gpu_master = source.to(device, non_blocking=can_non_blocking).to(compute_dtype)
+            if gpu_master.data_ptr() == source.data_ptr():
+                gpu_master = gpu_master.clone()
             if use_hardware_fp8:
                 amax = gpu_master.abs().amax().clamp_min(1e-12)
                 scale = (448.0 / amax).to(dtype=compute_dtype)
@@ -133,8 +167,9 @@ class FP8StagingBuffer(StagingBuffer):
                 self.event = None
             # Master weight updates are in master precision (BF16/FP32)
             self.cpu_master.copy_(self.gpu_tensor.to(self.cpu_master.dtype), non_blocking=non_blocking)
+        self.forward_snapshot = None
 
-    def release_gpu(self) -> None:
+    def release_gpu(self, clear_snapshot: bool = False) -> None:
         """Releases temporary GPU execution tensors and scale metadata, restoring CPU master."""
         self.gpu_tensor = None
         self.fp8_tensor = None
@@ -142,6 +177,8 @@ class FP8StagingBuffer(StagingBuffer):
         self.inv_scale = None
         self.amax = None
         self.event = None
+        if clear_snapshot:
+            self.forward_snapshot = None
         self.param.data = self.cpu_master
 
 
@@ -160,8 +197,9 @@ class ParameterStager:
         self.d2h_stream = d2h_stream
         self.use_fp8 = use_fp8
         self.buffers: dict[int, StagingBuffer] = {}
+        self._hooks: List[Any] = []
 
-    def register_module(self, module: nn.Module) -> None:
+    def register_module(self, module: nn.Module, register_backward_hooks: bool = True) -> None:
         """Initializes staging buffers for all parameters and buffers in a module.
 
         FP8 staging is strictly opt-in per module: only parameters owned by modules
@@ -199,14 +237,36 @@ class ParameterStager:
                 b._cpu_data = master
                 self.buffers[b_id] = StagingBuffer(param=b, cpu_master=master)
 
+        if register_backward_hooks and not getattr(module, "_stager_hooks_registered", False):
+            def _fwd_pre_hook(mod: nn.Module, args: tuple):
+                if torch.is_grad_enabled() and args and isinstance(args[0], torch.Tensor) and args[0].is_floating_point() and not args[0].requires_grad:
+                    return (args[0].detach().requires_grad_(True),) + args[1:]
+                return args
+
+            def _bwd_pre_hook(mod: nn.Module, grad_output):
+                mod._in_backward = True
+                self.stage_layer(mod, stream=None, _from_backward=True)
+                self.apply_staged_tensors(mod)
+
+            def _bwd_post_hook(mod: nn.Module, grad_input, grad_output):
+                mod._in_backward = False
+                self.release_layer(mod)
+
+            self._hooks.append(module.register_forward_pre_hook(_fwd_pre_hook))
+            self._hooks.append(module.register_full_backward_pre_hook(_bwd_pre_hook))
+            self._hooks.append(module.register_full_backward_hook(_bwd_post_hook))
+            module._stager_hooks_registered = True
+
     def stage_layer(
         self,
         layer: nn.Module,
         stream: Optional[torch.cuda.Stream] = None,
         target_dtype: Optional[torch.dtype] = None,
         use_hardware_fp8: bool = False,
+        _from_backward: bool = False,
     ) -> None:
         """Stages a layer's parameters and buffers to GPU."""
+        is_backward = _from_backward or getattr(layer, "_in_backward", False)
         for p in list(layer.parameters()) + list(layer.buffers()):
             buf = self.buffers.get(id(p))
             if buf is not None:
@@ -217,6 +277,7 @@ class ParameterStager:
                         target_dtype=target_dtype,
                         non_blocking=True,
                         use_hardware_fp8=use_hardware_fp8,
+                        is_backward=is_backward,
                     )
                 else:
                     gpu_tensor = buf.stage_to_gpu(
@@ -224,6 +285,7 @@ class ParameterStager:
                         stream=stream,
                         target_dtype=target_dtype,
                         non_blocking=True,
+                        is_backward=is_backward,
                     )
                 if stream is None:
                     p.data = gpu_tensor
@@ -240,6 +302,9 @@ class ParameterStager:
         for p in list(layer.parameters()) + list(layer.buffers()):
             buf = self.buffers.get(id(p))
             if buf is not None and buf.gpu_tensor is not None:
+                if buf.event is not None and self.device.type == "cuda":
+                    torch.cuda.current_stream().wait_event(buf.event)
+                    buf.event = None
                 p.data = buf.gpu_tensor
                 if isinstance(buf, FP8StagingBuffer):
                     p._fp8_tensor = buf.fp8_tensor
@@ -270,7 +335,7 @@ class ParameterStager:
             buf = self.buffers.get(id(p))
             if buf is not None:
                 buf.sync_to_cpu()
-                buf.release_gpu()
+                buf.release_gpu(clear_snapshot=True)
             if hasattr(p, "_fp8_tensor"):
                 p._fp8_tensor = None
             if hasattr(p, "_fp8_scale"):
@@ -286,7 +351,7 @@ class ParameterStager:
         """Universal exception cleanup: releases all GPU tensors, restores CPU pointers,
         clears temporary FP8 metadata, and synchronizes/retires pending events."""
         for buf in self.buffers.values():
-            buf.release_gpu()
+            buf.release_gpu(clear_snapshot=True)
             p = buf.param
             if hasattr(p, "_fp8_tensor"):
                 p._fp8_tensor = None
@@ -301,5 +366,11 @@ class ParameterStager:
 
     def clear(self) -> None:
         """Releases all staging buffers and resets state."""
+        for h in self._hooks:
+            try:
+                h.remove()
+            except Exception:
+                pass
+        self._hooks.clear()
         self.cleanup_all()
         self.buffers.clear()

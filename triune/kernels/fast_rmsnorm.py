@@ -111,7 +111,7 @@ if is_triton_available():
 
             # Weight gradient: sum over M of (dy * x * rsqrt)
             normed_x = x_2d * rsqrt.unsqueeze(1)
-            dw = (dy_2d * normed_x).sum(dim=0)
+            dw = (dy_2d * normed_x).sum(dim=0).to(weight.dtype)
             return dx.reshape(orig_shape), dw, None
 
 
@@ -124,9 +124,10 @@ def fast_rmsnorm(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-6) -> to
             pass  # Seamless fallback if tensor configuration requires PyTorch
 
     # PyTorch Fallback
+    w = weight.to(x.dtype) if weight.dtype != x.dtype else weight
     if hasattr(torch.nn.functional, "rms_norm"):
-        return torch.nn.functional.rms_norm(x, (x.size(-1),), weight=weight, eps=eps)
-    return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps) * weight
+        return torch.nn.functional.rms_norm(x, (x.size(-1),), weight=w, eps=eps)
+    return (x.float() * torch.rsqrt(x.float().pow(2).mean(-1, keepdim=True) + eps)).to(x.dtype) * w
 
 
 class FastRMSNorm(nn.Module):

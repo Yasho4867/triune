@@ -11,7 +11,7 @@ from .config import *
 class TransformerBlock(nn.Module):
     def __init__(self, dim, heads, layer_idx, vocab_size, exit_layers, num_experts=NUM_EXPERTS, use_moe=True, use_fp4=False, use_fp8=False):
         super().__init__()
-        self.attn = HybridAttention(dim, heads, use_fp4=use_fp4)
+        self.attn = HybridAttention(dim, heads, use_fp4=use_fp4, use_fp8=use_fp8)
         if use_moe:
             self.ffn = MoE_FFN(dim, num_experts=num_experts, use_fp4=use_fp4, use_fp8=use_fp8)
         else:

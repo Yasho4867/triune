@@ -17,11 +17,16 @@ class TrainingEngine:
         self.trainer = trainer
         self.step = 0
         self.best_eval_loss = float("inf")
-        self.target_depth_dist = torch.tensor(trainer.config["target_depth_dist"], device=trainer.device)
+        self.target_depth_dist = torch.tensor(
+            trainer.config["target_depth_dist"], device=trainer.device, dtype=torch.float32
+        )
         self.depth_usage_ema = self.target_depth_dist.clone()
         self.vram_monitor = LiveVRAMMonitor(trainer.device)
+        self.sync_streaming_engine()
+
+    def sync_streaming_engine(self) -> None:
         streaming_engine = getattr(self.model, "_streaming_engine", None)
-        if streaming_engine is not None:
+        if streaming_engine is not None and self.optimizer is not None:
             streaming_engine.set_optimizer(self.optimizer)
             streaming_engine.config.grad_clip = self.config.get("grad_clip", 1.0)
 
@@ -56,10 +61,13 @@ class TrainingEngine:
             valid_per_sample = valid_mask.reshape(x.size(0), -1).sum(dim=1).clamp_min(1)
             losses = []
             for logits in (reflex, limbic, cortex):
-                token_loss = self.trainer.loss_fn(logits.reshape(-1, self.trainer.vocab_size), y_flat)
+                token_loss = self.trainer.loss_fn(logits.float().reshape(-1, self.trainer.vocab_size), y_flat)
                 losses.append((token_loss * valid_mask.float()).reshape(x.size(0), -1).sum(dim=1) / valid_per_sample)
             del reflex, limbic, cortex, logits
             all_losses = torch.stack(losses, dim=1)
+            if self.target_depth_dist.device != all_losses.device:
+                self.target_depth_dist = self.target_depth_dist.to(all_losses.device)
+                self.depth_usage_ema = self.depth_usage_ema.to(all_losses.device)
             adjusted = all_losses - self.config["bias_strength"] * (self.target_depth_dist - self.depth_usage_ema).unsqueeze(0)
             labels = adjusted.argmin(dim=1)
             usage = F.one_hot(labels, num_classes=3).float().mean(dim=0)
@@ -102,71 +110,147 @@ class TrainingEngine:
             step=self.step,
         )
 
+    def step_once(self, *, advance_step: bool = False) -> dict:
+        """Executes a single canonical Triune training step shared across CLI and Studio."""
+        self.model.train()
+        self.vram_monitor.tick()
+        lr = self.trainer.lr_schedule(self.config, self.step)
+        self.trainer.set_optimizer_lr(self.optimizer, lr)
+        for module in self.model.modules():
+            if isinstance(module, MoE_FFN):
+                module._global_step = self.step
+
+        streaming_engine = getattr(self.model, "_streaming_engine", None)
+        if streaming_engine is not None:
+            self.sync_streaming_engine()
+        self.optimizer.zero_grad()
+        if streaming_engine is not None:
+            streaming_engine.zero_grad()
+
+        totals = {"loss": 0.0, "lm": 0.0, "router": 0.0, "balance": 0.0, "z_loss": 0.0, "overflow": 0, "tokens": 0}
+        last_labels = last_route_logits = None
+        exploration_rate = self._exploration_rate()
+        depth_mode = self.config.get("depth_mode", "dynamic")
+        grad_accum = int(getattr(self.trainer, "grad_accum", self.config.get("grad_accum_steps", 1)))
+        vocab_size = int(getattr(self.trainer, "vocab_size", getattr(self.model, "vocab_size", 32000)))
+        z_loss_coef = float(getattr(self.trainer, "z_loss_coef", 1e-3))
+        balance_coef = float(self.config.get("balance_coef", 0.3))
+        ema_decay = float(self.config.get("usage_ema_decay", 0.99))
+
+        for _ in range(grad_accum):
+            x, y = self.trainer.next_batch()
+            x, y = x.to(self.trainer.device), y.to(self.trainer.device)
+            totals["tokens"] += int(x.numel())
+            y_flat = y.reshape(-1)
+
+            if depth_mode == "cortex":
+                labels = torch.full((x.size(0),), 2, dtype=torch.long, device=self.trainer.device)
+                with self.trainer.model_autocast():
+                    res = self.model(x, force_depth=2)
+                    logits = res[0] if isinstance(res, tuple) else res
+                    route_logits = (
+                        res[1]
+                        if isinstance(res, tuple) and len(res) > 1
+                        else torch.zeros((x.size(0), 3), device=self.trainer.device)
+                    )
+                logits_f = logits.float()
+                route_f = route_logits.float()
+                lm_loss = self.trainer.loss_fn(logits_f.reshape(-1, vocab_size), y_flat).mean()
+                router_loss = torch.tensor(0.0, device=self.trainer.device)
+                z_loss = torch.tensor(0.0, device=self.trainer.device)
+                balance_loss = torch.tensor(0.0, device=self.trainer.device)
+                micro_loss = lm_loss
+                usage = torch.tensor([0.0, 0.0, 1.0], device=self.depth_usage_ema.device)
+                self.depth_usage_ema.mul_(ema_decay).add_(usage * (1.0 - ema_decay))
+            elif depth_mode == "joint":
+                labels = torch.full((x.size(0),), 2, dtype=torch.long, device=self.trainer.device)
+                with self.trainer.model_autocast():
+                    reflex_logits, limbic_logits, cortex_logits, route_logits = self.model.forward_all_exits(
+                        x, update_stats=True
+                    )
+                loss_ref = self.trainer.loss_fn(reflex_logits.float().reshape(-1, vocab_size), y_flat).mean()
+                loss_limb = self.trainer.loss_fn(limbic_logits.float().reshape(-1, vocab_size), y_flat).mean()
+                loss_cort = self.trainer.loss_fn(cortex_logits.float().reshape(-1, vocab_size), y_flat).mean()
+                lm_loss = 0.33 * loss_ref + 0.33 * loss_limb + 0.34 * loss_cort
+                route_f = route_logits.float()
+                z_loss = torch.logsumexp(route_f, dim=-1).pow(2).mean()
+                router_loss = z_loss
+                balance_loss = getattr(self.model, "last_balance_loss", None)
+                if balance_loss is None:
+                    balance_loss = torch.tensor(0.0, device=self.trainer.device)
+                micro_loss = lm_loss + z_loss_coef * z_loss
+                usage = torch.tensor([1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0], device=self.depth_usage_ema.device)
+                self.depth_usage_ema.mul_(ema_decay).add_(usage * (1.0 - ema_decay))
+            else:
+                labels = self._router_labels(x, y)
+                # Intentional batched exploration: same forced depth across all sequences in the batch
+                # for gradient correlation. Per-sequence exploration would require per-item depth tensors.
+                chosen_depth = random.choice((0, 1, 2)) if random.random() < exploration_rate else None
+
+                with self.trainer.model_autocast():
+                    logits, route_logits = self.model(x, force_depth=chosen_depth)
+                logits_f = logits.float()
+                route_f = route_logits.float()
+                lm_loss = self.trainer.loss_fn(logits_f.reshape(-1, vocab_size), y_flat).mean()
+                router_loss = self.trainer.router_loss_fn(route_f, labels)
+                z_loss = torch.logsumexp(route_f, dim=-1).pow(2).mean()
+                # Use router's native balance loss if recorded during forward pass, else compute from softmax distribution
+                balance_loss = getattr(self.model, "last_balance_loss", None)
+                if balance_loss is None:
+                    balance_loss = (torch.softmax(route_f, dim=-1).mean(dim=0) - self.target_depth_dist).pow(2).mean()
+                micro_loss = lm_loss + 0.5 * router_loss + z_loss_coef * z_loss + balance_coef * balance_loss
+
+            (micro_loss / grad_accum).backward()
+
+            totals["loss"] += micro_loss.item()
+            totals["lm"] += lm_loss.item()
+            totals["router"] += router_loss.item()
+            totals["balance"] += balance_loss.item()
+            totals["z_loss"] += z_loss.item()
+            for module in self.model.modules():
+                if isinstance(module, MoE_FFN):
+                    totals["overflow"] += module.overflow_counter
+                    module.overflow_counter = 0
+            last_labels, last_route_logits = labels, route_logits.detach()
+
+        if streaming_engine is not None:
+            streaming_engine.step_streaming_optimizer(optimizer=self.optimizer, grad_clip=self.config["grad_clip"])
+        else:
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config["grad_clip"])
+            self.optimizer.step()
+
+        for module in self.model.modules():
+            if isinstance(module, MoE_FFN) and hasattr(module, "step_bias"):
+                module.step_bias()
+        # overflow is a cumulative count, not an average
+        for key in ("loss", "lm", "router", "balance", "z_loss"):
+            totals[key] /= grad_accum
+
+        executed_step = self.step
+        if advance_step:
+            self.step += 1
+
+        return {
+            "step": executed_step,
+            "loss": totals["loss"],
+            "lm_loss": totals["lm"],
+            "router_loss": totals["router"],
+            "balance_loss": totals["balance"],
+            "z_loss": totals["z_loss"],
+            "lr": lr,
+            "exploration_rate": exploration_rate,
+            "overflow": totals["overflow"],
+            "labels": last_labels,
+            "route_logits": last_route_logits,
+            "tokens_in_step": totals["tokens"],
+            "depth_usage_ema": self.depth_usage_ema.detach().clone(),
+        }
+
     def train(self):
         self.model.train()
         try:
             while self.step < self.config["total_steps"]:
-                self.vram_monitor.tick()
-                lr = self.trainer.lr_schedule(self.config, self.step)
-                self.trainer.set_optimizer_lr(self.optimizer, lr)
-                for module in self.model.modules():
-                    if isinstance(module, MoE_FFN):
-                        module._global_step = self.step
-
-                streaming_engine = getattr(self.model, "_streaming_engine", None)
-                self.optimizer.zero_grad()
-                if streaming_engine is not None:
-                    streaming_engine.zero_grad()
-
-                totals = {"loss": 0.0, "lm": 0.0, "router": 0.0, "balance": 0.0, "overflow": 0}
-                last_labels = last_route_logits = None
-                exploration_rate = self._exploration_rate()
-
-                for _ in range(self.trainer.grad_accum):
-                    x, y = self.trainer.next_batch()
-                    x, y = x.to(self.trainer.device), y.to(self.trainer.device)
-                    labels = self._router_labels(x, y)
-                    # Intentional batched exploration: same forced depth across all sequences in the batch
-                    # for gradient correlation. Per-sequence exploration would require per-item depth tensors.
-                    chosen_depth = random.choice((0, 1, 2)) if random.random() < exploration_rate else None
-
-                    with self.trainer.model_autocast():
-                        logits, route_logits = self.model(x, force_depth=chosen_depth)
-                    y_flat = y.reshape(-1)
-                    logits_f = logits.float()
-                    route_f = route_logits.float()
-                    lm_loss = self.trainer.loss_fn(logits_f.reshape(-1, self.trainer.vocab_size), y_flat).mean()
-                    router_loss = self.trainer.router_loss_fn(route_logits, labels)
-                    z_loss = torch.logsumexp(route_f, dim=-1).pow(2).mean()
-                    # Use router's native balance loss if recorded during forward pass, else compute from softmax distribution
-                    balance_loss = getattr(self.model, "last_balance_loss", None)
-                    if balance_loss is None:
-                        balance_loss = (torch.softmax(route_f, dim=-1).mean(dim=0) - self.target_depth_dist).pow(2).mean()
-                    micro_loss = lm_loss + 0.5 * router_loss + self.trainer.z_loss_coef * z_loss + self.config["balance_coef"] * balance_loss
-                    (micro_loss / self.trainer.grad_accum).backward()
-
-                    totals["loss"] += micro_loss.item()
-                    totals["lm"] += lm_loss.item()
-                    totals["router"] += router_loss.item()
-                    totals["balance"] += balance_loss.item()
-                    for module in self.model.modules():
-                        if isinstance(module, MoE_FFN):
-                            totals["overflow"] += module.overflow_counter
-                            module.overflow_counter = 0
-                    last_labels, last_route_logits = labels, route_logits.detach()
-
-                if streaming_engine is not None:
-                    streaming_engine.step_streaming_optimizer(optimizer=self.optimizer, grad_clip=self.config["grad_clip"])
-                else:
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config["grad_clip"])
-                    self.optimizer.step()
-
-                for module in self.model.modules():
-                    if isinstance(module, MoE_FFN) and hasattr(module, "step_bias"):
-                        module.step_bias()
-                # overflow is a cumulative count, not an average
-                for key in ("loss", "lm", "router", "balance"):
-                    totals[key] /= self.trainer.grad_accum
+                step_stats = self.step_once(advance_step=False)
 
                 if self.step and self.step % self.config["eval_every"] == 0:
                     cortex_loss = self.trainer.run_eval(force_depth=2)
@@ -183,11 +267,11 @@ class TrainingEngine:
                     )
 
                 if self.step and self.step % self.config["save_every"] == 0:
-                    self.trainer.save_latest(self.step, totals["loss"])
+                    self.trainer.save_latest(self.step, step_stats["loss"])
                 self._log_training(
-                    loss=totals["loss"], lm_loss=totals["lm"], router_loss=totals["router"],
-                    balance_loss=totals["balance"], lr=lr, exploration_rate=exploration_rate,
-                    overflow=totals["overflow"], labels=last_labels, route_logits=last_route_logits,
+                    loss=step_stats["loss"], lm_loss=step_stats["lm_loss"], router_loss=step_stats["router_loss"],
+                    balance_loss=step_stats["balance_loss"], lr=step_stats["lr"], exploration_rate=step_stats["exploration_rate"],
+                    overflow=step_stats["overflow"], labels=step_stats["labels"], route_logits=step_stats["route_logits"],
                 )
                 self.step += 1
         except BaseException:

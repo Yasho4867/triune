@@ -1,6 +1,7 @@
 """Model Export Utilities.
 
-Provides high-efficiency exports for SafeTensors, GGUF, and ONNX formats.
+Provides SafeTensors and ONNX exports. GGUF is explicitly unsupported until a
+converter for Triune's custom architecture is implemented.
 """
 
 from __future__ import annotations
@@ -29,17 +30,35 @@ def export_safetensors(model: torch.nn.Module, output_path: str | Path) -> Path:
                 deduped[key] = tensor
         save_file(deduped, str(output_path))
     except ImportError:
-        # Fallback to standard torch save if safetensors package absent
-        torch.save(model.state_dict(), output_path)
+        raise RuntimeError("SafeTensors export requires the 'safetensors' package; no file was written.")
+    return output_path
+
+
+def export_lora_safetensors(model: torch.nn.Module, output_path: str | Path) -> Path:
+    """Export only LoRA A/B adapter matrices from a model with attached adapters."""
+    output_path = Path(output_path)
+    adapters = {
+        name: parameter.detach().to(device="cpu").contiguous()
+        for name, parameter in model.named_parameters()
+        if name.endswith(("lora_A", "lora_B"))
+    }
+    if not adapters:
+        raise ValueError("No attached LoRA adapter matrices were found; no file was written.")
+    try:
+        from safetensors.torch import save_file
+    except ImportError as exc:
+        raise RuntimeError("SafeTensors export requires the 'safetensors' package; no file was written.") from exc
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    save_file(adapters, str(output_path))
     return output_path
 
 
 def export_gguf(model: torch.nn.Module, output_path: str | Path, quantization: str = "q4_k_m") -> Path:
-    """Export model weights to GGUF quantization format."""
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(model.state_dict(), output_path.with_suffix(".bin"))
-    return output_path.with_suffix(".bin")
+    """Fail explicitly until Triune's custom architecture has a real GGUF converter."""
+    raise NotImplementedError(
+        "GGUF export is not implemented for Triune's GLA, hierarchical exits, and routed experts; "
+        "the model was not exported."
+    )
 
 
 def export_onnx(model: torch.nn.Module, output_path: str | Path, seq_len: int = 128) -> Path:

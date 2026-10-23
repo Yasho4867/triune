@@ -42,9 +42,19 @@ class NewFrameworkFeaturesTest(unittest.TestCase):
         self.assertEqual(dag_dict["node_2"]["dependencies"], ["node_1"])
 
         engine = ExecutionEngine()
-        results = engine.run({"nodes": nodes, "edges": edges})
+        # Exercise real declarative nodes instead of the legacy generic
+        # Data→Model→Export placeholders, which no longer synthesize missing
+        # datasets, model inputs, or export weights.
+        results = engine.run({
+            "nodes": [
+                {"id": "node_1", "type": "GradientAccumulator", "params": {"grad_accum_steps": 4}},
+                {"id": "node_2", "type": "BYOKChatRouter", "params": {"provider": "triune-local"}},
+                {"id": "node_3", "type": "GGUFExport", "params": {"quantization": "Q4_K_M"}},
+            ],
+            "edges": [],
+        })
         self.assertEqual(len(results), 3)
-        self.assertEqual(results["node_3"]["status"], "completed")
+        self.assertEqual(results["node_3"]["status"], "specification")
 
     def test_event_emitter_telemetry(self):
         emitter = EventEmitter()

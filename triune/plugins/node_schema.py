@@ -15,6 +15,7 @@ class PortType(str, Enum):
     """Strongly typed port dataflow classifications."""
     TEXT = "text"
     TENSOR = "tensor"
+    TENSOR_TUPLE = "tensor_tuple"
     DATASET_STREAM = "dataset_stream"
     MODEL_HANDLE = "model_handle"
     OPTIMIZER_HANDLE = "optimizer_handle"

@@ -12,16 +12,18 @@ class VRAMProfiler:
 
     @staticmethod
     def get_vram_stats(device: torch.device | str = "cuda") -> Dict[str, Any]:
-        if not torch.cuda.is_available():
+        dev = torch.device(device)
+        if not torch.cuda.is_available() or dev.type != "cuda":
             return {
                 "allocated_gb": 0.0,
                 "reserved_gb": 0.0,
                 "max_allocated_gb": 0.0,
                 "total_gb": 8.0,
+                "allocated": 0.0,
+                "reserved": 0.0,
+                "total": 8.0,
                 "oom_risk": False,
             }
-
-        dev = torch.device(device)
         allocated = torch.cuda.memory_allocated(dev) / (1024 ** 3)
         reserved = torch.cuda.memory_reserved(dev) / (1024 ** 3)
         max_allocated = torch.cuda.max_memory_allocated(dev) / (1024 ** 3)

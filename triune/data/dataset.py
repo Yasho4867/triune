@@ -37,6 +37,24 @@ class TokenStreamDataset(IterableDataset):
         self.split = split
         self.token = token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
 
+    def _is_word_boundary(self, token_id: int) -> bool:
+        """Determine if a token represents the start of a whole word, whitespace, or punctuation."""
+        if not hasattr(self, "tokenizer") or not self.tokenizer:
+            return True
+        try:
+            t = self.tokenizer.id_to_token(token_id)
+            if not t:
+                return True
+            if (t.startswith("[") and t.endswith("]")) or (t.startswith("<|") and t.endswith("|>")):
+                return True
+            if t.startswith("Ġ") or t.startswith("Ċ") or t.startswith("\n") or t.startswith(" "):
+                return True
+            if not t[0].isalnum():
+                return True
+            return False
+        except Exception:
+            return True
+
     def _stream(self):
         import os
         token_val = self.token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN") or None
@@ -103,9 +121,22 @@ class TokenStreamDataset(IterableDataset):
                     token_buffer.extend(ids)
                     token_buffer.append(self.sep_token_id)
 
-                    while len(token_buffer) >= self.seq_len + 1:
-                        chunk = token_buffer[: self.seq_len + 1]
-                        del token_buffer[: self.seq_len + 1]
+                    chunk_len = self.seq_len + 1
+                    while len(token_buffer) >= chunk_len:
+                        split_idx = chunk_len
+                        # Word-boundary alignment: ensure next chunk never starts with a severed subword
+                        if split_idx < len(token_buffer) and not self._is_word_boundary(token_buffer[split_idx]):
+                            bt = split_idx
+                            while bt > split_idx - 16 and bt > 0 and not self._is_word_boundary(token_buffer[bt]):
+                                bt -= 1
+                            if bt > 0:
+                                split_idx = bt
+
+                        chunk = token_buffer[:split_idx]
+                        del token_buffer[:split_idx]
+                        if len(chunk) < chunk_len:
+                            chunk.extend([0] * (chunk_len - len(chunk)))
+
                         batch_buffer.append(
                             (torch.tensor(chunk[:-1], dtype=torch.long), torch.tensor(chunk[1:], dtype=torch.long))
                         )

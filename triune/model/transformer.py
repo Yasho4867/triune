@@ -106,6 +106,7 @@ class TriuneTransformer(nn.Module):
         fp8_weights: bool = False,
         grad_clip: float = 1.0,
         instant_optimizer: bool = True,
+        resident_gpu_layers: int = 0,
     ):
         """Enables AirLLM-style layer streaming, keeping layers in CPU RAM and streaming on-demand."""
         from triune.runtime.streaming import LayerStreamingEngine, StreamingConfig
@@ -117,6 +118,7 @@ class TriuneTransformer(nn.Module):
             fp8_weights=fp8_weights,
             grad_clip=grad_clip,
             instant_optimizer=instant_optimizer,
+            resident_gpu_layers=resident_gpu_layers,
         )
         engine = LayerStreamingEngine(self, device=device, config=cfg)
         engine.attach()

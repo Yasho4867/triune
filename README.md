@@ -20,7 +20,7 @@ Triune is a PyTorch framework for training and serving multi-exit Mixture-of-Exp
 ```text
 triune/                 Python package (model, optim, runtime, trainer, data, api)
 models/                 Architecture configurations (nano, small, 2.5b, 7b)
-studio/                 Triune Studio frontend and desktop launcher
+studio/                 Triune Studio frontend, installers, and Windows app solution
 scripts/                Training, chat, and utility scripts
 tests/                  Unit and integration tests
 docs/                   Mathematical foundations and technical guides
@@ -51,11 +51,32 @@ python studio/installer/installer.py
 
 ## 🖥️ Launching Triune Studio
 
-After installation, launch Triune Studio as a native desktop application:
+After installation, launch Triune Studio as a desktop application:
 
-- **Windows**: Double-click the **`Triune Studio`** icon on your Desktop, or run `studio\TriuneStudio.bat`
+- **Windows (native app)**: Open `studio\windows\TriuneStudio.sln` in Visual Studio and publish the `TriuneStudio.Windows` project (steps below). Run `studio\windows\publish\TriuneStudio.exe`; the installer points the Desktop shortcut to this executable when it is present.
+- **Windows (Python fallback)**: `studio\TriuneStudio.bat` (used only if the native app has not been published)
 - **Linux / macOS**: `./studio/TriuneStudio.sh`
 - **Python / CLI**: `python scripts/launch_studio.py --port 8000`
+
+### Build the native Windows app
+
+Install Visual Studio with the **.NET desktop development** workload, the .NET 10 SDK, and the Microsoft Edge WebView2 Runtime. Open `studio/windows/TriuneStudio.sln`, restore NuGet packages, then build or publish `TriuneStudio.Windows`. The native WPF window hosts the existing Studio interface and starts the existing Python backend (including its WSL GPU detection); it does not replace or duplicate the model engine.
+
+To publish a self-contained x64 app from PowerShell at the repository root:
+
+```powershell
+dotnet publish studio/windows/TriuneStudio.Windows/TriuneStudio.Windows.csproj `
+  -c Release -r win-x64 --self-contained true `
+  -o studio/windows/publish
+```
+
+The .NET runtime is bundled, but WebView2 Runtime and the installed Triune Python environment are still required. For a desktop shortcut, rerun `studio/installer/install_studio.bat` after publishing; it will target the `.exe` instead of the batch fallback.
+
+### Studio appearance and extensions
+
+Studio opens in the **Modern Light** edition. Use **Appearance & Themes** in the sidebar to switch between Modern and Classic editions, choose light or dark mode, apply a curated theme, or set a personal accent color. Appearance preferences are saved locally in that desktop/browser profile. The **Extensions Marketplace** is separate: it lists curated modules and searches GitHub/Hugging Face; use **Add local or remote extensions** when you intentionally want to scan a workspace or clone a repository. Remote plugin code stays dormant after cloning and updating. Activation requires an explicit warning acknowledgement, a version-1 manifest, a trusted Ed25519 signature, matching SHA-256 entrypoint hashes, and the strict AST checks. Publishers can refresh the manifest signature with `python scripts/sign_plugin_manifest.py path/to/plugin --key-id publisher-key-1`; the tool prompts for the raw base64 private key without echoing it. Configure `TRIUNE_PLUGIN_TRUSTED_KEYS` as a JSON object mapping key IDs to base64-encoded Ed25519 public keys; do not put private signing keys in Triune. Even a valid signature does not sandbox plugin code, so activate only publishers you trust.
+
+User-entered provider and hub credentials are stored in the operating system credential store, not `studio_config.json`. The Windows desktop setup uses Windows Credential Manager even when model computation is hosted in WSL; no separate WSL keyring package or daemon is required. Standalone Linux deployments use Secret Service/KWallet, and environment variables remain supported for headless setups. Legacy plaintext credentials are read for migration compatibility and are moved to the OS store on the next successful save.
 
 ---
 

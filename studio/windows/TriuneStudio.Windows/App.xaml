@@ -1,0 +1,10 @@
+<Application x:Class="TriuneStudio.Windows.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             StartupUri="MainWindow.xaml">
+  <Application.Resources>
+    <SolidColorBrush x:Key="StudioBackground" Color="#17191D" />
+    <SolidColorBrush x:Key="StudioForeground" Color="#F4F5F7" />
+    <SolidColorBrush x:Key="StudioAccent" Color="#B4532A" />
+  </Application.Resources>
+</Application>

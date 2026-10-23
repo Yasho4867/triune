@@ -252,22 +252,34 @@ def install_pytorch(py_bin: Path, hw: HardwareProfile, cuda_choice: str = "auto"
     """Select and install optimal PyTorch build for the hardware profile."""
     log_info(f"Resolving PyTorch distribution for {hw.gpu_name}...")
 
-    # Check if host Python is >= 3.14 (where pre-built wheels might be scarce)
-    py_major, py_minor = sys.version_info[:2]
-    if py_major == 3 and py_minor >= 14 and hw.is_windows:
-        log_warning("Host Python is 3.14 on Windows. PyTorch upstream does not yet distribute pre-built CUDA wheels for 3.14.")
-        if hw.wsl_available:
-            log_info("Hybrid GPU Mode enabled: PyTorch runs with CUDA in WSL2 while Windows Studio UI runs natively.")
-            return True
-        else:
-            log_info("Attempting PyTorch install from default index...")
-
     install_cmd = [str(py_bin), "-m", "pip", "install"]
 
     if hw.has_nvidia:
-        # Modern NVIDIA GPUs (Blackwell, Ada, Hopper, Ampere) -> CUDA 12.4+
+        # Python 3.14 Windows wheels are available from the newer CUDA index.
+        # This app launches the native Windows interpreter, so a WSL-only CUDA
+        # environment is not a usable backend for this installation.
         index_url = "https://download.pytorch.org/whl/cu124"
-        if cuda_choice == "12.6":
+        effective_cuda = cuda_choice
+        if effective_cuda == "cpu":
+            log_info("CPU-only PyTorch explicitly selected despite NVIDIA hardware.")
+            install_cmd.extend(["torch", "torchvision", "--index-url", "https://download.pytorch.org/whl/cpu"])
+            code = run_command(install_cmd, show_output=True)
+            return code == 0
+        try:
+            target_version = subprocess.run(
+                [str(py_bin), "-c", "import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}')"],
+                capture_output=True, text=True, timeout=5.0,
+            )
+            py_major, py_minor = (int(part) for part in target_version.stdout.strip().split(".", 1))
+        except (OSError, subprocess.SubprocessError, ValueError):
+            py_major, py_minor = sys.version_info[:2]
+        if effective_cuda == "auto" and hw.is_windows and py_major == 3 and py_minor >= 14:
+            effective_cuda = "13.2"
+        if effective_cuda == "13.2":
+            index_url = "https://download.pytorch.org/whl/cu132"
+        elif effective_cuda == "13.0":
+            index_url = "https://download.pytorch.org/whl/cu130"
+        elif effective_cuda == "12.6":
             index_url = "https://download.pytorch.org/whl/cu126"
         elif cuda_choice == "12.1":
             index_url = "https://download.pytorch.org/whl/cu121"
@@ -291,7 +303,7 @@ def install_pytorch(py_bin: Path, hw: HardwareProfile, cuda_choice: str = "auto"
 
     code = run_command(install_cmd, show_output=True)
     if code != 0:
-        log_warning("Accelerated PyTorch wheel install encountered a warning/error.")
+        log_warning("Selected PyTorch wheel install failed; trying the standard PyTorch index.")
         log_info("Falling back to standard PyTorch distribution...")
         code = run_command([str(py_bin), "-m", "pip", "install", "torch", "torchvision"], show_output=True)
 
@@ -308,6 +320,7 @@ def install_dependencies(py_bin: Path) -> None:
         "fastapi>=0.100.0",
         "uvicorn>=0.22.0",
         "pywebview>=4.0.0",
+        "cryptography>=41.0.0",
         "pydantic>=2.0.0",
         "safetensors>=0.4.0",
         "tokenizers>=0.13.0",
@@ -315,7 +328,25 @@ def install_dependencies(py_bin: Path) -> None:
         "requests>=2.28.0",
         "psutil>=5.9.0",
     ]
-    run_command([str(py_bin), "-m", "pip", "install", *core_pkgs], show_output=False)
+    # Windows uses the OS Credential Manager API directly, including when the
+    # model backend runs in WSL. Python keyring remains required for native
+    # Linux/macOS installs that use Secret Service or KWallet.
+    if sys.platform != "win32":
+        core_pkgs.append("keyring>=25.0.0")
+    install_code = run_command([str(py_bin), "-m", "pip", "install", *core_pkgs], show_output=False)
+    if install_code != 0:
+        raise RuntimeError(
+            "Studio dependency installation failed. The setup cannot finish because the API and secure credential storage would be incomplete."
+        )
+    if sys.platform != "win32":
+        keyring_check = run_command(
+            [str(py_bin), "-c", "import keyring; assert keyring.get_keyring() is not None"],
+            show_output=False,
+        )
+        if keyring_check != 0:
+            raise RuntimeError(
+                "Studio setup could not initialize its secure credential storage dependency. Repair the installation and retry."
+            )
     log_success("Studio dependencies installed.")
 
     log_info("Installing Triune Framework in development mode (pip install -e .)...")
@@ -333,6 +364,11 @@ def create_desktop_shortcut(hw: HardwareProfile) -> None:
     """Create a 1-click desktop shortcut on Windows or Linux."""
     studio_bat = STUDIO_DIR / "TriuneStudio.bat"
     studio_sh = STUDIO_DIR / "TriuneStudio.sh"
+    native_studio_candidates = (
+        WORKSPACE_ROOT / "studio" / "windows" / "publish" / "TriuneStudio.exe",
+        WORKSPACE_ROOT / "studio" / "windows" / "TriuneStudio.Windows" / "bin" / "Release" / "net10.0-windows" / "TriuneStudio.exe",
+    )
+    native_studio_exe = next((path for path in native_studio_candidates if path.is_file()), studio_bat)
 
     # Create studio/TriuneStudio.sh for Linux/macOS
     sh_content = f"""#!/usr/bin/env bash
@@ -360,7 +396,7 @@ fi
 $WshShell = New-Object -comObject WScript.Shell
 $DesktopPath = [Environment]::GetFolderPath('Desktop')
 $Shortcut = $WshShell.CreateShortcut("$DesktopPath\\Triune Studio.lnk")
-$Shortcut.TargetPath = "{studio_bat}"
+$Shortcut.TargetPath = "{native_studio_exe}"
 $Shortcut.WorkingDirectory = "{WORKSPACE_ROOT}"
 $Shortcut.Description = "Triune Studio - AI Engine and Visual Research IDE"
 $Shortcut.Save()
@@ -402,7 +438,15 @@ def verify_installation(py_bin: Path, hw: HardwareProfile) -> bool:
     print(f"\n{BOLD}Verifying Subsystems:{RESET}")
 
     # 1. Python Environment Check
-    log_info(f"Python Runtime: {sys.version.split()[0]} ({platform.architecture()[0]})")
+    try:
+        target_python = subprocess.run(
+            [str(py_bin), "-c", "import platform,sys; print(sys.version.split()[0], platform.architecture()[0])"],
+            capture_output=True, text=True, timeout=5.0,
+        )
+        runtime_description = target_python.stdout.strip() if target_python.returncode == 0 else "unavailable"
+    except (OSError, subprocess.SubprocessError):
+        runtime_description = "unavailable"
+    log_info(f"Python Runtime: {runtime_description}")
 
     # 2. PyTorch & GPU
     chk_code = (
@@ -413,18 +457,15 @@ def verify_installation(py_bin: Path, hw: HardwareProfile) -> bool:
     res = subprocess.run([str(py_bin), "-c", chk_code], capture_output=True, text=True)
     if "TORCH_OK" in res.stdout:
         log_success(f"PyTorch Engine: {res.stdout.strip()}")
-    else:
-        if hw.is_windows and hw.wsl_python_path:
-            chk_wsl = subprocess.run(
-                ["wsl.exe", "-e", hw.wsl_python_path, "-c", "import torch; print(torch.__version__, 'CUDA:', torch.cuda.is_available(), torch.cuda.get_device_name(0))"],
-                capture_output=True, text=True, timeout=5.0
+        if hw.has_nvidia and "CUDA: True" not in res.stdout:
+            log_error(
+                "An NVIDIA GPU was detected, but the native Studio Python environment has no CUDA-enabled PyTorch. "
+                "Local inference will run on CPU; repair PyTorch with the matching CUDA wheel before expecting GPU speed."
             )
-            if chk_wsl.returncode == 0:
-                log_success(f"PyTorch Engine (WSL2 GPU Bridge): {chk_wsl.stdout.strip()}")
-            else:
-                log_success(f"PyTorch Engine: Configured via WSL2 GPU Bridge ({hw.gpu_name})")
-        else:
-            log_warning("PyTorch not present in local python (Studio will run in Host UI Mode)")
+            all_ok = False
+    else:
+        log_error("PyTorch is not present in the native Studio Python environment. Local inference is unavailable.")
+        all_ok = False
 
     # 3. Studio FastAPI & Server
     srv_code = "from triune.api.server import HAS_FASTAPI, create_app; assert HAS_FASTAPI; print('SERVER_OK')"
@@ -452,7 +493,7 @@ def verify_installation(py_bin: Path, hw: HardwareProfile) -> bool:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Triune Studio Comprehensive Automated Installer")
     parser.add_argument("--venv", default="studio/studio_env", help="Target virtual environment directory (default: studio/studio_env)")
-    parser.add_argument("--cuda", default="auto", choices=["auto", "12.6", "12.4", "12.1", "11.8", "cpu"], help="Target CUDA version")
+    parser.add_argument("--cuda", default="auto", choices=["auto", "13.2", "13.0", "12.6", "12.4", "12.1", "11.8", "cpu"], help="Target CUDA version")
     parser.add_argument("--skip-torch", action="store_true", help="Skip PyTorch installation")
     parser.add_argument("--no-launch", action="store_true", help="Do not launch Studio after install")
     parser.add_argument("--verify", action="store_true", help="Only verify existing environment health")

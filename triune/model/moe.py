@@ -55,7 +55,8 @@ class MoE_FFN(nn.Module):
         self.router = nn.Linear(dim, num_experts)
         self.register_buffer('expert_bias', torch.zeros(num_experts))
         self.register_buffer('expert_load_ratio', torch.ones(num_experts))
-        self.last_centroids = None
+        self.register_buffer('last_centroids', torch.zeros(num_experts, dim), persistent=False)
+        self.centroid_ema = CENTROID_EMA
         self.last_counts = None
         self.last_requested_counts = None
         self.last_accepted_counts = None
@@ -98,7 +99,7 @@ class MoE_FFN(nn.Module):
 
         if self.shared_expert:
             shared_out = self.shared(flat_x)
-            out = out + self.shared_scale * shared_out
+            out = out + (self.shared_scale * shared_out).to(out.dtype)
 
         for k in range(self.top_k):
             idx_k = flat_idx[:, k]
@@ -134,7 +135,7 @@ class MoE_FFN(nn.Module):
                     expert_output = expert_output[:orig_tokens]
 
                 # Fix C-1: out-of-place to preserve autograd graph
-                out = out.index_add(0, indices, expert_output * val_k_keep.unsqueeze(-1))
+                out = out.index_add(0, indices, (expert_output * val_k_keep.unsqueeze(-1)).to(out.dtype))
 
         requested_counts = torch.bincount(flat_idx.flatten(), minlength=self.num_experts)
         dropped_counts = (requested_counts - accepted_counts).clamp_min(0)
@@ -172,16 +173,22 @@ class MoE_FFN(nn.Module):
         self.last_dropped_counts = result.dropped_counts.detach()
         self.last_target = target
 
-        # Centroids must use accepted assignments only (Phase 8)
-        centroids = []
+        # Centroids tracking with exponential moving average (CENTROID_EMA)
+        ema_decay = getattr(self, "centroid_ema", CENTROID_EMA)
+        if self.last_centroids is None or self.last_centroids.device != flat_x.device or self.last_centroids.shape != (self.num_experts, self.dim):
+            self.last_centroids = torch.zeros(self.num_experts, self.dim, device=flat_x.device, dtype=flat_x.dtype)
+
         for expert_idx in range(self.num_experts):
             mask = (result.indices == expert_idx) & result.accepted_mask
             token_indices = mask.any(dim=1).nonzero(as_tuple=True)[0]
             if token_indices.numel() > 0:
-                centroids.append(flat_x[token_indices].mean(dim=0))
-            else:
-                centroids.append(torch.zeros(self.dim, device=flat_x.device, dtype=flat_x.dtype))
-        self.last_centroids = torch.stack(centroids)
+                batch_centroid = flat_x[token_indices].mean(dim=0).detach()
+                curr_centroid = self.last_centroids[expert_idx]
+                if curr_centroid.norm() < 1e-6:
+                    self.last_centroids[expert_idx] = batch_centroid
+                else:
+                    self.last_centroids[expert_idx] = ema_decay * curr_centroid + (1.0 - ema_decay) * batch_centroid
+            # If no tokens accepted this batch, retain the previous EMA centroid (do not zero out)
 
     @torch.no_grad()
     def step_bias(self):

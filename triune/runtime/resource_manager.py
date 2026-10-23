@@ -259,26 +259,45 @@ class DynamicResourceManager:
         cfg = dict(config)
         total_params, param_memory_gb = cls.calculate_model_size(cfg, model=model)
 
+        use_streaming = cfg.get("streaming", False) or cfg.get("use_layer_streaming", False)
         use_muon = cfg.get("use_muon", True)
-        opt_bytes_factor = 0.5 if use_muon else 0.8
-        optimizer_memory_gb = param_memory_gb * opt_bytes_factor
-
-        cuda_overhead_gb = 0.6  # PyTorch CUDA context + cuBLAS workspace
-        gradient_memory_gb = param_memory_gb * 0.5  # Checkpointed/active gradients
-        baseline_static_gb = param_memory_gb + optimizer_memory_gb + gradient_memory_gb + cuda_overhead_gb
-
-        initial_batch = cfg.get("batch_size", 2)
-        initial_accum = cfg.get("grad_accum_steps", 4)
-        target_effective_batch = initial_batch * initial_accum
-        seq_len = cfg.get("seq_len", 256)
         num_layers = cfg.get("num_layers", 24)
         hidden_dim = cfg.get("hidden_dim", 1536)
         num_experts = cfg.get("num_experts", 8)
+        seq_len = cfg.get("seq_len", 256)
+        initial_batch = cfg.get("batch_size", 2)
+        initial_accum = cfg.get("grad_accum_steps", 4)
+        target_effective_batch = initial_batch * initial_accum
 
-        # Activation per sample (with gradient checkpointing)
-        act_per_sample_bytes = num_layers * seq_len * hidden_dim * 2
-        act_per_sample_gb = act_per_sample_bytes / (1024 ** 3)
-        activation_memory_gb = initial_batch * act_per_sample_gb
+        if use_streaming:
+            # Layer Streaming Architecture:
+            # Persistent on GPU: Embeddings, router, exits, norms (~10-15% of total params)
+            # Active on GPU: 1 transformer layer (+ 1 prefetched layer buffer)
+            # Master parameters & optimizer state reside on host CPU!
+            gpu_persistent_params = total_params * 0.12
+            single_layer_params = (total_params * 0.88) / max(1, num_layers)
+            staged_layer_params = single_layer_params * 2.0  # active layer + prefetch buffer
+
+            bytes_per_param_gpu = 1.0 if cfg.get("use_fp8") else (0.5 if cfg.get("use_fp4") else 2.0)
+            gpu_weight_memory_gb = ((gpu_persistent_params + staged_layer_params) * bytes_per_param_gpu) / (1024 ** 3)
+            # In streaming, optimizer state resides on CPU RAM, not GPU VRAM!
+            optimizer_memory_gb = 0.05  # tiny staging buffer for active layer update
+            gradient_memory_gb = (staged_layer_params * 2.0) / (1024 ** 3)  # local layer gradients before D2H async
+            cuda_overhead_gb = 0.4
+            baseline_static_gb = gpu_weight_memory_gb + optimizer_memory_gb + gradient_memory_gb + cuda_overhead_gb
+            act_per_sample_bytes = seq_len * hidden_dim * 2 * 2  # per-layer staged activations
+            act_per_sample_gb = act_per_sample_bytes / (1024 ** 3)
+            activation_memory_gb = initial_batch * act_per_sample_gb
+        else:
+            opt_bytes_factor = 0.5 if use_muon else 0.8
+            optimizer_memory_gb = param_memory_gb * opt_bytes_factor
+            cuda_overhead_gb = 0.6  # PyTorch CUDA context + cuBLAS workspace
+            gradient_memory_gb = param_memory_gb * 0.5  # Checkpointed/active gradients
+            baseline_static_gb = param_memory_gb + optimizer_memory_gb + gradient_memory_gb + cuda_overhead_gb
+            # Activation per sample across all layers (with gradient checkpointing)
+            act_per_sample_bytes = num_layers * seq_len * hidden_dim * 2
+            act_per_sample_gb = act_per_sample_bytes / (1024 ** 3)
+            activation_memory_gb = initial_batch * act_per_sample_gb
 
         estimated_total_gb = baseline_static_gb + activation_memory_gb
         headroom_gb = safe_budget_gb - estimated_total_gb
@@ -491,15 +510,17 @@ class DynamicResourceManager:
         )
 
     @staticmethod
-    def safe_to_device(
+    def bulk_to_device(
         model: nn.Module,
         device: torch.device,
         dtype: torch.dtype = torch.bfloat16,
         force: bool = False,
         safety_ceiling_pct: float = 0.92,
     ) -> nn.Module:
-        """Safely transfers model components to GPU layer-by-layer with memory checks.
+        """Staged bulk loader that moves all model components onto GPU with VRAM ceiling checks.
 
+        NOTE: For streaming execution where only 1 layer resides in GPU VRAM at a time,
+        use `triune.runtime.engine.LayerStreamingEngine` instead of this bulk loader.
         If force=True, allows CUDA to load layers without pre-emptive ceiling checks.
         """
         if device.type != "cuda" or not torch.cuda.is_available():
@@ -553,3 +574,6 @@ class DynamicResourceManager:
             gc.collect()
             torch.cuda.empty_cache()
             raise
+
+    # Backwards compatibility alias
+    safe_to_device = bulk_to_device

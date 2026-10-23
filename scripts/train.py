@@ -119,7 +119,7 @@ def _checkpoint_run_id(path: Path | None) -> str | None:
     if path is None or not path.is_file():
         return None
     try:
-        return torch.load(path, map_location="cpu", weights_only=False).get("wandb_run_id")
+        return torch.load(path, map_location="cpu", weights_only=True).get("wandb_run_id")
     except (OSError, RuntimeError, KeyError):
         return None
 

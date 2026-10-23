@@ -15,7 +15,7 @@ except ImportError:
     AdamW8bit = None
 
 class CentroidSteerOptimizer(torch.optim.Optimizer):
-    def __init__(self, model, lr, betas, weight_decay,
+    def __init__(self, model, lr=defaults.LR, betas=defaults.BETAS, weight_decay=defaults.WEIGHT_DECAY,
                  rank=defaults.GALORE_RANK, update_gap=defaults.GALORE_UPDATE_GAP,
                  steer_scale=defaults.STEER_SCALE,
                  expert_lr=defaults.GALORE_LR, expert_betas=defaults.GALORE_BETAS,
@@ -177,6 +177,11 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                 orig_params = group['params']
                 group['params'] = matching
                 try:
+                    for p in matching:
+                        if p in self.base_optimizer.state:
+                            st = self.base_optimizer.state[p]
+                            if "exp_avg" not in st or "exp_avg_sq" not in st:
+                                st.clear()
                     self.base_optimizer.step()
                 finally:
                     group['params'] = orig_params
@@ -215,28 +220,45 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
             state = group['state']
             m, n = grad.shape
 
-            is_initial = (group['projection'] is None)
-            if (self.step_count - group['proj_step']) >= self.update_gap or is_initial:
+            if group['projection'] is None:
+                rank = min(self.rank, m, n)
+                if m >= n:
+                    group['projection_side'] = 'left'
+                    # QR-based orthogonal initialization is unsupported for
+                    # CPU bfloat16 and is less stable in low precision. Build
+                    # the small projection in fp32, then cast to the gradient
+                    # dtype used by the optimizer update.
+                    init_p = torch.empty(m, rank, device=grad.device, dtype=torch.float32)
+                    torch.nn.init.orthogonal_(init_p)
+                    group['projection'] = init_p.to(dtype=grad.dtype)
+                else:
+                    group['projection_side'] = 'right'
+                    init_p = torch.empty(n, rank, device=grad.device, dtype=torch.float32)
+                    torch.nn.init.orthogonal_(init_p)
+                    group['projection'] = init_p.to(dtype=grad.dtype)
+                state['momentum'] = None
+                state['variance'] = None
+                state['step'] = 0
+                group['last_c_orth'] = None
+            elif (self.step_count - group['proj_step']) >= self.update_gap:
                 svd_device = grad.device
                 grad_fp32 = grad.to(device=svd_device, non_blocking=True).float()
                 U, S, V = torch.svd_lowrank(grad_fp32, q=min(self.rank + 10, m, n), niter=2)
                 rank = min(self.rank, m, n)
-                
+
                 if m >= n:
                     group['projection_side'] = 'left'
                     group['projection'] = U[:, :rank].to(device=grad.device, dtype=grad.dtype).contiguous()
                 else:
                     group['projection_side'] = 'right'
                     group['projection'] = V[:, :rank].to(device=grad.device, dtype=grad.dtype).contiguous()
-                    
+
                 del grad_fp32, U, S, V
-                if svd_device.type == "cuda":
-                    torch.cuda.empty_cache()
-                if not is_initial:
-                    group['proj_step'] = self.step_count
+                group['proj_step'] = self.step_count
                 state['momentum'] = None
                 state['variance'] = None
                 state['step'] = 0
+                group['last_c_orth'] = None
 
             proj = group['projection'].to(device=grad.device, dtype=grad.dtype)
             side = group.get('projection_side', 'left')
@@ -265,6 +287,11 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                     c_res_norm = c_res.norm()
                     if c_res_norm > 1e-8:
                         c_orth = (c_res / c_res_norm).to(device=proj.device, dtype=proj.dtype)
+                        last_c = group.get('last_c_orth')
+                        if last_c is not None and last_c.shape == c_orth.shape and last_c.device == c_orth.device:
+                            if torch.dot(c_orth.view(-1), last_c.view(-1)) < 0:
+                                c_orth = -c_orth
+                        group['last_c_orth'] = c_orth.detach()
                         if hasattr(module, 'expert_load_ratio') and expert_idx < module.expert_load_ratio.size(0):
                             # Fix H-6: Replace .item() with tensor ops to avoid CPU-GPU sync
                             load_r = module.expert_load_ratio[expert_idx]
@@ -280,6 +307,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
             if not steer_applied:
                 zero_vec = torch.zeros(m if side == 'left' else n, 1, dtype=proj.dtype, device=proj.device)
                 proj_aug = torch.cat([proj, zero_vec], dim=1)
+                group['last_c_orth'] = None
 
             if side == 'left':
                 g_lr = proj_aug.T @ grad

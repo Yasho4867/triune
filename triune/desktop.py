@@ -53,7 +53,7 @@ def _wait_for_server(url: str, timeout: float = 15.0) -> bool:
 def _is_triune_server_alive(port: int) -> bool:
     """Check if an active Triune Studio server is responding on this port."""
     try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/v1/system/diagnostics", timeout=1.0) as resp:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz", timeout=1.0) as resp:
             if resp.status == 200:
                 return True
     except Exception:
@@ -126,7 +126,7 @@ def _start_fallback_http_server(directory: Path, port: int) -> None:
     t.start()
 
 
-def launch_desktop_app(port: int = 8000, use_browser: bool = False) -> None:
+def launch_desktop_app(port: int = 8000, use_browser: bool = False, native_host: bool = False) -> None:
     """Launch embedded Triune Studio API server and open as a native desktop application window."""
     workspace_root = Path(__file__).resolve().parent.parent
     studio_src = workspace_root / "studio" / "src"
@@ -134,6 +134,14 @@ def launch_desktop_app(port: int = 8000, use_browser: bool = False) -> None:
     # Check if a Triune Studio server is already alive on this port
     server_already_running = False
     if _is_port_in_use(port):
+        if native_host:
+            # The native shell must start the backend with its current runtime
+            # environment (including the Windows credential-store bridge).
+            # Reusing an old API process here makes UI updates appear active
+            # while operations such as BYOK save still run stale code.
+            raise RuntimeError(
+                f"Studio port {port} is already in use. Close the existing Studio window or choose another port, then retry."
+            )
         if _is_triune_server_alive(port):
             print(f"[Studio] Connected to existing Triune Studio backend on http://127.0.0.1:{port}/")
             server_already_running = True
@@ -175,10 +183,25 @@ def launch_desktop_app(port: int = 8000, use_browser: bool = False) -> None:
         elif wsl_py:
             # Windows host bridging to high-performance WSL2 GPU engine
             wsl_ws = _to_wsl_path(workspace_root)
+            windows_python = _to_wsl_path(Path(sys.executable))
             print(f"[Studio] Hardware Bridge: Launching backend in WSL2 with GPU acceleration ({wsl_py})...")
+            # The API and model engine run in WSL, but user credentials belong in
+            # the Windows user's Credential Manager. Pass the already-provisioned
+            # Windows Studio interpreter to the WSL backend as a vault bridge;
+            # no Linux keyring package or desktop keyring daemon is required.
+            wsl_startup = (
+                "import os,sys; "
+                f"os.environ['TRIUNE_WINDOWS_PYTHON']={windows_python!r}; "
+                f"sys.path.insert(0, {wsl_ws!r}); "
+                f"from triune.api import run_server; run_server(host='127.0.0.1', port={port})"
+            )
             wsl_cmd = [
                 "wsl.exe", "-e", wsl_py, "-c",
-                f"import sys; sys.path.insert(0, '{wsl_ws}'); from triune.api import run_server; run_server(host='0.0.0.0', port={port})"
+                # WSL localhost forwarding exposes this guest-loopback service
+                # to the Windows host without opening it on the LAN. A wildcard
+                # bind is intentionally rejected by run_server unless TLS and
+                # an API token are configured.
+                wsl_startup
             ]
             try:
                 api_proc = subprocess.Popen(
@@ -219,11 +242,59 @@ def launch_desktop_app(port: int = 8000, use_browser: bool = False) -> None:
     # 2. Wait for server to be responsive BEFORE opening browser/webview
     if not server_already_running:
         print(f"[Studio] Waiting for server to initialize on {url}...")
-        server_ready = _wait_for_server(url, timeout=15.0)
+        # The root path can return HTTP 200 from an unrelated local service if
+        # another process wins a port-allocation race. Require Triune's own API
+        # health route before opening the desktop window.
+        health_url = f"http://127.0.0.1:{port}/healthz"
+        # WSL may need to wake its VM and import the CUDA/PyTorch stack on a
+        # cold start. The native Windows shell allows longer than this same
+        # deadline so it can display the backend's real startup error if it
+        # exits, instead of killing a healthy but still initializing process.
+        startup_timeout = 90.0 if wsl_py else 30.0
+        server_ready = _wait_for_server(health_url, timeout=startup_timeout)
         if server_ready:
             print(f"[Studio] Server ready and responsive on {url}!")
         else:
-            print(f"[Studio] Notice: Server still warming up; proceeding with window launch.")
+            if api_proc and api_proc.poll() is None:
+                api_proc.terminate()
+                try:
+                    api_proc.wait(timeout=3.0)
+                except subprocess.TimeoutExpired:
+                    api_proc.kill()
+            raise RuntimeError(
+                f"Triune Studio backend did not become ready at {url} within {startup_timeout:g} seconds. "
+                "The desktop window was not opened; check the backend startup error above."
+            )
+
+    # A native Windows WPF host embeds the existing Studio UI in WebView2. Keep
+    # the same backend selection above (including the WSL GPU bridge), but leave
+    # window ownership to that host instead of opening a second browser window.
+    if native_host:
+        print(f"[Studio] Backend ready for native desktop host at {url}.")
+        consecutive_health_failures = 0
+        try:
+            while True:
+                if api_proc and api_proc.poll() is not None:
+                    raise RuntimeError("Triune backend process exited unexpectedly.")
+                if not _is_triune_server_alive(port):
+                    consecutive_health_failures += 1
+                    if consecutive_health_failures >= 5:
+                        raise RuntimeError(
+                            "Triune backend failed five consecutive health checks; restarting the desktop backend supervisor."
+                        )
+                else:
+                    consecutive_health_failures = 0
+                time.sleep(1.0)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            if api_proc and api_proc.poll() is None:
+                api_proc.terminate()
+                try:
+                    api_proc.wait(timeout=3.0)
+                except subprocess.TimeoutExpired:
+                    api_proc.kill()
+        return
 
     # 3. Launch native desktop window via PyWebView
     if not use_browser:

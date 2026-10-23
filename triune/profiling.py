@@ -31,7 +31,7 @@ def profile_model(
     state_dict = None
     checkpoint_path = Path(checkpoint_path)
     if checkpoint_path.is_file():
-        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
         state_dict = checkpoint["model_state"]
         saved = checkpoint.get("config", {})
         config = build_config({

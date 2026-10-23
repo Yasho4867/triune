@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import csv
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import torch
@@ -119,9 +120,6 @@ class TriuneFineTuner:
 
         # Prepare tokens
         token_batches: List[torch.Tensor] = []
-        vocab_size = getattr(self.model, "vocab_size", 32000)
-        if hasattr(self.model, "config") and hasattr(self.model.config, "vocab_size"):
-            vocab_size = self.model.config.vocab_size
 
         if dataset_path and Path(dataset_path).is_file():
             dpath = Path(dataset_path)
@@ -134,9 +132,42 @@ class TriuneFineTuner:
                             continue
                         try:
                             item = json.loads(line)
-                            raw_texts.append(item.get("text", item.get("prompt", "") + " " + item.get("completion", "")))
+                            if "instruction" in item:
+                                # Alpaca format: instruction, input, output
+                                inp = f"\nContext: {item['input']}" if item.get("input") else ""
+                                formatted = f"User: {item['instruction']}{inp}\n\nAssistant: {item.get('output', '')}"
+                                raw_texts.append(formatted)
+                            elif "messages" in item and isinstance(item["messages"], list):
+                                # ShareGPT / OpenAI Chat format
+                                turns = []
+                                for m in item["messages"]:
+                                    role = "User" if m.get("role") in ("user", "human") else "Assistant"
+                                    turns.append(f"{role}: {m.get('content', '')}")
+                                raw_texts.append("\n\n".join(turns))
+                            elif "prompt" in item and "completion" in item:
+                                raw_texts.append(f"User: {item['prompt']}\n\nAssistant: {item['completion']}")
+                            else:
+                                raw_texts.append(item.get("text", str(item)))
                         except Exception:
                             raw_texts.append(line)
+            elif dpath.suffix.lower() == ".csv":
+                with open(dpath, "r", encoding="utf-8-sig", newline="") as f:
+                    reader = csv.DictReader(f)
+                    if not reader.fieldnames:
+                        raise ValueError(f"CSV dataset has no header row: {dpath}")
+                    text_column = next(
+                        (column for column in ("text", "content", "story", "prompt") if column in reader.fieldnames),
+                        None,
+                    )
+                    if text_column is None:
+                        raise ValueError(
+                            f"CSV dataset needs one of these text columns: text, content, story, or prompt ({dpath})."
+                        )
+                    raw_texts = [
+                        str(row.get(text_column) or "").strip()
+                        for row in reader
+                        if str(row.get(text_column) or "").strip()
+                    ]
             else:
                 with open(dpath, "r", encoding="utf-8") as f:
                     raw_texts = [line.strip() for line in f if line.strip()]
@@ -152,12 +183,15 @@ class TriuneFineTuner:
                     except Exception:
                         pass
 
+            if raw_texts and tokenizer is None:
+                raise RuntimeError(
+                    "A Triune tokenizer is required for LoRA fine-tuning. "
+                    "Load triune_tokenizer.json or tokenizer.json; refusing to substitute hashed token IDs."
+                )
+
             all_ids: List[int] = []
             for txt in raw_texts:
-                if tokenizer:
-                    all_ids.extend(tokenizer.encode(txt).ids)
-                else:
-                    all_ids.extend([hash(w) % (vocab_size - 1) + 1 for w in txt.split()])
+                all_ids.extend(tokenizer.encode(txt).ids)
 
             if len(all_ids) > seq_len + 1:
                 num_chunks = len(all_ids) // (seq_len + 1)
@@ -166,9 +200,10 @@ class TriuneFineTuner:
                     token_batches.append(torch.tensor(chunk, dtype=torch.long))
 
         if not token_batches:
-            # Generate synthetic token batches for training if no data file or small corpus
-            for _ in range(max(4, epochs * 2)):
-                token_batches.append(torch.randint(1, min(vocab_size, 4000), (seq_len + 1,), dtype=torch.long))
+            raise RuntimeError(
+                "The selected fine-tuning dataset produced no complete training sequences. "
+                f"Verify the file and tokenizer, and ensure it contains more than {seq_len} tokens."
+            )
 
         print(f"[LoRA Fine-Tuning] Starting: {len(token_batches)} batches -> {output_dir}")
         self.model.train()

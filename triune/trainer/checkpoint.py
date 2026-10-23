@@ -156,7 +156,7 @@ def save_best(trainer, engine, step: int, loss: float) -> Path:
 
 def load_checkpoint(trainer, path: str | Path, *, load_optimizer: bool) -> dict:
     # Fix H-1: always load to CPU first; streaming engine handles GPU staging
-    checkpoint = torch.load(path, map_location="cpu", weights_only=False)
+    checkpoint = torch.load(path, map_location="cpu", weights_only=True)
 
     # Schema-v2 Architecture & Semantic fingerprint verification
     saved_config = checkpoint.get("config", {})

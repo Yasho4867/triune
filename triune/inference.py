@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import torch
-import torch.nn.functional as F
 
 from .configs.config import build_config
 from .data.tokenizer import load_tokenizer
@@ -26,7 +25,7 @@ def load_checkpoint_model(
     if pad_token_id is None or eos_token_id is None:
         raise ValueError("Tokenizer must define [PAD] and [SEP] special tokens")
 
-    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
     state_dict = checkpoint["model_state"]
     if any(key.startswith("_orig_mod.") for key in state_dict):
         state_dict = {key.removeprefix("_orig_mod."): value for key, value in state_dict.items()}
@@ -57,50 +56,94 @@ def generate_response(
     eos_token_id: int,
     force_depth: int | None = None,
     temperature: float = 0.7,
+    top_k: int = 50,
     repetition_penalty: float = 1.1,
     max_new_tokens: int = 100,
-) -> str:
+    prompt_is_formatted: bool = False,
+    cancel_event=None,
+    return_info: bool = False,
+) -> str | dict[str, object]:
     """Generate a response using the model's established depth-routing options."""
-    if temperature <= 0:
-        raise ValueError("temperature must be greater than zero")
-    if repetition_penalty < 0:
-        raise ValueError("repetition_penalty must be non-negative")
+    if temperature < 0:
+        raise ValueError("temperature must be non-negative")
+    if top_k <= 0:
+        raise ValueError("top_k must be a positive integer")
+    if repetition_penalty <= 0:
+        raise ValueError("repetition_penalty must be greater than zero")
     if max_new_tokens <= 0:
         raise ValueError("max_new_tokens must be positive")
-    formatted = f"User: {prompt}\nAssistant:"
-    ids = torch.tensor(tokenizer.encode(formatted).ids, dtype=torch.long, device=device).unsqueeze(0)
-    generated, seen = [], set()
-    
-    # Process full prompt once, initialize cache
-    cache = model.init_cache(batch_size=1)
-    logits, cache = model(ids, cache=cache, force_depth=force_depth)
-    
-    for _ in range(max_new_tokens):
-        next_logits = logits[0, -1].float() / temperature
-        
-        # Standard multiplicative repetition penalty
-        for token_id in seen:
-            if next_logits[token_id] > 0:
-                next_logits[token_id] /= repetition_penalty
+    import time
+
+    if max_new_tokens <= 0:
+        raise ValueError("max_new_tokens must be positive")
+    formatted = prompt if prompt_is_formatted else f"User: {prompt}\nAssistant:"
+    token_ids = tokenizer.encode(formatted).ids
+    if not token_ids:
+        raise ValueError("The configured tokenizer returned no prompt tokens")
+    vocab_size = tokenizer.get_vocab_size()
+    if any(token_id < 0 or token_id >= vocab_size for token_id in token_ids):
+        raise ValueError("Tokenizer prompt IDs exceed the active model vocabulary")
+    ids = torch.tensor(token_ids, dtype=torch.long, device=device).unsqueeze(0)
+    generated: list[int] = []
+    seen = torch.zeros(vocab_size, dtype=torch.bool, device=device)
+    cache = model.init_cache(batch_size=1) if hasattr(model, "init_cache") else None
+    started = time.perf_counter()
+    with torch.inference_mode():
+        if cache is not None:
+            logits, cache = model(ids, cache=cache, force_depth=force_depth)
+        else:
+            logits, _ = model(ids, force_depth=force_depth)
+        # A recurrent cache belongs to one exit path; keep the prompt's choice
+        # stable through decoding instead of switching into stale layer states.
+        decode_depth = force_depth
+        if decode_depth is None and getattr(model, "last_depth_choice", None) is not None:
+            decode_depth = int(model.last_depth_choice[0].item())
+
+        cancelled = False
+        for _ in range(min(max_new_tokens, 8192)):
+            if cancel_event is not None and cancel_event.is_set():
+                cancelled = True
+                break
+            next_logits = logits[0, -1].float()
+            if temperature > 0:
+                next_logits = next_logits / temperature
+            penalized = torch.where(
+                next_logits > 0,
+                next_logits / repetition_penalty,
+                next_logits * repetition_penalty,
+            )
+            next_logits = torch.where(seen, penalized, next_logits)
+            if 0 <= pad_token_id < next_logits.numel():
+                next_logits[pad_token_id] = float("-inf")
+            effective_top_k = min(top_k, next_logits.numel())
+            threshold = torch.topk(next_logits, effective_top_k).values[-1]
+            next_logits[next_logits < threshold] = float("-inf")
+            next_id = (
+                int(torch.argmax(next_logits).item())
+                if temperature == 0
+                else int(torch.multinomial(torch.softmax(next_logits, dim=-1), 1).item())
+            )
+            if next_id == eos_token_id:
+                break
+            generated.append(next_id)
+            seen[next_id] = True
+            next_input = torch.tensor([[next_id]], dtype=torch.long, device=device)
+            if cache is not None:
+                logits, cache = model(next_input, cache=cache, force_depth=decode_depth)
             else:
-                next_logits[token_id] *= repetition_penalty
-                
-        # Top-k filtering
-        top_k = min(50, next_logits.size(-1))
-        indices_to_remove = next_logits < torch.topk(next_logits, top_k)[0][-1]
-        next_logits[indices_to_remove] = float('-inf')
-        
-        next_logits[pad_token_id] = -torch.inf
-        
-        probs = torch.softmax(next_logits, dim=-1)
-        next_id = torch.multinomial(probs, num_samples=1).item()
-        if next_id == eos_token_id:
-            break
-        generated.append(next_id)
-        seen.add(next_id)
-        
-        # Feed ONLY the new token with cache — O(1) per step
-        next_input = torch.tensor([[next_id]], dtype=torch.long, device=device)
-        logits, cache = model(next_input, cache=cache, force_depth=force_depth)
-        
-    return tokenizer.decode(generated)
+                ids = torch.cat((ids, next_input), dim=1)
+                logits, _ = model(ids, force_depth=decode_depth)
+
+    elapsed = max(time.perf_counter() - started, 1e-3)
+    text = tokenizer.decode(generated, skip_special_tokens=True).strip()
+    if not return_info:
+        return text
+    route_name = "AUTO" if decode_depth is None else ("REFLEX", "LIMBIC", "CORTEX")[decode_depth]
+    return {
+        "text": text,
+        "tokens_count": len(generated),
+        "tokens_per_sec": len(generated) / elapsed,
+        "latency_ms": round(elapsed * 1000, 1),
+        "route": route_name,
+        "cancelled": cancelled,
+    }

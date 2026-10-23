@@ -45,6 +45,9 @@ unsloth_compiled_cache/
 # IDE
 .vscode/
 .idea/
+studio/windows/**/bin/
+studio/windows/**/obj/
+studio/windows/publish/
 
 # Logs
 *.log

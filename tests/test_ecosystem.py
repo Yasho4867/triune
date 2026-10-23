@@ -129,9 +129,8 @@ class TestTriuneEcosystem(unittest.TestCase):
             script_content = '''
 from triune.plugins.registry import register_node
 
-@register_node("DynamicEchoNode", category="Plugin", description="Dynamic test node")
-def dynamic_echo_handler(inputs: dict) -> dict:
-    val = inputs.get("val", 0)
+@register_node("DynamicEchoNode", category="Plugin", description="Dynamic test node", inputs=["val"], outputs=["result"])
+def dynamic_echo_handler(val: int) -> dict:
     return {"result": val * 10}
 '''
             script_path.write_text(script_content, encoding="utf-8")
@@ -157,6 +156,112 @@ def dynamic_echo_handler(inputs: dict) -> dict:
             self.assertEqual(out.get("result"), 70)
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def test_sandbox_dunder_escape_and_execute_function_guards(self):
+        """Verify PythonSandbox blocks dunder attribute escapes and guards execute_function."""
+        sandbox = PythonSandbox(timeout=2)
+
+        # Classic Python __builtins__ escape via object.__subclasses__()
+        escape_code = "x = ().__class__.__base__.__subclasses__()"
+        res = sandbox.execute_code(escape_code)
+        self.assertFalse(res.get("success", True))
+        self.assertIn("dunder", res.get("error", "").lower())
+
+        # Allowed standard library math import works
+        ok_res = sandbox.execute_code("import math\nval = int(math.sqrt(144))")
+        self.assertTrue(ok_res.get("success"))
+        self.assertEqual(ok_res.get("val"), 12)
+
+        # execute_function rejects functions that import os
+        def bad_fn():
+            import os
+            return os.getcwd()
+
+        fn_res = sandbox.execute_function(bad_fn)
+        self.assertFalse(fn_res.get("success", True))
+
+    def test_module_manager_security_gates(self):
+        """Verify ModuleManager blocks option injection and malicious plugin ASTs."""
+        import tempfile
+        import shutil
+        from pathlib import Path
+        from triune.modules.manager import ModuleManager
+
+        mgr = ModuleManager()
+
+        # 1. Option injection in clone_repository URL / branch
+        bad_url = mgr.clone_repository("--upload-pack=touch /tmp/pwn")
+        self.assertFalse(bad_url["success"])
+        bad_branch = mgr.clone_repository("https://github.com/org/repo.git", branch="--config=evil")
+        self.assertFalse(bad_branch["success"])
+
+        # 2. Option injection in pip install
+        bad_pip = mgr.install_module({"id": "evil-pkg", "package_name": "--index-url=https://evil.example/simple"})
+        self.assertFalse(bad_pip["success"])
+
+        # 3. Malicious plugin with @register_node + import os is blocked by AST gate before exec_module
+        temp_dir = Path(tempfile.mkdtemp(prefix="triune_evil_mod_"))
+        marker_file = temp_dir / "executed_marker.txt"
+        try:
+            evil_py = temp_dir / "evil_node.py"
+            evil_py.write_text(
+                f"import os\n"
+                f"from pathlib import Path\n"
+                f"Path({str(marker_file)!r}).write_text('pwned')\n"
+                f"from triune.plugins.registry import register_node\n"
+                f"@register_node('EvilNode', category='Custom')\n"
+                f"def evil_handler(x): return x\n",
+                encoding="utf-8",
+            )
+            discovered = mgr.discover_and_register_nodes(temp_dir, trusted=True)
+            self.assertEqual(discovered, [])
+            self.assertFalse(marker_file.exists(), "Malicious plugin file must not be executed!")
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def test_dag_model_spec_fidelity_and_failure_reporting(self):
+        """Verify DAG _handle_model_node honors ModelSpec/precision and execute_graph reports failures."""
+        from triune.execution.dag import ExecutionEngine
+        from triune.plugins.registry import register_node
+
+        engine = ExecutionEngine()
+
+        # 1. Model node honors requested architecture & FP8 precision
+        ctx = {}
+        out = engine._handle_model_node(
+            {
+                "id": "m1",
+                "type": "Model",
+                "title": "CustomFP8Model",
+                "config": {
+                    "num_layers": 4,
+                    "hidden_dim": 128,
+                    "num_heads": 4,
+                    "head_dim": 32,
+                    "num_experts": 2,
+                    "use_fp8": True,
+                    "initialize_only": True,
+                },
+            },
+            ctx,
+        )
+        self.assertEqual(out["precision"], "fp8")
+        model = ctx["model"]
+        self.assertEqual(model.num_layers, 4)
+        self.assertEqual(model.hidden_dim, 128)
+        self.assertTrue(model.use_fp8)
+
+        # 2. Plugin failure propagates to graph status == 'failed'
+        @register_node("FailingTestPluginNode", category="Custom", description="Always fails")
+        def failing_plugin(params):
+            raise RuntimeError("Intentional plugin failure")
+
+        graph_res = engine.execute_graph({
+            "nodes": [{"id": "n_fail", "type": "FailingTestPluginNode", "title": "FailingTestPluginNode"}],
+            "edges": [],
+        })
+        self.assertEqual(graph_res["status"], "failed")
+        self.assertEqual(graph_res["failed_node"], "n_fail")
 
 
 if __name__ == "__main__":

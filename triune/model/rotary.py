@@ -6,11 +6,17 @@ from .config import ROPE_MAX_SEQ_LEN
 
 from .config import *
 class RotaryEmbedding(nn.Module):
-    def __init__(self, dim, max_seq_len=ROPE_MAX_SEQ_LEN):
+    def __init__(self, dim, max_seq_len=ROPE_MAX_SEQ_LEN, base=10000.0):
         super().__init__()
+        if dim <= 0 or dim % 2:
+            raise ValueError(f"RoPE dimension must be a positive even number, got {dim}.")
+        base = float(base)
+        if max_seq_len <= 0 or not math.isfinite(base) or base <= 0:
+            raise ValueError("RoPE max_seq_len and base must be positive, with a finite base.")
         self.dim = dim
         self.max_seq_len = max_seq_len
-        inv_freq = 1.0 / (10000 ** (torch.arange(0, dim, 2).float() / dim))
+        self.base = float(base)
+        inv_freq = 1.0 / (self.base ** (torch.arange(0, dim, 2).float() / dim))
         self.register_buffer('inv_freq', inv_freq, persistent=False)
         t = torch.arange(max_seq_len, dtype=torch.float32)
         freqs = torch.einsum('i,j->ij', t, inv_freq)

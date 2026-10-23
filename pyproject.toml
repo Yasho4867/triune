@@ -45,6 +45,8 @@ studio = [
     "uvicorn>=0.22.0",
     "httpx>=0.24.0",
     "pywebview>=4.0.0",
+    "keyring>=25.0.0",
+    "cryptography>=41.0.0",
 ]
 train = [
     "wandb>=0.15.0",
@@ -60,6 +62,8 @@ all = [
     "uvicorn>=0.22.0",
     "httpx>=0.24.0",
     "pywebview>=4.0.0",
+    "keyring>=25.0.0",
+    "cryptography>=41.0.0",
     "wandb>=0.15.0",
     "bitsandbytes>=0.41.0",
     "pytest>=7.0.0",
@@ -70,5 +74,5 @@ triune = "triune.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["triune", "triune.*"]
-exclude = ["tests*", "studio*", "models*", "scripts*", "triune_fast*"]
+include = ["triune", "triune.*", "scripts", "scripts.*"]
+exclude = ["tests*", "studio*", "models*", "triune_fast*"]

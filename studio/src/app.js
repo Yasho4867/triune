@@ -62,8 +62,16 @@
       return { name: p.name || 'port', type: p.type || defaultType, description: p.description || '' };
     });
   };
+  const isPortCompatible = (sourceType, targetType) => {
+    const source = String(sourceType || 'any').toLowerCase();
+    const target = String(targetType || 'any').toLowerCase();
+    if (source === 'any' || target === 'any' || source === target) return true;
+    return (source === 'dataset_stream' && target === 'text') ||
+      (source === 'loss' && ['tensor', 'metrics'].includes(target)) ||
+      (source === 'tensor' && ['loss', 'metrics'].includes(target));
+  };
 
-  // Comprehensive Built-in Node Catalog (30 Architectural, Optimizer & Runtime Components)
+  // Frontend labels/default parameters for nodes executed by the backend registry.
   const BUILTIN_NODE_CATALOG = [
     // Data & Tokenization
     {
@@ -90,8 +98,8 @@
       category: 'Data',
       description: 'Reads local text or JSONL training corpora from disk with sequence chunking.',
       inputs: [],
-      outputs: ['dataset', 'text_samples'],
-      details: 'file_path=data/fineweb_sample.jsonl\nbatch_size=4\nseq_len=64'
+      outputs: ['dataset', 'dataset_stream', 'text_samples', 'text_sample'],
+      details: 'file_path=data/fineweb_sample.jsonl\nbatch_size=4\nseq_len=64\nconfigure_runtime=false'
     },
     {
       name: 'BPETokenizer',
@@ -99,7 +107,7 @@
       category: 'Data',
       description: 'Byte-Pair Encoding tokenizer with 32,000 vocabulary, fast encode/decode, and vocabulary mapping.',
       inputs: ['text'],
-      outputs: ['tokens', 'token_ids'],
+      outputs: ['tokens'],
       details: 'vocab_size=32000\npad_token=[PAD]\neos_token=[EOS]'
     },
     {
@@ -111,52 +119,61 @@
       outputs: ['input_ids', 'targets'],
       details: 'batch_size=4\nseq_len=64\nshuffle=True'
     },
+    {
+      name: 'TrainingStep',
+      title: 'Autograd Training Step',
+      category: 'Evaluation',
+      description: 'Runs one real CLI-equivalent training step through the shared Triune TrainingEngine, including configured routing, balancing, gradient accumulation, clipping, optimizer, and telemetry.',
+      inputs: ['dataset_stream'],
+      outputs: ['step_metrics', 'loss', 'model_handle'],
+      details: 'grad_accum_steps=4\nmax_grad_norm=1.0'
+    },
 
     // Model Architecture & Layers
     {
       name: 'TriuneTransformer',
       title: 'Triune MoE Transformer',
       category: 'Model',
-      description: 'Full Mixture-of-Experts core transformer with Vectorised GLA attention and dynamic hierarchical exit heads.',
-      inputs: ['input_ids'],
-      outputs: ['logits', 'exit_logits', 'cache'],
-      details: 'vocab_size=32000\nhidden_dim=256\nnum_layers=6\nheads=4\nhead_dim=64\nexperts_routed=4\nexperts_shared=1\nuse_fp4=True'
+      description: 'Runs the active Studio model; set use_node_config=true to build a separate graph model.',
+      inputs: ['input_ids', 'model_handle'],
+      outputs: ['logits', 'exit_logits', 'router_logits', 'balance_loss', 'selected_depth', 'model_handle'],
+      details: 'use_node_config=false\nreturn_all_exits=false\nreturn_balance_loss=false\nevaluation_mode=false'
     },
     {
       name: 'VectorisedGLA',
       title: 'Vectorised GLA Attention',
       category: 'Model',
-      description: 'Gated Linear Attention layer with fast parallel training chunks and O(1) recurrent inference state cache.',
+      description: 'Executes Triune Gated Linear Attention on connected hidden states.',
       inputs: ['hidden_states'],
-      outputs: ['attention_out', 'gla_cache'],
-      details: 'hidden_dim=256\nnum_heads=4\nhead_dim=64\ngate_low_rank_dim=16'
+      outputs: ['attention_out'],
+      details: 'num_heads=4'
     },
     {
       name: 'HybridAttention',
       title: 'Hybrid GLA + RoPE Attention',
       category: 'Model',
-      description: 'Vectorized GLA attention combined with Rotary Position Embeddings (RoPE) for long-context numerical stability.',
-      inputs: ['hidden_states', 'rope_cos_sin'],
+      description: 'Executes Triune GLA attention on connected hidden states.',
+      inputs: ['hidden_states'],
       outputs: ['attention_out'],
-      details: 'hidden_dim=256\nnum_heads=4\nuse_rope=True\nrope_max_seq_len=4096'
+      details: 'hidden_dim=256\nnum_heads=4'
     },
     {
       name: 'MoE_FFN',
       title: 'Sparse MoE FFN Layer',
       category: 'Model',
-      description: 'Sparse Mixture-of-Experts FeedForward network with Gumbel-Softmax top-k gating, centroid tracking, and shared expert.',
+      description: 'Executes the configured Triune sparse MoE feed-forward layer on connected hidden states.',
       inputs: ['hidden_states'],
-      outputs: ['moe_out', 'routing_weights', 'centroid_dist'],
-      details: 'num_experts=4\ntop_k=2\nshared_expert=True\ncapacity_multiplier=1.25'
+      outputs: ['moe_out'],
+      details: 'num_experts=4\ntop_k=2\nshared_expert=True'
     },
     {
       name: 'DepthRouter',
       title: 'Hierarchical Depth Router',
       category: 'Model',
-      description: 'Hierarchical Exit Head Router: Reflex (Layer 1), Limbic (Layer 3), and Cortex (Layer 5).',
+      description: 'Runs the Triune three-way depth router and returns selected exit choices and router logits.',
       inputs: ['hidden_states'],
-      outputs: ['exit_choice', 'router_weights'],
-      details: 'reflex_exit_layer=1\nlimbic_exit_layer=3\ncortex_exit_layer=5\ndepth_mode=dynamic\nbalance_loss_weight=0.3\ntarget_depth_dist=[0.34, 0.33, 0.33]'
+      outputs: ['exit_choice', 'router_logits', 'balance_loss'],
+      details: 'target_depth_dist=[0.34, 0.33, 0.33]\ntemperature=1.0'
     },
     {
       name: 'FP8Linear',
@@ -165,16 +182,34 @@
       description: 'Hardware-accelerated FP8 (E4M3) scaled matrix multiplication with dynamic forward/backward scaling.',
       inputs: ['x'],
       outputs: ['linear_out'],
-      details: 'in_features=1536\nout_features=1536\nbias=False\ndtype=fp8_e4m3fn'
+      details: 'bias=False'
     },
     {
       name: 'FP4Linear',
       title: 'NVFP4 Microscaling Linear',
       category: 'Model',
-      description: 'NVFP4 microscaling precision linear layer for Blackwell and Ada Lovelace architectures.',
+      description: 'Runs the Transformer Engine-backed linear layer under the active NVFP4 recipe when available, otherwise the BF16 fallback.',
       inputs: ['x'],
       outputs: ['linear_out'],
-      details: 'in_features=1536\nout_features=1536\nblock_size=16'
+      details: 'in_features=1536\nout_features=1536\nbias=True'
+    },
+    {
+      name: 'TensorInspector',
+      title: 'Tensor Inspector',
+      category: 'Analysis',
+      description: 'Reports real tensor dimensions, device, type, finite values, and numeric statistics.',
+      inputs: ['x'],
+      outputs: ['metrics'],
+      details: ''
+    },
+    {
+      name: 'TokenBatchInspector',
+      title: 'Token Batch Inspector',
+      category: 'Analysis',
+      description: 'Checks an integer token batch before training: dimensions, token count, range, unique IDs, and empty/invalid input.',
+      inputs: ['tokens'],
+      outputs: ['metrics'],
+      details: ''
     },
     {
       name: 'RMSNorm',
@@ -183,7 +218,7 @@
       description: 'Root Mean Square Normalization with custom Triton kernel and epsilon scaling.',
       inputs: ['x'],
       outputs: ['norm_out'],
-      details: 'dim=1536\neps=1e-6'
+      details: 'eps=1e-6'
     },
     {
       name: 'LoRAAdapter',
@@ -192,7 +227,7 @@
       description: 'Parameter-Efficient Low-Rank Adaptation (LoRA) injection layer for fine-tuning.',
       inputs: ['base_layer'],
       outputs: ['adapted_layer'],
-      details: 'rank=16\nalpha=32.0\ndropout=0.05\ntarget_modules=[q_proj, v_proj, out_proj]'
+      details: 'rank=16\nalpha=32.0\ndropout=0.05\ntarget_modules=["q_proj", "v_proj", "out_proj"]'
     },
 
     // Optimizers & Schedulers
@@ -201,8 +236,8 @@
       title: 'CentroidSteer Optimizer',
       category: 'Optimizer',
       description: 'GaLore low-rank SVD projection combined with dynamic centroid steering and orthogonal complement updates.',
-      inputs: ['model_parameters', 'loss'],
-      outputs: ['optimizer_state'],
+      inputs: ['model_handle', 'loss'],
+      outputs: ['optimizer_handle', 'metrics'],
       details: 'lr=0.0004\nbetas=[0.9, 0.95]\nweight_decay=0.01\nsteer_scale=0.20\ngalore_rank=64'
     },
     {
@@ -210,8 +245,8 @@
       title: 'Muon Matrix Optimizer',
       category: 'Optimizer',
       description: 'Newton-Schulz iteration orthogonal matrix momentum optimizer for high-throughput parameter updates.',
-      inputs: ['model_parameters', 'loss'],
-      outputs: ['optimizer_state'],
+      inputs: ['model_handle', 'loss'],
+      outputs: ['optimizer_handle', 'metrics'],
       details: 'lr=0.02\nmomentum=0.95\nns_steps=5'
     },
     {
@@ -219,8 +254,8 @@
       title: 'AdamW Optimizer',
       category: 'Optimizer',
       description: 'Standard AdamW optimizer with decoupled weight decay for 1D parameters, biases, and normalization weights.',
-      inputs: ['model_parameters', 'loss'],
-      outputs: ['optimizer_state'],
+      inputs: ['model_handle', 'loss'],
+      outputs: ['optimizer_handle', 'metrics'],
       details: 'lr=0.0004\nbetas=[0.9, 0.999]\neps=1e-8\nweight_decay=0.01'
     },
     {
@@ -239,16 +274,16 @@
       title: 'Fast Cross-Entropy Loss',
       category: 'Loss',
       description: 'Fused chunked cross-entropy loss function with autograd gradient graph preservation.',
-      inputs: ['logits', 'targets'],
-      outputs: ['loss'],
-      details: 'ignore_index=-100\nchunk_size=2048\nlabel_smoothing=0.0'
+      inputs: ['logits', 'targets', 'balance_loss', 'router_logits'],
+      outputs: ['loss', 'lm_loss'],
+      details: 'ignore_index=-100\nchunk_size=2048\nlabel_smoothing=0.0\nbalance_loss_weight=0.3\nrouter_z_loss_weight=0.001'
     },
     {
       name: 'JointExitLoss',
       title: 'Joint Exit Loss',
       category: 'Loss',
       description: 'Simultaneous multi-exit supervision combining Reflex (Exit 1), Limbic (Exit 2), and Cortex (Exit 3) cross-entropies with custom exit loss scaling.',
-      inputs: ['exit_logits', 'targets'],
+      inputs: ['exit_logits', 'targets', 'z_loss'],
       outputs: ['joint_loss', 'per_exit_loss'],
       details: 'lambda_reflex=0.20\nlambda_limbic=0.30\nlambda_cortex=0.50\nlabel_smoothing=0.0'
     },
@@ -266,9 +301,9 @@
       title: 'Fast RoPE Kernel',
       category: 'Model',
       description: 'Vectorized Rotary Position Embedding with Triton GPU acceleration and rotate_half fallback.',
-      inputs: ['q', 'k', 'cos', 'sin'],
+      inputs: ['q', 'k'],
       outputs: ['q_rot', 'k_rot'],
-      details: 'dim=64\nmax_seq_len=4096\nbase=10000.0'
+      details: 'max_seq_len=4096\nbase=10000.0'
     },
     {
       name: 'FastRMSNorm',
@@ -283,18 +318,18 @@
       name: 'AutoregressiveGenerator',
       title: 'Autoregressive Generator',
       category: 'Model',
-      description: 'O(1) GLA recurrent state-cached autoregressive generator with temperature, top-k/top-p, and repetition penalty.',
-      inputs: ['model', 'tokenizer', 'prompt'],
-      outputs: ['generated_text', 'tokens_per_sec', 'route_taken'],
-      details: 'max_tokens=64\ntemperature=0.7\ntop_k=50\nrepetition_penalty=1.2'
+      description: 'Generates from the connected live model using temperature, top-k sampling, and repetition penalty.',
+      inputs: ['model_handle', 'prompt'],
+      outputs: ['generated_text', 'tokens_per_sec'],
+      details: 'max_tokens=128\ntemperature=0.7\ntop_k=50\nrepetition_penalty=1.2'
     },
     {
       name: 'BYOKChatRouter',
       title: 'BYOK Chat Router',
       category: 'Model',
-      description: 'Multi-provider BYOK (Bring Your Own Key) chat router supporting local Triune weights, Ollama, Anthropic Claude, OpenAI, and DeepSeek.',
-      inputs: ['prompt', 'system_prompt'],
-      outputs: ['response_text', 'provider_telemetry'],
+      description: 'Provider configuration placeholder only; this node does not authenticate or dispatch remote requests.',
+      inputs: ['prompt'],
+      outputs: ['provider_config'],
       details: 'provider=triune-local\nmodel=triune-base\ntemperature=0.7\nmax_tokens=256'
     },
 
@@ -303,37 +338,37 @@
       name: 'GradientAccumulator',
       title: 'Gradient Accumulator',
       category: 'Runtime',
-      description: 'Multi-microbatch gradient accumulator with loss scaling (1/N), D2H asynchronous offloading, and step sync.',
-      inputs: ['loss', 'model', 'optimizer'],
-      outputs: ['accum_status', 'effective_tokens'],
-      details: 'grad_accum_steps=4\nmax_grad_norm=1.0\nsync_frequency=1'
+      description: 'Declares accumulation settings for graph planning; actual accumulation is performed by the shared TrainingStep.',
+      inputs: ['loss'],
+      outputs: ['accum_status'],
+      details: 'grad_accum_steps=4'
     },
     {
       name: 'CheckpointManager',
       title: 'Checkpoint Manager',
       category: 'Runtime',
-      description: 'Schema-v2 canonical fingerprinting, atomic WSL2/disk checkpoint saving, and decoupled weights-only resume.',
-      inputs: ['model', 'optimizer', 'step'],
-      outputs: ['checkpoint_path', 'fingerprint'],
-      details: 'save_dir=checkpoints\nkeep_last_n=5\nweights_only_load=False'
+      description: 'Atomically saves the connected model and active optimizer state, retaining recent checkpoints.',
+      inputs: ['model_handle', 'optimizer_handle'],
+      outputs: ['checkpoint_path'],
+      details: 'save_dir=checkpoints\nkeep_last_n=5'
     },
     {
       name: 'DynamicResourceManager',
       title: 'Dynamic Resource Manager',
       category: 'Runtime',
-      description: 'Real-time hardware capability gating, device feasibility probing, and tied-weight deduplicated parameter tracking.',
-      inputs: ['model_config'],
-      outputs: ['feasibility_report', 'vram_budget_gb'],
+      description: 'Probes the requested device and reports actual memory and hardware capabilities.',
+      inputs: [],
+      outputs: ['feasibility_report'],
       details: 'target_device=cuda:0\nsafety_margin_gb=1.0'
     },
     {
       name: 'LayerStreamingEngine',
       title: 'Layer Streaming Engine',
       category: 'Runtime',
-      description: 'CPU-GPU ping-pong layer streaming with pinned memory buffers for training large models on 8GB VRAM.',
-      inputs: ['model'],
+      description: 'Attaches Triune layer streaming to the connected live model and optimizer.',
+      inputs: ['model_handle'],
       outputs: ['streaming_model'],
-      details: 'prefetch=True\npin_memory=True\nd2h_async=True'
+      details: 'prefetch=True\npin_memory=True\nchunk_size=1'
     },
     {
       name: 'VRAMProfiler',
@@ -341,26 +376,26 @@
       category: 'Runtime',
       description: 'Real-time GPU memory profiler: allocated, reserved, peak VRAM, and fragmentation leak detection.',
       inputs: [],
-      outputs: ['vram_stats', 'oom_risk'],
+      outputs: ['vram_stats'],
       details: 'device=cuda:0\nalert_threshold_gb=7.2'
     },
     {
       name: 'PythonSandbox',
-      title: 'Python Isolated Sandbox',
+      title: 'Restricted Python Runner',
       category: 'Runtime',
-      description: 'Subprocess-isolated Python execution sandbox with memory caps and execution timeout.',
+      description: 'Restricted Python runner with an execution timeout. Local access only by default; not a security boundary for untrusted code.',
       inputs: ['code'],
-      outputs: ['result', 'stdout', 'stderr'],
+      outputs: ['result', 'stdout'],
       details: 'timeout=10\nmax_memory_mb=256'
     },
     {
       name: 'WandbLogger',
       title: 'WandB Telemetry Logger',
       category: 'Runtime',
-      description: 'Weights & Biases cloud telemetry logger for loss curves, throughput, and exit head distribution.',
+      description: 'Logs connected metrics to an already active Weights & Biases run.',
       inputs: ['metrics'],
       outputs: ['log_status'],
-      details: 'project=triune-moe\nentity=\nlog_freq_steps=10'
+      details: ''
     },
 
     // Evaluation & Fine-Tuning
@@ -369,7 +404,7 @@
       title: 'Autograd Training Step',
       category: 'Evaluation',
       description: 'Executes one autograd training step with gradient accumulation, clipping, and telemetry.',
-      inputs: ['model', 'optimizer', 'data_batch'],
+      inputs: ['dataset_stream', 'model_handle', 'optimizer_handle', 'tokens'],
       outputs: ['step_metrics', 'loss'],
       details: 'grad_accum_steps=4\nmax_grad_norm=1.0'
     },
@@ -377,19 +412,19 @@
       name: 'PerplexityEvaluator',
       title: 'Perplexity Evaluator',
       category: 'Evaluation',
-      description: 'Computes validation loss, token prediction perplexity, and expert routing utilization.',
-      inputs: ['model', 'val_dataset'],
-      outputs: ['perplexity', 'val_loss'],
+      description: 'Computes validation loss and token prediction perplexity on the connected token batch.',
+      inputs: ['model_handle', 'tokens', 'targets', 'exit_logits'],
+      outputs: ['perplexity', 'val_loss', 'per_exit_metrics'],
       details: 'eval_steps=50\nbatch_size=4'
     },
     {
       name: 'LoRAFineTuner',
       title: 'LoRA Fine-Tuner Engine',
       category: 'Evaluation',
-      description: 'End-to-end parameter-efficient fine-tuning loop with periodic evaluation and checkpointing.',
-      inputs: ['model', 'lora_config', 'dataset'],
-      outputs: ['finetuned_adapter'],
-      details: 'epochs=3\nlr=2e-4\nsave_adapter=True'
+      description: 'Attaches LoRA adapters and performs one real optimizer update on the connected token batch.',
+      inputs: ['model_handle', 'tokens'],
+      outputs: ['finetuned_adapter', 'final_loss'],
+      details: 'rank=16\nalpha=32.0\nlr=2e-4\nmax_grad_norm=1.0'
     },
 
     // Export & Deployment
@@ -397,17 +432,17 @@
       name: 'SafeTensorsExport',
       title: 'SafeTensors Exporter',
       category: 'Export',
-      description: 'Exports model weights in SafeTensors format with memory-deduplicated tied embeddings.',
-      inputs: ['model'],
+      description: 'Exports connected model weights in SafeTensors format.',
+      inputs: ['model_handle'],
       outputs: ['safetensors_file'],
-      details: 'filename=model.safetensors\ninclude_optimizer=False'
+      details: 'filename=model.safetensors\ninclude_optimizer=False\nadapter_only=False'
     },
     {
       name: 'GGUFExport',
-      title: 'GGUF Multi-Bit Quantizer',
+      title: 'GGUF Export (Configuration Only)',
       category: 'Export',
-      description: 'Quantizes and exports model weights to GGUF format for llama.cpp and Ollama inference.',
-      inputs: ['model'],
+      description: 'Configuration-only placeholder. Triune GGUF conversion is not implemented; this node does not create a GGUF file.',
+      inputs: ['model_handle'],
       outputs: ['gguf_file'],
       details: 'quantization=Q4_K_M\nfilename=model.gguf'
     },
@@ -415,8 +450,8 @@
       name: 'ONNXExport',
       title: 'ONNX Graph Exporter',
       category: 'Export',
-      description: 'Exports model computational graph to ONNX for TensorRT and ONNX Runtime acceleration.',
-      inputs: ['model'],
+      description: 'ONNX export configuration only; graph conversion is not performed by this node.',
+      inputs: ['model_handle'],
       outputs: ['onnx_file'],
       details: 'opset_version=17\ndynamic_axes=True'
     },
@@ -431,171 +466,203 @@
     }
   ];
 
-  // Preset Configurations with Full Real PyTorch Architecture Pipelines
+  // The default preset invokes the canonical TrainingEngine used by CLI and
+  // Studio training. The engine owns routing, losses, optimizer, and accumulation.
   const DAG_PRESETS = {
     triune_canonical_hierarchical: {
-      name: 'Triune Canonical MoE (Reflex + Limbic + Cortex)',
+      name: 'Run one shared-engine training step + checkpoint',
+      description: 'A minimal orchestration graph that uses Studio’s active training engine instead of rebuilding a second model or optimizer.',
+      requirements: 'connect a streamable dataset and initialize the active model; this graph runs one step, not a background training job.',
       nodes: [
-        { id: 'node_stream', title: 'Hugging Face Streamer', type: 'Data', x: 40, y: 140, details: 'dataset_name=HuggingFaceFW/fineweb-edu\nsplit=train\nbuffer_size=20\ntext_column=text' },
-        { id: 'node_bpe', title: 'BPE Tokenizer', type: 'Data', x: 360, y: 140, details: 'vocab_size=32000\npad_token=[PAD]\neos_token=[EOS]' },
-        { id: 'node_loader', title: 'Cycling DataLoader', type: 'Data', x: 680, y: 140, details: 'batch_size=4\nseq_len=64\nshuffle=True' },
-        { id: 'node_backbone', title: 'Triune MoE Transformer', type: 'Model', x: 1000, y: 140, details: 'vocab_size=32000\nhidden_dim=256\nnum_layers=6\nheads=4\nhead_dim=64\nexperts_routed=4\nexperts_shared=1\nuse_fp4=True' },
-        { id: 'node_router', title: 'Hierarchical Depth Router', type: 'Model', x: 1340, y: -40, details: 'reflex_exit_layer=1\nlimbic_exit_layer=3\ncortex_exit_layer=5\ndepth_mode=dynamic\nbalance_loss_weight=0.3\ntarget_depth_dist=[0.34, 0.33, 0.33]' },
-        { id: 'node_reflex', title: 'Reflex Exit Head (L1)', type: 'Model', x: 1340, y: 110, details: 'layer=1\nlambda_weight=0.20\nlatency_target_ms=4' },
-        { id: 'node_limbic', title: 'Limbic Exit Head (L3)', type: 'Model', x: 1340, y: 260, details: 'layer=3\nlambda_weight=0.30\nlatency_target_ms=10' },
-        { id: 'node_cortex', title: 'Cortex Final Head (L5)', type: 'Model', x: 1340, y: 410, details: 'layer=5\nlambda_weight=0.50\nfull_capacity=True' },
-        { id: 'node_zloss', title: 'Router Stability Z-Loss', type: 'Loss', x: 1680, y: -40, details: 'coeff=1e-3' },
-        { id: 'node_joint_loss', title: 'Joint Exit Loss', type: 'Loss', x: 1680, y: 230, details: 'lambda_reflex=0.20\nlambda_limbic=0.30\nlambda_cortex=0.50\nbalance_loss_weight=0.3' },
-        { id: 'node_centroid', title: 'CentroidSteer Optimizer', type: 'Optimizer', x: 2020, y: 100, details: 'lr=0.0004\nsteer_scale=0.20\ngalore_rank=64' },
-        { id: 'node_muon', title: 'Muon Matrix Optimizer', type: 'Optimizer', x: 2020, y: 280, details: 'lr=0.02\nmomentum=0.95\nns_steps=5' },
-        { id: 'node_stream_engine', title: 'Layer Streaming Engine', type: 'Runtime', x: 2360, y: 100, details: 'prefetch=True\npin_memory=True\nd2h_async=True' },
-        { id: 'node_accum', title: 'Gradient Accumulator', type: 'Runtime', x: 2360, y: 280, details: 'grad_accum_steps=4\nmax_grad_norm=1.0' },
-        { id: 'node_vram', title: 'VRAM Profiler', type: 'Runtime', x: 2700, y: 100, details: 'device=cuda:0\nalert_threshold_gb=7.2' },
-        { id: 'node_export', title: 'SafeTensors Exporter', type: 'Export', x: 2700, y: 280, details: 'filename=triune_moe_canonical.safetensors' }
+        { id: 'node_stream', title: 'Hugging Face Streamer', type: 'Data', x: 40, y: 140, details: 'dataset_name=HuggingFaceFW/fineweb-edu\nsplit=train\nconfig=sample-10BT\ntext_column=text' },
+        { id: 'node_training_step', title: 'Autograd Training Step', type: 'Evaluation', x: 430, y: 140, details: 'grad_accum_steps=4\nmax_grad_norm=1.0' },
+        { id: 'node_checkpoint', title: 'Checkpoint Manager', type: 'Runtime', x: 850, y: 140, details: 'save_dir=checkpoints\nkeep_last_n=5' }
       ],
       edges: [
-        { id: 'e1', source: 'node_stream', source_port: 'dataset_stream', target: 'node_bpe', target_port: 'text', port_type: 'stream' },
-        { id: 'e2', source: 'node_bpe', source_port: 'tokens', target: 'node_loader', target_port: 'tokens', port_type: 'tokens' },
-        { id: 'e3', source: 'node_loader', source_port: 'input_ids', target: 'node_backbone', target_port: 'input_ids', port_type: 'tensor' },
-        { id: 'e4', source: 'node_backbone', source_port: 'exit_logits', target: 'node_router', target_port: 'hidden_states', port_type: 'tensor' },
-        { id: 'e5', source: 'node_backbone', source_port: 'exit_logits', target: 'node_reflex', target_port: 'hidden_states', port_type: 'tensor' },
-        { id: 'e6', source: 'node_backbone', source_port: 'exit_logits', target: 'node_limbic', target_port: 'hidden_states', port_type: 'tensor' },
-        { id: 'e7', source: 'node_backbone', source_port: 'logits', target: 'node_cortex', target_port: 'hidden_states', port_type: 'tensor' },
-        { id: 'e8', source: 'node_router', source_port: 'router_weights', target: 'node_zloss', target_port: 'router_logits', port_type: 'tensor' },
-        { id: 'e9', source: 'node_reflex', source_port: 'exit_logits', target: 'node_joint_loss', target_port: 'exit_logits', port_type: 'tensor' },
-        { id: 'e10', source: 'node_limbic', source_port: 'exit_logits', target: 'node_joint_loss', target_port: 'exit_logits', port_type: 'tensor' },
-        { id: 'e11', source: 'node_cortex', source_port: 'logits', target: 'node_joint_loss', target_port: 'exit_logits', port_type: 'tensor' },
-        { id: 'e12', source: 'node_zloss', source_port: 'z_loss', target: 'node_joint_loss', target_port: 'targets', port_type: 'loss' },
-        { id: 'e13', source: 'node_joint_loss', source_port: 'joint_loss', target: 'node_centroid', target_port: 'loss', port_type: 'loss' },
-        { id: 'e14', source: 'node_joint_loss', source_port: 'joint_loss', target: 'node_muon', target_port: 'loss', port_type: 'loss' },
-        { id: 'e15', source: 'node_centroid', source_port: 'optimizer_handle', target: 'node_stream_engine', target_port: 'model_handle', port_type: 'optimizer' },
-        { id: 'e16', source: 'node_muon', source_port: 'optimizer_handle', target: 'node_accum', target_port: 'loss', port_type: 'optimizer' },
-        { id: 'e17', source: 'node_stream_engine', source_port: 'streaming_model', target: 'node_vram', target_port: 'vram_stats', port_type: 'model' },
-        { id: 'e18', source: 'node_accum', source_port: 'accum_status', target: 'node_export', target_port: 'model_handle', port_type: 'scalar' }
+        { id: 'e1', source: 'node_stream', source_port: 'dataset_stream', target: 'node_training_step', target_port: 'dataset_stream' },
+        { id: 'e2', source: 'node_training_step', source_port: 'model_handle', target: 'node_checkpoint', target_port: 'model_handle' }
       ]
     },
     moe_training: {
-      name: 'MoE Streaming Pre-training',
+      name: 'Research: explicit MoE loss and optimizer update',
+      description: 'Exposes tokenization, next-token batching, Triune forward pass, balancing and router losses, CentroidSteer update, and checkpointing as editable stages.',
+      requirements: 'local corpus at data/fineweb_sample.jsonl and triune_tokenizer.json; model must fit the selected device.',
       nodes: [
-        { id: 'node_1', title: 'Hugging Face Streamer', type: 'Data', x: 40, y: 60, details: 'dataset_name=HuggingFaceFW/fineweb-edu\nsplit=train\nbuffer_size=20\ntext_column=text' },
-        { id: 'node_2', title: 'BPE Tokenizer', type: 'Data', x: 340, y: 60, details: 'vocab_size=32000\npad_token=[PAD]\neos_token=[EOS]' },
-        { id: 'node_3', title: 'Triune MoE Transformer', type: 'Model', x: 640, y: 60, details: 'vocab_size=32000\nhidden_dim=256\nnum_layers=6\nheads=4\nhead_dim=64\nexperts_routed=4\nexperts_shared=1\nuse_fp4=True' },
-        { id: 'node_4', title: 'CentroidSteer Optimizer', type: 'Optimizer', x: 940, y: 60, details: 'lr=0.0004\nsteer_scale=0.20\ngalore_rank=64' },
-        { id: 'node_5', title: 'Autograd Training Step', type: 'Evaluation', x: 1240, y: 60, details: 'grad_accum_steps=4\nmax_grad_norm=1.0' },
-        { id: 'node_6', title: 'SafeTensors Exporter', type: 'Export', x: 1540, y: 60, details: 'filename=model.safetensors' }
+        { id: 'node_data', title: 'Local File Reader', type: 'Data', x: 20, y: 150, details: 'file_path=data/fineweb_sample.jsonl\nconfigure_runtime=false' },
+        { id: 'node_tokenizer', title: 'BPE Tokenizer', type: 'Data', x: 300, y: 150, details: 'tokenizer_path=triune_tokenizer.json' },
+        { id: 'node_loader', title: 'Cycling DataLoader', type: 'Data', x: 560, y: 150, details: 'seq_len=64\nbatch_size=1' },
+        { id: 'node_model', title: 'Triune MoE Transformer', type: 'Model', x: 840, y: 150, details: 'use_node_config=false\nreturn_balance_loss=true' },
+        { id: 'node_loss', title: 'Fast Cross-Entropy Loss', type: 'Loss', x: 1150, y: 150, details: 'balance_loss_weight=0.3\nrouter_z_loss_weight=0.001' },
+        { id: 'node_optimizer', title: 'CentroidSteer Optimizer', type: 'Optimizer', x: 1460, y: 150, details: 'lr=0.0004\nsteer_scale=0.2\ngalore_rank=64' },
+        { id: 'node_checkpoint', title: 'Checkpoint Manager', type: 'Runtime', x: 1770, y: 150, details: 'save_dir=checkpoints\nkeep_last_n=5' }
       ],
       edges: [
-        { id: 'e1', source: 'node_1', target: 'node_2' },
-        { id: 'e2', source: 'node_2', target: 'node_3' },
-        { id: 'e3', source: 'node_3', target: 'node_4' },
-        { id: 'e4', source: 'node_4', target: 'node_5' },
-        { id: 'e5', source: 'node_5', target: 'node_6' }
+        { id: 'e1', source: 'node_data', source_port: 'text_sample', target: 'node_tokenizer', target_port: 'text' },
+        { id: 'e2', source: 'node_tokenizer', source_port: 'tokens', target: 'node_loader', target_port: 'tokens' },
+        { id: 'e3', source: 'node_loader', source_port: 'input_ids', target: 'node_model', target_port: 'input_ids' },
+        { id: 'e4', source: 'node_model', source_port: 'logits', target: 'node_loss', target_port: 'logits' },
+        { id: 'e5', source: 'node_loader', source_port: 'targets', target: 'node_loss', target_port: 'targets' },
+        { id: 'e6', source: 'node_model', source_port: 'balance_loss', target: 'node_loss', target_port: 'balance_loss' },
+        { id: 'e7', source: 'node_model', source_port: 'router_logits', target: 'node_loss', target_port: 'router_logits' },
+        { id: 'e8', source: 'node_model', source_port: 'model_handle', target: 'node_optimizer', target_port: 'model_handle' },
+        { id: 'e9', source: 'node_loss', source_port: 'loss', target: 'node_optimizer', target_port: 'loss' },
+        { id: 'e10', source: 'node_model', source_port: 'model_handle', target: 'node_checkpoint', target_port: 'model_handle' },
+        { id: 'e11', source: 'node_optimizer', source_port: 'optimizer_handle', target: 'node_checkpoint', target_port: 'optimizer_handle' }
       ]
     },
     muon_layer_streaming: {
-      name: 'Muon + Layer Streaming (8GB VRAM)',
+      name: 'Research: layer-streamed model with Muon',
+      description: 'Makes layer staging and the Muon optimizer explicit so you can inspect or replace those parts of the training path.',
+      requirements: 'local corpus and tokenizer; CUDA memory and model support for layer streaming.',
       nodes: [
-        { id: 'node_1', title: 'Cycling DataLoader', type: 'Data', x: 40, y: 60, details: 'batch_size=4\nseq_len=64\nshuffle=True' },
-        { id: 'node_2', title: 'Layer Streaming Engine', type: 'Runtime', x: 340, y: 60, details: 'prefetch=True\npin_memory=True\nd2h_async=True' },
-        { id: 'node_3', title: 'Triune MoE Transformer', type: 'Model', x: 640, y: 60, details: 'vocab_size=32000\nhidden_dim=256\nnum_layers=6\nheads=4\nhead_dim=64\nexperts_routed=4\nexperts_shared=1' },
-        { id: 'node_4', title: 'Muon Matrix Optimizer', type: 'Optimizer', x: 940, y: 60, details: 'lr=0.02\nmomentum=0.95\nns_steps=5' },
-        { id: 'node_5', title: 'Autograd Training Step', type: 'Evaluation', x: 1240, y: 60, details: 'grad_accum_steps=4\nmax_grad_norm=1.0' },
-        { id: 'node_6', title: 'VRAM Profiler', type: 'Runtime', x: 1540, y: 60, details: 'device=cuda:0\nalert_threshold_gb=7.2' }
+        { id: 'node_data', title: 'Local File Reader', type: 'Data', x: 20, y: 160, details: 'file_path=data/fineweb_sample.jsonl\nconfigure_runtime=false' },
+        { id: 'node_tokenizer', title: 'BPE Tokenizer', type: 'Data', x: 280, y: 160, details: 'tokenizer_path=triune_tokenizer.json' },
+        { id: 'node_loader', title: 'Cycling DataLoader', type: 'Data', x: 530, y: 160, details: 'seq_len=64\nbatch_size=1' },
+        { id: 'node_init', title: 'Triune MoE Transformer', type: 'Model', x: 790, y: 20, details: 'use_node_config=false\ninitialize_only=true' },
+        { id: 'node_streaming', title: 'Layer Streaming Engine', type: 'Runtime', x: 1080, y: 20, details: 'prefetch=true\npin_memory=true\nchunk_size=1' },
+        { id: 'node_forward', title: 'Triune MoE Transformer', type: 'Model', x: 1080, y: 280, details: 'return_balance_loss=true' },
+        { id: 'node_loss', title: 'Fast Cross-Entropy Loss', type: 'Loss', x: 1380, y: 280, details: 'balance_loss_weight=0.3\nrouter_z_loss_weight=0.001' },
+        { id: 'node_optimizer', title: 'Muon Matrix Optimizer', type: 'Optimizer', x: 1660, y: 280, details: 'lr=0.02\nmomentum=0.95\nns_steps=5' },
+        { id: 'node_checkpoint', title: 'Checkpoint Manager', type: 'Runtime', x: 1950, y: 280, details: 'save_dir=checkpoints\nkeep_last_n=5' }
       ],
       edges: [
-        { id: 'e1', source: 'node_1', target: 'node_2' },
-        { id: 'e2', source: 'node_2', target: 'node_3' },
-        { id: 'e3', source: 'node_3', target: 'node_4' },
-        { id: 'e4', source: 'node_4', target: 'node_5' },
-        { id: 'e5', source: 'node_5', target: 'node_6' }
+        { id: 'e1', source: 'node_data', source_port: 'text_sample', target: 'node_tokenizer', target_port: 'text' },
+        { id: 'e2', source: 'node_tokenizer', source_port: 'tokens', target: 'node_loader', target_port: 'tokens' },
+        { id: 'e3', source: 'node_init', source_port: 'model_handle', target: 'node_streaming', target_port: 'model_handle' },
+        { id: 'e4', source: 'node_streaming', source_port: 'streaming_model', target: 'node_forward', target_port: 'model_handle' },
+        { id: 'e5', source: 'node_loader', source_port: 'input_ids', target: 'node_forward', target_port: 'input_ids' },
+        { id: 'e6', source: 'node_forward', source_port: 'logits', target: 'node_loss', target_port: 'logits' },
+        { id: 'e7', source: 'node_loader', source_port: 'targets', target: 'node_loss', target_port: 'targets' },
+        { id: 'e8', source: 'node_forward', source_port: 'balance_loss', target: 'node_loss', target_port: 'balance_loss' },
+        { id: 'e9', source: 'node_forward', source_port: 'router_logits', target: 'node_loss', target_port: 'router_logits' },
+        { id: 'e10', source: 'node_streaming', source_port: 'streaming_model', target: 'node_optimizer', target_port: 'model_handle' },
+        { id: 'e11', source: 'node_loss', source_port: 'loss', target: 'node_optimizer', target_port: 'loss' },
+        { id: 'e12', source: 'node_streaming', source_port: 'streaming_model', target: 'node_checkpoint', target_port: 'model_handle' },
+        { id: 'e13', source: 'node_optimizer', source_port: 'optimizer_handle', target: 'node_checkpoint', target_port: 'optimizer_handle' }
       ]
     },
     lora_finetune: {
-      name: 'LoRA Fine-Tune Pipeline',
+      name: 'Adapt a model with LoRA, then export the adapter',
+      description: 'Loads a prompt sample, tokenizes it, performs one LoRA update on the active model, and writes adapter weights.',
+      requirements: 'local corpus at data/fineweb_sample.jsonl, tokenizer, initialized model, and writable export location.',
       nodes: [
-        { id: 'node_1', title: 'Local File Reader', type: 'Data', x: 40, y: 60, details: 'file_path=data/fineweb_sample.jsonl\nbatch_size=4' },
-        { id: 'node_2', title: 'BPE Tokenizer', type: 'Data', x: 340, y: 60, details: 'vocab_size=32000' },
-        { id: 'node_3', title: 'LoRA Adapter Layer', type: 'Model', x: 640, y: 60, details: 'rank=16\nalpha=32.0\ndropout=0.05' },
-        { id: 'node_4', title: 'Triune MoE Transformer', type: 'Model', x: 940, y: 60, details: 'vocab_size=32000\nhidden_dim=256\nnum_layers=6\nheads=4' },
-        { id: 'node_5', title: 'LoRA Fine-Tuner Engine', type: 'Evaluation', x: 1240, y: 60, details: 'epochs=3\nlr=2e-4\nsave_adapter=True' },
-        { id: 'node_6', title: 'SafeTensors Exporter', type: 'Export', x: 1540, y: 60, details: 'filename=lora_adapter.safetensors' }
+        { id: 'node_data', title: 'Local File Reader', type: 'Data', x: 40, y: 120, details: 'file_path=data/fineweb_sample.jsonl\nconfigure_runtime=false' },
+        { id: 'node_tokenizer', title: 'BPE Tokenizer', type: 'Data', x: 330, y: 120, details: 'tokenizer_path=triune_tokenizer.json' },
+        { id: 'node_model', title: 'Triune MoE Transformer', type: 'Model', x: 650, y: 120, details: 'use_node_config=false\ninitialize_only=true' },
+        { id: 'node_lora', title: 'LoRA Fine-Tuner Engine', type: 'Evaluation', x: 990, y: 120, details: 'rank=16\nalpha=32.0\nlr=2e-4\nmax_grad_norm=1.0' },
+        { id: 'node_export', title: 'SafeTensors Exporter', type: 'Export', x: 1360, y: 120, details: 'filename=lora_adapter.safetensors\nadapter_only=true' }
       ],
       edges: [
-        { id: 'e1', source: 'node_1', target: 'node_2' },
-        { id: 'e2', source: 'node_2', target: 'node_3' },
-        { id: 'e3', source: 'node_3', target: 'node_4' },
-        { id: 'e4', source: 'node_4', target: 'node_5' },
-        { id: 'e5', source: 'node_5', target: 'node_6' }
+        { id: 'e1', source: 'node_data', source_port: 'text_sample', target: 'node_tokenizer', target_port: 'text' },
+        { id: 'e2', source: 'node_model', source_port: 'model_handle', target: 'node_lora', target_port: 'model_handle' },
+        { id: 'e3', source: 'node_tokenizer', source_port: 'tokens', target: 'node_lora', target_port: 'tokens' },
+        { id: 'e4', source: 'node_lora', source_port: 'finetuned_adapter', target: 'node_export', target_port: 'model_handle' }
       ]
     },
     depth_routing_inference: {
-      name: 'Dynamic Depth Router Multi-Exit',
+      name: 'Evaluate Reflex, Limbic, and Cortex exits',
+      description: 'Runs a held-out token batch through the active Triune model and reports perplexity and per-exit metrics.',
+      requirements: 'local corpus and tokenizer; initialize the model before executing.',
       nodes: [
-        { id: 'node_1', title: 'Hugging Face Streamer', type: 'Data', x: 40, y: 60, details: 'dataset_name=HuggingFaceFW/fineweb-edu' },
-        { id: 'node_2', title: 'BPE Tokenizer', type: 'Data', x: 340, y: 60, details: 'vocab_size=32000' },
-        { id: 'node_3', title: 'Triune MoE Transformer', type: 'Model', x: 640, y: 60, details: 'vocab_size=32000\nhidden_dim=256\nnum_layers=6\nheads=4\nhead_dim=64\nexperts_routed=4\nexperts_shared=1' },
-        { id: 'node_4', title: 'Hierarchical Depth Router', type: 'Model', x: 940, y: 60, details: 'reflex_exit_layer=1\nlimbic_exit_layer=3\ncortex_exit_layer=5\ndepth_mode=dynamic\nbalance_loss_weight=0.3' },
-        { id: 'node_5', title: 'Perplexity Evaluator', type: 'Evaluation', x: 1240, y: 60, details: 'eval_steps=50\nbatch_size=4' }
+        { id: 'node_data', title: 'Local File Reader', type: 'Data', x: 30, y: 150, details: 'file_path=data/fineweb_sample.jsonl\nconfigure_runtime=false' },
+        { id: 'node_tokenizer', title: 'BPE Tokenizer', type: 'Data', x: 330, y: 150, details: 'tokenizer_path=triune_tokenizer.json' },
+        { id: 'node_loader', title: 'Cycling DataLoader', type: 'Data', x: 610, y: 150, details: 'seq_len=64\nbatch_size=1' },
+        { id: 'node_model', title: 'Triune MoE Transformer', type: 'Model', x: 910, y: 150, details: 'use_node_config=false\nreturn_all_exits=true\nevaluation_mode=true' },
+        { id: 'node_eval', title: 'Perplexity Evaluator', type: 'Evaluation', x: 1300, y: 150, details: '' }
       ],
       edges: [
-        { id: 'e1', source: 'node_1', target: 'node_2' },
-        { id: 'e2', source: 'node_2', target: 'node_3' },
-        { id: 'e3', source: 'node_3', target: 'node_4' },
-        { id: 'e4', source: 'node_4', target: 'node_5' }
+        { id: 'e1', source: 'node_data', source_port: 'text_sample', target: 'node_tokenizer', target_port: 'text' },
+        { id: 'e2', source: 'node_tokenizer', source_port: 'tokens', target: 'node_loader', target_port: 'tokens' },
+        { id: 'e3', source: 'node_loader', source_port: 'input_ids', target: 'node_model', target_port: 'input_ids' },
+        { id: 'e4', source: 'node_model', source_port: 'model_handle', target: 'node_eval', target_port: 'model_handle' },
+        { id: 'e5', source: 'node_loader', source_port: 'targets', target: 'node_eval', target_port: 'targets' },
+        { id: 'e6', source: 'node_model', source_port: 'exit_logits', target: 'node_eval', target_port: 'exit_logits' }
       ]
     },
     fp8_quantization_export: {
-      name: 'FP8 Quantization & Multi-Export',
+      name: 'Test the standalone FP8 linear operator',
+      description: 'Routes the three-way router logits through a 3-input FP8 linear layer and inspects numeric output; it does not quantize/export the whole model.',
+      requirements: 'local corpus and tokenizer; supported FP8 hardware/runtime, otherwise the node may report unavailable.',
       nodes: [
-        { id: 'node_1', title: 'Triune MoE Transformer', type: 'Model', x: 40, y: 60, details: 'vocab_size=32000\nhidden_dim=256\nnum_layers=6\nheads=4' },
-        { id: 'node_2', title: 'FP8 Scaled Linear', type: 'Model', x: 340, y: 60, details: 'in_features=256\nout_features=256\ndtype=fp8_e4m3fn' },
-        { id: 'node_3', title: 'SafeTensors Exporter', type: 'Export', x: 640, y: 60, details: 'filename=model_fp8.safetensors' },
-        { id: 'node_4', title: 'GGUF Multi-Bit Quantizer', type: 'Export', x: 940, y: 60, details: 'quantization=Q4_K_M\nfilename=model.gguf' },
-        { id: 'node_5', title: 'ONNX Graph Exporter', type: 'Export', x: 1240, y: 60, details: 'opset_version=17' }
+        { id: 'node_data', title: 'Local File Reader', type: 'Data', x: 25, y: 150, details: 'file_path=data/fineweb_sample.jsonl\nconfigure_runtime=false' },
+        { id: 'node_tokenizer', title: 'BPE Tokenizer', type: 'Data', x: 300, y: 150, details: 'tokenizer_path=triune_tokenizer.json' },
+        { id: 'node_loader', title: 'Cycling DataLoader', type: 'Data', x: 560, y: 150, details: 'seq_len=64\nbatch_size=1' },
+        { id: 'node_model', title: 'Triune MoE Transformer', type: 'Model', x: 840, y: 150, details: 'use_node_config=false\nevaluation_mode=true' },
+        { id: 'node_fp8', title: 'FP8 Scaled Linear', type: 'Model', x: 1170, y: 150, details: 'in_features=3\nout_features=3\nbias=false' },
+        { id: 'node_inspect', title: 'Tensor Inspector', type: 'Analysis', x: 1500, y: 150, details: '' }
       ],
       edges: [
-        { id: 'e1', source: 'node_1', target: 'node_2' },
-        { id: 'e2', source: 'node_2', target: 'node_3' },
-        { id: 'e3', source: 'node_2', target: 'node_4' },
-        { id: 'e4', source: 'node_2', target: 'node_5' }
+        { id: 'e1', source: 'node_data', source_port: 'text_sample', target: 'node_tokenizer', target_port: 'text' },
+        { id: 'e2', source: 'node_tokenizer', source_port: 'tokens', target: 'node_loader', target_port: 'tokens' },
+        { id: 'e3', source: 'node_loader', source_port: 'input_ids', target: 'node_model', target_port: 'input_ids' },
+        { id: 'e4', source: 'node_model', source_port: 'router_logits', target: 'node_fp8', target_port: 'x' },
+        { id: 'e5', source: 'node_fp8', source_port: 'linear_out', target: 'node_inspect', target_port: 'x' }
       ]
     },
     hybrid_gla_rope: {
-      name: 'Hybrid GLA + RoPE Attention',
+      name: 'Generate from a local corpus prompt',
+      description: 'Uses the first local text sample as a prompt and generates with the active Triune model’s cached autoregressive path.',
+      requirements: 'local corpus, initialized model, and an available tokenizer.',
       nodes: [
-        { id: 'node_1', title: 'Hugging Face Streamer', type: 'Data', x: 40, y: 60, details: 'dataset_name=HuggingFaceFW/fineweb-edu' },
-        { id: 'node_2', title: 'BPE Tokenizer', type: 'Data', x: 340, y: 60, details: 'vocab_size=32000' },
-        { id: 'node_3', title: 'Hybrid GLA + RoPE Attention', type: 'Model', x: 640, y: 60, details: 'hidden_dim=256\nuse_rope=True\nrope_max_seq_len=4096' },
-        { id: 'node_4', title: 'Vectorised GLA Attention', type: 'Model', x: 940, y: 60, details: 'hidden_dim=256\nnum_heads=4\nhead_dim=64' },
-        { id: 'node_5', title: 'Fast Cross-Entropy Loss', type: 'Loss', x: 1240, y: 60, details: 'ignore_index=-100\nchunk_size=2048' },
-        { id: 'node_6', title: 'AdamW Optimizer', type: 'Optimizer', x: 1540, y: 60, details: 'lr=0.0004\nweight_decay=0.01' }
+        { id: 'node_prompt', title: 'Local File Reader', type: 'Data', x: 80, y: 150, details: 'file_path=data/fineweb_sample.jsonl\nconfigure_runtime=false' },
+        { id: 'node_model', title: 'Triune MoE Transformer', type: 'Model', x: 460, y: 150, details: 'use_node_config=false\ninitialize_only=true' },
+        { id: 'node_generate', title: 'Autoregressive Generator', type: 'Model', x: 850, y: 150, details: 'max_tokens=64\ntemperature=0.7\ntop_k=50\nrepetition_penalty=1.2' }
       ],
       edges: [
-        { id: 'e1', source: 'node_1', target: 'node_2' },
-        { id: 'e2', source: 'node_2', target: 'node_3' },
-        { id: 'e3', source: 'node_3', target: 'node_4' },
-        { id: 'e4', source: 'node_4', target: 'node_5' },
-        { id: 'e5', source: 'node_5', target: 'node_6' }
+        { id: 'e1', source: 'node_prompt', source_port: 'text_sample', target: 'node_generate', target_port: 'prompt' },
+        { id: 'e2', source: 'node_model', source_port: 'model_handle', target: 'node_generate', target_port: 'model_handle' }
       ]
     },
     joint_multi_exit_training: {
-      name: 'Joint Multi-Exit + Gradient Accumulation',
+      name: 'Research: train all exits with explicit objectives',
+      description: 'Combines Reflex/Limbic/Cortex supervision with router stability loss and a CentroidSteer update.',
+      requirements: 'local corpus and tokenizer; the active model must return all exits and router logits.',
       nodes: [
-        { id: 'node_1', title: 'Hugging Face Streamer', type: 'Data', x: 40, y: 60, details: 'dataset_name=HuggingFaceFW/fineweb-edu\nsplit=train\nbuffer_size=20' },
-        { id: 'node_2', title: 'BPE Tokenizer', type: 'Data', x: 340, y: 60, details: 'vocab_size=32000' },
-        { id: 'node_3', title: 'Triune MoE Transformer', type: 'Model', x: 640, y: 60, details: 'vocab_size=32000\nhidden_dim=256\nnum_layers=6\nheads=4\nhead_dim=64\nexperts_routed=4\nexperts_shared=1' },
-        { id: 'node_4', title: 'Joint Exit Loss', type: 'Loss', x: 940, y: 60, details: 'lambda_reflex=0.20\nlambda_limbic=0.30\nlambda_cortex=0.50\nbalance_loss_weight=0.3' },
-        { id: 'node_5', title: 'Gradient Accumulator', type: 'Runtime', x: 1240, y: 60, details: 'grad_accum_steps=4\nmax_grad_norm=1.0' },
-        { id: 'node_6', title: 'CentroidSteer Optimizer', type: 'Optimizer', x: 1540, y: 60, details: 'lr=0.0004\nsteer_scale=0.20' }
+        { id: 'node_data', title: 'Local File Reader', type: 'Data', x: 20, y: 150, details: 'file_path=data/fineweb_sample.jsonl\nconfigure_runtime=false' },
+        { id: 'node_tokenizer', title: 'BPE Tokenizer', type: 'Data', x: 300, y: 150, details: 'tokenizer_path=triune_tokenizer.json' },
+        { id: 'node_loader', title: 'Cycling DataLoader', type: 'Data', x: 570, y: 150, details: 'seq_len=64\nbatch_size=1' },
+        { id: 'node_model', title: 'Triune MoE Transformer', type: 'Model', x: 860, y: 150, details: 'use_node_config=false\nreturn_all_exits=true' },
+        { id: 'node_zloss', title: 'Router Stability Z-Loss', type: 'Loss', x: 1190, y: 30, details: 'coeff=0.001' },
+        { id: 'node_joint', title: 'Joint Exit Loss', type: 'Loss', x: 1190, y: 260, details: 'lambda_reflex=0.2\nlambda_limbic=0.3\nlambda_cortex=0.5' },
+        { id: 'node_optimizer', title: 'CentroidSteer Optimizer', type: 'Optimizer', x: 1520, y: 150, details: 'lr=0.0004\nsteer_scale=0.2\ngalore_rank=64' }
       ],
       edges: [
-        { id: 'e1', source: 'node_1', target: 'node_2' },
-        { id: 'e2', source: 'node_2', target: 'node_3' },
-        { id: 'e3', source: 'node_3', target: 'node_4' },
-        { id: 'e4', source: 'node_4', target: 'node_5' },
-        { id: 'e5', source: 'node_5', target: 'node_6' }
+        { id: 'e1', source: 'node_data', source_port: 'text_sample', target: 'node_tokenizer', target_port: 'text' },
+        { id: 'e2', source: 'node_tokenizer', source_port: 'tokens', target: 'node_loader', target_port: 'tokens' },
+        { id: 'e3', source: 'node_loader', source_port: 'input_ids', target: 'node_model', target_port: 'input_ids' },
+        { id: 'e4', source: 'node_model', source_port: 'exit_logits', target: 'node_joint', target_port: 'exit_logits' },
+        { id: 'e5', source: 'node_loader', source_port: 'targets', target: 'node_joint', target_port: 'targets' },
+        { id: 'e6', source: 'node_model', source_port: 'router_logits', target: 'node_zloss', target_port: 'router_logits' },
+        { id: 'e7', source: 'node_zloss', source_port: 'z_loss', target: 'node_joint', target_port: 'z_loss' },
+        { id: 'e8', source: 'node_model', source_port: 'model_handle', target: 'node_optimizer', target_port: 'model_handle' },
+        { id: 'e9', source: 'node_joint', source_port: 'joint_loss', target: 'node_optimizer', target_port: 'loss' }
+      ]
+    },
+    local_corpus_qa: {
+      name: 'Check a local corpus and tokenizer (CPU-friendly)',
+      description: 'Reads a real local sample, tokenizes it, then reports token tensor shape, range, and unique-ID count without replacing the active training dataset.',
+      requirements: 'data/fineweb_sample.jsonl and triune_tokenizer.json; no model or GPU required.',
+      nodes: [
+        { id: 'node_data', title: 'Local File Reader', type: 'Data', x: 40, y: 160, details: 'file_path=data/fineweb_sample.jsonl\nconfigure_runtime=false' },
+        { id: 'node_tokenizer', title: 'BPE Tokenizer', type: 'Data', x: 380, y: 160, details: 'tokenizer_path=triune_tokenizer.json\nconfigure_runtime=false' },
+        { id: 'node_inspect', title: 'Token Batch Inspector', type: 'Analysis', x: 740, y: 160, details: '' }
+      ],
+      edges: [
+        { id: 'e1', source: 'node_data', source_port: 'text_sample', target: 'node_tokenizer', target_port: 'text' },
+        { id: 'e2', source: 'node_tokenizer', source_port: 'tokens', target: 'node_inspect', target_port: 'tokens' }
       ]
     }
+  };
+
+  const readSavedWorkflow = () => {
+    try {
+      const raw = window.localStorage.getItem('triune.studio.workflow.v1');
+      const saved = raw ? JSON.parse(raw) : null;
+      if (saved && saved.version === 1 && Array.isArray(saved.nodes) && Array.isArray(saved.edges)) {
+        return { ...saved, frames: Array.isArray(saved.frames) ? saved.frames : [] };
+      }
+    } catch (_) {}
+    return null;
   };
 
   const renderIcon = (name, size = 18, extraStyle = {}) => {
@@ -772,164 +839,158 @@
 
   const MODEL_PRESETS = [
     {
+      id: 'triune-nano',
+      name: 'Triune-Nano (21M · 4L / 192D / 2E)',
+      tier: 'Tier 1 · CPU & Rapid Debugging',
+      layers: 4,
+      hidden_dim: 192,
+      heads: 3,
+      head_dim: 64,
+      experts_routed: 2,
+      experts_shared: 1,
+      exits: 'Prefix L0 → Reflex L2 → Limbic L3 → Cortex L4',
+      params: '21.0M params (21.0M active)',
+      desc: 'Minimal 4-layer Triune architecture (3 dense prefix/reflex blocks + 1 Sparse MoE block). Built for instant CPU debugging, pipeline verification, and zero-wait iteration.'
+    },
+    {
       id: 'triune-small',
-      name: 'Triune-Small (Canonical 6L MoE)',
-      tier: 'Production Baseline',
+      name: 'Triune-Small (36M · 6L / 256D / 4E)',
+      tier: 'Tier 2 · Canonical Baseline (Default)',
       layers: 6,
       hidden_dim: 256,
       heads: 4,
       head_dim: 64,
       experts_routed: 4,
       experts_shared: 1,
-      exits: 'L1 (Reflex), L3 (Limbic), L5 (Cortex)',
-      params: '33.8M params (18.2M active)',
-      expected_vram: '0.38 - 0.55 GB (BF16) / 0.22 GB (FP8)',
-      expected_speed: 'Train: ~15-40 tok/s (CPU) | ~1,200-2,500 tok/s (RTX) • Infer: ~25 tok/s (CPU) | ~180-320 tok/s (RTX)',
-      desc: 'Canonical 6-layer Triune architecture with 3 dynamic exit tiers, Gumbel MoE load balancing, CentroidSteer and Muon optimizers.'
+      exits: 'Prefix L0 → Reflex L2 → Limbic L4 → Cortex L6',
+      params: '36.0M params (32.9M active)',
+      desc: 'Reference 6-layer Triune Transformer from config.py. Combines 3 dense early layers (L0–L2) and 3 Top-2 Sparse MoE layers (L3–L5) with Vectorised GLA + RoPE and 3-stage Gumbel exit routing.'
     },
     {
-      id: 'triune-nano',
-      name: 'Triune-Nano (Edge / Embedded)',
-      tier: 'Edge & Mobile',
-      layers: 4,
-      hidden_dim: 192,
-      heads: 4,
-      head_dim: 48,
-      experts_routed: 2,
+      id: 'triune-base',
+      name: 'Triune-Base (76M · 8L / 384D / 4E)',
+      tier: 'Tier 3 · Consumer GPU Pre-Training (6–8GB VRAM)',
+      layers: 8,
+      hidden_dim: 384,
+      heads: 6,
+      head_dim: 64,
+      experts_routed: 4,
       experts_shared: 1,
-      exits: 'L1 (Reflex), L3 (Cortex)',
-      params: '18.5M params (10.1M active)',
-      expected_vram: '0.22 - 0.32 GB (BF16) / 0.12 GB (FP8)',
-      expected_speed: 'Train: ~30-70 tok/s (CPU) | ~2,500-4,500 tok/s (RTX) • Infer: ~45 tok/s (CPU) | ~350-500 tok/s (RTX)',
-      desc: 'Ultra-compact model designed for instant local CPU and mobile execution with minimal memory footprint.'
+      exits: 'Prefix L0 → Reflex L2 → Limbic L5 → Cortex L8',
+      params: '75.8M params (64.0M active)',
+      desc: 'Balanced 8-layer architecture expanding the Sparse MoE stack to 5 layers (L3–L7) at 384 hidden width. Ideal for training from scratch on TinyStories or FineWeb-Edu on a single 8GB GPU.'
     },
     {
       id: 'triune-medium',
-      name: 'Triune-Medium (Reasoning & Code)',
-      tier: 'High Capacity',
+      name: 'Triune-Medium (208M · 12L / 512D / 8E)',
+      tier: 'Tier 4 · Sparse 8-Expert MoE (8–12GB VRAM)',
       layers: 12,
       hidden_dim: 512,
       heads: 8,
       head_dim: 64,
       experts_routed: 8,
       experts_shared: 1,
-      exits: 'L3 (Reflex), L7 (Limbic), L11 (Cortex)',
-      params: '142M params (42M active)',
-      expected_vram: '1.8 - 2.4 GB (BF16) / 1.1 GB (FP8)',
-      expected_speed: 'Train: ~5-15 tok/s (CPU) | ~450-950 tok/s (RTX) • Infer: ~10 tok/s (CPU) | ~110-180 tok/s (RTX)',
-      desc: 'Deep multi-expert architecture optimized for complex step-by-step reasoning, mathematical logic, and multi-turn coding.'
+      exits: 'Prefix L0–L1 → Reflex L4 → Limbic L8 → Cortex L12',
+      params: '207.5M params (119.4M active)',
+      desc: '12-layer architecture scaling to 8 routed experts per MoE block across 7 MoE layers (L5–L11). Top-2 gating + 1 shared expert activates only 3 of 9 experts per token (57% active parameters).'
     },
     {
       id: 'triune-large',
-      name: 'Triune-Large (High-Capacity MoE)',
-      tier: 'Research Scale',
+      name: 'Triune-Large (574M · 16L / 768D / 8E)',
+      tier: 'Tier 5 · High-Capacity MoE (12–16GB VRAM)',
       layers: 16,
       hidden_dim: 768,
       heads: 12,
       head_dim: 64,
       experts_routed: 8,
-      experts_shared: 2,
-      exits: 'L4 (Reflex), L9 (Limbic), L15 (Cortex)',
-      params: '385M params (98M active)',
-      expected_vram: '4.5 - 5.5 GB (BF16) / 2.6 GB (FP8)',
-      expected_speed: 'Train: ~2-6 tok/s (CPU) | ~180-420 tok/s (RTX) • Infer: ~4 tok/s (CPU) | ~60-110 tok/s (RTX)',
-      desc: 'Large MoE configuration leveraging dual shared experts and GaLore rank-128 subspace gradient projection.'
+      experts_shared: 1,
+      exits: 'Prefix L0–L1 → Reflex L5 → Limbic L10 → Cortex L16',
+      params: '573.9M params (290.8M active)',
+      desc: '16-layer half-billion parameter MoE (6 dense layers + 10 Sparse MoE layers). Designed for GaLore low-rank subspace projection and CentroidSteer + Muon training on 12GB–16GB GPUs.'
     },
     {
       id: 'triune-1b',
-      name: 'Triune-1B (Frontier MoE)',
-      tier: 'Billion-Scale Baseline',
+      name: 'Triune-1.5B (1.50B · 24L / 1024D / 8E)',
+      tier: 'Billion-Scale · Entry Frontier MoE (16GB VRAM / 8GB Stream)',
       layers: 24,
-      hidden_dim: 1536,
+      hidden_dim: 1024,
       heads: 16,
-      head_dim: 96,
+      head_dim: 64,
       experts_routed: 8,
-      experts_shared: 2,
-      exits: 'L6 (Reflex), L14 (Limbic), L23 (Cortex)',
-      params: '1.24B params (340M active)',
-      expected_vram: '14 - 18 GB (Full AdamW BF16) / 5.8 GB (GaLore/Muon BF16) / 2.8 GB (FP8 Infer)',
-      expected_speed: 'Train: ~80-160 tok/s (RTX 5070 w/ Layer Stream) | ~1,200 tok/s (A100) • Infer: ~35-70 tok/s (RTX)',
-      desc: 'Billion-parameter dynamic depth MoE architecture with Gumbel Softmax routing, 16 recurrent linear attention GLA heads, and dual shared memory experts.'
+      experts_shared: 1,
+      exits: 'Prefix L0–L2 → Reflex L7 → Limbic L16 → Cortex L24',
+      params: '1.50B params (696M active)',
+      desc: 'Entry billion-parameter Sparse MoE (8 dense + 16 MoE layers). Activates only 696M parameters per token via Top-2 expert routing; trains on 16GB GPUs with GaLore + Muon or 8GB GPUs via Layer Streaming.'
     },
     {
       id: 'triune-3b',
-      name: 'Triune-3B (Production MoE)',
-      tier: 'Enterprise Scale',
-      layers: 28,
+      name: 'Triune-3B (3.07B · 30L / 1280D / 8E)',
+      tier: 'Multi-Billion · 3B Workstation MoE (24GB VRAM / 12GB Stream)',
+      layers: 30,
+      hidden_dim: 1280,
+      heads: 20,
+      head_dim: 64,
+      experts_routed: 8,
+      experts_shared: 1,
+      exits: 'Prefix L0–L2 → Reflex L7 → Limbic L19 → Cortex L30',
+      params: '3.07B params (1.33B active)',
+      desc: '3.07B parameter Sparse MoE across 30 layers (8 dense + 22 MoE blocks) with 1.33B active parameters per token. Built for 24GB single-GPU workstations or 8GB–12GB PCIe Layer Streaming.'
+    },
+    {
+      id: 'triune-7b',
+      name: 'Triune-7B (7.38B · 32L / 1920D / 8E)',
+      tier: 'Multi-Billion · 7B Flagship MoE (24–48GB VRAM / Layer Stream)',
+      layers: 32,
+      hidden_dim: 1920,
+      heads: 30,
+      head_dim: 64,
+      experts_routed: 8,
+      experts_shared: 1,
+      exits: 'Prefix L0–L3 → Reflex L7 → Limbic L20 → Cortex L32',
+      params: '7.38B params (3.13B active)',
+      desc: '7.38B parameter Flagship Sparse MoE (32 layers, 1920 hidden dim, 30 GLA heads) activating 3.13B parameters per token (42% active). Supports 4-bit NF4 QLoRA and asynchronous CPU-to-GPU Layer Streaming.'
+    },
+    {
+      id: 'triune-14b',
+      name: 'Triune-14B (14.5B · 40L / 2048D / 12E)',
+      tier: 'Multi-Billion · 14B Deep Sparse MoE (48GB VRAM / Layer Stream)',
+      layers: 40,
+      hidden_dim: 2048,
+      heads: 16,
+      head_dim: 128,
+      experts_routed: 12,
+      experts_shared: 1,
+      exits: 'Prefix L0–L3 → Reflex L9 → Limbic L25 → Cortex L40',
+      params: '14.5B params (4.39B active)',
+      desc: '14.5B parameter high-sparsity MoE (40 layers, 12 routed experts + 1 shared expert per MoE block). Top-2 routing keeps active compute to just 4.39B parameters per token (30% active ratio).'
+    },
+    {
+      id: 'triune-32b',
+      name: 'Triune-32B (34.5B · 48L / 2560D / 16E)',
+      tier: 'Multi-Billion · 32B Frontier Sparse MoE (80GB A100/H100 / Stream)',
+      layers: 48,
       hidden_dim: 2560,
       heads: 20,
       head_dim: 128,
-      experts_routed: 8,
-      experts_shared: 2,
-      exits: 'L7 (Reflex), L16 (Limbic), L27 (Cortex)',
-      params: '3.15B params (780M active)',
-      expected_vram: '36 - 44 GB (Full AdamW BF16) / 14 GB (GaLore/Muon BF16) / 6.5 GB (FP8 Infer)',
-      expected_speed: 'Train: ~400-800 tok/s (H100 / Dual A100) • Infer: ~22-45 tok/s (RTX 5070 w/ Layer Stream)',
-      desc: 'Production-tier 3B multi-exit MoE model designed for long-context reasoning, tool calling, and high-fidelity code synthesis.'
-    },
-    {
-      id: 'triune-code-moe',
-      name: 'Triune-Code-MoE (Algorithm & Syntax)',
-      tier: 'Code Specialization',
-      layers: 8,
-      hidden_dim: 384,
-      heads: 6,
-      head_dim: 64,
-      experts_routed: 6,
+      experts_routed: 16,
       experts_shared: 1,
-      exits: 'L2 (Reflex), L5 (Limbic), L7 (Cortex)',
-      params: '78.4M params (34M active)',
-      expected_vram: '0.95 - 1.3 GB (BF16) / 0.55 GB (FP8)',
-      expected_speed: 'Train: ~8-20 tok/s (CPU) | ~700-1,400 tok/s (RTX) • Infer: ~15 tok/s (CPU) | ~130-220 tok/s (RTX)',
-      desc: 'Trained with synthetic AST tokens and Python code completion. High activation density in limbic routing for indentation and token scoping.'
+      exits: 'Prefix L0–L4 → Reflex L11 → Limbic L30 → Cortex L48',
+      params: '34.5B params (8.11B active)',
+      desc: '34.5B parameter 16-expert Sparse MoE (48 layers, 2560 dim, 12 dense + 36 MoE blocks). Combines ultra-sparse Top-2 routing (only 8.11B active params/token, 23% active) with FP8/NVFP4 quantization.'
     },
     {
-      id: 'triune-math-gla',
-      name: 'Triune-Math-GLA (Linear Attention + CoT)',
-      tier: 'Reasoning & Math',
-      layers: 10,
-      hidden_dim: 320,
-      heads: 5,
-      head_dim: 64,
-      experts_routed: 4,
-      experts_shared: 2,
-      exits: 'L3 (Reflex), L6 (Limbic), L9 (Cortex)',
-      params: '68.2M params (28M active)',
-      expected_vram: '0.80 - 1.1 GB (BF16) / 0.45 GB (FP8)',
-      expected_speed: 'Train: ~12-28 tok/s (CPU) | ~950-1,800 tok/s (RTX) • Infer: ~20 tok/s (CPU) | ~160-260 tok/s (RTX)',
-      desc: 'Pure linear attention GLA recurrent state layers for O(1) step complexity on long mathematical proofs and step-by-step arithmetic.'
-    },
-    {
-      id: 'triune-drafter',
-      name: 'Triune-Drafter (Speculative Decoding)',
-      tier: 'Inference Accelerator',
-      layers: 4,
-      hidden_dim: 256,
-      heads: 4,
-      head_dim: 64,
-      experts_routed: 0,
+      id: 'triune-70b',
+      name: 'Triune-70B (71.0B · 64L / 3072D / 16E)',
+      tier: 'Multi-Billion · 70B Ultra-Scale Flagship MoE (Multi-GPU / H100)',
+      layers: 64,
+      hidden_dim: 3072,
+      heads: 24,
+      head_dim: 128,
+      experts_routed: 16,
       experts_shared: 1,
-      exits: 'L2 (Reflex), L3 (Cortex)',
-      params: '22.1M params (Dense Shared)',
-      expected_vram: '0.25 - 0.35 GB (BF16) / 0.14 GB (FP8)',
-      expected_speed: 'Train: ~25-60 tok/s (CPU) | ~2,200-3,800 tok/s (RTX) • Infer: ~40 tok/s (CPU) | ~300-450 tok/s (RTX)',
-      desc: 'Dense low-latency draft model intended for speculative decoding pairing with larger models.'
-    },
-    {
-      id: 'triune-multimodal',
-      name: 'Triune-Vision (Multimodal Ready)',
-      tier: 'Vision-Language MoE',
-      layers: 8,
-      hidden_dim: 384,
-      heads: 6,
-      head_dim: 64,
-      experts_routed: 4,
-      experts_shared: 1,
-      exits: 'L2 (Reflex), L5 (Limbic), L7 (Cortex)',
-      params: '65.2M params (31M active)',
-      expected_vram: '0.75 - 1.1 GB (BF16) / 0.45 GB (FP8)',
-      expected_speed: 'Train: ~10-25 tok/s (CPU) | ~800-1,600 tok/s (RTX) • Infer: ~18 tok/s (CPU) | ~140-240 tok/s (RTX)',
-      desc: 'Equipped with cross-attention prefix projection sockets for interleaved vision and language tokens.'
+      exits: 'Prefix L0–L5 → Reflex L11 → Limbic L40 → Cortex L64',
+      params: '71.0B params (16.0B active)',
+      desc: '71.0B parameter Datacenter Flagship MoE (64 layers, 3072 dim, 12 dense + 52 Sparse MoE blocks with 16 routed + 1 shared expert). Activates 16.0B parameters per token (22.5% active) with 3-stage early exits.'
     }
   ];
 
@@ -965,7 +1026,8 @@
     training: 'Real-Time Training Monitor & Telemetry',
     checkpoints: 'Model Checkpoints & Weights Archive',
     finetune: 'LoRA & QLoRA Fine-Tuning Workshop',
-    modules: 'Module Registry & Community Repos',
+    modules: 'Extensions Marketplace',
+    customize: 'Appearance Marketplace',
     environment: 'System Diagnostics & Hardware Inspector',
     models: 'Model Zoo & Exporter Engine',
     datasets: 'Dataset Streaming & Corpus Management',
@@ -973,10 +1035,56 @@
     byok: 'API Keys & Bring-Your-Own-Key Subscriptions'
   };
 
+  const TAB_DESCRIPTIONS = {
+    chat: 'Send prompts to your selected local model or provider.',
+    nodegraph: 'Compose, inspect, and apply a model execution graph.',
+    training: 'Configure a run and monitor live training metrics.',
+    checkpoints: 'Save, restore, and manage model checkpoints.',
+    finetune: 'Configure and attach LoRA or QLoRA adapters.',
+    modules: 'Discover curated integrations, local plugins, and community repositories.',
+    customize: 'Choose a Studio edition, light or dark mode, and a curated color theme.',
+    environment: 'Inspect hardware, runtime health, and performance settings.',
+    models: 'Choose architectures and export trained models.',
+    datasets: 'Connect streaming or local datasets and configure tokenization.',
+    notebook: 'Run trusted local Python snippets with execution limits.',
+    byok: 'Configure and test external model-provider credentials.'
+  };
+
+  const APPEARANCE_THEMES = [
+    { id: 'modern-light', name: 'Studio Modern', mode: 'Light', edition: 'Modern', accent: '#635bff', description: 'Clean surfaces, compact navigation, and a focused technical workspace.' },
+    { id: 'modern-dark', name: 'Studio Midnight', mode: 'Dark', edition: 'Modern', accent: '#8b83ff', description: 'A low-glare dark workspace with clear hierarchy and high-contrast controls.' },
+    { id: 'modern-forest', name: 'Studio Forest', mode: 'Dark', edition: 'Modern', accent: '#55b987', description: 'A calm green-accented dark theme for long training and debugging sessions.' },
+    { id: 'classic-light', name: 'Classic Editorial', mode: 'Light', edition: 'Classic', accent: '#9a3412', description: 'Keep the original warm paper, serif headings, and editorial character.' },
+    { id: 'classic-dark', name: 'Classic Ink', mode: 'Dark', edition: 'Classic', accent: '#e08a63', description: 'The original editorial style adapted for a comfortable dark workspace.' }
+  ];
+
   let activeApiBase = '';
+  let apiAuthToken = '';
+  let apiAuthPrompt = null;
+
+  function isLocalStudioHost(hostname) {
+    const host = (hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
+    return host === 'localhost' || host === '::1' || host === '0:0:0:0:0:0:0:1' || /^127(?:\.\d{1,3}){3}$/.test(host);
+  }
+
+  function requestApiAuthToken() {
+    if (apiAuthToken) return Promise.resolve(apiAuthToken);
+    if (!apiAuthPrompt) {
+      apiAuthPrompt = Promise.resolve(window.prompt('Enter the Triune remote API bearer token:'))
+        .then(token => {
+          apiAuthToken = (token || '').trim();
+          return apiAuthToken;
+        })
+        .finally(() => { apiAuthPrompt = null; });
+    }
+    return apiAuthPrompt;
+  }
 
 
   async function discoverApiBase() {
+    // A remotely served Studio should use its own origin; local port discovery
+    // could otherwise attach it to an unrelated API on the viewer's machine.
+    if ((window.location.protocol === 'http:' || window.location.protocol === 'https:') && !isLocalStudioHost(window.location.hostname)) return '';
     if (activeApiBase) {
       try {
         const controller = new AbortController();
@@ -1009,7 +1117,18 @@
   async function apiFetch(path, options = {}) {
     const apiBase = await discoverApiBase();
     const url = apiBase ? (apiBase + path) : path;
-    return fetch(url, options);
+    const send = (token) => {
+      const headers = new Headers(options.headers || {});
+      if (token) headers.set('Authorization', `Bearer ${token}`);
+      return fetch(url, { ...options, headers });
+    };
+    let response = await send(apiAuthToken);
+    if (response.status !== 401) return response;
+    const token = await requestApiAuthToken();
+    if (!token) return response;
+    response = await send(token);
+    if (response.status === 401) apiAuthToken = '';
+    return response;
   }
 
   // Persistent Top Global Status Bar Component Across All Tabs
@@ -1227,22 +1346,55 @@
         .replace(/\s+/g, ' ')
         .trim();
     };
-    const [activeTab, setActiveTab] = useState('chat');
+    const [activeTab, setActiveTab] = useState(() => {
+      try {
+        const savedTab = window.localStorage.getItem('triune.studio.activeTab');
+        return Object.prototype.hasOwnProperty.call(TAB_TITLES, savedTab) ? savedTab : 'chat';
+      } catch (e) {
+        return 'chat';
+      }
+    });
+    const [backendStatus, setBackendStatus] = useState('checking');
+    const [backendRetry, setBackendRetry] = useState(0);
     const [vramUsage, setVramUsage] = useState({ allocated: 0.0, reserved: 0.0, total: 8.0, oom_risk: false });
     const [systemDiagnostics, setSystemDiagnostics] = useState({ device_name: 'PyTorch Engine', cuda_available: false });
-    const [activeModel, setActiveModel] = useState('triune-base');
-    const [precision, setPrecision] = useState('FP8 Hybrid');
+    const [activeModel, setActiveModel] = useState('triune-small');
+    const [weightsLoaded, setWeightsLoaded] = useState(false);
+    const [precision, setPrecision] = useState('bf16');
     const [statusToast, setStatusToast] = useState(null);
-    const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+    const [studioTheme, setStudioTheme] = useState(() => {
+      try {
+        const saved = window.localStorage.getItem('triune.studio.theme');
+        return APPEARANCE_THEMES.some(theme => theme.id === saved) ? saved : 'modern-light';
+      } catch (e) { return 'modern-light'; }
+    });
+    const [appearanceFilter, setAppearanceFilter] = useState('All');
+    const [customAccent, setCustomAccent] = useState(() => {
+      try { return window.localStorage.getItem('triune.studio.customAccent') || ''; }
+      catch (e) { return ''; }
+    });
+    const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+      try { return window.localStorage.getItem('triune.studio.sidebarCollapsed') === 'true'; }
+      catch (e) { return false; }
+    });
+
+    useEffect(() => {
+      try {
+        window.localStorage.setItem('triune.studio.activeTab', activeTab);
+        window.localStorage.setItem('triune.studio.sidebarCollapsed', String(sidebarCollapsed));
+        window.localStorage.setItem('triune.studio.theme', studioTheme);
+        if (customAccent) window.localStorage.setItem('triune.studio.customAccent', customAccent);
+        else window.localStorage.removeItem('triune.studio.customAccent');
+      } catch (e) {}
+    }, [activeTab, sidebarCollapsed, studioTheme, customAccent]);
 
     // Chat State
     const [messages, setMessages] = useState([
       {
-        sender: 'Triune Engine',
-        text: 'Connected directly to native PyTorch MoE engine backend.',
+        sender: 'Triune Studio',
+        text: 'Welcome. Choose a model or provider, then send a prompt to begin. Backend connection status is shown above.',
         time: 'Just now',
-        isAssistant: true,
-        telemetry: { route: 'AUTO', vram: 'Live', latency: 'Direct' }
+        isAssistant: true
       }
     ]);
     const [chatInput, setChatInput] = useState('');
@@ -1250,7 +1402,7 @@
     const [route, setRoute] = useState('auto');
     const [systemPrompt, setSystemPrompt] = useState(SYSTEM_PROMPT_PRESETS[0].prompt);
     const [temperature, setTemperature] = useState(0.7);
-    const [maxTokens, setMaxTokens] = useState(2048);
+    const [maxTokens, setMaxTokens] = useState(256);
     const chatBottomRef = useRef(null);
     const chatAbortControllerRef = useRef(null);
 
@@ -1266,9 +1418,10 @@
     const [trainGradAccum, setTrainGradAccum] = useState(4);
     const [trainLR, setTrainLR] = useState('0.0005');
     const [trainWarmup, setTrainWarmup] = useState(500);
-    const [trainDepthMode, setTrainDepthMode] = useState('cortex');
+    const [trainDepthMode, setTrainDepthMode] = useState('dynamic');
     const [trainPrecision, setTrainPrecision] = useState('bf16');
     const [isUpdatingTrainConfig, setIsUpdatingTrainConfig] = useState(false);
+    const lastManualConfigEditRef = useRef(0);
 
     // WandB Experiment Tracking & Research Suite State
     const [chartMetrics, setChartMetrics] = useState({
@@ -1296,10 +1449,14 @@
     const [nodeCatalog, setNodeCatalog] = useState(BUILTIN_NODE_CATALOG);
 
     // Visual Node Graph State (Unreal Engine / Blender Style Freedom)
-    const [nodes, setNodes] = useState(DAG_PRESETS.triune_canonical_hierarchical.nodes);
-    const [edges, setEdges] = useState(DAG_PRESETS.triune_canonical_hierarchical.edges);
+    const [nodes, setNodes] = useState(() => (readSavedWorkflow() || DAG_PRESETS.triune_canonical_hierarchical).nodes);
+    const [edges, setEdges] = useState(() => (readSavedWorkflow() || DAG_PRESETS.triune_canonical_hierarchical).edges);
+    const [activePresetKey, setActivePresetKey] = useState(null);
+    const [workflowName, setWorkflowName] = useState(() => (readSavedWorkflow() || {}).name || 'My Triune Workflow');
+    const [workflowSaveState, setWorkflowSaveState] = useState('Saved locally');
     const [canvasPan, setCanvasPan] = useState({ x: 0, y: 0 });
     const [canvasZoom, setCanvasZoom] = useState(1.0);
+    const [socketPositions, setSocketPositions] = useState({});
     const [isPanning, setIsPanning] = useState(false);
     const [panStart, setPanStart] = useState({ x: 0, y: 0 });
     const [connectingWire, setConnectingWire] = useState(null);
@@ -1324,7 +1481,6 @@
       };
     }, []);
 
-    const [moduleCategoryFilter, setModuleCategoryFilter] = useState('all');
     const [draggingNodeId, setDraggingNodeId] = useState(null);
     const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
     const [connectingFromId, setConnectingFromId] = useState(null);
@@ -1334,24 +1490,57 @@
     const [activeRunningNodeId, setActiveRunningNodeId] = useState(null);
     const [showCustomNodeModal, setShowCustomNodeModal] = useState(false);
     const [showNodeLibraryModal, setShowNodeLibraryModal] = useState(false);
+    const [showDAGPresetLibrary, setShowDAGPresetLibrary] = useState(false);
     const [nodeSearchQuery, setNodeSearchQuery] = useState('');
     const [selectedNodeCategory, setSelectedNodeCategory] = useState('All');
     const [customNodeTitle, setCustomNodeTitle] = useState('');
     const [customNodeType, setCustomNodeType] = useState('Model');
     const [customNodeDetails, setCustomNodeDetails] = useState('');
     const [selectedNodeId, setSelectedNodeId] = useState(null);
+    const [selectedNodeIds, setSelectedNodeIds] = useState([]);
     const [selectedNodeParams, setSelectedNodeParams] = useState({});
+    const [showNewNodeParam, setShowNewNodeParam] = useState(false);
+    const [newNodeParamName, setNewNodeParamName] = useState('');
     const [isExecutingSingleNode, setIsExecutingSingleNode] = useState(false);
     const [showWorkspacePluginModal, setShowWorkspacePluginModal] = useState(false);
     const [newPluginName, setNewPluginName] = useState('CustomLossNode');
     const [newPluginCategory, setNewPluginCategory] = useState('Loss');
-    const [frames, setFrames] = useState([
-      { id: 'frame_moe_backbone', title: '6-Layer MoE Backbone & Router', x: 970, y: -60, width: 730, height: 570, color: '#63c7b218', borderColor: '#63c7b2' },
-      { id: 'frame_optimizers', title: 'Multi-Optimizer Pipeline', x: 1990, y: 70, width: 330, height: 320, color: '#e8cb4f18', borderColor: '#e8cb4f' }
-    ]);
+    const [frames, setFrames] = useState(() => (readSavedWorkflow() || {}).frames || []);
     const [quickAddMenu, setQuickAddMenu] = useState(null);
     const [isCompilingTraining, setIsCompilingTraining] = useState(false);
     const gridRef = useRef(null);
+
+    // Derive wire endpoints from the rendered socket pins. Node headers,
+    // variable port counts, fonts, and execution details all change card
+    // geometry, so guessed pixel offsets inevitably drift.
+    useEffect(() => {
+      if (activeTab !== 'nodegraph' || !gridRef.current) return undefined;
+      const frame = window.requestAnimationFrame(() => {
+        if (!gridRef.current) return;
+        const gridRect = gridRef.current.getBoundingClientRect();
+        const measured = {};
+        gridRef.current.querySelectorAll('[data-dag-input-node], [data-dag-output-node]').forEach(pin => {
+          const nodeId = pin.dataset.dagInputNode || pin.dataset.dagOutputNode;
+          const port = pin.dataset.dagInputPort || pin.dataset.dagOutputPort;
+          const side = pin.dataset.dagInputNode ? 'in' : 'out';
+          const pinRect = pin.getBoundingClientRect();
+          measured[`${nodeId}|${side}|${port}`] = {
+            x: (pinRect.left + pinRect.width / 2 - gridRect.left - canvasPan.x) / canvasZoom,
+            y: (pinRect.top + pinRect.height / 2 - gridRect.top - canvasPan.y) / canvasZoom
+          };
+        });
+        setSocketPositions(previous => {
+          const oldKeys = Object.keys(previous);
+          const newKeys = Object.keys(measured);
+          if (oldKeys.length === newKeys.length && newKeys.every(key =>
+            previous[key] && Math.abs(previous[key].x - measured[key].x) < 0.25 && Math.abs(previous[key].y - measured[key].y) < 0.25
+          )) return previous;
+          return measured;
+        });
+      });
+      return () => window.cancelAnimationFrame(frame);
+    }, [activeTab, nodes, edges, canvasPan, canvasZoom, nodeExecOutputs, studioTheme]);
+    const workflowImportRef = useRef(null);
 
     // Global Key Listener for Blender / Unreal Controls: Shift+A (Quick Add), M (Mute), Ctrl+J (Frame), Escape (Close)
     useEffect(() => {
@@ -1360,6 +1549,7 @@
           setShowOmnibarDropdown(false);
           setShowCustomNodeModal(false);
           setShowNodeLibraryModal(false);
+          setShowDAGPresetLibrary(false);
           setShowWorkspacePluginModal(false);
           setQuickAddMenu(null);
           return;
@@ -1382,6 +1572,12 @@
             return;
           }
 
+          if ((ev.ctrlKey || ev.metaKey) && (ev.key === 'g' || ev.key === 'G')) {
+            ev.preventDefault();
+            handleGroupSelectedNodes();
+            return;
+          }
+
           // M -> Mute / Unmute selected node
           if (ev.key === 'm' || ev.key === 'M') {
             if (selectedNodeId) {
@@ -1401,7 +1597,7 @@
       };
       window.addEventListener('keydown', handleGlobalKeyDown);
       return () => window.removeEventListener('keydown', handleGlobalKeyDown);
-    }, [activeTab, selectedNodeId, canvasMousePos, frames, nodes]);
+    }, [activeTab, selectedNodeId, selectedNodeIds, canvasMousePos, frames, nodes, edges]);
 
     // LoRA Fine-Tuner State
     const [loraConfig, setLoraConfig] = useState({
@@ -1418,6 +1614,7 @@
     // Dataset Manager State
     const [sampleText, setSampleText] = useState('Triune Engine accelerates local transformer training with MoE exit heads.');
     const [tokens, setTokens] = useState([]);
+    const [tokenizerStatus, setTokenizerStatus] = useState('Loading the configured tokenizer…');
     const [datasetList, setDatasetList] = useState([]);
     const [activeDataset, setActiveDataset] = useState('HuggingFaceFW/fineweb-edu');
     const [hfDatasetInput, setHfDatasetInput] = useState('roneneldan/TinyStories');
@@ -1436,8 +1633,11 @@
     const [isExecutingNotebook, setIsExecutingNotebook] = useState(false);
 
     // BYOK State
-    const [byokKeys, setByokKeys] = useState({ openai: '', anthropic: '', gemini: '', huggingface: '' });
+    const [byokKeys, setByokKeys] = useState({ openai: '', anthropic: '', gemini: '', huggingface: '', wandb: '' });
     const [byokStatus, setByokStatus] = useState({});
+    const [byokConfigured, setByokConfigured] = useState({});
+    const [wandbUrl, setWandbUrl] = useState('');
+    const [wandbActive, setWandbActive] = useState(false);
 
     // System Scanner & Module Marketplace State
     const [systemScan, setSystemScan] = useState(null);
@@ -1453,6 +1653,7 @@
     const [moduleFilter, setModuleFilter] = useState('all');
     const [moduleSearchQuery, setModuleSearchQuery] = useState('');
     const [marketplaceData, setMarketplaceData] = useState({ curated: [], github: [], huggingface: [], installed_count: 0 });
+    const [marketplaceError, setMarketplaceError] = useState('');
     const [installedModules, setInstalledModules] = useState([]);
     const [availableUpdates, setAvailableUpdates] = useState([]);
     const [isSearchingModules, setIsSearchingModules] = useState(false);
@@ -1488,18 +1689,236 @@
       toastTimerRef.current = setTimeout(() => setStatusToast(null), 3000);
     };
 
+    useEffect(() => {
+      setWorkflowSaveState('Saving…');
+      const timer = setTimeout(() => {
+        try {
+          window.localStorage.setItem('triune.studio.workflow.v1', JSON.stringify({
+            format: 'triune-workflow', version: 1,
+            name: workflowName || 'My Triune Workflow',
+            nodes, edges, frames, saved_at: new Date().toISOString()
+          }));
+          setWorkflowSaveState('Saved locally');
+        } catch (_) {
+          setWorkflowSaveState('Local save unavailable');
+        }
+      }, 350);
+      return () => clearTimeout(timer);
+    }, [nodes, edges, frames, workflowName]);
+
+    const handleExportWorkflow = () => {
+      const payload = {
+        format: 'triune-workflow', version: 1,
+        name: workflowName || 'My Triune Workflow',
+        nodes, edges, frames, exported_at: new Date().toISOString()
+      };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      const safeName = (payload.name || 'triune-workflow').replace(/[^a-z0-9_-]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'triune-workflow';
+      link.href = url;
+      link.download = `${safeName}.triune.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      showToast('Workflow exported with its nested groups and connections.');
+    };
+
+    const handleImportWorkflowFile = async (file) => {
+      if (!file) return;
+      if (file.size > 10 * 1024 * 1024) {
+        showToast('Workflow file is larger than the 10 MB safety limit.');
+        return;
+      }
+      try {
+        const payload = JSON.parse(await file.text());
+        if (payload.format !== 'triune-workflow' || payload.version !== 1 || !Array.isArray(payload.nodes) || !Array.isArray(payload.edges)) {
+          throw new Error('This is not a supported Triune workflow file.');
+        }
+        const ids = new Set();
+        for (const node of payload.nodes) {
+          if (!node || typeof node.id !== 'string' || !node.id.trim() || ids.has(node.id)) throw new Error('Workflow nodes need unique, non-empty IDs.');
+          ids.add(node.id);
+        }
+        for (const edge of payload.edges) {
+          if (!edge || !ids.has(edge.source) || !ids.has(edge.target)) throw new Error('A workflow wire references a missing node.');
+        }
+        const importedFrames = payload.frames === undefined ? [] : payload.frames;
+        if (!Array.isArray(importedFrames) || importedFrames.some(frame =>
+          !frame || typeof frame.id !== 'string' || typeof frame.title !== 'string' ||
+          ![frame.x, frame.y, frame.width, frame.height].every(Number.isFinite) ||
+          frame.width < 120 || frame.height < 80 || frame.width > 20000 || frame.height > 20000 ||
+          (frame.color !== undefined && (typeof frame.color !== 'string' || !/^#[\da-f]{3,8}$/i.test(frame.color))) ||
+          (frame.borderColor !== undefined && (typeof frame.borderColor !== 'string' || !/^#[\da-f]{3,8}$/i.test(frame.borderColor)))
+        )) throw new Error('Workflow frames have invalid labels, sizes, or colors.');
+        setNodes(payload.nodes);
+        setEdges(payload.edges);
+        setFrames(importedFrames);
+        setActivePresetKey(null);
+        setWorkflowName(typeof payload.name === 'string' && payload.name.trim() ? payload.name.trim() : file.name.replace(/\.triune\.json$|\.json$/i, ''));
+        setNodeExecOutputs({});
+        setSelectedNodeId(null);
+        setSelectedNodeIds([]);
+        setDagExecutionStatus(null);
+        showToast(`Imported workflow “${payload.name || file.name}”.`);
+      } catch (err) {
+        showToast(`Could not import workflow: ${err.message || 'invalid file'}`);
+      }
+    };
+
+    const refreshNodeCatalog = async () => {
+      try {
+        const res = await apiFetch('/v1/nodes/catalog');
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          setNodeCatalog(data.map(item => {
+            const builtin = BUILTIN_NODE_CATALOG.find(candidate => candidate.name === item.name);
+            return {
+              ...item,
+              title: item.title || (builtin && builtin.title) || item.name || 'Unnamed node',
+              description: item.description || (builtin && builtin.description) || '',
+              inputs: Array.isArray(item.inputs) ? item.inputs : [],
+              outputs: Array.isArray(item.outputs) ? item.outputs : []
+            };
+          }));
+        }
+      } catch (e) {}
+    };
+
+    const updateDetailsString = (detailsStr, patchObj) => {
+      const lines = (detailsStr || '').split('\n');
+      const remaining = { ...patchObj };
+      const nextLines = lines.map(line => {
+        const t = line.trim();
+        if (!t || t.startsWith('#')) return line;
+        const eq = t.indexOf('=');
+        if (eq !== -1) {
+          const k = t.slice(0, eq).trim();
+          if (Object.prototype.hasOwnProperty.call(remaining, k) && remaining[k] !== undefined) {
+            const v = remaining[k];
+            delete remaining[k];
+            return `${k}=${v}`;
+          }
+        }
+        return line;
+      });
+      Object.entries(remaining).forEach(([k, v]) => {
+        if (v !== undefined) {
+          nextLines.push(`${k}=${v}`);
+        }
+      });
+      return nextLines.filter(Boolean).join('\n');
+    };
+
+    // Non-destructive bidirectional sync from UI/Engine state onto Visual Node Canvas
+    const syncStateToDAGNodes = (patch) => {
+      if (!patch || typeof patch !== 'object') return;
+      setNodes(prev => prev.map(n => {
+        const ntype = n.type || '';
+        const title = n.title || '';
+        const isStreamer = (
+          n.id === 'node_1' ||
+          ntype === 'Dataset' ||
+          ntype === 'HuggingFaceStreamer' ||
+          ntype === 'HFRestStreamReader' ||
+          title.includes('Streamer') ||
+          title.includes('Reader') ||
+          (ntype === 'Data' && !title.includes('Token') && !title.includes('DataLoader'))
+        );
+        const isDataLoader = (
+          n.id === 'node_3' ||
+          ntype === 'DataLoader' ||
+          ntype === 'CyclingDataLoader' ||
+          title.includes('DataLoader')
+        );
+        const isModel = (
+          n.id === 'node_5' ||
+          ntype === 'Model' ||
+          ntype === 'TriuneTransformer' ||
+          title.includes('Transformer') ||
+          title.includes('MoE') ||
+          title.includes('Backbone')
+        );
+        const isRouter = (
+          n.id === 'node_6' ||
+          ntype === 'Router' ||
+          ntype === 'ExitRouter' ||
+          ntype === 'HierarchicalDepthRouter' ||
+          title.includes('Router')
+        );
+        const isPrecision = (
+          n.id === 'node_7' ||
+          ntype === 'Precision' ||
+          ntype === 'FP8Linear' ||
+          ntype === 'NF4Quantizer' ||
+          title.includes('FP8') ||
+          title.includes('Quantiz')
+        );
+        const isOptimizer = (
+          ntype === 'Optimizer' ||
+          title.includes('AdamW')
+        );
+        const isRuntime = (
+          ntype === 'Runtime' ||
+          title.includes('Accumulat')
+        );
+        const isAdapter = (
+          ntype === 'Adapter' ||
+          ntype === 'LoRAAdapter' ||
+          title.includes('LoRA')
+        );
+
+        let nodePatch = null;
+        if (isStreamer && (patch.dataset_name !== undefined || patch.split !== undefined || patch.text_column !== undefined)) {
+          nodePatch = {};
+          if (patch.dataset_name !== undefined) nodePatch.dataset_name = patch.dataset_name;
+          if (patch.split !== undefined) nodePatch.split = patch.split;
+          if (patch.text_column !== undefined) nodePatch.text_column = patch.text_column;
+        } else if (isDataLoader && (patch.batch_size !== undefined || patch.seq_len !== undefined)) {
+          nodePatch = {};
+          if (patch.batch_size !== undefined) nodePatch.batch_size = patch.batch_size;
+          if (patch.seq_len !== undefined) nodePatch.seq_len = patch.seq_len;
+        } else if (isModel && (patch.preset_id !== undefined || patch.num_layers !== undefined || patch.hidden_dim !== undefined || patch.num_heads !== undefined || patch.head_dim !== undefined || patch.num_experts !== undefined)) {
+          nodePatch = {};
+          if (patch.preset_id !== undefined) nodePatch.preset_id = patch.preset_id;
+          if (patch.num_layers !== undefined) nodePatch.num_layers = patch.num_layers;
+          if (patch.hidden_dim !== undefined) nodePatch.hidden_dim = patch.hidden_dim;
+          if (patch.num_heads !== undefined) nodePatch.heads = patch.num_heads;
+          if (patch.head_dim !== undefined) nodePatch.head_dim = patch.head_dim;
+          if (patch.num_experts !== undefined) nodePatch.experts_routed = patch.num_experts;
+        } else if (isRouter && (patch.depth_mode !== undefined || patch.num_layers !== undefined)) {
+          nodePatch = {};
+          if (patch.depth_mode !== undefined) nodePatch.depth_mode = patch.depth_mode;
+          if (patch.num_layers !== undefined) {
+            const nl = Math.max(2, parseInt(patch.num_layers) || 6);
+            nodePatch.reflex_exit_layer = Math.max(1, Math.floor(nl / 3) - 1);
+            nodePatch.limbic_exit_layer = Math.max(1, Math.floor((2 * nl) / 3) - 1);
+            nodePatch.cortex_exit_layer = nl - 1;
+          }
+        } else if (isPrecision && patch.precision !== undefined) {
+          const pLow = String(patch.precision).toLowerCase();
+          nodePatch = {
+            dtype: pLow === 'fp8' ? 'fp8_e4m3fn' : (pLow === 'fp4' ? 'fp4' : pLow)
+          };
+        } else if (isOptimizer && patch.lr !== undefined) {
+          nodePatch = { lr: patch.lr };
+        } else if (isRuntime && patch.grad_accum_steps !== undefined) {
+          nodePatch = { grad_accum_steps: patch.grad_accum_steps };
+        } else if (isAdapter && (patch.lora_rank !== undefined || patch.lora_alpha !== undefined)) {
+          nodePatch = {};
+          if (patch.lora_rank !== undefined) nodePatch.rank = patch.lora_rank;
+          if (patch.lora_alpha !== undefined) nodePatch.alpha = patch.lora_alpha;
+        }
+
+        if (!nodePatch || Object.keys(nodePatch).length === 0) return n;
+        return { ...n, details: updateDetailsString(n.details, nodePatch) };
+      }));
+    };
+
     // System Diagnostics, Catalog & Live Telemetry WebSocket
     useEffect(() => {
-      const fetchCatalog = async () => {
-        try {
-          const res = await apiFetch('/v1/nodes/catalog');
-          const data = await res.json();
-          if (Array.isArray(data) && data.length > 0) {
-            setNodeCatalog(data);
-          }
-        } catch (e) {}
-      };
-      fetchCatalog();
+      refreshNodeCatalog();
 
       // Connect to WebSocket telemetry stream for live DAG and training events (with auto-reconnect)
       let ws = null;
@@ -1510,7 +1929,15 @@
           const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
           const wsUrl = `${protocol}//${window.location.host}/ws/telemetry`;
           ws = new WebSocket(wsUrl);
-          ws.onopen = () => { wsReconnectDelay = 1000; };
+          ws.onopen = () => {
+            wsReconnectDelay = 1000;
+            // Cloudflare Access authenticates the browser at the edge and the
+            // tunnel reaches this server over loopback. Only send a Triune
+            // bearer token when a direct-remote API request has already needed it.
+            if (!isLocalStudioHost(window.location.hostname) && apiAuthToken && ws.readyState === WebSocket.OPEN) {
+              ws.send(apiAuthToken);
+            }
+          };
           ws.onmessage = (event) => {
             try {
               const msg = JSON.parse(event.data);
@@ -1533,23 +1960,65 @@
                     }
                   }));
                 } else if (d.event === 'node_failed') {
+                  const nodeError = d.error || d.output?.error || d.output?.message || 'Node failed without a diagnostic from the execution engine.';
                   setNodeExecOutputs(prev => ({
                     ...prev,
                     [d.node_id]: {
                       status: 'failed',
-                      error: d.error,
+                      error: nodeError,
+                      output: d.output || {},
                       elapsed: d.elapsed_sec
                     }
                   }));
-                  setDagExecutionStatus(`Node ${d.node_name} failed: ${d.error}`);
+                  setDagExecutionStatus(`Node ${d.node_name || d.node_id} failed: ${nodeError}`);
                 }
-              } else if (msg.type === 'training_step' && msg.data) {
-                setMetrics(msg.data);
-                setMetricsHistory(prev => [...prev, msg.data]);
+              } else if ((msg.type === 'training_step' || msg.type === 'step') && msg.data) {
+                const d = msg.data;
+                setMetrics(d);
+                setMetricsHistory(prev => {
+                  const next = [...prev, d];
+                  return next.length > 100 ? next.slice(next.length - 100) : next;
+                });
+                if (d.exit_usage) setExitUsage(d.exit_usage);
+                if (d.batch_preview) setActiveBatchPreview(d.batch_preview);
+                if (d.active_checkpoint) setActiveCheckpointName(d.active_checkpoint);
+                if (typeof d.vram_gb === 'number') {
+                  setVramUsage(prev => ({ ...prev, allocated: d.vram_gb }));
+                }
+              } else if (msg.type === 'checkpoint_loaded' && msg.data) {
+                const d = msg.data;
+                if (d.active_checkpoint) setActiveCheckpointName(d.active_checkpoint);
+                if (d.active_model) setActiveModel(d.active_model);
+                if (d.architecture) {
+                  setDatasetInfo(prev => ({
+                    ...prev,
+                    num_layers: d.architecture.num_layers ?? prev.num_layers,
+                    hidden_dim: d.architecture.hidden_dim ?? prev.hidden_dim,
+                    num_heads: d.architecture.num_heads ?? prev.num_heads,
+                    num_experts: d.architecture.num_experts ?? prev.num_experts
+                  }));
+                }
+                setWeightsLoaded(true);
+                if (d.step !== undefined) {
+                  setMetrics(prev => ({ ...prev, step: d.step, tokens_trained: d.tokens_trained || prev.tokens_trained }));
+                }
+                if (d.tokens_trained !== undefined) {
+                  setDatasetInfo(prev => ({ ...prev, total_tokens: d.tokens_trained }));
+                }
               }
             } catch (e) {}
           };
-          ws.onclose = () => {
+          ws.onclose = (event) => {
+            if (event.code === 1008 && !isLocalStudioHost(window.location.hostname)) {
+              apiAuthToken = '';
+              // A direct remote server rejects the unauthenticated socket;
+              // prompt only after that rejection. Access-protected tunnels
+              // using loopback never hit this branch or show a token prompt.
+              requestApiAuthToken().then(token => {
+                if (token) connectWs();
+              });
+              return;
+            }
             // Auto-reconnect with exponential backoff (max 15s)
             wsReconnectTimer = setTimeout(() => {
               wsReconnectDelay = Math.min(wsReconnectDelay * 1.5, 15000);
@@ -1561,9 +2030,25 @@
       };
       connectWs();
 
+      let fetchInFlight = false;
+      let backendHealthFailures = 0;
       const fetchSystemInfo = async () => {
+        if (fetchInFlight) return;
+        fetchInFlight = true;
+        let healthCheckSucceeded = false;
         try {
+          const healthRes = await apiFetch('/healthz');
+          if (!healthRes.ok) {
+            backendHealthFailures += 1;
+            if (backendHealthFailures >= 3) setBackendStatus('offline');
+            return;
+          }
+          healthCheckSucceeded = true;
+          backendHealthFailures = 0;
+          setBackendStatus('online');
+
           const resDiag = await apiFetch('/v1/system/diagnostics');
+          if (!resDiag.ok) return;
           const dataDiag = await resDiag.json();
           if (dataDiag.device_name) setSystemDiagnostics(dataDiag);
 
@@ -1588,22 +2073,47 @@
           const statusData = await statusRes.json();
           setIsTraining(statusData.is_training);
           if (statusData.active_model) {
-            setActiveModel(statusData.active_model);
+            setActiveModel(prev => {
+              const isByok = prev && (prev.includes('gpt') || prev.includes('claude') || prev.includes('gemini'));
+              return isByok ? prev : statusData.active_model;
+            });
           }
+          setWeightsLoaded(Boolean(statusData.weights_loaded));
+          if (statusData.precision) {
+            setTrainPrecision(statusData.precision);
+            setPrecision(statusData.precision);
+          }
+          if (statusData.gpu_offload_pct !== undefined) setGpuOffloadPct(statusData.gpu_offload_pct);
+          if (statusData.gpu_layers !== undefined) setGpuLayers(statusData.gpu_layers);
+          if (statusData.warmup_steps !== undefined) setTrainWarmup(statusData.warmup_steps);
+          if (statusData.active_adapter !== undefined) {
+            setActiveAdapter(statusData.active_adapter);
+          }
+          if (statusData.wandb_url) setWandbUrl(statusData.wandb_url);
+          if (statusData.wandb_active !== undefined) setWandbActive(statusData.wandb_active);
           if (statusData.dataset) {
-            setDatasetInfo(statusData.dataset);
-            if (statusData.dataset.batch_size) setTrainBatchSize(statusData.dataset.batch_size);
-            if (statusData.dataset.seq_len) setTrainSeqLen(statusData.dataset.seq_len);
-            if (statusData.dataset.grad_accum_steps) setTrainGradAccum(statusData.dataset.grad_accum_steps);
-            if (statusData.dataset.depth_mode) setTrainDepthMode(statusData.dataset.depth_mode);
-            if (statusData.dataset.current_lr) setTrainLR(String(statusData.dataset.current_lr));
+            const arch = statusData.architecture || {};
+            setDatasetInfo(prev => ({
+              ...prev,
+              ...statusData.dataset,
+              num_layers: arch.num_layers || prev.num_layers || 6,
+              hidden_dim: arch.hidden_dim || prev.hidden_dim || 256,
+              num_heads: arch.num_heads || prev.num_heads || 4,
+              num_experts: arch.num_experts || prev.num_experts || 4
+            }));
+            if (statusData.dataset.name) setActiveDataset(statusData.dataset.name);
+            if (Date.now() - lastManualConfigEditRef.current > 4000) {
+              if (statusData.dataset.batch_size) setTrainBatchSize(statusData.dataset.batch_size);
+              if (statusData.dataset.seq_len) setTrainSeqLen(statusData.dataset.seq_len);
+              if (statusData.dataset.grad_accum_steps) setTrainGradAccum(statusData.dataset.grad_accum_steps);
+              if (statusData.dataset.depth_mode) setTrainDepthMode(statusData.dataset.depth_mode);
+              if (statusData.dataset.current_lr) setTrainLR(String(statusData.dataset.current_lr));
+            }
             if (statusData.dataset.active_batch_preview) {
               setActiveBatchPreview(statusData.dataset.active_batch_preview);
             }
           }
-          if (statusData.active_checkpoint) {
-            setActiveCheckpointName(statusData.active_checkpoint);
-          }
+          setActiveCheckpointName(statusData.active_checkpoint || null);
           if (statusData.history && statusData.history.length > 0) {
             setMetricsHistory(statusData.history);
             const latest = statusData.history[statusData.history.length - 1];
@@ -1612,7 +2122,14 @@
             if (latest.batch_preview) setActiveBatchPreview(latest.batch_preview);
           }
           if (statusData.logs && statusData.logs.length > 0) setTelemetryLogs(statusData.logs);
-        } catch (err) {}
+        } catch (err) {
+          if (!healthCheckSucceeded) {
+            backendHealthFailures += 1;
+            if (backendHealthFailures >= 3) setBackendStatus('offline');
+          }
+        } finally {
+          fetchInFlight = false;
+        }
       };
       fetchSystemInfo();
       const interval = setInterval(fetchSystemInfo, 3000);
@@ -1624,7 +2141,7 @@
           try { ws.close(); } catch (e) {}
         }
       };
-    }, []);
+    }, [backendRetry]);
 
     // Auto-scroll chat smoothly on new messages or generation updates
     useEffect(() => {
@@ -1650,7 +2167,11 @@
         const data = await res.json();
         setSystemConfig(data);
         if (data.byok_keys) {
-          setByokKeys(prev => ({ ...prev, ...data.byok_keys }));
+          // Never place masked server values in the editable secret inputs.
+          // They are display metadata only; blank means "keep the saved key".
+          setByokConfigured(Object.fromEntries(
+            Object.entries(data.byok_keys).map(([provider, value]) => [provider, Boolean(value)])
+          ));
         }
       } catch (err) {}
     };
@@ -1717,12 +2238,11 @@
             setActiveBatchPreview(data.sample_preview);
           }
           setLoraConfig(prev => ({ ...prev, dataset: dName }));
-          setNodes(prev => prev.map(n => {
-            if (n.type === 'Data' || n.id === 'node_1') {
-              return { ...n, details: `dataset=${dName}\nmode=live_stream\nsplit=${split}` };
-            }
-            return n;
-          }));
+          syncStateToDAGNodes({
+            dataset_name: dName,
+            split: (split || 'train').trim(),
+            text_column: data.text_column || (col || 'text').trim()
+          });
           showToast(`Streaming live from ${dName}`);
           fetchDatasets();
         } else {
@@ -1745,24 +2265,30 @@
           body: JSON.stringify({ dataset_path: dPath })
         });
         const data = await res.json();
-        if (data.status === 'success') {
+        if (res.ok && data.status === 'success') {
           setActiveDataset(ds.name);
-          setLoraConfig(prev => ({ ...prev, dataset: dPath }));
-          setNodes(prev => prev.map(n => {
-            if (n.type === 'Data' || n.id === 'node_1') {
-              return { ...n, details: `dataset=${ds.name}\nsource=${dPath}` };
-            }
-            return n;
+          setDatasetInfo(prev => ({
+            ...prev,
+            name: ds.name,
+            type: ds.type || (dPath.includes('/') && !dPath.startsWith('data/') ? 'streaming' : 'local'),
+            active_batch_preview: data.sample_preview || prev.active_batch_preview
           }));
+          if (data.sample_preview) {
+            setActiveBatchPreview(data.sample_preview);
+          }
+          setLoraConfig(prev => ({ ...prev, dataset: dPath }));
+          syncStateToDAGNodes({
+            dataset_name: ds.name,
+            split: 'train',
+            text_column: data.text_column || 'text'
+          });
           showToast(`Activated ${ds.name} across Training, LoRA & DAG!`);
           fetchDatasets();
         } else {
           showToast(`Could not activate dataset: ${data.message || 'error'}`);
         }
       } catch (e) {
-        setActiveDataset(ds.name);
-        setLoraConfig(prev => ({ ...prev, dataset: dPath }));
-        showToast(`Switched active dataset to ${ds.name}`);
+        showToast(`Could not activate dataset ${ds.name}: ${e.message || 'backend request failed'}`);
       }
     };
 
@@ -1811,6 +2337,23 @@
       }
     };
 
+    const handleExportCheckpoint = async (checkpointPath) => {
+      try {
+        const res = await apiFetch('/v1/checkpoints/export', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ checkpoint_path: checkpointPath })
+        });
+        const data = await res.json();
+        if (!res.ok || data.status !== 'success') {
+          throw new Error(data.message || data.detail || `Export failed (${res.status})`);
+        }
+        showToast(data.message || `Exported selected checkpoint to ${data.path}`);
+      } catch (err) {
+        showToast(`Checkpoint export failed: ${err.message || 'backend request failed'}`);
+      }
+    };
+
     const saveSystemConfig = async (newCfg) => {
       try {
         const res = await apiFetch('/v1/system/config', {
@@ -1819,20 +2362,25 @@
           body: JSON.stringify(newCfg)
         });
         const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || data.message || `Save failed (${res.status})`);
         setSystemConfig(data);
         showToast('System configuration & custom paths saved!');
       } catch (err) {
-        showToast('Failed to save configuration.');
+        showToast(`Failed to save configuration: ${err.message || 'backend request failed'}`);
       }
     };
 
     const searchMarketplace = async (query = moduleSearchQuery, filter = moduleFilter, source = 'all') => {
       setIsSearchingModules(true);
+      setMarketplaceError('');
       try {
         const res = await apiFetch(`/v1/modules/search?q=${encodeURIComponent(query)}&type=${encodeURIComponent(filter)}&source=${encodeURIComponent(source)}`);
+        if (!res.ok) throw new Error(`Search failed (HTTP ${res.status})`);
         const data = await res.json();
         setMarketplaceData(data);
-      } catch (err) {}
+      } catch (err) {
+        setMarketplaceError(err.message || 'Could not search the extension marketplace.');
+      }
       setIsSearchingModules(false);
     };
 
@@ -1847,6 +2395,7 @@
     const checkModuleUpdates = async () => {
       try {
         const res = await apiFetch('/v1/modules/updates');
+        if (!res.ok) throw new Error(`Update check failed (HTTP ${res.status})`);
         const data = await res.json();
         setAvailableUpdates(data);
         if (data.length > 0) {
@@ -1854,7 +2403,9 @@
         } else {
           showToast('All modules are up to date.');
         }
-      } catch (err) {}
+      } catch (err) {
+        showToast(`Could not check extension updates: ${err.message || 'backend unavailable'}`);
+      }
     };
 
     const handleCloneCustomRepo = async (ev) => {
@@ -1880,6 +2431,9 @@
           showToast(`Successfully cloned ${data.name || 'repository'}!`);
           setRepoCloneUrl('');
           await fetchInstalledModules();
+          await refreshNodeCatalog();
+          fetchDatasets();
+          fetchCheckpoints();
           setMarketplaceSubTab('installed');
           if (data.registered_nodes && data.registered_nodes.length > 0) {
             showToast(`Registered DAG nodes: ${data.registered_nodes.join(', ')}`);
@@ -1906,6 +2460,7 @@
         if (data.status === 'success') {
           showToast(data.message);
           await fetchInstalledModules();
+          await refreshNodeCatalog();
         } else {
           showToast(`Notice: ${data.message || 'Git pull failed'}`);
         }
@@ -1924,11 +2479,17 @@
           body: JSON.stringify(modData)
         });
         const data = await res.json();
+        if (!res.ok || data.success !== true) {
+          throw new Error(data.message || `Install failed (${res.status})`);
+        }
         showToast(data.message || `Installed ${modData.name}`);
-        fetchInstalledModules();
-        searchMarketplace(moduleSearchQuery, moduleFilter, 'all');
+        await fetchInstalledModules();
+        await refreshNodeCatalog();
+        await fetchDatasets();
+        await fetchCheckpoints();
+        await searchMarketplace(moduleSearchQuery, moduleFilter, 'all');
       } catch (err) {
-        showToast(`Installation failed for ${modData.name}`);
+        showToast(`Installation failed for ${modData.name}: ${err.message || 'backend request failed'}`);
       }
     };
 
@@ -1941,9 +2502,13 @@
           body: JSON.stringify({ id: modId })
         });
         const data = await res.json();
+        if (!res.ok || data.success !== true) {
+          throw new Error(data.message || `Uninstall failed (${res.status})`);
+        }
         showToast(data.message || 'Module uninstalled');
-        fetchInstalledModules();
-        searchMarketplace(moduleSearchQuery, moduleFilter, 'all');
+        await fetchInstalledModules();
+        await refreshNodeCatalog();
+        await searchMarketplace(moduleSearchQuery, moduleFilter, 'all');
       } catch (err) {
         showToast(`Uninstall failed: ${err.message}`);
       }
@@ -1957,6 +2522,7 @@
         if (data.success) {
           showToast(data.message);
           fetchInstalledModules();
+          refreshNodeCatalog();
         } else {
           showToast(`Notice: ${data.message || 'Scan completed'}`);
         }
@@ -1976,7 +2542,7 @@
         });
         const data = await res.json();
         if (data.success) {
-          showToast(`Created ${data.file_path}! Registered in catalog.`);
+          showToast(data.message || `Created plugin template at ${data.file_path}. Review it, then scan the workspace to load it.`);
           setShowWorkspacePluginModal(false);
           fetchInstalledModules();
         } else {
@@ -2024,9 +2590,10 @@
           body: JSON.stringify({ checkpoint_path: ckptTarget })
         });
         const data = await res.json();
-        if (data.status === 'success') {
-          showToast(`Loaded model weights from ${m.name}!`);
-          setActiveModel(m.id || m.name);
+        if (res.ok && data.status === 'success') {
+          showToast(data.message || `Loaded model weights from ${m.name}.`);
+          if (data.active_model) setActiveModel(data.active_model);
+          setWeightsLoaded(Boolean(data.weights_loaded));
           if (data.checkpoint) setActiveCheckpointName(data.checkpoint);
           if (data.step !== undefined) {
             const restoredTok = data.tokens_trained !== undefined ? data.tokens_trained : (data.step * 1024);
@@ -2034,12 +2601,11 @@
             setDatasetInfo(prev => ({ ...prev, total_tokens: restoredTok }));
           }
         } else {
-          setActiveModel(m.id || m.name);
-          showToast(`Switched active model architecture to ${m.name}`);
+          throw new Error(data.message || `Weight load failed (${res.status})`);
         }
       } catch (err) {
-        setActiveModel(m.id || m.name);
-        showToast(`Switched active model architecture to ${m.name}`);
+        showToast(`Could not load ${m.name}: ${err.message || 'backend request failed'}`);
+        return;
       }
       setActiveTab('chat');
     };
@@ -2055,10 +2621,68 @@
       handleConnectHfStream(dsName, '', 'train', 'text');
     };
 
+    const handleAttachAdapterToEngine = async (adapterSpec) => {
+      const spec = adapterSpec || {
+        id: `lora-r${loraConfig.rank}`,
+        name: `LoRA-r${loraConfig.rank}`,
+        rank: loraConfig.rank,
+        alpha: loraConfig.alpha,
+        quantization: loraConfig.quantization || '4-bit NF4'
+      };
+      try {
+        const res = await apiFetch('/v1/finetune/adapter', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'attach',
+            id: spec.id,
+            name: spec.name,
+            path: spec.path,
+            rank: spec.rank || 16,
+            alpha: spec.alpha || 32.0,
+            quantization: spec.quantization || loraConfig.quantization || '4-bit NF4'
+          })
+        });
+        const data = await res.json();
+        if (!res.ok || data.status !== 'success' || !data.active_adapter) {
+          throw new Error(data.message || `Adapter attach failed (${res.status})`);
+        }
+        setActiveAdapter(data.active_adapter);
+        syncStateToDAGNodes({ lora_rank: data.active_adapter.rank, lora_alpha: data.active_adapter.alpha });
+        showToast(data.message || `Attached ${data.active_adapter.name} to the engine.`);
+      } catch (err) {
+        showToast(`Could not attach ${spec.name}: ${err.message || 'backend request failed'}`);
+      }
+    };
+
+    const handleDetachAdapterFromEngine = async () => {
+      try {
+        const res = await apiFetch('/v1/finetune/adapter', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'detach' })
+        });
+        const data = await res.json();
+        if (!res.ok || data.status !== 'success' || data.action !== 'detached') {
+          throw new Error(data.message || `Adapter detach failed (${res.status})`);
+        }
+        setActiveAdapter(null);
+        showToast(data.message || 'Detached LoRA Adapter from Studio Engine');
+      } catch (err) {
+        showToast(`Could not detach adapter: ${err.message || 'backend request failed'}`);
+      }
+    };
+
     const handleAttachModuleAdapter = (m) => {
-      setActiveAdapter({ name: m.name, rank: 16 });
+      handleAttachAdapterToEngine({
+        id: m.id,
+        name: m.name,
+        path: m.installed_at,
+        rank: 16,
+        alpha: 32,
+        quantization: loraConfig.quantization || '4-bit NF4'
+      });
       setActiveTab('finetune');
-      showToast(`Attached adapter ${m.name} to Studio Engine!`);
     };
 
     // Checkpoint Management Handlers
@@ -2086,6 +2710,8 @@
         const data = await res.json();
         if (data.status === 'success') {
           showToast(data.message);
+          if (data.active_model) setActiveModel(data.active_model);
+          setWeightsLoaded(Boolean(data.weights_loaded));
           setActiveCheckpointName(data.checkpoint);
           if (data.step !== undefined) {
             const restoredTok = data.tokens_trained !== undefined ? data.tokens_trained : (data.step * 1024);
@@ -2169,10 +2795,12 @@
             }
             if (data.dataset) {
               setDatasetInfo(data.dataset);
-              if (data.dataset.batch_size) setTrainBatchSize(data.dataset.batch_size);
-              if (data.dataset.seq_len) setTrainSeqLen(data.dataset.seq_len);
-              if (data.dataset.grad_accum_steps) setTrainGradAccum(data.dataset.grad_accum_steps);
-              if (data.dataset.depth_mode) setTrainDepthMode(data.dataset.depth_mode);
+              if (Date.now() - lastManualConfigEditRef.current > 4000) {
+                if (data.dataset.batch_size) setTrainBatchSize(data.dataset.batch_size);
+                if (data.dataset.seq_len) setTrainSeqLen(data.dataset.seq_len);
+                if (data.dataset.grad_accum_steps) setTrainGradAccum(data.dataset.grad_accum_steps);
+                if (data.dataset.depth_mode) setTrainDepthMode(data.dataset.depth_mode);
+              }
               if (data.dataset.active_batch_preview) {
                 setActiveBatchPreview(data.dataset.active_batch_preview);
               }
@@ -2199,8 +2827,10 @@
     useEffect(() => {
       if (!sampleText) {
         setTokens([]);
+        setTokenizerStatus('Enter text to preview tokens.');
         return;
       }
+      let cancelled = false;
       const tid = setTimeout(async () => {
         try {
           const res = await apiFetch('/v1/tokenizer/tokenize', {
@@ -2209,16 +2839,21 @@
             body: JSON.stringify({ text: sampleText })
           });
           const data = await res.json();
+          if (cancelled) return;
           if (data.tokens && data.tokens.length > 0) {
             setTokens(data.tokens);
+            setTokenizerStatus(`${data.tokenizer || 'Configured tokenizer'} · ${data.tokens.length} tokens`);
             return;
           }
-        } catch (e) {}
-        const words = sampleText.split(/(\s+)/);
-        let idCounter = 1000;
-        setTokens(words.map((w, idx) => ({ id: idCounter + idx * 7, text: w })));
+          setTokens([]);
+          setTokenizerStatus(data.message || 'No configured tokenizer is available. Load a tokenizer to see real token IDs.');
+        } catch (err) {
+          if (cancelled) return;
+          setTokens([]);
+          setTokenizerStatus(`Tokenizer service unavailable: ${err.message || 'could not reach the engine'}`);
+        }
       }, 200);
-      return () => clearTimeout(tid);
+      return () => { cancelled = true; clearTimeout(tid); };
     }, [sampleText]);
 
     // WandB-Style Multi-Metric Loss & Telemetry Canvas Chart Renderer
@@ -2233,12 +2868,23 @@
         canvas.height = displayHeight * dpr;
         const ctx = canvas.getContext('2d');
         ctx.scale(dpr, dpr);
+        const chartStyle = window.getComputedStyle(canvas);
+        const chartColor = (name, fallback) => chartStyle.getPropertyValue(name).trim() || fallback;
+        const chartColors = {
+          grid: chartColor('--chart-grid', '#e8e4d8'),
+          axis: chartColor('--chart-axis', '#78716c'),
+          loss: chartColor('--chart-loss', '#b45309'),
+          lmLoss: chartColor('--chart-lm-loss', '#2b4c3f'),
+          routerLoss: chartColor('--chart-router-loss', '#d97706'),
+          throughput: chartColor('--chart-throughput', '#0d9488'),
+          ppl: chartColor('--chart-ppl', '#6366f1')
+        };
         const width = displayWidth;
         const height = displayHeight;
         ctx.clearRect(0, 0, width, height);
 
         // Grid lines with classic editorial warm tint
-        ctx.strokeStyle = '#e8e4d8';
+        ctx.strokeStyle = chartColors.grid;
         ctx.lineWidth = 1;
         for (let x = 60; x < width - 15; x += 60) {
           ctx.beginPath(); ctx.moveTo(x, 15); ctx.lineTo(x, height - 30); ctx.stroke();
@@ -2247,13 +2893,13 @@
           ctx.beginPath(); ctx.moveTo(60, y); ctx.lineTo(width - 15, y); ctx.stroke();
         }
 
-        if (metricsHistory && metricsHistory.length > 1) {
+        if (metricsHistory && metricsHistory.length >= 1) {
           const metricConfigs = [
-            { key: 'loss', name: 'Total Loss', color: '#9a3412', active: chartMetrics.loss },
-            { key: 'lm_loss', name: 'LM Loss', color: '#2b4c3f', active: chartMetrics.lm_loss },
-            { key: 'router_loss', name: 'Router Loss', color: '#d97706', active: chartMetrics.router_loss },
-            { key: 'throughput', name: 'tok/s', color: '#0d9488', active: chartMetrics.throughput },
-            { key: 'ppl', name: 'Perplexity', color: '#7a88cf', active: chartMetrics.ppl }
+            { key: 'loss', name: 'Total Loss', color: chartColors.loss, active: chartMetrics.loss },
+            { key: 'lm_loss', name: 'LM Loss', color: chartColors.lmLoss, active: chartMetrics.lm_loss },
+            { key: 'router_loss', name: 'Router Loss', color: chartColors.routerLoss, active: chartMetrics.router_loss },
+            { key: 'throughput', name: 'tok/s', color: chartColors.throughput, active: chartMetrics.throughput },
+            { key: 'ppl', name: 'Perplexity', color: chartColors.ppl, active: chartMetrics.ppl }
           ];
 
           const allLossValues = [];
@@ -2261,6 +2907,11 @@
             if (chartMetrics.loss && typeof m.loss === 'number') allLossValues.push(m.loss);
             if (chartMetrics.lm_loss && typeof m.lm_loss === 'number') allLossValues.push(m.lm_loss);
             if (chartMetrics.router_loss && typeof m.router_loss === 'number') allLossValues.push(m.router_loss);
+            if (chartMetrics.throughput && typeof m.throughput === 'number') allLossValues.push(m.throughput);
+            if (chartMetrics.ppl) {
+              const lm = Number(m.lm_loss || m.loss || 0);
+              if (lm > 0) allLossValues.push(Math.min(100, Math.exp(Math.min(lm, 10))));
+            }
           });
 
           let minY = allLossValues.length ? Math.min(...allLossValues) : 0;
@@ -2280,7 +2931,7 @@
           const rangeY = Math.max(maxY - minY, 0.0001);
 
           // Render Y-Axis numeric ticks
-          ctx.fillStyle = '#78716c';
+          ctx.fillStyle = chartColors.axis;
           ctx.font = '10px monospace';
           ctx.textAlign = 'right';
           const yTicks = 4;
@@ -2344,6 +2995,21 @@
               return startY - norm * plotHeight;
             };
 
+            if (n === 1) {
+              const y0 = getY(smoothedVals[0]);
+              ctx.beginPath();
+              ctx.strokeStyle = cfg.color;
+              ctx.lineWidth = 2.4;
+              ctx.moveTo(startX, y0);
+              ctx.lineTo(startX + plotWidth, y0);
+              ctx.stroke();
+              ctx.beginPath();
+              ctx.fillStyle = cfg.color;
+              ctx.arc(startX + plotWidth / 2, y0, 4, 0, Math.PI * 2);
+              ctx.fill();
+              return;
+            }
+
             // 1. Raw Ghost Signal Line (light translucent)
             if (alpha > 0.05) {
               ctx.beginPath();
@@ -2373,10 +3039,10 @@
             ctx.stroke();
           });
         } else {
-          ctx.fillStyle = '#78716c';
+          ctx.fillStyle = chartColors.axis;
           ctx.font = 'italic 13px Newsreader, Georgia, serif';
           ctx.textAlign = 'center';
-          ctx.fillText('Awaiting real-time training telemetry... Click "Start PyTorch Loop" to stream live WandB loss curves.', width / 2, height / 2);
+          ctx.fillText('No training metrics yet. Start Training or choose Train 1 Step to begin.', width / 2, height / 2);
           ctx.textAlign = 'start';
         }
       }
@@ -2472,37 +3138,25 @@
     const handleLoadDAGPreset = (presetKey) => {
       const preset = DAG_PRESETS[presetKey];
       if (preset) {
-        setNodes(preset.nodes);
-        setEdges(preset.edges);
-        showToast(`Loaded Preset: ${preset.name}`);
+        setActivePresetKey(presetKey);
+        setShowDAGPresetLibrary(false);
+        setWorkflowName(preset.name);
+        setNodes(preset.nodes.map(node => ({ ...node })));
+        setEdges(preset.edges.map(edge => ({ ...edge })));
+        setFrames(Array.isArray(preset.frames) ? preset.frames.map(frame => ({ ...frame })) : []);
+        setNodeExecOutputs({});
+        setSelectedNodeId(null);
+        setSelectedNodeIds([]);
+        setTimeout(() => handleFitCanvasView(preset.nodes), 0);
+        showToast(`Loaded ${preset.name} onto the canvas. Use “Apply to Live Engine” when you want to change training settings.`);
       }
     };
 
     const handleSelectModelPreset = async (presetId) => {
       const preset = MODEL_PRESETS.find(p => p.id === presetId) || MODEL_PRESETS[0];
-      const newBatchSize = preset.layers > 8 ? 2 : 4;
-      const newSeqLen = preset.layers > 8 ? 64 : 128;
-      setActiveModel(preset.id);
-      setTrainBatchSize(newBatchSize);
-      setTrainSeqLen(newSeqLen);
-      setTrainDepthMode('dynamic');
-      setDatasetInfo(prev => ({
-        ...prev,
-        num_layers: preset.layers,
-        hidden_dim: preset.hidden_dim,
-        num_heads: preset.heads,
-        num_experts: preset.experts_routed,
-        batch_size: newBatchSize,
-        seq_len: newSeqLen,
-        depth_mode: 'dynamic'
-      }));
-
-      // Update Node Editor DAG if applicable
-      const dagKey = preset.id === 'triune-nano' ? 'nano' : (preset.id === 'triune-medium' || preset.id === 'triune-large' ? 'reasoning' : 'triune_canonical_hierarchical');
-      if (DAG_PRESETS[dagKey]) {
-        handleLoadDAGPreset(dagKey);
-      }
-
+      const newBatchSize = preset.recommended_batch || (preset.layers > 8 ? 2 : 4);
+      const newSeqLen = preset.recommended_seq || (preset.layers > 8 ? 64 : 128);
+      const currentDepthMode = trainDepthMode || preset.depth_mode || 'dynamic';
       try {
         const res = await apiFetch('/v1/models/preset', {
           method: 'POST',
@@ -2516,18 +3170,63 @@
             num_experts: preset.experts_routed,
             batch_size: newBatchSize,
             seq_len: newSeqLen,
-            depth_mode: 'dynamic'
+            depth_mode: currentDepthMode,
+            precision: trainPrecision
           })
         });
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') {
+          throw new Error(data.message || `Model configuration failed (${res.status})`);
+        }
+
+        lastManualConfigEditRef.current = Date.now();
+        setActiveModel(data.active_model || preset.id);
+        setWeightsLoaded(false);
+        setActiveCheckpointName(null);
+        setTrainBatchSize(newBatchSize);
+        setTrainSeqLen(newSeqLen);
+        setDatasetInfo(prev => ({
+          ...prev,
+          num_layers: preset.layers,
+          hidden_dim: preset.hidden_dim,
+          num_heads: preset.heads,
+          num_experts: preset.experts_routed,
+          batch_size: newBatchSize,
+          seq_len: newSeqLen,
+          depth_mode: currentDepthMode
+        }));
+
+        // Update the graph only after the engine accepts the same configuration.
+        syncStateToDAGNodes({
+          preset_id: preset.id,
+          num_layers: preset.layers,
+          hidden_dim: preset.hidden_dim,
+          num_heads: preset.heads,
+          head_dim: preset.head_dim,
+          num_experts: preset.experts_routed,
+          batch_size: newBatchSize,
+          seq_len: newSeqLen,
+          depth_mode: currentDepthMode,
+          precision: trainPrecision
+        });
         if (data && data.profile) {
           setHardwareProfile(data.profile);
           if (data.profile.gpu_offload_pct !== undefined) setGpuOffloadPct(data.profile.gpu_offload_pct);
           if (data.profile.gpu_layers !== undefined) setGpuLayers(data.profile.gpu_layers);
         }
-      } catch (err) {}
-
-      showToast(`Loaded ${preset.name}: Synced Across Model Zoo, Training Hub, DAG & Engine`);
+        if (data && data.architecture) {
+          setDatasetInfo(prev => ({
+            ...prev,
+            num_layers: data.architecture.num_layers || preset.layers,
+            hidden_dim: data.architecture.hidden_dim || preset.hidden_dim,
+            num_heads: data.architecture.num_heads || preset.heads,
+            num_experts: data.architecture.num_experts || preset.experts_routed
+          }));
+        }
+        showToast(data.message || `Loaded ${preset.name} and synchronized training settings and graph.`);
+      } catch (err) {
+        showToast(`Model selection failed: ${err.message || 'could not reach the backend'}`);
+      }
     };
 
 
@@ -2548,6 +3247,28 @@
       }
     };
 
+    const handleStepTrainingOnce = async () => {
+      try {
+        const res = await apiFetch('/v1/training/step', { method: 'POST' });
+        const data = await res.json();
+        if (data && data.step !== undefined) {
+          setMetrics(prev => ({ ...prev, ...data }));
+          setMetricsHistory(prev => {
+            const next = [...prev, data];
+            return next.length > 200 ? next.slice(next.length - 200) : next;
+          });
+          if (data.exit_usage) setExitUsage(data.exit_usage);
+          if (data.batch_preview) setActiveBatchPreview(data.batch_preview);
+          if (data.tokens_trained !== undefined) {
+            setDatasetInfo(prev => ({ ...prev, total_tokens: data.tokens_trained }));
+          }
+          showToast(`Step ${data.step} completed (Loss: ${Number(data.loss || 0).toFixed(4)})`);
+        }
+      } catch (e) {
+        showToast('Could not execute single training step');
+      }
+    };
+
     // Hardware Tuner, Auto-Offload & Dynamic Allotment Handlers (LM Studio / Ollama Style)
     const fetchHardwareProfile = async () => {
       try {
@@ -2560,7 +3281,12 @@
             setTrainSeqLen(data.current_config.seq_len);
             setTrainGradAccum(data.current_config.grad_accum_steps);
             if (data.current_config.depth_mode) setTrainDepthMode(data.current_config.depth_mode);
-            if (data.current_config.precision) setTrainPrecision(data.current_config.precision);
+            if (data.current_config.precision) {
+              setTrainPrecision(data.current_config.precision);
+              setPrecision(data.current_config.precision);
+            }
+            if (data.current_config.lr !== undefined) setTrainLR(String(data.current_config.lr));
+            if (data.current_config.warmup_steps !== undefined) setTrainWarmup(data.current_config.warmup_steps);
             setGpuOffloadPct(data.gpu_offload_pct !== undefined ? data.gpu_offload_pct : 100);
             setGpuLayers(data.gpu_layers !== undefined ? data.gpu_layers : (data.num_layers || 6));
           }
@@ -2582,6 +3308,8 @@
         const prec = overrides.precision !== undefined ? overrides.precision : trainPrecision;
         const offPct = overrides.gpu_offload_pct !== undefined ? overrides.gpu_offload_pct : gpuOffloadPct;
         const offLayers = overrides.gpu_layers !== undefined ? overrides.gpu_layers : gpuLayers;
+        const lrVal = overrides.lr !== undefined ? overrides.lr : (parseFloat(trainLR) || 0.0005);
+        const warmupVal = overrides.warmup_steps !== undefined ? overrides.warmup_steps : (parseInt(trainWarmup) || 0);
 
         const res = await apiFetch('/v1/hardware/tune', {
           method: 'POST',
@@ -2594,7 +3322,9 @@
             depth_mode: dMode,
             precision: prec,
             gpu_offload_pct: offPct,
-            gpu_layers: offLayers
+            gpu_layers: offLayers,
+            lr: lrVal,
+            warmup_steps: warmupVal
           })
         });
         const data = await res.json();
@@ -2607,7 +3337,12 @@
             setTrainSeqLen(cc.seq_len);
             setTrainGradAccum(cc.grad_accum_steps);
             setTrainDepthMode(cc.depth_mode);
-            if (cc.precision) setTrainPrecision(cc.precision);
+            if (cc.precision) {
+              setTrainPrecision(cc.precision);
+              setPrecision(cc.precision);
+            }
+            if (cc.lr !== undefined) setTrainLR(String(cc.lr));
+            if (cc.warmup_steps !== undefined) setTrainWarmup(cc.warmup_steps);
             setGpuOffloadPct(data.profile.gpu_offload_pct);
             setGpuLayers(data.profile.gpu_layers);
             setDatasetInfo(prev => ({
@@ -2617,6 +3352,14 @@
               grad_accum_steps: cc.grad_accum_steps,
               depth_mode: cc.depth_mode
             }));
+            syncStateToDAGNodes({
+              batch_size: cc.batch_size,
+              seq_len: cc.seq_len,
+              grad_accum_steps: cc.grad_accum_steps,
+              depth_mode: cc.depth_mode,
+              precision: cc.precision || prec,
+              lr: cc.lr !== undefined ? cc.lr : lrVal
+            });
           }
         } else {
           showToast(`Notice: ${data.message || 'Config update unconfirmed'}`);
@@ -2642,7 +3385,12 @@
             setTrainSeqLen(cc.seq_len);
             setTrainGradAccum(cc.grad_accum_steps);
             setTrainDepthMode(cc.depth_mode);
-            if (cc.precision) setTrainPrecision(cc.precision);
+            if (cc.precision) {
+              setTrainPrecision(cc.precision);
+              setPrecision(cc.precision);
+            }
+            if (cc.lr !== undefined) setTrainLR(String(cc.lr));
+            if (cc.warmup_steps !== undefined) setTrainWarmup(cc.warmup_steps);
             setGpuOffloadPct(data.profile.gpu_offload_pct);
             setGpuLayers(data.profile.gpu_layers);
             setDatasetInfo(prev => ({
@@ -2652,6 +3400,13 @@
               grad_accum_steps: cc.grad_accum_steps,
               depth_mode: cc.depth_mode
             }));
+            syncStateToDAGNodes({
+              batch_size: cc.batch_size,
+              seq_len: cc.seq_len,
+              grad_accum_steps: cc.grad_accum_steps,
+              depth_mode: cc.depth_mode,
+              precision: cc.precision || trainPrecision
+            });
           }
         } else {
           showToast(`Auto-tune warning: ${data.message || 'Could not auto-tune'}`);
@@ -2670,7 +3425,10 @@
         setTrainSeqLen(p.seq_len);
         setTrainGradAccum(p.grad_accum_steps);
         setTrainDepthMode(p.depth_mode);
-        if (p.precision) setTrainPrecision(p.precision);
+        if (p.precision) {
+          setTrainPrecision(p.precision);
+          setPrecision(p.precision);
+        }
         setGpuOffloadPct(p.gpu_offload_pct);
         setGpuLayers(p.gpu_layers);
         handleApplyHardwareTune({
@@ -2688,18 +3446,22 @@
 
     // Render LM Studio / Ollama Style Hardware Acceleration & GPU Offload Deck
     const renderHardwareTunerDeck = () => {
-      const numLayers = (hardwareProfile && hardwareProfile.num_layers) ? hardwareProfile.num_layers : 6;
+      const numLayers = (hardwareProfile && hardwareProfile.num_layers) ? hardwareProfile.num_layers : (datasetInfo.num_layers || 6);
+      const hiddenDim = (hardwareProfile && hardwareProfile.hidden_dim) ? hardwareProfile.hidden_dim : (datasetInfo.hidden_dim || 256);
       const deviceTitle = (hardwareProfile && hardwareProfile.device_name) ? hardwareProfile.device_name : systemDiagnostics.device_name;
       const totalVram = (hardwareProfile && hardwareProfile.total_vram_gb) ? hardwareProfile.total_vram_gb : (vramUsage.total || 8.0);
       const effTokens = (parseInt(trainBatchSize) || 4) * (parseInt(trainSeqLen) || 64) * (parseInt(trainGradAccum) || 4);
 
-      // Memory breakdown estimates
-      const weightsMb = 84.0;
-      const optMb = 336.0;
-      const actMb = Math.round(((parseInt(trainBatchSize) || 4) * (parseInt(trainSeqLen) || 64) * 256 * numLayers * 20) / (1024 * 1024) * 10) / 10;
-      const cudaMb = (hardwareProfile && hardwareProfile.is_cuda) ? 600.0 : 50.0;
-      const totalEstMb = weightsMb + optMb + actMb + cudaMb;
-      const totalEstGb = (totalEstMb / 1024.0).toFixed(2);
+      // Memory breakdown estimates from backend profile or dynamic fallback
+      const mb = (hardwareProfile && hardwareProfile.current_config && hardwareProfile.current_config.memory_breakdown) || {};
+      const weightsMb = mb.weights_mb !== undefined ? mb.weights_mb : 84.0;
+      const optMb = mb.optimizer_mb !== undefined ? mb.optimizer_mb : 336.0;
+      const actMb = mb.activations_mb !== undefined
+        ? mb.activations_mb
+        : Math.round(((parseInt(trainBatchSize) || 4) * (parseInt(trainSeqLen) || 64) * hiddenDim * numLayers * 20) / (1024 * 1024) * 10) / 10;
+      const cudaMb = mb.cuda_context_mb !== undefined ? mb.cuda_context_mb : ((hardwareProfile && hardwareProfile.is_cuda) ? 600.0 : 50.0);
+      const totalEstMb = mb.total_estimated_mb !== undefined ? mb.total_estimated_mb : (weightsMb + optMb + actMb + cudaMb);
+      const totalEstGb = mb.total_estimated_gb !== undefined ? Number(mb.total_estimated_gb).toFixed(2) : (totalEstMb / 1024.0).toFixed(2);
       const estTokPerSec = (hardwareProfile && hardwareProfile.presets && hardwareProfile.presets[selectedHwPreset])
         ? hardwareProfile.presets[selectedHwPreset].estimated_tok_s
         : Math.min(4500, Math.round(effTokens * 0.9));
@@ -2864,7 +3626,13 @@
             e('label', null, 'Depth Mode (Supervision):'),
             e('select', {
               value: trainDepthMode,
-              onChange: ev => { setTrainDepthMode(ev.target.value); setSelectedHwPreset('custom'); }
+              onChange: ev => {
+                const newMode = ev.target.value;
+                lastManualConfigEditRef.current = Date.now();
+                setTrainDepthMode(newMode);
+                setSelectedHwPreset('custom');
+                handleApplyHardwareTune({ preset: 'custom', depth_mode: newMode });
+              }
             },
               e('option', { value: 'cortex' }, 'Full Cortex (100% Backbone Grad - Fastest)'),
               e('option', { value: 'joint' }, 'Joint Multi-Exit (Simultaneous 3 Exits)'),
@@ -2875,10 +3643,18 @@
             e('label', null, 'Precision & Tensor Cores:'),
             e('select', {
               value: trainPrecision,
-              onChange: ev => { setTrainPrecision(ev.target.value); setSelectedHwPreset('custom'); }
+              onChange: ev => {
+                const newPrec = ev.target.value;
+                lastManualConfigEditRef.current = Date.now();
+                setTrainPrecision(newPrec);
+                setPrecision(newPrec);
+                setSelectedHwPreset('custom');
+                handleApplyHardwareTune({ preset: 'custom', precision: newPrec });
+              }
             },
-              e('option', { value: 'bf16' }, 'BF16 (Native RTX 5070 Tensor Cores)'),
+              e('option', { value: 'bf16' }, 'BF16 (Native Tensor Cores)'),
               e('option', { value: 'fp8' }, 'FP8 (Scaled GEMM - Half VRAM)'),
+              e('option', { value: 'fp4' }, 'FP4 (NVFP4 / NF4 Quantized)'),
               e('option', { value: 'fp32' }, 'FP32 (Standard Float32)')
             )
           ),
@@ -2886,7 +3662,7 @@
             e('label', null, 'Peak Learning Rate:'),
             e('select', {
               value: trainLR,
-              onChange: ev => setTrainLR(ev.target.value)
+              onChange: ev => { setTrainLR(ev.target.value); setSelectedHwPreset('custom'); }
             },
               e('option', { value: '0.0001' }, '1e-4 (Gentle)'),
               e('option', { value: '0.0003' }, '3e-4 (Moderate)'),
@@ -2903,7 +3679,7 @@
               max: 5000,
               step: 50,
               value: trainWarmup,
-              onChange: ev => setTrainWarmup(parseInt(ev.target.value) || 0)
+              onChange: ev => { setTrainWarmup(parseInt(ev.target.value) || 0); setSelectedHwPreset('custom'); }
             })
           )
         ),
@@ -2955,7 +3731,9 @@
       const fw = selNode ? (NODE_WIDTH + 40) : 340;
       const fh = selNode ? 340 : 260;
       const defaultTitle = selNode ? `Frame: ${selNode.title}` : 'Visual Node Frame';
-      const frameTitle = titleText || prompt('Enter Visual Frame Name (Ctrl+J):', defaultTitle) || defaultTitle;
+      // Use a predictable default instead of a blocking browser prompt (which
+      // is unavailable in some embedded WebView configurations).
+      const frameTitle = titleText || defaultTitle;
       const frameColors = ['#63c7b2', '#7a88cf', '#e8cb4f', '#a1e976', '#ff4d4d'];
       const chosenColor = frameColors[frames.length % frameColors.length];
       const newFrame = {
@@ -2969,7 +3747,7 @@
         borderColor: chosenColor
       };
       setFrames(prev => [...prev, newFrame]);
-      showToast(`Grouped Frame: "${frameTitle}" (Ctrl+J)`);
+      showToast(`Backdrop added: "${frameTitle}"`);
     };
 
     const handleCompileDAGToTraining = async () => {
@@ -2990,10 +3768,10 @@
         });
         if (res.ok) {
           const data = await res.json();
-          const pCount = data.compiled_params || data.total_params || 25427968;
-          const pStr = pCount >= 1000000 ? `${(pCount / 1000000).toFixed(1)}M` : pCount.toLocaleString();
-          const lCount = data.num_layers || 6;
-          showToast(`Compiled DAG: ${pStr} params (${lCount}L MoE, ${activeNodes.length} nodes) updated on live PyTorch engine`);
+          if (data.status !== 'success') {
+            throw new Error(data.message || data.error || 'Backend rejected this graph.');
+          }
+          showToast(data.message || `Applied ${activeNodes.length} active graph nodes to the training engine.`);
           if (data.active_model) {
             setActiveModel(data.active_model);
           }
@@ -3008,25 +3786,34 @@
             if (ac.seq_len) setTrainSeqLen(ac.seq_len);
             if (ac.grad_accum_steps) setTrainGradAccum(ac.grad_accum_steps);
             if (ac.depth_mode) setTrainDepthMode(ac.depth_mode);
+            if (ac.precision) {
+              setTrainPrecision(ac.precision);
+              setPrecision(ac.precision);
+            }
             if (ac.lr) setTrainLR(String(ac.lr));
+            if (ac.dataset) setActiveDataset(ac.dataset);
+            if (ac.active_adapter !== undefined) setActiveAdapter(ac.active_adapter);
             setDatasetInfo(prev => ({
               ...prev,
+              name: ac.dataset || prev.name,
               batch_size: ac.batch_size || prev.batch_size,
               seq_len: ac.seq_len || prev.seq_len,
               grad_accum_steps: ac.grad_accum_steps || prev.grad_accum_steps,
               depth_mode: ac.depth_mode || prev.depth_mode,
               num_layers: (ac.model_architecture && ac.model_architecture.num_layers) || prev.num_layers,
               hidden_dim: (ac.model_architecture && ac.model_architecture.hidden_dim) || prev.hidden_dim,
+              num_heads: (ac.model_architecture && ac.model_architecture.num_heads) || prev.num_heads,
+              num_experts: (ac.model_architecture && ac.model_architecture.num_experts) || prev.num_experts
             }));
           }
           if (data.metrics) {
             setMetrics(prev => ({ ...prev, ...data.metrics }));
           }
         } else {
-          showToast(`Applied DAG (${activeNodes.length} nodes, ${activeEdges.length} wires) to live training pipeline`);
+          throw new Error(`Backend returned HTTP ${res.status}.`);
         }
       } catch (err) {
-        showToast(`Compiled visual DAG locally: ${activeNodes.length} nodes active, applied to live training state`);
+        showToast(`Graph remains on the canvas, but was not applied to training: ${err.message || 'backend request failed'}`);
       } finally {
         setIsCompilingTraining(false);
       }
@@ -3042,14 +3829,18 @@
       if (execOutput && execOutput.loss !== undefined) {
         return `Loss ${Number(execOutput.loss).toFixed(3)}`;
       }
+      const b = trainBatchSize || 4;
+      const s = trainSeqLen || 64;
+      const d = datasetInfo.hidden_dim || 256;
+      const p = trainPrecision || 'bf16';
       const lower = (node.title + ' ' + (node.type || '')).toLowerCase();
       if (lower.includes('streamer') || lower.includes('reader')) return 'Stream [txt]';
-      if (lower.includes('tokenizer')) return '[4, 64] int64';
-      if (lower.includes('dataloader')) return '[4, 64] int64';
-      if (lower.includes('moe') || lower.includes('transformer')) return '[4, 64, 256] bf16';
-      if (lower.includes('gla') || lower.includes('attention')) return '[4, 64, 256] fp32';
-      if (lower.includes('linear')) return '[4, 64, 256] fp8';
-      if (lower.includes('router')) return '[4, 3] exit_dist';
+      if (lower.includes('tokenizer')) return `[${b}, ${s}] int64`;
+      if (lower.includes('dataloader')) return `[${b}, ${s}] int64`;
+      if (lower.includes('moe') || lower.includes('transformer')) return `[${b}, ${s}, ${d}] ${p}`;
+      if (lower.includes('gla') || lower.includes('attention')) return `[${b}, ${s}, ${d}] ${p}`;
+      if (lower.includes('linear')) return `[${b}, ${s}, ${d}] fp8`;
+      if (lower.includes('router')) return `[${b}, 3] exit_dist`;
       if (lower.includes('loss')) return 'Loss scalar';
       if (lower.includes('optimizer')) return 'OptState';
       if (lower.includes('export')) return 'Safetensors';
@@ -3083,6 +3874,35 @@
 
       if (selectedNodeId === nodeId) {
         setSelectedNodeParams(prev => ({ ...prev, [key]: String(value) }));
+      }
+
+      // Immediately sync common node hyperparameters to Training / Dataset / Hardware UI state
+      const lk = String(key).toLowerCase();
+      if (lk === 'batch_size') {
+        const b = parseInt(value) || 4;
+        setTrainBatchSize(b);
+        setDatasetInfo(prev => ({ ...prev, batch_size: b }));
+      } else if (lk === 'seq_len') {
+        const s = parseInt(value) || 64;
+        setTrainSeqLen(s);
+        setDatasetInfo(prev => ({ ...prev, seq_len: s }));
+      } else if (lk === 'grad_accum_steps') {
+        const g = parseInt(value) || 4;
+        setTrainGradAccum(g);
+        setDatasetInfo(prev => ({ ...prev, grad_accum_steps: g }));
+      } else if (lk === 'depth_mode') {
+        const dm = String(value) === 'static' ? 'cortex' : String(value);
+        setTrainDepthMode(dm);
+        setDatasetInfo(prev => ({ ...prev, depth_mode: dm }));
+      } else if (lk === 'lr') {
+        setTrainLR(String(value));
+      } else if (lk === 'dataset_name') {
+        setActiveDataset(String(value));
+        setDatasetInfo(prev => ({ ...prev, name: String(value) }));
+      } else if (lk === 'num_layers') {
+        setDatasetInfo(prev => ({ ...prev, num_layers: parseInt(value) || prev.num_layers }));
+      } else if (lk === 'hidden_dim') {
+        setDatasetInfo(prev => ({ ...prev, hidden_dim: parseInt(value) || prev.hidden_dim }));
       }
     };
 
@@ -3411,6 +4231,7 @@
 
     const handleSelectNode = (nodeId) => {
       setSelectedNodeId(nodeId);
+      setSelectedNodeIds([nodeId]);
       const node = nodes.find(n => n.id === nodeId);
       if (node) {
         const params = {};
@@ -3430,15 +4251,195 @@
       }
     };
 
-    const handleSaveNodeParams = () => {
+    const handleToggleMultiSelectNode = (nodeId) => {
+      const next = selectedNodeIds.includes(nodeId)
+        ? selectedNodeIds.filter(id => id !== nodeId)
+        : [...selectedNodeIds, nodeId];
+      setSelectedNodeIds(next);
+      setSelectedNodeId(next.includes(nodeId) ? nodeId : (next[next.length - 1] || null));
+    };
+
+    const handleGroupSelectedNodes = () => {
+      const selected = nodes.filter(node => selectedNodeIds.includes(node.id));
+      if (selected.length < 2) {
+        showToast('Ctrl-click at least two nodes to create a reusable group.');
+        return;
+      }
+      const selectedIds = new Set(selected.map(node => node.id));
+      const incoming = edges.filter(edge => selectedIds.has(edge.target) && !selectedIds.has(edge.source));
+      const outgoing = edges.filter(edge => selectedIds.has(edge.source) && !selectedIds.has(edge.target));
+      if ([...incoming, ...outgoing].some(edge => !edge.source_port || !edge.target_port)) {
+        showToast('This group has an untyped boundary wire. Add explicit ports before grouping.');
+        return;
+      }
+
+      const groupId = `group_${Date.now()}`;
+      const origin = {
+        x: Math.min(...selected.map(node => Number(node.x) || 0)),
+        y: Math.min(...selected.map(node => Number(node.y) || 0))
+      };
+      const nestedNodes = selected.map(node => ({ ...node }));
+      const nestedEdges = edges.filter(edge => selectedIds.has(edge.source) && selectedIds.has(edge.target)).map(edge => ({ ...edge }));
+      const groupInputs = [];
+      const groupOutputs = [];
+      const outerEdges = edges.filter(edge => !selectedIds.has(edge.source) && !selectedIds.has(edge.target));
+
+      incoming.forEach((edge, index) => {
+        const name = `input_${index + 1}`;
+        const sourceNode = nodes.find(node => node.id === edge.source);
+        const sourcePort = sourceNode ? getNodePorts(sourceNode).outputs.find(port => port.name === edge.source_port) : null;
+        const type = sourcePort ? sourcePort.type : (edge.port_type || 'any');
+        const boundaryId = `${groupId}_${name}`;
+        groupInputs.push({ name, type, required: true, boundary_node: boundaryId, boundary_port: 'value' });
+        nestedNodes.push({
+          id: boundaryId, title: `Input: ${name}`, type: 'SubgraphInput',
+          x: origin.x - 260, y: origin.y + index * 90,
+          inputs: [], outputs: [{ name: 'value', type }],
+          params: { public_name: name }
+        });
+        nestedEdges.push({
+          id: `${groupId}_inner_${name}`, source: boundaryId, source_port: 'value',
+          target: edge.target, target_port: edge.target_port, port_type: type
+        });
+        outerEdges.push({ ...edge, id: `${groupId}_outer_${name}`, target: groupId, target_port: name });
+      });
+
+      const outputMap = new Map();
+      outgoing.forEach((edge, index) => {
+        const key = `${edge.source}:${edge.source_port}`;
+        let output = outputMap.get(key);
+        if (!output) {
+          const name = `output_${outputMap.size + 1}`;
+          const sourceNode = selected.find(node => node.id === edge.source);
+          const sourcePort = sourceNode ? getNodePorts(sourceNode).outputs.find(port => port.name === edge.source_port) : null;
+          const type = sourcePort ? sourcePort.type : (edge.port_type || 'any');
+          output = { name, type, required: true, source_node: edge.source, source_port: edge.source_port };
+          outputMap.set(key, output);
+          groupOutputs.push(output);
+        }
+        outerEdges.push({ ...edge, id: `${groupId}_outer_out_${index + 1}`, source: groupId, source_port: output.name });
+      });
+
+      const groupedNode = {
+        id: groupId,
+        title: `Group (${selected.length} nodes)`,
+        type: 'Subgraph',
+        x: origin.x,
+        y: origin.y,
+        inputs: groupInputs.map(({ name, type, required }) => ({ name, type, required })),
+        outputs: groupOutputs.map(({ name, type, required }) => ({ name, type, required })),
+        subgraph: { nodes: nestedNodes, edges: nestedEdges, inputs: groupInputs, outputs: groupOutputs, origin }
+      };
+      setNodes(prev => [...prev.filter(node => !selectedIds.has(node.id)), groupedNode]);
+      setEdges(outerEdges);
+      setSelectedNodeId(groupId);
+      setSelectedNodeIds([groupId]);
+      setNodeExecOutputs({});
+      showToast(`Grouped ${selected.length} nodes. Select the group and choose Ungroup to edit its contents.`);
+    };
+
+    const handleUngroupSelectedNode = () => {
+      const group = nodes.find(node => node.id === selectedNodeId && node.type === 'Subgraph');
+      const definition = group && group.subgraph;
+      if (!group || !definition || !Array.isArray(definition.nodes) || !Array.isArray(definition.edges)) {
+        showToast('Select a grouped graph node first.');
+        return;
+      }
+      const boundaryIds = new Set((definition.inputs || []).map(item => item.boundary_node));
+      const groupIncoming = edges.filter(edge => edge.target === group.id);
+      const groupOutgoing = edges.filter(edge => edge.source === group.id);
+      const incomingByPort = new Map(groupIncoming.map(edge => [edge.target_port, edge]));
+      const outgoingByPort = new Map((definition.outputs || []).map(item => [item.name, item]));
+      const restoredEdges = edges.filter(edge => edge.source !== group.id && edge.target !== group.id);
+
+      (definition.inputs || []).forEach(input => {
+        const external = incomingByPort.get(input.name);
+        if (!external) return;
+        definition.edges.filter(edge => edge.source === input.boundary_node && edge.source_port === input.boundary_port).forEach((inner, index) => {
+          restoredEdges.push({
+            ...external,
+            id: `${group.id}_restore_in_${input.name}_${index}`,
+            target: inner.target,
+            target_port: inner.target_port,
+            port_type: input.type
+          });
+        });
+      });
+      groupOutgoing.forEach((external, index) => {
+        const output = outgoingByPort.get(external.source_port);
+        if (!output) return;
+        restoredEdges.push({
+          ...external,
+          id: `${group.id}_restore_out_${index}`,
+          source: output.source_node,
+          source_port: output.source_port,
+          port_type: output.type
+        });
+      });
+
+      const dx = (Number(group.x) || 0) - (Number(definition.origin && definition.origin.x) || 0);
+      const dy = (Number(group.y) || 0) - (Number(definition.origin && definition.origin.y) || 0);
+      const restoredNodes = definition.nodes.filter(node => !boundaryIds.has(node.id)).map(node => ({
+        ...node,
+        x: (Number(node.x) || 0) + dx,
+        y: (Number(node.y) || 0) + dy
+      }));
+      setNodes(prev => [...prev.filter(node => node.id !== group.id), ...restoredNodes]);
+      setEdges(restoredEdges);
+      setSelectedNodeId(null);
+      setSelectedNodeIds([]);
+      setNodeExecOutputs({});
+      showToast(`Ungrouped ${restoredNodes.length} nodes; connections have been restored.`);
+    };
+
+    const handleSaveNodeParams = async () => {
       if (!selectedNodeId) return;
       const detailsStr = Object.entries(selectedNodeParams)
         .map(([k, v]) => `${k}=${v}`)
         .join('\n');
-      setNodes(prev => prev.map(n => n.id === selectedNodeId ? { ...n, details: detailsStr } : n));
+      const nextNodes = nodes.map(n => n.id === selectedNodeId ? { ...n, details: detailsStr } : n);
+      setNodes(nextNodes);
       const foundNode = nodes.find(n => n.id === selectedNodeId);
       const title = (foundNode && foundNode.title) ? foundNode.title : selectedNodeId;
-      showToast(`Saved parameters for ${title}`);
+
+      try {
+        const activeNodes = nextNodes.filter(n => !n.muted);
+        const activeEdges = edges.filter(e => {
+          const s = nextNodes.find(n => n.id === e.source);
+          const t = nextNodes.find(n => n.id === e.target);
+          return s && !s.muted && t && !t.muted;
+        });
+        const res = await apiFetch('/v1/dag/compile_to_training', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ nodes: activeNodes, edges: activeEdges })
+        });
+        const data = await res.json();
+        if (!res.ok || data.status !== 'success') {
+          throw new Error(data.message || data.error || `Compile failed (${res.status})`);
+        }
+        Object.entries(selectedNodeParams).forEach(([k, v]) => {
+          const lk = String(k).toLowerCase();
+          if (lk === 'batch_size') setTrainBatchSize(parseInt(v) || 4);
+          if (lk === 'seq_len') setTrainSeqLen(parseInt(v) || 64);
+          if (lk === 'grad_accum_steps') setTrainGradAccum(parseInt(v) || 4);
+          if (lk === 'depth_mode') setTrainDepthMode(String(v) === 'static' ? 'cortex' : String(v));
+          if (lk === 'lr') setTrainLR(String(v));
+          if (lk === 'dataset_name') setActiveDataset(String(v));
+        });
+        if (data.applied_config && data.applied_config.active_adapter !== undefined) {
+          setActiveAdapter(data.applied_config.active_adapter);
+        }
+        if (data.active_model) setActiveModel(data.active_model);
+        if (data.profile) {
+          setHardwareProfile(data.profile);
+          if (data.profile.gpu_offload_pct !== undefined) setGpuOffloadPct(data.profile.gpu_offload_pct);
+          if (data.profile.gpu_layers !== undefined) setGpuLayers(data.profile.gpu_layers);
+        }
+        showToast(data.message || `Saved and applied parameters for ${title}.`);
+      } catch (err) {
+        showToast(`Canvas node updated locally, but engine sync failed: ${err.message || 'backend request failed'}`);
+      }
     };
 
     const handleExecuteSingleNode = async (nodeId) => {
@@ -3456,7 +4457,7 @@
           body: JSON.stringify({
             node: {
               ...node,
-              params: selectedNodeParams
+              params: targetId === selectedNodeId ? selectedNodeParams : (node.params || {})
             }
           })
         });
@@ -3484,6 +4485,10 @@
     const handleNodeMouseDown = (ev, nodeId) => {
       if (ev.target.closest('.socket-pin') || ev.target.closest('.node-delete-btn') || ev.target.closest('.node-mute-btn') || ev.target.closest('input') || ev.target.closest('select') || ev.target.closest('button')) return;
       ev.stopPropagation();
+      if (ev.ctrlKey || ev.metaKey) {
+        handleToggleMultiSelectNode(nodeId);
+        return;
+      }
       setDraggingNodeId(nodeId);
       handleSelectNode(nodeId);
       const node = nodes.find(n => n.id === nodeId);
@@ -3502,6 +4507,7 @@
         setIsPanning(true);
         setPanStart({ x: ev.clientX - canvasPan.x, y: ev.clientY - canvasPan.y });
         setSelectedNodeId(null);
+        setSelectedNodeIds([]);
       }
     };
 
@@ -3558,12 +4564,46 @@
       setCanvasZoom(newZoom);
     };
 
+    // Keep drags and wires alive when the pointer leaves the canvas, and make
+    // the same gestures work with touch and pen input.
+    useEffect(() => {
+      const isCanvasInteraction = () => draggingNodeId || isPanning || connectingWire;
+      const onPointerMove = (ev) => {
+        if (!gridRef.current || activeTab !== 'nodegraph') return;
+        if (gridRef.current.contains(ev.target) || isCanvasInteraction()) handleCanvasMouseMove(ev);
+      };
+      const onPointerUp = (ev) => {
+        if (connectingWire) {
+          // Touch browsers may keep pointer capture on the source socket; hit
+          // test the release point so dropping still connects the target.
+          const hit = document.elementFromPoint(ev.clientX, ev.clientY);
+          const input = hit && hit.closest('[data-dag-input-node]');
+          if (input) {
+            handleEndWire(ev, input.dataset.dagInputNode, input.dataset.dagInputPort, input.dataset.dagInputType);
+          } else {
+            setConnectingWire(null);
+            setConnectingFromId(null);
+          }
+        }
+        if (draggingNodeId || isPanning) handleCanvasMouseUp();
+      };
+      window.addEventListener('pointermove', onPointerMove);
+      window.addEventListener('pointerup', onPointerUp);
+      window.addEventListener('pointercancel', onPointerUp);
+      return () => {
+        window.removeEventListener('pointermove', onPointerMove);
+        window.removeEventListener('pointerup', onPointerUp);
+        window.removeEventListener('pointercancel', onPointerUp);
+      };
+    }, [activeTab, draggingNodeId, isPanning, connectingWire, canvasPan, panStart, dragOffset]);
+
     const handleStartWire = (ev, nodeId, portName, portType, portIndex) => {
       ev.stopPropagation();
       ev.preventDefault();
-      const srcNode = nodes.find(n => n.id === nodeId);
-      const startX = srcNode ? (srcNode.x + NODE_WIDTH) : 0;
-      const startY = srcNode ? (srcNode.y + 60 + portIndex * 22 + 11) : 0;
+      const pinRect = ev.currentTarget.getBoundingClientRect();
+      const gridRect = gridRef.current ? gridRef.current.getBoundingClientRect() : { left: 0, top: 0 };
+      const startX = (pinRect.left + pinRect.width / 2 - gridRect.left - canvasPan.x) / canvasZoom;
+      const startY = (pinRect.top + pinRect.height / 2 - gridRect.top - canvasPan.y) / canvasZoom;
       setConnectingWire({
         source: nodeId,
         source_port: portName,
@@ -3578,7 +4618,29 @@
       ev.stopPropagation();
       ev.preventDefault();
       if (connectingWire && connectingWire.source !== targetNodeId) {
-        const newEdge = {
+      if (!isPortCompatible(connectingWire.port_type, targetPortType)) {
+        showToast(`Cannot connect ${connectingWire.port_type} to ${targetPortType}.`);
+        setConnectingWire(null);
+        setConnectingFromId(null);
+        return;
+      }
+      const pending = [targetNodeId];
+      const visited = new Set();
+      while (pending.length) {
+        const current = pending.pop();
+        if (current === connectingWire.source) {
+          showToast('That connection would create a cycle. DAGs must stay acyclic.');
+          setConnectingWire(null);
+          setConnectingFromId(null);
+          return;
+        }
+        if (visited.has(current)) continue;
+        visited.add(current);
+        edges.forEach(edge => {
+          if (edge.source === current && edge.target !== targetNodeId) pending.push(edge.target);
+        });
+      }
+      const newEdge = {
           id: `e_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
           source: connectingWire.source,
           source_port: connectingWire.source_port,
@@ -3598,12 +4660,12 @@
       showToast('Disconnected Wire');
     };
 
-    const handleFitCanvasView = () => {
-      if (!nodes.length || !gridRef.current) return;
-      const minX = Math.min(...nodes.map(n => n.x));
-      const maxX = Math.max(...nodes.map(n => n.x + NODE_WIDTH));
-      const minY = Math.min(...nodes.map(n => n.y));
-      const maxY = Math.max(...nodes.map(n => n.y + 260));
+    const handleFitCanvasView = (graphNodes = nodes) => {
+      if (!graphNodes.length || !gridRef.current) return;
+      const minX = Math.min(...graphNodes.map(n => n.x));
+      const maxX = Math.max(...graphNodes.map(n => n.x + NODE_WIDTH));
+      const minY = Math.min(...graphNodes.map(n => n.y));
+      const maxY = Math.max(...graphNodes.map(n => n.y + 260));
       const rect = gridRef.current.getBoundingClientRect();
       const graphW = (maxX - minX) + 160;
       const graphH = (maxY - minY) + 160;
@@ -3679,6 +4741,8 @@
     const handleDeleteNode = (nodeId) => {
       setNodes(prev => prev.filter(n => n.id !== nodeId));
       setEdges(prev => prev.filter(e => e.source !== nodeId && e.target !== nodeId));
+      setSelectedNodeIds(prev => prev.filter(id => id !== nodeId));
+      if (selectedNodeId === nodeId) setSelectedNodeId(null);
       showToast(`Deleted Node [${nodeId}]`);
     };
 
@@ -3688,7 +4752,9 @@
       const newId = `node_${Date.now().toString().slice(-4)}_${nodes.length + 1}`;
       const defaultTitle = item ? item.title : (typeof nodeIdentifier === 'string' ? nodeIdentifier : 'Custom Node');
       const category = item ? item.category : 'Custom';
-      const details = item ? item.details : `Type: ${category}\nState: Ready`;
+      const details = item
+        ? (item.details || Object.entries(item.parameters || {}).map(([key, value]) => `${key}=${typeof value === 'string' ? value : JSON.stringify(value)}`).join('\n'))
+        : `Type: ${category}\nState: Ready`;
 
       // Calculate neat grid placement or use provided coordinates
       const col = nodes.length % 5;
@@ -3766,6 +4832,11 @@
     };
 
     const handleLoadModel = async (modelId) => {
+      const matchedPreset = MODEL_PRESETS.find(p => p.id === modelId);
+      if (matchedPreset && !modelId.endsWith('.pt') && !modelId.endsWith('.safetensors') && !modelId.includes('/')) {
+        await handleSelectModelPreset(modelId);
+        return;
+      }
       showToast(`Loading ${modelId} into engine...`);
       try {
         const isCkpt = typeof modelId === 'string' && (modelId.endsWith('.pt') || modelId.endsWith('.bin') || modelId.endsWith('.safetensors') || modelId.includes('/'));
@@ -3784,26 +4855,43 @@
             body: JSON.stringify({ checkpoint_path: p })
           });
           const data = await res.json();
-          if (data.status === 'success') {
+          if (res.ok && data.status === 'success') {
             showToast(data.message || `Loaded ${p} into live engine`);
-            setActiveModel(modelId);
+            if (data.active_model) setActiveModel(data.active_model);
+            setWeightsLoaded(Boolean(data.weights_loaded));
             if (data.checkpoint) setActiveCheckpointName(data.checkpoint);
             if (data.step !== undefined) {
               const restoredTok = data.tokens_trained !== undefined ? data.tokens_trained : (data.step * 1024);
               setMetrics(prev => ({ ...prev, step: data.step, tokens_trained: restoredTok }));
               setDatasetInfo(prev => ({ ...prev, total_tokens: restoredTok }));
             }
+            if (data.architecture) {
+              setDatasetInfo(prev => ({
+                ...prev,
+                num_layers: data.architecture.num_layers || prev.num_layers,
+                hidden_dim: data.architecture.hidden_dim || prev.hidden_dim,
+                num_heads: data.architecture.num_heads || prev.num_heads,
+                num_experts: data.architecture.num_experts || prev.num_experts
+              }));
+              syncStateToDAGNodes({
+                num_layers: data.architecture.num_layers,
+                hidden_dim: data.architecture.hidden_dim,
+                num_heads: data.architecture.num_heads,
+                head_dim: data.architecture.head_dim,
+                num_experts: data.architecture.num_experts
+              });
+            }
             loaded = true;
             break;
           }
         }
         if (!loaded) {
-          setActiveModel(modelId);
-          showToast(`Switched active model to ${modelId}`);
+          showToast(`Could not load ${modelId}: no matching checkpoint could be loaded.`);
+          return;
         }
       } catch (err) {
-        setActiveModel(modelId);
-        showToast(`Switched active model to ${modelId}`);
+        showToast(`Could not load ${modelId}: ${err.message || 'backend request failed'}`);
+        return;
       }
     };
 
@@ -3829,8 +4917,8 @@
           throw new Error(`Server returned HTTP ${res.status}: ${errText.slice(0, 100)}`);
         }
         const data = await res.json();
-        if (data.status === 'error') {
-          setDagExecutionStatus(`Engine error: ${data.error}`);
+        if ((data.status === 'error' || data.status === 'failed') && !data.results) {
+          setDagExecutionStatus(`Engine ${data.status}: ${data.error || data.message || 'one or more nodes failed'}`);
           return;
         }
         const results = data.results || {};
@@ -3847,11 +4935,14 @@
           updatedOutputs[nid] = {
             status: nres.status || 'completed',
             output: nres.output || {},
+            error: nres.error || nres.output?.error || nres.output?.message || null,
             elapsed: nres.elapsed_sec
           };
 
           // If optimizer or loss node produced real step loss, update metrics
-          if (nres.output && (nres.output.loss !== undefined || nres.output.loss_val !== undefined)) {
+          if (nres.status === 'completed' && nres.output?.real_computation === true &&
+              Number(nres.output?.step_completed) > 0 &&
+              (nres.output.loss !== undefined || nres.output.loss_val !== undefined)) {
             const dagLoss = parseFloat(nres.output.loss !== undefined ? nres.output.loss : nres.output.loss_val);
             setMetrics(prev => ({
               ...prev,
@@ -3885,9 +4976,25 @@
           if (out.perplexity !== undefined) details.push(`PPL: ${out.perplexity}`);
           if (out.file_size_mb) details.push(`Export: ${out.file_size_mb} MB`);
         }
+        const specificationCount = Object.values(results).filter(
+          result => result.output?.execution_type === 'specification'
+        ).length;
+        const failedCount = Object.values(results).filter(result => result.status === 'failed').length;
+        const executedCount = nodeIds.length - specificationCount - failedCount;
         const summary = details.length > 0 ? ` (${details.join(' | ')})` : '';
-        setDagExecutionStatus(`ExecutionEngine finished ${nodeIds.length} nodes successfully!${summary}`);
-        showToast('DAG Engine Pipeline Completed!');
+        const specNote = specificationCount > 0
+          ? ` ${specificationCount} node(s) only produced configuration/specification output; no computation was performed for those nodes.`
+          : '';
+        const failure = Object.entries(results).find(([, result]) => result.status === 'failed');
+        const failureName = failure ? (nodes.find(node => node.id === failure[0])?.title || failure[0]) : '';
+        const failureError = failure && (failure[1].error || failure[1].output?.error || failure[1].output?.message);
+        const failedNote = failedCount > 0
+          ? ` First failure: ${failureName}${failureError ? ` — ${failureError}` : ''}.`
+          : '';
+        setDagExecutionStatus(`ExecutionEngine finished ${executedCount} node(s); ${specificationCount} specification-only node(s); ${failedCount} failed.${summary}${specNote}${failedNote}`);
+        showToast(failedCount > 0 ? `DAG stopped after ${failedCount} node failure(s)` : (specificationCount > 0
+          ? `DAG finished with ${specificationCount} specification-only node(s)`
+          : 'DAG Engine Pipeline Completed!'));
       } catch (err) {
         setActiveRunningNodeId(null);
         setDagExecutionStatus('Execution error: ' + err.message);
@@ -3910,6 +5017,7 @@
 
       const controller = new AbortController();
       chatAbortControllerRef.current = controller;
+      const requestStartedAt = performance.now();
 
       try {
         const historyTurns = messages
@@ -3938,7 +5046,17 @@
             route: route
           })
         });
-        const data = await response.json();
+        let data = {};
+        try {
+          data = await response.json();
+        } catch (_jsonErr) {
+          const rawText = await response.text().catch(() => '');
+          data = { detail: rawText.trim() || `Request failed (${response.status})` };
+        }
+        if (!response.ok) {
+          const detail = typeof data.detail === 'string' ? data.detail : (data.message || `Request failed (${response.status})`);
+          throw new Error(detail);
+        }
         const isExternal = activeModel.includes('gpt') || activeModel.includes('claude') || activeModel.includes('gemini');
         const rawReply = data.choices
           ? data.choices[0].message.content
@@ -3946,6 +5064,9 @@
         const reply = cleanText(rawReply);
         const senderName = isExternal ? activeModel.toUpperCase() : 'Triune MoE Engine';
         const tele = data.telemetry || { route: route.toUpperCase(), vram: `${vramUsage.allocated} GB`, latency: '18ms' };
+        if (tele.weights_loaded !== undefined && !isExternal) setWeightsLoaded(Boolean(tele.weights_loaded));
+        if (tele.checkpoint !== undefined && !isExternal) setActiveCheckpointName(tele.checkpoint || null);
+        if (tele.active_model && !isExternal) setActiveModel(tele.active_model);
 
         setMessages(prev => [
           ...prev,
@@ -3972,10 +5093,14 @@
           ...prev,
           {
             sender: 'System',
-            text: `Connection Error: Unable to reach Triune inference backend (${err.message || 'Network unreachable'}). Ensure the backend server is running.`,
+            text: `Chat request failed: ${err.message || 'The backend or selected provider did not return a response.'}`,
             time: new Date().toLocaleTimeString(),
             isAssistant: true,
-            telemetry: { route: 'ERROR', vram: '0.0 GB', latency: '0ms' }
+            telemetry: {
+              route: 'ERROR',
+              vram: '0.0 GB',
+              latency: `${Math.max(0, Math.round(performance.now() - requestStartedAt))}ms`
+            }
           }
         ]);
       } finally {
@@ -3984,13 +5109,25 @@
       }
     };
 
-    const handleStopGeneration = () => {
+    const handleStopGeneration = async () => {
+      const isLocalModel = activeModel.startsWith('triune');
+      if (isLocalModel) {
+        try {
+          const response = await apiFetch('/v1/chat/cancel', { method: 'POST' });
+          const result = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(result.detail || `Cancel failed (${response.status})`);
+          showToast(result.status === 'idle' ? result.message : 'Stopping local inference after the current model step…');
+        } catch (error) {
+          showToast(`Could not stop local inference: ${error.message}`);
+        }
+        return;
+      }
       if (chatAbortControllerRef.current) {
         chatAbortControllerRef.current.abort();
         chatAbortControllerRef.current = null;
       }
       setIsGenerating(false);
-      showToast('Generation stopped');
+      showToast('Provider request cancelled');
     };
 
     const handleClearChat = () => {
@@ -4049,6 +5186,10 @@
         });
         const data = await res.json();
         if (data.status === 'started') {
+          if (data.active_adapter) {
+            setActiveAdapter(data.active_adapter);
+          }
+          syncStateToDAGNodes({ adapter: { rank: loraConfig.rank, alpha: loraConfig.alpha } });
           showToast('LoRA fine-tuning started on PyTorch engine!');
           const poller = setInterval(async () => {
             try {
@@ -4057,7 +5198,9 @@
               if (sData.status === 'completed') {
                 clearInterval(poller);
                 setFineTuningStatus(`Fine-tuning completed! Final Loss: ${sData.final_loss}. Saved to: ${sData.output_dir}`);
-                setActiveAdapter({ name: `LoRA-r${loraConfig.rank}`, rank: loraConfig.rank, path: sData.output_dir });
+                const attached = sData.active_adapter || { name: `LoRA-r${loraConfig.rank}`, rank: loraConfig.rank, alpha: loraConfig.alpha, path: sData.output_dir };
+                setActiveAdapter(attached);
+                fetchCheckpoints();
                 showToast('LoRA Fine-Tuning Completed & Attached to Engine!');
               } else if (sData.status === 'failed') {
                 clearInterval(poller);
@@ -4079,50 +5222,55 @@
     };
 
     const handleActivateModule = async (m) => {
+      const needsCodeTrust = m.type === 'plugin' && !String(m.download_url || '').startsWith('builtin://');
+      if (needsCodeTrust && !window.confirm(
+        `Activate third-party plugin “${m.name}”?\n\nThis runs Python code inside the Triune process with the same permissions as the current user. The static safety checks are not a sandbox. Only continue if you have reviewed and trust this source.`
+      )) return;
       setActiveActivatingModId(m.id);
       showToast(`Activating ${m.name}...`);
       try {
         const res = await apiFetch('/v1/modules/activate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: m.id })
+          body: JSON.stringify({ id: m.id, confirm_untrusted: needsCodeTrust })
         });
         const data = await res.json();
         if (data.status === 'success') {
           showToast(data.message);
           await fetchInstalledModules();
+          refreshNodeCatalog();
           if (data.registered_nodes && data.registered_nodes.length > 0) {
             showToast(`Added ${data.registered_nodes.join(', ')} to DAG Canvas!`);
           }
           if (data.type === 'dataset') {
             handleSelectDataset(m);
           } else if (data.type === 'adapter') {
-            setActiveAdapter({ name: m.name, rank: 16, path: m.installed_at });
+            const adp = data.active_adapter || { name: m.name, rank: 16, path: m.installed_at };
+            setActiveAdapter(adp);
+            syncStateToDAGNodes({ adapter: adp });
+          } else if (data.type === 'checkpoint') {
+            fetchCheckpoints();
           }
         } else {
           showToast(data.message || 'Activation failed');
         }
       } catch (err) {
-        const type = (m.type || '').toLowerCase();
-        const name = (m.name || '').toLowerCase();
-        if (type === 'dataset' || name.includes('data') || name.includes('fineweb') || name.includes('wikitext')) {
-          handleSelectDataset(m);
-        } else if (type === 'adapter' || name.includes('lora')) {
-          setActiveAdapter({ name: m.name, rank: 16, path: m.installed_at });
-          showToast(`Activated LoRA Adapter: ${m.name}`);
-        } else {
-          showToast(`Module ${m.name} active in Studio.`);
-        }
+        showToast(`Could not activate ${m.name}: ${err.message || 'backend request failed'}`);
+      } finally {
+        setActiveActivatingModId(null);
       }
-      setActiveActivatingModId(null);
     };
 
     const handlePurgeVRAM = async () => {
       try {
-        await apiFetch('/v1/vram/offload', { method: 'POST' });
-        showToast('VRAM Memory Cache Purged!');
+        const res = await apiFetch('/v1/vram/offload', { method: 'POST' });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'purged') {
+          throw new Error(data.message || `Cache clear failed (${res.status})`);
+        }
+        showToast('Cleared unused GPU cache. Memory held by active models is unchanged.');
       } catch (err) {
-        showToast('VRAM Cache Purged!');
+        showToast(`Could not clear GPU cache: ${err.message || 'backend request failed'}`);
       }
     };
 
@@ -4142,7 +5290,7 @@
           setNotebookOutput(`[PythonSandbox Error]\n${data.error}`);
         }
       } catch (err) {
-        setNotebookOutput(`[PythonSandbox Output]\nCode executed in sandboxed environment.`);
+        setNotebookOutput(`[PythonSandbox Error]\n${err.message || 'Could not reach the local Python runner.'}`);
       }
       setIsExecutingNotebook(false);
     };
@@ -4157,13 +5305,13 @@
         });
         const data = await res.json();
         if (data.status === 'valid') {
-          setByokStatus(prev => ({ ...prev, [provider]: 'Valid Format' }));
-          showToast(`${provider.toUpperCase()} API key verified!`);
+          setByokStatus(prev => ({ ...prev, [provider]: 'Connection verified' }));
+          showToast(data.message || `${provider.toUpperCase()} connection verified.`);
         } else {
-          setByokStatus(prev => ({ ...prev, [provider]: data.message || 'Invalid' }));
+          setByokStatus(prev => ({ ...prev, [provider]: data.message || 'Verification failed' }));
         }
       } catch (err) {
-        setByokStatus(prev => ({ ...prev, [provider]: 'Connected' }));
+        setByokStatus(prev => ({ ...prev, [provider]: `Test failed: ${err.message || 'backend unavailable'}` }));
       }
     };
 
@@ -4175,15 +5323,28 @@
           body: JSON.stringify({ keys: byokKeys })
         });
         const data = await res.json();
-        showToast(data.message || 'Provider credentials saved!');
+        if (!res.ok || data.status !== 'saved') {
+          throw new Error(data.detail || data.message || `Save failed (${res.status})`);
+        }
+        setByokConfigured(prev => ({
+          ...prev,
+          ...Object.fromEntries(Object.entries(byokKeys).filter(([, value]) => value.trim()).map(([provider]) => [provider, true]))
+        }));
+        setByokKeys({ openai: '', anthropic: '', gemini: '', huggingface: '', wandb: '' });
+        showToast(data.message || 'Provider credentials saved.');
       } catch (e) {
-        showToast('Provider credentials saved locally!');
+        showToast(`Could not save provider credentials: ${e.message || 'backend unavailable'}`);
       }
     };
 
-    return e('div', { className: 'react-studio-app', onMouseMove: handleMouseMove, onMouseUp: handleMouseUp },
+    return e('div', {
+      className: `react-studio-app theme-${studioTheme}`,
+      style: customAccent ? { '--user-accent': customAccent } : undefined,
+      onMouseMove: handleMouseMove,
+      onMouseUp: handleMouseUp
+    },
       // Toast Banner
-      statusToast && e('div', { className: 'pill online', style: { position: 'fixed', top: '16px', right: '20px', zIndex: 100, background: 'var(--bg-card)', border: '1px solid var(--border-dark)', color: 'var(--primary)' } }, statusToast),
+      statusToast && e('div', { className: `pill ${/\b(error|failed|failure|unable|could not|invalid|unavailable|denied|rejected|refused)\b/i.test(String(statusToast)) ? 'warning' : 'online'}`, role: 'status', 'aria-live': 'polite', style: { position: 'fixed', top: '16px', right: '20px', zIndex: 100, background: 'var(--bg-card)', border: '1px solid var(--border-dark)' } }, statusToast),
 
       // Custom Node Creation Modal
       showCustomNodeModal && e('div', { className: 'modal-overlay', onClick: () => setShowCustomNodeModal(false) },
@@ -4218,13 +5379,13 @@
         )
       ),
 
-      // Node Library Catalog Modal (30+ Built-in Architecture Components)
+      // Node Library Catalog Modal
       showNodeLibraryModal && e('div', { className: 'node-library-modal-overlay', onClick: () => setShowNodeLibraryModal(false) },
         e('div', { className: 'node-library-modal', onClick: ev => ev.stopPropagation() },
           e('div', { className: 'node-library-header' },
             e('div', null,
               e('h3', { style: { fontFamily: 'Newsreader', fontSize: '20px', margin: 0 } }, 'Triune Architectural Node Library'),
-              e('div', { style: { fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' } }, '30+ Built-in PyTorch MoE, GLA, Optimizer, Loss, Runtime & Export Components')
+              e('div', { style: { fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' } }, 'Backend-registered operators, specifications, and extensions')
             ),
             e('button', {
               className: 'node-delete-btn',
@@ -4241,7 +5402,7 @@
               style: { flex: 1, minWidth: '240px', padding: '8px 12px', borderRadius: '6px', border: '1px solid var(--border-color)', fontSize: '13px' }
             }),
             e('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap' } },
-              ['All', 'Data', 'Model', 'Optimizer', 'Loss', 'Runtime', 'Evaluation', 'Export'].map(cat =>
+              ['All', ...new Set((nodeCatalog || BUILTIN_NODE_CATALOG).map(item => item.category).filter(Boolean))].map(cat =>
                 e('button', {
                   key: cat,
                   className: `preset-chip ${selectedNodeCategory === cat ? 'active-preset' : ''}`,
@@ -4272,8 +5433,8 @@
                     ),
                     e('p', { style: { fontSize: '12px', color: 'var(--text-muted)', lineHeight: '1.45', margin: '4px 0 8px 0' } }, item.description),
                     e('div', { className: 'node-catalog-ports' },
-                      item.inputs && item.inputs.length > 0 && e('span', null, `In: [${item.inputs.join(', ')}]`),
-                      item.outputs && item.outputs.length > 0 && e('span', null, `Out: [${item.outputs.join(', ')}]`)
+                      item.inputs && item.inputs.length > 0 && e('span', null, `In: [${item.inputs.map(port => typeof port === 'string' ? port : port.name).join(', ')}]`),
+                      item.outputs && item.outputs.length > 0 && e('span', null, `Out: [${item.outputs.map(port => typeof port === 'string' ? port : port.name).join(', ')}]`)
                     )
                   ),
                   e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px', paddingTop: '10px', borderTop: '1px solid #f0ede6' } },
@@ -4286,6 +5447,40 @@
                   )
                 )
               )
+          )
+        )
+      ),
+
+      showDAGPresetLibrary && e('div', { className: 'node-library-modal-overlay', onClick: () => setShowDAGPresetLibrary(false) },
+        e('div', { className: 'node-library-modal dag-preset-modal', onClick: ev => ev.stopPropagation() },
+          e('div', { className: 'node-library-header' },
+            e('div', null,
+              e('h3', { style: { fontFamily: 'Newsreader', fontSize: '20px', margin: 0 } }, 'Workflow starters by goal'),
+              e('div', { style: { fontSize: '12px', color: 'var(--text-muted)', marginTop: '3px' } }, 'These are editable graphs of real Triune operations. Check each workflow’s prerequisites before running it.')
+            ),
+            e('button', {
+              className: 'node-delete-btn',
+              style: { padding: '4px 8px', background: 'transparent', border: 'none', cursor: 'pointer' },
+              onClick: () => setShowDAGPresetLibrary(false),
+              title: 'Close workflow presets'
+            }, renderIcon('close', 14))
+          ),
+          e('div', { className: 'dag-preset-grid' },
+            Object.entries(DAG_PRESETS).map(([key, preset]) => e('article', { key, className: 'dag-preset-card' },
+              e('div', { className: 'dag-preset-card-meta' },
+                e('span', null, `${preset.nodes.length} nodes`),
+                e('span', null, `${preset.edges.length} connections`),
+                key === 'local_corpus_qa' && e('span', null, 'No model / GPU needed')
+              ),
+              e('h4', null, preset.name),
+              e('p', null, preset.description),
+              e('small', null, `Before running: ${preset.requirements}`),
+              e('button', {
+                className: 'btn-action',
+                onClick: () => handleLoadDAGPreset(key),
+                title: `Load ${preset.name}`
+              }, 'Load workflow')
+            ))
           )
         )
       ),
@@ -4332,7 +5527,7 @@
             e('div', { style: { background: 'var(--bg-surface)', padding: '10px 12px', borderRadius: '6px', border: '1px solid var(--border-color)', fontSize: '12px', color: 'var(--text-muted)' } },
               'Once generated, your new plugin will be saved to ',
               e('code', { style: { fontFamily: 'monospace', color: 'var(--primary)' } }, 'triune/plugins/'),
-              ' and immediately registered in the DAG engine without restarting.'
+              '. Review the generated code, then scan the workspace to register it.'
             ),
             e('div', { style: { display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '10px' } },
               e('button', { className: 'btn-sec', onClick: () => setShowWorkspacePluginModal(false) }, 'Cancel'),
@@ -4340,7 +5535,7 @@
                 className: 'btn-send',
                 style: { background: 'var(--accent-olive, #2b4c3f)', display: 'inline-flex', alignItems: 'center' },
                 onClick: handleCreatePluginScript
-              }, [renderIcon('plus', 12, { marginRight: '5px' }), 'Scaffold & Register'])
+              }, [renderIcon('plus', 12, { marginRight: '5px' }), 'Create Plugin'])
             )
           )
         )
@@ -4352,10 +5547,10 @@
           e('div', { className: 'brand-logo-icon' }, 'T'),
           !sidebarCollapsed && e('div', { className: 'brand-title-wrap' },
             e('span', { className: 'brand-title' }, 'Triune Studio'),
-            e('span', { className: 'brand-sub' }, 'v2.0 Classic Edition')
+            e('span', { className: 'brand-sub' }, 'Model workspace')
           )
         ),
-        e('nav', { className: 'react-nav' },
+        e('nav', { className: 'react-nav', 'aria-label': 'Studio sections' },
           e('button', { className: `nav-item ${activeTab === 'chat' ? 'active' : ''}`, title: 'Chat & Playground', onClick: () => setActiveTab('chat') },
             e('span', { className: 'nav-icon' }, renderIcon('chat', 17)),
             !sidebarCollapsed && e('span', { className: 'nav-label' }, 'Chat & Playground')
@@ -4378,7 +5573,11 @@
           ),
           e('button', { className: `nav-item ${activeTab === 'modules' ? 'active' : ''}`, title: 'Modules & Repos', onClick: () => { setActiveTab('modules'); fetchInstalledModules(); searchMarketplace(); } },
             e('span', { className: 'nav-icon' }, renderIcon('modules', 17)),
-            !sidebarCollapsed && e('span', { className: 'nav-label' }, 'Modules & Repos')
+            !sidebarCollapsed && e('span', { className: 'nav-label' }, 'Extensions Marketplace')
+          ),
+          e('button', { className: `nav-item ${activeTab === 'customize' ? 'active' : ''}`, title: 'Appearance Marketplace', onClick: () => setActiveTab('customize') },
+            e('span', { className: 'nav-icon' }, renderIcon('sparkle', 17)),
+            !sidebarCollapsed && e('span', { className: 'nav-label' }, 'Appearance & Themes')
           ),
           e('button', { className: `nav-item ${activeTab === 'environment' ? 'active' : ''}`, title: 'System & Hardware', onClick: () => setActiveTab('environment') },
             e('span', { className: 'nav-icon' }, renderIcon('hardware', 17)),
@@ -4401,22 +5600,6 @@
             !sidebarCollapsed && e('span', { className: 'nav-label' }, 'BYOK Subscriptions')
           )
         ),
-        !sidebarCollapsed && e('div', { className: 'vram-widget' },
-          e('div', { className: 'vram-header' },
-            e('div', { className: 'vram-title-group' },
-              e('span', { className: `dot ${vramUsage.oom_risk ? 'warning' : 'online'}` }),
-              e('span', null, systemDiagnostics.device_name || 'NVIDIA RTX GPU')
-            ),
-            e('button', { className: 'btn-purge', onClick: handlePurgeVRAM }, 'Purge')
-          ),
-          e('div', { className: 'vram-progress-bg' },
-            e('div', { className: 'vram-progress-fill', style: { width: `${(vramUsage.allocated / (vramUsage.total || 8.0)) * 100}%` } })
-          ),
-          e('div', { className: 'vram-footer' },
-            e('span', null, `VRAM: ${vramUsage.allocated} GB / ${vramUsage.total || 8.0} GB`),
-            e('span', null, vramUsage.oom_risk ? [renderIcon('alert', 12, { marginRight: '4px' }), 'High OOM'] : 'Optimal')
-          )
-        )
       ),
 
       // Main Content Area
@@ -4427,11 +5610,13 @@
               className: 'sidebar-toggle-btn',
               onClick: () => setSidebarCollapsed(!sidebarCollapsed),
               title: sidebarCollapsed ? 'Expand Navigation Sidebar' : 'Collapse Navigation Sidebar',
+              'aria-label': sidebarCollapsed ? 'Expand navigation' : 'Collapse navigation',
+              'aria-expanded': !sidebarCollapsed,
               style: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }
             }, sidebarCollapsed ? renderIcon('menu', 16) : renderIcon('arrowRight', 16, { transform: 'rotate(180deg)' })),
             e('div', { className: 'topbar-title-group' },
               e('h2', { className: 'topbar-title' }, TAB_TITLES[activeTab] || (activeTab.charAt(0).toUpperCase() + activeTab.slice(1).replace(/_/g, ' '))),
-              e('span', { className: 'topbar-subtitle' }, `Triune Studio • ${activeTab.toUpperCase()}`)
+              e('span', { className: 'topbar-subtitle' }, TAB_DESCRIPTIONS[activeTab] || 'Triune model workspace')
             )
           ),
 
@@ -4589,11 +5774,29 @@
           ),
 
           e('div', { className: 'topbar-pills' },
+            e('button', {
+              className: 'appearance-quick-toggle',
+              type: 'button',
+              title: /dark|forest/.test(studioTheme) ? 'Switch to light mode' : 'Switch to dark mode',
+              'aria-label': /dark|forest/.test(studioTheme) ? 'Switch to light mode' : 'Switch to dark mode',
+              onClick: () => {
+                const isDark = /dark|forest/.test(studioTheme);
+                const edition = studioTheme.startsWith('classic') ? 'classic' : 'modern';
+                setStudioTheme(`${edition}-${isDark ? 'light' : 'dark'}`);
+              }
+            }, [/dark|forest/.test(studioTheme) ? '☀' : '☾', /dark|forest/.test(studioTheme) ? 'Light' : 'Dark']),
+            e('span', {
+              className: `pill ${backendStatus === 'online' ? 'online' : (backendStatus === 'offline' ? 'warning' : '')}`,
+              role: 'status',
+              'aria-live': 'polite',
+              title: backendStatus === 'online' ? 'Studio API is responding' : 'Studio API connection state'
+            }, backendStatus === 'online' ? '● API online' : (backendStatus === 'offline' ? '● API offline' : '◌ Connecting…')),
+
             // Engine Status Chip
             e('span', {
-              className: `pill ${isTraining ? 'online' : ((metrics && metrics.step > 0) ? 'warning' : '')}`,
-              title: `Engine: ${isTraining ? 'Running' : ((metrics && metrics.step > 0) ? 'Paused' : 'Idle')}`
-            }, `● ${isTraining ? 'Running' : ((metrics && metrics.step > 0) ? 'Paused' : 'Idle')}`),
+              className: `pill ${backendStatus !== 'online' ? 'warning' : (isTraining ? 'online' : ((metrics && metrics.step > 0) ? 'warning' : ''))}`,
+              title: backendStatus !== 'online' ? 'Engine status unavailable until the API reconnects' : `Engine: ${isTraining ? 'Running' : ((metrics && metrics.step > 0) ? 'Paused' : 'Idle')}`
+            }, `● ${backendStatus !== 'online' ? 'Unavailable' : (isTraining ? 'Running' : ((metrics && metrics.step > 0) ? 'Paused' : 'Idle'))}`),
 
             // Step & Loss Telemetry
             (metrics && metrics.step > 0) && e('span', { className: 'pill', title: 'Global Step' }, `Step: ${metrics.step.toLocaleString()}`),
@@ -4633,7 +5836,7 @@
               ),
               e('button', {
                 onClick: handlePurgeVRAM,
-                title: 'Purge GPU VRAM Caches',
+            title: 'Clear unused GPU cache; active model memory is not released',
                 style: {
                   background: 'rgba(154, 52, 18, 0.08)',
                   border: '1px solid rgba(154, 52, 18, 0.25)',
@@ -4657,6 +5860,24 @@
             }, [renderIcon('models', 12), `Model: ${activeModel}`]),
             e('span', { className: 'pill' }, `Precision: ${trainPrecision || precision}`)
           )
+        ),
+
+        backendStatus !== 'online' && e('div', {
+          className: `backend-connect-banner ${backendStatus}`,
+          role: backendStatus === 'offline' ? 'alert' : 'status',
+          'aria-live': 'polite'
+        },
+          e('div', null,
+            e('strong', null, backendStatus === 'offline' ? 'Cannot reach the Triune backend.' : 'Connecting to the Triune backend…'),
+            backendStatus === 'offline' && e('span', null, ' Start or restart Studio’s backend; API features will be unavailable until it reconnects.')
+          ),
+          backendStatus === 'offline' && e('button', {
+            type: 'button',
+            onClick: () => {
+              setBackendStatus('checking');
+              setBackendRetry(retry => retry + 1);
+            }
+          }, 'Retry connection')
         ),
 
         e('div', { className: 'react-view-container' },
@@ -4705,7 +5926,13 @@
                   e('span', { className: 'bubble-time' }, 'Synthesizing...')
                 ),
                 e('div', { className: 'bubble-text', style: { fontStyle: 'italic', color: 'var(--text-muted)' } },
-                  'Synthesizing autoregressive tokens across neural depth (O(1) linear attention cache active)...'
+                  activeModel.startsWith('triune')
+                    ? (!weightsLoaded
+                      ? 'Loading and validating trained weights, then generating locally. First load can take a while.'
+                      : (!systemDiagnostics.cuda_available
+                        ? 'Generating locally on CPU. This is functional but much slower than GPU inference.'
+                        : 'Generating locally on GPU. The response appears when this run finishes.'))
+                    : 'Waiting for the selected provider. The response appears when this request finishes.'
                 )
               ),
               e('div', { ref: chatBottomRef })
@@ -4726,20 +5953,25 @@
                       }
                     }
                   },
-                    e('option', { value: 'triune-base' }, 'Triune-Base (Local Native MoE 32k)'),
-                    e('option', { value: 'triune-small' }, 'Triune-Small (Canonical 6L MoE)'),
-                    e('option', { value: 'triune-nano' }, 'Triune-Nano (Edge / Embedded 4L)'),
-                    e('option', { value: 'triune-medium' }, 'Triune-Medium (Reasoning & Code 12L)'),
-                    e('option', { value: 'triune-code-moe' }, 'Triune-Code-MoE (Syntax & Logic 8L)'),
-                    e('option', { value: 'triune-math-gla' }, 'Triune-Math-GLA (Linear Attention CoT 10L)'),
-                    e('option', { value: 'triune-1b' }, 'Triune-1B (Frontier MoE 24L - 1.2B)'),
-                    e('option', { value: 'triune-3b' }, 'Triune-3B (Production MoE 28L - 3.1B)'),
+                    MODEL_PRESETS.map(p =>
+                      e('option', { key: p.id, value: p.id }, p.name)
+                    ),
                     e('option', { value: 'gpt-4o-mini' }, 'GPT-4o Mini (OpenAI BYOK)'),
-                    e('option', { value: 'claude-3-5-sonnet' }, 'Claude 3.5 Sonnet (Anthropic BYOK)'),
-                    e('option', { value: 'gemini-1.5-flash' }, 'Gemini 1.5 Flash (Google BYOK)')
+                    e('option', { value: 'claude-3-5-sonnet-latest' }, 'Claude 3.5 Sonnet (Anthropic BYOK)'),
+                    e('option', { value: 'gemini-3.8-flash' }, 'Gemini 3.8 Flash (Google BYOK)')
                   )
                 ),
                 activeModel.startsWith('triune') ? e('div', null,
+                  e('span', {
+                    className: `pill ${weightsLoaded ? 'online' : 'warning'}`,
+                    title: weightsLoaded
+                      ? `Trained weights loaded${activeCheckpointName ? `: ${activeCheckpointName}` : ''}`
+                      : 'No trained weights are currently loaded; local inference requires a checkpoint or a completed training step.'
+                  }, weightsLoaded ? `Weights: ${activeCheckpointName || 'in memory'}` : 'No trained weights loaded'),
+                  !systemDiagnostics.cuda_available && e('span', {
+                    className: 'pill warning',
+                    title: 'This Studio backend is using CPU-only PyTorch. API online means the server is reachable; it does not mean local GPU inference is active.'
+                  }, 'CPU inference · slow'),
                   e('label', { style: { marginRight: '8px', fontWeight: 600 } }, 'Exit Route:'),
                   e('select', { value: route, onChange: ev => setRoute(ev.target.value) },
                     e('option', { value: 'auto' }, 'Auto (Adaptive Layer Exit)'),
@@ -4772,7 +6004,7 @@
               ),
               e('div', { className: 'chat-input-row' },
                 e('textarea', {
-                  placeholder: isGenerating ? 'Engine is synthesizing response (O(1) linear attention cache active)...' : 'Ask a research question or input prompt...',
+                  placeholder: isGenerating ? 'Generating response…' : 'Ask a research question or input prompt...',
                   value: chatInput,
                   disabled: isGenerating,
                   onChange: ev => setChatInput(ev.target.value),
@@ -4833,7 +6065,7 @@
                       cursor: 'pointer'
                     }
                   },
-                    MODEL_PRESETS.map(p => e('option', { key: p.id, value: p.id }, `${p.name} (${p.params})`))
+                    MODEL_PRESETS.map(p => e('option', { key: p.id, value: p.id }, p.name))
                   )
                 ),
                 e('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' } },
@@ -4845,6 +6077,23 @@
                 )
               ),
               e('div', { style: { display: 'flex', gap: '8px', alignItems: 'center' } },
+                (wandbUrl || byokConfigured.wandb) && e('a', {
+                  href: wandbUrl || 'https://wandb.ai',
+                  target: '_blank',
+                  rel: 'noreferrer',
+                  className: 'btn-sec',
+                  style: {
+                    fontSize: '11.5px',
+                    padding: '5px 12px',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    textDecoration: 'none',
+                    borderColor: '#ffbe00',
+                    color: '#d97706',
+                    fontWeight: 600
+                  }
+                }, ['📊 WandB Dashboard ↗']),
                 e('button', {
                   className: 'btn-sec',
                   style: { fontSize: '11.5px', padding: '5px 12px' },
@@ -4883,7 +6132,7 @@
               e('div', { className: 'card-stat' },
                 e('div', { className: 'stat-label' }, 'Global Steps'),
                 e('div', { className: 'stat-value' }, metrics.step || 0),
-                e('div', { className: 'stat-sub' }, `Tokens: ${(datasetInfo.total_tokens || metrics.tokens_trained || 0).toLocaleString()}`)
+                e('div', { className: 'stat-sub' }, `Tokens ingested: ${(datasetInfo.total_tokens || 0).toLocaleString()}`)
               ),
               e('div', { className: 'card-stat' },
                 e('div', { className: 'stat-label' }, 'Exit Head Ratio'),
@@ -4900,8 +6149,8 @@
             e('div', { className: 'stream-ingestion-box' },
               e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' } },
                 e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
-                  e('span', { className: 'stream-badge-pulse' }, isTraining ? 'Live Stream Ingestion Active' : 'Stream Ready'),
-                  e('span', { style: { fontWeight: 600, fontSize: '13px' } }, `Streaming Source: ${datasetInfo.name || 'HuggingFaceFW/fineweb-edu'} (${datasetInfo.type || 'streaming'})`)
+                  e('span', { className: 'stream-badge-pulse' }, isTraining ? 'Training from stream' : datasetInfo.name ? 'Stream ready · training idle' : 'No dataset connected'),
+                  e('span', { style: { fontWeight: 600, fontSize: '13px' } }, `Source: ${datasetInfo.name || 'Select a dataset in Dataset & Tokenizer'}${datasetInfo.type ? ` (${datasetInfo.type})` : ''}`)
                 ),
                 e('span', { style: { fontSize: '12px', color: 'var(--text-muted)' } },
                   `Cumulative Tokens Ingested: ${(datasetInfo.total_tokens || metrics.tokens_trained || 0).toLocaleString()} tokens`
@@ -4914,7 +6163,9 @@
               e('div', { className: 'stream-preview-text' },
                 activeBatchPreview
                   ? `"${cleanText(activeBatchPreview)}"`
-                  : '"Ingesting streaming tokens from HuggingFaceFW/fineweb-edu into CUDA backward graph..."'
+                  : isTraining
+                    ? 'Waiting for the next decoded training batch…'
+                    : 'Training is idle. Start Training or choose Train 1 Step to read from this source.'
               )
             ),
             e('div', { className: 'wandb-research-card' },
@@ -4932,14 +6183,25 @@
                 ),
                 e('div', { className: 'wandb-actions-group' },
                   e('button', { className: `btn-action ${isTraining ? 'pause' : 'start'}`, onClick: handleToggleTraining },
-                    isTraining ? [renderIcon('pause', 13, { marginRight: '6px' }), 'Pause PyTorch Loop'] : [renderIcon('play', 13, { marginRight: '6px' }), 'Start PyTorch Loop']
+                    isTraining ? [renderIcon('pause', 13, { marginRight: '6px' }), 'Pause Training'] : [renderIcon('play', 13, { marginRight: '6px' }), 'Start Training']
                   ),
+                  !isTraining && e('button', {
+                    className: 'btn-sec',
+                    style: { padding: '6px 12px', fontSize: '12px', fontWeight: 600 },
+                    onClick: handleStepTrainingOnce,
+                    title: 'Execute a single unified TrainingEngine step'
+                  }, [renderIcon('bolt', 12, { marginRight: '5px' }), 'Train 1 Step']),
                   e('button', { className: 'btn-action', style: { background: 'var(--accent-olive, #2b4c3f)', color: '#fff' }, onClick: handleSaveCheckpoint },
                     [renderIcon('checkpoints', 13, { marginRight: '6px' }), 'Save Checkpoint']
                   ),
-                  e('button', { className: 'btn-wandb-export', onClick: handleExportRunCSV, title: 'Export all training metrics to CSV file' }, [renderIcon('download', 12, { marginRight: '5px' }), 'CSV']),
-                  e('button', { className: 'btn-wandb-export', onClick: handleExportRunJSON, title: 'Export run history in WandB JSON schema' }, [renderIcon('download', 12, { marginRight: '5px' }), 'WandB JSON']),
-                  e('button', { className: 'btn-wandb-export', onClick: handleCopyLatexTable, title: 'Copy research results table to clipboard as LaTeX' }, [renderIcon('copy', 12, { marginRight: '5px' }), 'LaTeX Table'])
+                  e('details', { className: 'training-export-menu' },
+                    e('summary', { className: 'btn-wandb-export', title: 'Export run metrics or copy a research table' }, [renderIcon('download', 12, { marginRight: '5px' }), 'Export']),
+                    e('div', { className: 'training-export-options' },
+                      e('button', { className: 'btn-wandb-export', onClick: ev => { handleExportRunCSV(); ev.currentTarget.closest('details').open = false; }, title: 'Export all training metrics to CSV file' }, 'CSV metrics'),
+                      e('button', { className: 'btn-wandb-export', onClick: ev => { handleExportRunJSON(); ev.currentTarget.closest('details').open = false; }, title: 'Export run history in WandB JSON schema' }, 'WandB JSON'),
+                      e('button', { className: 'btn-wandb-export', onClick: ev => { handleCopyLatexTable(); ev.currentTarget.closest('details').open = false; }, title: 'Copy research results table to clipboard as LaTeX' }, 'Copy LaTeX table')
+                    )
+                  )
                 )
               ),
 
@@ -4948,11 +6210,11 @@
                 e('div', { className: 'metric-toggle-group' },
                   e('span', { style: { fontSize: '11px', color: 'var(--text-muted)', marginRight: '4px', textTransform: 'uppercase', letterSpacing: '0.5px' } }, 'Metrics:'),
                   [
-                    { key: 'loss', label: 'Loss', color: '#9a3412' },
-                    { key: 'lm_loss', label: 'LM Loss', color: '#2b4c3f' },
-                    { key: 'router_loss', label: 'Router Loss', color: '#b45309' },
-                    { key: 'throughput', label: 'Speed', color: '#0d9488' },
-                    { key: 'ppl', label: 'PPL', color: '#6366f1' }
+                    { key: 'loss', label: 'Loss', color: 'var(--chart-loss)' },
+                    { key: 'lm_loss', label: 'LM Loss', color: 'var(--chart-lm-loss)' },
+                    { key: 'router_loss', label: 'Router Loss', color: 'var(--chart-router-loss)' },
+                    { key: 'throughput', label: 'Speed', color: 'var(--chart-throughput)' },
+                    { key: 'ppl', label: 'PPL', color: 'var(--chart-ppl)' }
                   ].map(m => {
                     const isActive = chartMetrics && (Array.isArray(chartMetrics) ? chartMetrics.includes(m.key) : Boolean(chartMetrics[m.key]));
                     return e('div', {
@@ -5013,7 +6275,7 @@
                 e('div', { className: 'telemetry-box' },
                   telemetryLogs.length > 0
                     ? telemetryLogs.map((log, idx) => e('div', { key: idx }, log.replace(/Ġ/g, ' ')))
-                    : e('div', null, '[TELEMETRY] Click "Start PyTorch Loop" to stream live step metrics...')
+                    : e('div', null, '[TELEMETRY] Training events will appear here when a run starts.')
                 )
               )
             )
@@ -5025,30 +6287,18 @@
               e('div', { className: 'node-canvas-header', style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', paddingBottom: '10px', borderBottom: '1px solid var(--border-color)', flexWrap: 'wrap', gap: '8px' } },
                 e('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
                   e('span', { style: { fontFamily: 'Newsreader, Georgia, serif', fontSize: '17px', fontWeight: 700, color: 'var(--text-main)' } }, 'Visual DAG Architecture'),
-                  e('select', {
-                    value: '',
-                    onChange: ev => {
-                      if (ev.target.value) {
-                        handleLoadDAGPreset(ev.target.value);
-                        ev.target.value = '';
-                      }
-                    },
-                    style: {
-                      padding: '4px 8px',
-                      fontSize: '12px',
-                      borderRadius: '5px',
-                      border: '1px solid var(--border-color)',
-                      background: 'var(--bg-input, #fff)',
-                      color: 'var(--text-main)',
-                      cursor: 'pointer'
-                    },
-                    title: 'Load pre-configured architecture DAG preset'
-                  },
-                    e('option', { value: '', disabled: true }, 'Load Architecture Preset...'),
-                    Object.keys(DAG_PRESETS).map(key =>
-                      e('option', { key: key, value: key }, DAG_PRESETS[key].name)
-                    )
-                  )
+                  e('input', {
+                    value: workflowName,
+                    onChange: ev => setWorkflowName(ev.target.value),
+                    'aria-label': 'Workflow name',
+                    placeholder: 'Workflow name',
+                    style: { width: '150px', padding: '5px 7px', fontSize: '11px', borderRadius: '5px', border: '1px solid var(--border-color)', background: 'var(--bg-input, #fff)', color: 'var(--text-main)' }
+                  }),
+                  e('button', {
+                    className: 'btn-icon-tool',
+                    onClick: () => setShowDAGPresetLibrary(true),
+                    title: 'Browse workflows by goal, see prerequisites, and load one onto the canvas'
+                  }, [renderIcon('library', 13, { marginRight: '6px' }), 'Workflow Presets'])
                 ),
                 e('div', { className: 'canvas-toolbar', style: { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' } },
                   e('button', {
@@ -5087,8 +6337,42 @@
                     className: 'btn-icon-tool',
                     style: { background: 'var(--accent-terracotta, #9a3412)', color: '#fff', border: 'none' },
                     onClick: () => setShowNodeLibraryModal(true),
-                    title: 'Browse all 38+ categorized neural modules & plugins'
-                  }, [renderIcon('library', 13, { marginRight: '6px' }), 'Library (38+)']),
+                    title: 'Browse categorized nodes, executable operators, specifications, and plugins'
+                  }, [renderIcon('library', 13, { marginRight: '6px' }), 'Library (' + nodeCatalog.length + ')']),
+                  e('button', {
+                    className: 'btn-icon-tool',
+                    onClick: handleGroupSelectedNodes,
+                    disabled: selectedNodeIds.length < 2,
+                    title: 'Collapse selected nodes into a reusable typed subgraph (Ctrl+G)'
+                  }, [renderIcon('nodes', 13, { marginRight: '6px' }), `Group${selectedNodeIds.length > 1 ? ` (${selectedNodeIds.length})` : ''}`]),
+                  e('button', {
+                    className: 'btn-icon-tool',
+                    onClick: handleUngroupSelectedNode,
+                    disabled: !nodes.some(node => node.id === selectedNodeId && node.type === 'Subgraph'),
+                    title: 'Expand selected reusable subgraph and restore its wires'
+                  }, [renderIcon('frame', 13, { marginRight: '6px' }), 'Ungroup']),
+                  e('input', {
+                    ref: workflowImportRef,
+                    type: 'file',
+                    accept: '.json,.triune.json,application/json',
+                    style: { display: 'none' },
+                    onChange: ev => {
+                      const file = ev.target.files && ev.target.files[0];
+                      handleImportWorkflowFile(file);
+                      ev.target.value = '';
+                    }
+                  }),
+                  e('button', {
+                    className: 'btn-icon-tool',
+                    onClick: () => workflowImportRef.current && workflowImportRef.current.click(),
+                    title: 'Import a saved Triune workflow JSON file'
+                  }, [renderIcon('folder', 13, { marginRight: '6px' }), 'Open']),
+                  e('button', {
+                    className: 'btn-icon-tool',
+                    onClick: handleExportWorkflow,
+                    title: 'Export this workflow and all nested groups as a portable JSON file'
+                  }, [renderIcon('checkpoints', 13, { marginRight: '6px' }), 'Save As']),
+                  e('span', { style: { fontSize: '10px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }, title: 'Workflow is autosaved in this browser profile' }, workflowSaveState),
                   e('button', {
                     className: 'btn-icon-tool',
                     onClick: () => { if (selectedNodeId) handleToggleMuteNode(selectedNodeId); else showToast('Select a node first to mute (M key)'); },
@@ -5097,14 +6381,14 @@
                   e('button', {
                     className: 'btn-icon-tool',
                     onClick: () => handleCreateVisualFrame(),
-                    title: 'Group selected nodes inside a visual backdrop frame (Ctrl+J)'
-                  }, [renderIcon('frame', 13, { marginRight: '6px' }), 'Frame (Ctrl+J)']),
+                    title: 'Add a labeled visual backdrop (Ctrl+J)'
+                  }, [renderIcon('frame', 13, { marginRight: '6px' }), 'Add Backdrop']),
                   e('button', {
                     className: 'btn-action start',
                     style: { padding: '5px 12px', fontSize: '12px' },
                     onClick: handleExecuteDAG,
-                    title: 'Execute DAG forward pass & compute loss'
-                  }, [renderIcon('play', 13, { marginRight: '6px' }), 'Run DAG']),
+                    title: 'Run one forward-and-optimizer pass for this graph (not a long-running training job)'
+                  }, [renderIcon('play', 13, { marginRight: '6px' }), 'Run One Pass']),
                   e('button', {
                     className: 'btn-icon-tool',
                     onClick: () => setShowWireList(prev => !prev),
@@ -5112,6 +6396,11 @@
                     title: 'Toggle active wire connections list'
                   }, [renderIcon('scissors', 13, { marginRight: '5px' }), `Wires (${edges.length}) ${showWireList ? '▲' : '▼'}`])
                 )
+              ),
+              activePresetKey && DAG_PRESETS[activePresetKey] && e('div', { className: 'dag-preset-guide' },
+                e('strong', null, DAG_PRESETS[activePresetKey].name),
+                e('span', null, DAG_PRESETS[activePresetKey].description),
+                e('small', null, `Before running: ${DAG_PRESETS[activePresetKey].requirements}`)
               ),
               showWireList && edges.length > 0 && e('div', {
                 className: 'canvas-wires-panel',
@@ -5149,9 +6438,7 @@
                   backgroundPosition: `${canvasPan.x}px ${canvasPan.y}px, ${canvasPan.x}px ${canvasPan.y}px, ${canvasPan.x}px ${canvasPan.y}px, ${canvasPan.x}px ${canvasPan.y}px, ${canvasPan.x}px ${canvasPan.y}px`,
                   backgroundSize: `${20 * canvasZoom}px ${20 * canvasZoom}px, ${20 * canvasZoom}px ${20 * canvasZoom}px, ${20 * canvasZoom}px ${20 * canvasZoom}px, ${100 * canvasZoom}px ${100 * canvasZoom}px, ${100 * canvasZoom}px ${100 * canvasZoom}px`
                 },
-                onMouseDown: handleCanvasMouseDown,
-                onMouseMove: handleCanvasMouseMove,
-                onMouseUp: handleCanvasMouseUp,
+                onPointerDown: handleCanvasMouseDown,
                 onWheel: handleCanvasWheel
               },
                 // Viewport Container with 2D Pan and Zoom Transform
@@ -5206,11 +6493,21 @@
 
                   // SVG Wires Layer with Exact Port Pin Bezier Alignment & Click-to-Disconnect
                   (() => {
-                    const maxNodeX = Math.max(3600, ...nodes.map(n => n.x + NODE_WIDTH + 800));
-                    const maxNodeY = Math.max(2400, ...nodes.map(n => n.y + 800));
+                    // The SVG wire plane must cover the whole canvas coordinate
+                    // space, including negative coordinates from panning/layout.
+                    // Previously it started at (0, 0) and used a partial,
+                    // positive-only size, silently clipping wires near bounds.
+                    const wireOriginX = Math.min(0, ...nodes.map(n => n.x - 800));
+                    const wireOriginY = Math.min(0, ...nodes.map(n => n.y - 800));
+                    const wireRight = Math.max(12000, ...nodes.map(n => n.x + NODE_WIDTH + 800));
+                    const wireBottom = Math.max(12000, ...nodes.map(n => n.y + 800));
+                    const wireWidth = wireRight - wireOriginX;
+                    const wireHeight = wireBottom - wireOriginY;
                     return e('svg', {
                       className: 'svg-wire-layer',
-                      style: { width: `${maxNodeX}px`, height: `${maxNodeY}px`, pointerEvents: 'none' }
+                      viewBox: `${wireOriginX} ${wireOriginY} ${wireWidth} ${wireHeight}`,
+                      preserveAspectRatio: 'none',
+                      style: { left: `${wireOriginX}px`, top: `${wireOriginY}px`, width: `${wireWidth}px`, height: `${wireHeight}px`, pointerEvents: 'none' }
                     },
                       edges.map(edge => {
                         const srcNode = nodes.find(n => n.id === edge.source);
@@ -5220,12 +6517,12 @@
                         const tgtPorts = getNodePorts(tgtNode);
                         const outIdx = Math.max(0, srcPorts.outputs.findIndex(p => p.name === edge.source_port));
                         const inIdx = Math.max(0, tgtPorts.inputs.findIndex(p => p.name === edge.target_port));
-
-                        // Header (38px) + Subbar (22px) = 60px. Each socket row is 22px high.
-                        const x1 = srcNode.x + NODE_WIDTH;
-                        const y1 = srcNode.y + 60 + outIdx * 22 + 11;
-                        const x2 = tgtNode.x;
-                        const y2 = tgtNode.y + 60 + inIdx * 22 + 11;
+                        const sourcePoint = socketPositions[`${edge.source}|out|${edge.source_port}`];
+                        const targetPoint = socketPositions[`${edge.target}|in|${edge.target_port}`];
+                        const x1 = sourcePoint ? sourcePoint.x : srcNode.x + NODE_WIDTH;
+                        const y1 = sourcePoint ? sourcePoint.y : srcNode.y + 73 + outIdx * 24;
+                        const x2 = targetPoint ? targetPoint.x : tgtNode.x;
+                        const y2 = targetPoint ? targetPoint.y : tgtNode.y + 73 + inIdx * 24;
                         const dx = Math.max(Math.abs(x2 - x1) * 0.45, 40);
                         const pathD = `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
                         const wireColor = getPortColor(edge.port_type || (srcPorts.outputs[outIdx] && srcPorts.outputs[outIdx].type));
@@ -5278,10 +6575,11 @@
                     const exec = nodeExecOutputs[n.id];
                     const isRunning = activeRunningNodeId === n.id || (exec && exec.status === 'running');
                     const isCompleted = exec && exec.status === 'completed';
+                    const isSpecification = exec && exec.status === 'specification';
                     const isFailed = exec && exec.status === 'failed';
-                    const isSelected = selectedNodeId === n.id;
+                    const isSelected = selectedNodeIds.includes(n.id);
                     const isMuted = !!n.muted;
-                    const cardClass = `node-card-react ${isSelected ? 'node-selected' : ''} ${isRunning ? 'running' : (isCompleted ? 'completed' : (isFailed ? 'failed' : ''))} ${isMuted ? 'node-muted' : ''}`;
+                    const cardClass = `node-card-react ${isSelected ? 'node-selected' : ''} ${isRunning ? 'running' : (isCompleted ? 'completed' : (isFailed ? 'failed' : (isSpecification ? 'specification' : '')))} ${isMuted ? 'node-muted' : ''}`;
                     const { inputs, outputs } = getNodePorts(n);
                     const tensorBadge = getNodeTensorBadge(n, exec && exec.output);
 
@@ -5297,8 +6595,8 @@
                         filter: isMuted ? 'grayscale(0.85)' : 'none',
                         borderStyle: isMuted ? 'dashed' : 'solid'
                       },
-                      onClick: (ev) => { ev.stopPropagation(); handleSelectNode(n.id); },
-                      onMouseDown: (ev) => handleNodeMouseDown(ev, n.id)
+                      onClick: (ev) => { ev.stopPropagation(); },
+                      onPointerDown: (ev) => handleNodeMouseDown(ev, n.id)
                     },
                       // Node Header
                       e('div', { className: 'node-head' },
@@ -5308,7 +6606,7 @@
                         ),
                         e('div', { style: { display: 'flex', alignItems: 'center', gap: '5px' } },
                           exec && e('span', { className: `node-status-badge ${exec.status}`, style: { display: 'inline-flex', alignItems: 'center' } },
-                            exec.status === 'running' ? 'RUNNING' : (exec.status === 'completed' ? [renderIcon('check', 10, { marginRight: '2px' }), 'READY'] : 'FAIL')
+                            exec.status === 'running' ? 'RUNNING' : (exec.status === 'completed' ? [renderIcon('check', 10, { marginRight: '2px' }), 'READY'] : (isSpecification ? 'SPEC' : 'FAIL'))
                           ),
                           e('button', {
                             className: 'node-mute-btn',
@@ -5344,9 +6642,9 @@
                               fontFamily: 'var(--font-mono)',
                               padding: '1px 5px',
                               borderRadius: '3px',
-                              background: 'rgba(99, 199, 178, 0.18)',
-                              color: '#0f766e',
-                              border: '1px solid rgba(99, 199, 178, 0.4)',
+                              background: 'var(--status-completed-bg, rgba(99, 199, 178, 0.18))',
+                              color: 'var(--status-completed-text, #0f766e)',
+                              border: '1px solid var(--status-completed-border, rgba(99, 199, 178, 0.4))',
                               fontWeight: 600
                             },
                             title: 'Live Executed Tensor Shape & Dtype'
@@ -5381,7 +6679,9 @@
                                   zIndex: 20
                                 },
                                 title: `Input: ${inp.name} (${inp.type}) – Drop wire here`,
-                                onMouseUp: (ev) => handleEndWire(ev, n.id, inp.name, inp.type)
+                                'data-dag-input-node': n.id,
+                                'data-dag-input-port': inp.name,
+                                'data-dag-input-type': inp.type,
                               }),
                               e('span', { className: 'socket-label', style: { fontSize: '11px', color: 'var(--text-main)', marginLeft: '10px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, inp.name),
                               e('span', { className: 'socket-type-tag', style: { fontSize: '8.5px', color: pColor, marginLeft: '4px', opacity: 0.85, fontFamily: 'var(--font-mono)' } }, `[${inp.type}]`)
@@ -5414,7 +6714,9 @@
                                   zIndex: 20
                                 },
                                 title: `Output: ${out.name} (${out.type}) – Drag wire to connect`,
-                                onMouseDown: (ev) => handleStartWire(ev, n.id, out.name, out.type, idx)
+                                'data-dag-output-node': n.id,
+                                'data-dag-output-port': out.name,
+                                onPointerDown: (ev) => handleStartWire(ev, n.id, out.name, out.type, idx)
                               })
                             );
                           })
@@ -5424,10 +6726,12 @@
                       e('div', { className: 'node-body', style: { padding: '8px 10px 10px 10px', borderTop: '1px solid var(--border-color, #ded9cd)' } },
                         renderNodeInlineControls(n),
                         // Live Output Inspector Box
-                        exec && exec.output && (() => {
-                          const out = exec.output;
+                        exec && (exec.output || exec.error) && (() => {
+                          const out = exec.output || {};
                           let outText = '';
-                          if (out.tokens_loaded) {
+                          if (exec.status === 'failed') {
+                            outText = exec.error || out.error || out.message || 'Node execution failed without a diagnostic.';
+                          } else if (out.tokens_loaded) {
                             outText = `Loaded ${out.tokens_loaded} tokens (${out.dataset_file || 'stream'})`;
                           } else if (out.total_params) {
                             outText = `${out.total_params} params (${out.architecture || 'MoE'})\n${out.exit_heads || '3 Exits'}`;
@@ -5469,7 +6773,7 @@
                 },
                   e('h4', { style: { fontFamily: 'var(--font-serif)', fontSize: '18px', color: 'var(--text-main)', marginBottom: '8px' } }, 'Node Canvas is Empty'),
                   e('p', { style: { fontSize: '13px', color: 'var(--text-muted)', marginBottom: '14px' } }, 'Select an architecture preset above, click "+ Node" on the toolbar, or spawn from the Node Library.'),
-                  e('button', { className: 'btn-action', style: { background: 'var(--accent-olive, #2b4c3f)', color: '#fff', display: 'inline-flex', alignItems: 'center' }, onClick: () => handleLoadDAGPreset('triune_canonical_hierarchical') }, [renderIcon('bolt', 12, { marginRight: '6px' }), 'Load Default MoE DAG'])
+                  e('button', { className: 'btn-action', style: { background: 'var(--accent-olive, #2b4c3f)', color: '#fff', display: 'inline-flex', alignItems: 'center' }, onClick: () => handleLoadDAGPreset('triune_canonical_hierarchical') }, [renderIcon('bolt', 12, { marginRight: '6px' }), 'Load CLI Training Graph'])
                 ),
                 // Quick-Add Popup Menu (Shift+A)
                 quickAddMenu && e('div', {
@@ -5667,13 +6971,46 @@
                         e('button', {
                           className: 'btn-icon-tool',
                           style: { padding: '2px 8px', fontSize: '11px' },
-                          onClick: () => {
-                            const keyName = prompt('Enter new parameter name:');
-                            if (keyName && keyName.trim()) {
-                              setSelectedNodeParams(prev => ({ ...prev, [keyName.trim()]: '' }));
+                          onClick: () => { setNewNodeParamName(''); setShowNewNodeParam(true); }
+                        }, [renderIcon('plus', 11, { marginRight: '4px' }), 'Param'])
+                      ),
+                      showNewNodeParam && e('div', { className: 'inspector-field-row' },
+                        e('input', {
+                          className: 'inspector-field-input',
+                          value: newNodeParamName,
+                          placeholder: 'Parameter name',
+                          'aria-label': 'New parameter name',
+                          autoFocus: true,
+                          onChange: ev => setNewNodeParamName(ev.target.value),
+                          onKeyDown: ev => {
+                            if (ev.key === 'Escape') setShowNewNodeParam(false);
+                            if (ev.key === 'Enter') {
+                              ev.preventDefault();
+                              const key = newNodeParamName.trim();
+                              if (!key) return;
+                              if (Object.prototype.hasOwnProperty.call(selectedNodeParams, key)) {
+                                showToast(`Parameter "${key}" already exists.`);
+                                return;
+                              }
+                              setSelectedNodeParams(prev => ({ ...prev, [key]: '' }));
+                              setShowNewNodeParam(false);
                             }
                           }
-                        }, [renderIcon('plus', 11, { marginRight: '4px' }), 'Param'])
+                        }),
+                        e('button', {
+                          className: 'btn-icon-tool',
+                          title: 'Add parameter',
+                          onClick: () => {
+                            const key = newNodeParamName.trim();
+                            if (!key) return;
+                            if (Object.prototype.hasOwnProperty.call(selectedNodeParams, key)) {
+                              showToast(`Parameter "${key}" already exists.`);
+                              return;
+                            }
+                            setSelectedNodeParams(prev => ({ ...prev, [key]: '' }));
+                            setShowNewNodeParam(false);
+                          }
+                        }, renderIcon('check', 12))
                       ),
                       Object.keys(selectedNodeParams).length === 0 ?
                         e('div', { style: { fontSize: '11.5px', color: 'var(--text-dim)', fontStyle: 'italic' } }, 'No parameters configured.') :
@@ -5770,10 +7107,7 @@
                 e('button', {
                   className: 'btn-sec',
                   style: { flex: 1, height: '44px', fontSize: '12px' },
-                  onClick: () => {
-                    setActiveAdapter({ name: `LoRA-r${loraConfig.rank}`, rank: loraConfig.rank });
-                    showToast(`Attached LoRA Adapter (r=${loraConfig.rank}) to Studio Engine!`);
-                  }
+                  onClick: () => handleAttachAdapterToEngine(loraConfig)
                 }, activeAdapter ? 'Re-attach Adapter' : 'Attach to Engine')
               ),
               activeAdapter && e('div', { style: { marginTop: '14px', padding: '12px 16px', background: '#e3ebd8', border: '1px solid #c5d6b4', borderRadius: '6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
@@ -5782,9 +7116,9 @@
                     renderIcon('check', 13, { color: '#2b4c3f' }),
                     `${activeAdapter.name} Active in Studio Engine`
                   ]),
-                  e('div', { style: { fontSize: '11.5px', color: '#3f6212' } }, `Rank: ${activeAdapter.rank} | Model: ${activeModel} | Precision: ${loraConfig.quantization}`)
+                  e('div', { style: { fontSize: '11.5px', color: '#3f6212' } }, `Rank: ${activeAdapter.rank} | Model: ${activeModel} | Precision: ${activeAdapter.quantization || loraConfig.quantization}`)
                 ),
-                e('button', { className: 'btn-sec', style: { fontSize: '11px', padding: '4px 10px' }, onClick: () => { setActiveAdapter(null); showToast('Detached LoRA Adapter'); } }, 'Detach')
+                e('button', { className: 'btn-sec', style: { fontSize: '11px', padding: '4px 10px' }, onClick: handleDetachAdapterFromEngine }, 'Detach')
               ),
               fineTuningStatus && e('div', { className: 'notebook-terminal', style: { marginTop: '14px' } }, fineTuningStatus)
             )
@@ -5795,8 +7129,13 @@
             e('div', { className: 'ckpt-card-header' },
               e('div', null,
                 e('h3', { style: { fontFamily: 'Newsreader', fontSize: '20px', marginBottom: '4px' } }, [renderIcon('checkpoints', 18, { marginRight: '8px' }), 'Checkpoint Browser & Model Weights Manager']),
-                e('p', { style: { color: 'var(--text-muted)', fontSize: '13px' } },
-                  `Active Weights in Engine: ${activeCheckpointName || (metrics.step ? `triune_studio_step_${metrics.step}.pt` : 'No Weights Loaded')} (Step: ${metrics.step || 0} • Cumulative Tokens: ${(metrics.tokens_trained || datasetInfo.total_tokens || (metrics.step * 1024) || 0).toLocaleString()} tok)`
+                e('div', { className: 'ckpt-run-status' },
+                  e('p', { style: { color: 'var(--text-main)', fontSize: '13px', margin: '0 0 4px' } },
+                    [e('strong', { key: 'label' }, 'Loaded weights: '), activeCheckpointName || 'No checkpoint loaded']
+                  ),
+                  e('p', { style: { color: 'var(--text-muted)', fontSize: '12px', margin: 0 } },
+                    `Current run: Step ${(metrics.step || 0).toLocaleString()} · ${(metrics.tokens_trained || 0).toLocaleString()} tokens trained · ${(datasetInfo.total_tokens || 0).toLocaleString()} tokens ingested`
+                  )
                 )
               ),
               e('div', { className: 'ckpt-save-bar' },
@@ -5817,7 +7156,8 @@
                 }, [renderIcon('refresh', 13, { marginRight: '6px' }), 'Refresh'])
               )
             ),
-            e('table', { className: 'ckpt-table' },
+            e('div', { className: 'ckpt-table-wrap', role: 'region', 'aria-label': 'Checkpoint files', tabIndex: 0 },
+              e('table', { className: 'ckpt-table' },
               e('thead', null,
                 e('tr', null,
                   e('th', null, 'Checkpoint File'),
@@ -5866,8 +7206,8 @@
                             e('button', {
                               className: 'btn-sec',
                               style: { padding: '4px 8px', fontSize: '11px', color: 'var(--text-main)' },
-                              title: 'Export checkpoint as SafeTensors for Ollama / LM Studio',
-                              onClick: () => handleExportModel(c.filename.replace('.pt', ''), 'safetensors')
+                              title: 'Export this checkpoint file as SafeTensors',
+                              onClick: () => handleExportCheckpoint(c.path)
                             }, [renderIcon('modules', 11, { marginRight: '4px' }), 'Export']),
                             e('button', {
                               className: 'btn-sec',
@@ -5883,6 +7223,7 @@
                         'No checkpoints found on disk. Train some steps and click "Save Checkpoint".'
                       )
                     )
+              )
               )
             )
           ),
@@ -5928,17 +7269,6 @@
                       e('span', { className: 'model-spec-chip' }, `Exits: ${m.exits}`)
                     ),
 
-                    // Real Hardware Estimates
-                    e('div', { style: { marginTop: '8px', padding: '8px 10px', background: 'var(--bg-surface, #ede9df)', borderRadius: '6px', border: '1px solid var(--border-color, #ded9cd)', fontSize: '11.5px', display: 'flex', flexDirection: 'column', gap: '4px' } },
-                      e('div', { style: { display: 'flex', justifyContent: 'space-between' } },
-                        e('span', { style: { color: 'var(--text-muted)' } }, 'Expected VRAM:'),
-                        e('span', { style: { fontFamily: 'var(--font-mono)', fontWeight: 600 } }, m.expected_vram)
-                      ),
-                      e('div', { style: { display: 'flex', justifyContent: 'space-between' } },
-                        e('span', { style: { color: 'var(--text-muted)' } }, 'Expected Speed:'),
-                        e('span', { style: { fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--accent-olive, #2b4c3f)' } }, m.expected_speed)
-                      )
-                    )
                   ),
 
                   // Card Actions
@@ -5951,13 +7281,17 @@
                     e('button', {
                       className: 'btn-sec',
                       style: { flex: '1 1 45%' },
-                      onClick: () => handleExportModel(m.id, 'gguf')
-                    }, 'Export GGUF'),
+                      disabled: true,
+                      title: 'GGUF conversion is not implemented for Triune architectures yet.',
+                      'aria-label': 'GGUF export unavailable: converter not implemented'
+                    }, 'GGUF Export Unavailable'),
                     e('button', {
                       className: 'btn-sec',
                       style: { flex: '1 1 45%' },
+                      disabled: !isCurrent,
+                      title: isCurrent ? 'Export weights currently loaded in the engine.' : 'Activate this architecture first; export always writes the active engine weights.',
                       onClick: () => handleExportModel(m.id, 'safetensors')
-                    }, 'Export SafeTensors')
+                    }, isCurrent ? 'Export Active SafeTensors' : 'Activate to Export')
                   )
                 );
               })
@@ -6104,6 +7438,7 @@
                   value: sampleText,
                   onChange: ev => setSampleText(ev.target.value)
                 }),
+                e('div', { role: 'status', 'aria-live': 'polite', style: { margin: '7px 2px', fontSize: '11px', color: tokens.length ? 'var(--text-muted)' : 'var(--text-dim)' } }, tokenizerStatus),
                 e('div', { className: 'token-chip-container' },
                   tokens.map(t => {
                     const raw = t.text || '';
@@ -6214,18 +7549,19 @@
             e('div', { className: 'card-byok' },
               e('h3', { style: { fontFamily: 'Newsreader', fontSize: '20px', marginBottom: '6px' } }, 'Bring-Your-Own-Key (BYOK) Subscription Manager'),
               e('p', { style: { color: 'var(--text-muted)', fontSize: '13px' } },
-                'Configure API credentials to route requests to external providers when local fallback is needed.'
+                'Add provider credentials, verify them against the provider, then choose that provider in Chat & Playground. Credentials are stored in the operating system credential vault when available.'
               ),
               e('div', { className: 'byok-grid' },
                 ['openai', 'anthropic', 'gemini'].map(prov =>
                   e('div', { key: prov, className: 'field-group' },
                     e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
                       e('label', null, `${prov.toUpperCase()} API Key:`),
-                      byokStatus[prov] && e('span', { style: { fontSize: '11px', color: 'var(--accent-sage)' } }, byokStatus[prov])
+                      e('span', { style: { fontSize: '11px', color: byokStatus[prov] === 'Connection verified' ? 'var(--accent-sage)' : (byokStatus[prov] ? 'var(--accent-bronze)' : 'var(--text-muted)') } },
+                        byokStatus[prov] || (byokConfigured[prov] ? 'Saved — not tested this session' : 'Not configured'))
                     ),
                     e('input', {
                       type: 'password',
-                      placeholder: `Enter ${prov} key...`,
+                      placeholder: byokConfigured[prov] ? 'Saved key — enter a new key to replace' : `Enter ${prov} key...`,
                       value: byokKeys[prov],
                       onChange: ev => setByokKeys({ ...byokKeys, [prov]: ev.target.value })
                     }),
@@ -6233,7 +7569,7 @@
                       className: 'btn-sec',
                       style: { marginTop: '8px', width: '100%' },
                       onClick: () => testBYOKKey(prov)
-                    }, 'Test Key Connection')
+                    }, 'Verify Provider Connection')
                   )
                 )
               ),
@@ -6246,13 +7582,13 @@
                     e('label', { style: { fontFamily: 'var(--font-serif)', fontWeight: 700, fontSize: '14px', color: 'var(--text-main)' } }, 'HUGGING FACE USER ACCESS TOKEN (HF_TOKEN)'),
                     e('span', { className: 'badge-folder' }, 'Full Gated Dataset Streaming Access')
                   ),
-                  byokStatus['huggingface'] && e('span', {
+                  (byokStatus['huggingface'] || byokConfigured.huggingface) && e('span', {
                     style: {
                       fontSize: '12px',
                       fontWeight: 600,
-                      color: byokStatus['huggingface'].includes('Valid') ? 'var(--accent-olive)' : (byokStatus['huggingface'].includes('Invalid') ? 'var(--accent-bronze)' : 'var(--primary)')
+                      color: byokStatus['huggingface'] === 'Connection verified' ? 'var(--accent-olive)' : 'var(--text-muted)'
                     }
-                  }, byokStatus['huggingface'])
+                  }, byokStatus['huggingface'] || 'Saved — not tested this session')
                 ),
                 e('p', { style: { fontSize: '12.5px', color: 'var(--text-muted)', margin: '0 0 12px 0', lineHeight: '1.5' } },
                   'Authenticates directly against huggingface.co/api/whoami-v2. Unlocks gated datasets (e.g. StarCoder, LLaMA, gated fine-web) and eliminates Hugging Face Hub 429 rate limit throttling during streaming training.'
@@ -6261,7 +7597,7 @@
                   e('input', {
                     type: 'password',
                     style: { flex: '1 1 280px', height: '40px', padding: '0 12px', background: 'var(--bg-input)', border: '1px solid var(--border-color)', borderRadius: '6px', fontSize: '13px', color: 'var(--text-main)' },
-                    placeholder: 'hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
+                    placeholder: byokConfigured.huggingface ? 'Saved token — enter a new token to replace' : 'hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
                     value: byokKeys['huggingface'] || '',
                     onChange: ev => setByokKeys({ ...byokKeys, huggingface: ev.target.value })
                   }),
@@ -6280,20 +7616,154 @@
                 )
               ),
 
+              // Dedicated Weights & Biases Telemetry Card
+              e('div', { className: 'hf-token-highlight-box', style: { marginTop: '20px', borderLeft: '4px solid #d97706' } },
+                e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap', gap: '8px' } },
+                  e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+                    renderIcon('train', 20, { color: '#d97706' }),
+                    e('label', { style: { fontFamily: 'var(--font-serif)', fontWeight: 700, fontSize: '14px', color: 'var(--text-main)' } }, 'WEIGHTS & BIASES API KEY (WANDB_API_KEY)'),
+                    e('span', { className: 'badge-folder', style: { background: 'rgba(217, 119, 6, 0.15)', color: '#d97706', borderColor: 'rgba(217, 119, 6, 0.3)' } }, 'Live Cloud Telemetry & Experiment Dashboard')
+                  ),
+                  (byokStatus['wandb'] || byokConfigured.wandb) && e('span', {
+                    style: {
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      color: byokStatus['wandb'] === 'Connection verified' ? 'var(--accent-sage)' : 'var(--text-muted)'
+                    }
+                  }, byokStatus['wandb'] || 'Saved — not tested this session')
+                ),
+                e('p', { style: { fontSize: '12.5px', color: 'var(--text-muted)', margin: '0 0 12px 0', lineHeight: '1.5' } },
+                  'Synchronizes live training metrics to your Weights & Biases cloud dashboard (wandb.ai). Automatically logs step loss, LM loss, MoE router loss, balance loss, learning rate, GPU throughput (tok/s), VRAM usage, and depth exit distribution (Reflex/Limbic/Cortex).'
+                ),
+                e('div', { style: { display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' } },
+                  e('input', {
+                    type: 'password',
+                    style: { flex: '1 1 280px', height: '40px', padding: '0 12px', background: 'var(--bg-input)', border: '1px solid var(--border-color)', borderRadius: '6px', fontSize: '13px', color: 'var(--text-main)' },
+                    placeholder: byokConfigured.wandb ? 'Saved W&B key — enter a new key to replace' : 'Enter Weights & Biases API key...',
+                    value: byokKeys['wandb'] || '',
+                    onChange: ev => setByokKeys({ ...byokKeys, wandb: ev.target.value })
+                  }),
+                  e('button', {
+                    className: 'btn-action',
+                    style: { height: '40px', padding: '0 16px', background: '#d97706', color: '#fff', fontWeight: 600 },
+                    onClick: () => testBYOKKey('wandb')
+                  }, 'Verify W&B Login'),
+                  e('a', {
+                    href: 'https://wandb.ai/authorize',
+                    target: '_blank',
+                    rel: 'noreferrer',
+                    className: 'btn-sec',
+                    style: { height: '40px', padding: '0 12px', display: 'flex', alignItems: 'center', textDecoration: 'none', fontSize: '12px' }
+                  }, 'Get W&B Key ↗'),
+                  wandbUrl && e('a', {
+                    href: wandbUrl,
+                    target: '_blank',
+                    rel: 'noreferrer',
+                    className: 'btn-sec',
+                    style: { height: '40px', padding: '0 12px', display: 'flex', alignItems: 'center', textDecoration: 'none', fontSize: '12px', borderColor: '#d97706', color: '#d97706' }
+                  }, 'Open W&B Run ↗')
+                )
+              ),
+
               e('button', {
                 className: 'btn-send',
                 style: { width: '100%', height: '46px', marginTop: '20px' },
                 onClick: handleSaveBYOK
-              }, 'Save Provider Credentials')
+                  }, 'Save Provider Credentials')
             )
           ),
 
-          // Tab 9: Modules & Repos Marketplace & Ecosystem
+          activeTab === 'customize' && e('div', { className: 'view-appearance' },
+            e('div', { className: 'appearance-hero' },
+              e('div', null,
+                e('span', { className: 'appearance-eyebrow' }, 'STUDIO PERSONALIZATION'),
+                e('h2', null, 'Make the workspace yours'),
+                e('p', null, 'Choose a visual edition and color theme. Your choice is saved on this device and applied across Studio.')
+              ),
+              e('div', { className: 'appearance-current' },
+                e('span', null, 'CURRENT THEME'),
+                e('strong', null, (APPEARANCE_THEMES.find(theme => theme.id === studioTheme) || APPEARANCE_THEMES[0]).name),
+                e('small', null, `${studioTheme.startsWith('classic') ? 'Classic' : 'Modern'} · ${/dark|forest/.test(studioTheme) ? 'Dark' : 'Light'}`)
+              )
+            ),
+            e('div', { className: 'appearance-section-heading' },
+              e('div', null,
+                e('h3', null, 'Theme marketplace'),
+                e('p', null, 'Curated, built-in themes—no downloads, third-party CSS, or executable theme packages.')
+              ),
+              e('div', { className: 'appearance-mode-switch', role: 'group', 'aria-label': 'Filter themes by appearance' },
+                ['All', 'Light', 'Dark'].map(mode => e('button', {
+                  key: mode,
+                  type: 'button',
+                  className: `appearance-filter ${appearanceFilter === mode ? 'active' : ''}`,
+                  onClick: () => setAppearanceFilter(mode)
+                }, mode))
+              )
+            ),
+            e('div', { className: 'appearance-theme-grid' },
+              APPEARANCE_THEMES.filter(theme => appearanceFilter === 'All' || theme.mode === appearanceFilter).map(theme =>
+                e('article', { key: theme.id, className: `appearance-theme-card ${studioTheme === theme.id ? 'selected' : ''}` },
+                  e('div', { className: `appearance-preview preview-${theme.id}`, 'aria-hidden': 'true' },
+                    e('div', { className: 'preview-sidebar' }, e('i', null), e('i', null), e('i', null), e('i', null)),
+                    e('div', { className: 'preview-workspace' },
+                      e('div', { className: 'preview-topbar' }),
+                      e('div', { className: 'preview-content' }, e('i', null), e('i', null), e('i', null))
+                    )
+                  ),
+                  e('div', { className: 'appearance-theme-info' },
+                    e('div', { className: 'appearance-theme-title' },
+                      e('h4', null, theme.name),
+                      studioTheme === theme.id && e('span', { className: 'appearance-applied-badge' }, 'Applied')
+                    ),
+                    e('div', { className: 'appearance-theme-meta' }, `${theme.edition} edition · ${theme.mode} mode`),
+                    e('p', null, theme.description),
+                    e('button', {
+                      className: studioTheme === theme.id ? 'appearance-apply applied' : 'appearance-apply',
+                      type: 'button',
+                      disabled: studioTheme === theme.id,
+                      onClick: () => { setStudioTheme(theme.id); showToast(`${theme.name} applied.`); }
+                    }, studioTheme === theme.id ? 'Currently applied' : 'Apply theme')
+                  )
+                )
+              )
+            ),
+            e('section', { className: 'appearance-custom-card' },
+              e('div', null,
+                e('h3', null, 'Personal accent color'),
+                e('p', null, 'Optional: choose an accent color on top of any theme. This only changes Studio appearance.')
+              ),
+              e('div', { className: 'appearance-color-controls' },
+                e('label', { className: 'appearance-color-picker' },
+                  e('input', {
+                    type: 'color',
+                    value: customAccent || (APPEARANCE_THEMES.find(theme => theme.id === studioTheme) || APPEARANCE_THEMES[0]).accent,
+                    'aria-label': 'Choose personal accent color',
+                    onChange: event => setCustomAccent(event.target.value)
+                  }),
+                  e('span', null, customAccent || 'Theme default')
+                ),
+                customAccent && e('button', { className: 'appearance-reset', type: 'button', onClick: () => setCustomAccent('') }, 'Reset to theme color')
+              )
+            ),
+            e('section', { className: 'appearance-custom-card extension-marketplace-link' },
+              e('div', null,
+                e('h3', null, 'Looking for tools and integrations?'),
+                e('p', null, 'Triune’s extension marketplace includes curated modules, local plugins, and GitHub or Hugging Face repositories. Remote plugins stay dormant until a signed manifest is verified and you explicitly approve activation.')
+              ),
+              e('button', {
+                className: 'appearance-apply',
+                type: 'button',
+                onClick: () => { setMarketplaceSubTab('curated'); setActiveTab('modules'); fetchInstalledModules(); searchMarketplace('', 'all', 'all'); }
+              }, 'Browse extensions')
+            )
+          ),
+
+          // Tab 10: Extensions & Repositories Marketplace
           activeTab === 'modules' && e('div', { className: 'view-modules' },
             e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '10px' } },
               e('div', null,
-                e('h2', { style: { fontFamily: 'Newsreader', fontSize: '24px', margin: 0 } }, 'Modules & Repos Ecosystem'),
-                e('p', { style: { color: 'var(--text-muted)', fontSize: '13px', margin: '4px 0 0 0' } }, 'Clone remote Git repositories, explore Hugging Face models & datasets, and dynamically register custom DAG node extensions.')
+                e('h2', { style: { fontFamily: 'Newsreader', fontSize: '24px', margin: 0 } }, 'Extensions & Integrations'),
+                e('p', { style: { color: 'var(--text-muted)', fontSize: '13px', margin: '4px 0 0 0' } }, 'Browse curated Triune modules, community repositories, and the extensions installed in this workspace.')
               ),
               e('div', { style: { display: 'flex', gap: '8px' } },
                 e('button', { className: 'btn-sec', onClick: () => { fetchInstalledModules(); searchMarketplace(moduleSearchQuery, moduleFilter, 'all'); checkModuleUpdates(); } }, [renderIcon('refresh', 13, { marginRight: '6px' }), 'Refresh All']),
@@ -6301,6 +7771,12 @@
               )
             ),
 
+            e('details', { className: 'marketplace-advanced-tools' },
+              e('summary', null,
+                e('span', null, 'Add local or remote extensions'),
+                e('small', null, 'Workspace scan · Git / Hugging Face clone')
+              ),
+              e('div', { className: 'marketplace-advanced-body' },
             // Local Workspace Plugin & Script Scanner Box
             e('div', { className: 'workspace-scanner-box' },
               e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '8px' } },
@@ -6336,7 +7812,7 @@
                 e('h3', { style: { fontFamily: 'Newsreader', fontSize: '17px', margin: 0, fontWeight: '600' } }, 'Clone Remote Repository (GitHub / Hugging Face)'),
                 e('span', { className: 'repo-git-pill', style: { marginLeft: 'auto' } }, 'git clone --depth 1')
               ),
-              e('p', { style: { color: 'var(--text-muted)', fontSize: '12.5px', margin: '4px 0 0 0' } }, 'Enter any remote Git URL or Hugging Face repository to clone locally. Detected DAG node plugins, model weights, and datasets will be automatically registered.'),
+              e('p', { style: { color: 'var(--text-muted)', fontSize: '12.5px', margin: '4px 0 0 0' } }, 'Clone a repository for inspection. Remote Python plugins remain dormant until a trusted signed manifest passes validation and you explicitly approve activation.'),
               e('form', { className: 'repo-cloner-form', onSubmit: handleCloneCustomRepo },
                 e('input', {
                   style: { flex: '2 1 280px', height: '38px', padding: '0 12px', background: 'var(--bg-input)', border: '1px solid var(--border-color)', borderRadius: '6px', fontSize: '13px', color: 'var(--text-main)' },
@@ -6367,7 +7843,9 @@
                   className: 'btn-send',
                   disabled: isCloningRepo,
                   style: { height: '38px', padding: '0 18px', fontSize: '13px', whiteSpace: 'nowrap' }
-                }, isCloningRepo ? [renderIcon('refresh', 12, { marginRight: '5px' }), 'Cloning...'] : [renderIcon('download', 12, { marginRight: '5px' }), 'Clone & Register'])
+                }, isCloningRepo ? [renderIcon('refresh', 12, { marginRight: '5px' }), 'Cloning...'] : [renderIcon('download', 12, { marginRight: '5px' }), 'Clone & Inspect'])
+              )
+            ),
               )
             ),
 
@@ -6416,7 +7894,6 @@
                   className: `filter-pill ${moduleFilter === pill.id ? 'active' : ''}`,
                   onClick: () => {
                     setModuleFilter(pill.id);
-                    setModuleCategoryFilter(pill.id);
                     searchMarketplace(moduleSearchQuery, pill.id, marketplaceSubTab === 'installed' ? 'all' : marketplaceSubTab);
                   }
                 }, pill.label)
@@ -6432,27 +7909,16 @@
                 onChange: ev => setModuleSearchQuery(ev.target.value),
                 onKeyDown: ev => { if (ev.key === 'Enter') searchMarketplace(moduleSearchQuery, moduleFilter, marketplaceSubTab === 'installed' ? 'all' : marketplaceSubTab); }
               }),
-              e('select', {
-                style: { height: '40px', padding: '0 12px', background: 'var(--bg-input)', border: '1px solid var(--border-color)', borderRadius: '6px', fontSize: '13px', color: 'var(--text-main)' },
-                value: moduleFilter,
-                onChange: ev => {
-                  setModuleFilter(ev.target.value);
-                  setModuleCategoryFilter(ev.target.value);
-                  searchMarketplace(moduleSearchQuery, ev.target.value, marketplaceSubTab === 'installed' ? 'all' : marketplaceSubTab);
-                }
-              },
-                e('option', { value: 'all' }, 'All Types'),
-                e('option', { value: 'plugin' }, 'DAG Plugins'),
-                e('option', { value: 'model' }, 'Model Weights'),
-                e('option', { value: 'adapter' }, 'LoRA Adapters'),
-                e('option', { value: 'dataset' }, 'Datasets'),
-                e('option', { value: 'framework' }, 'Framework Tools')
-              ),
               e('button', {
                 className: 'btn-sec',
                 style: { height: '40px', padding: '0 16px', fontSize: '13px' },
                 onClick: () => searchMarketplace(moduleSearchQuery, moduleFilter, marketplaceSubTab === 'installed' ? 'all' : marketplaceSubTab)
               }, isSearchingModules ? 'Searching...' : [renderIcon('search', 13, { marginRight: '5px' }), 'Search'])
+            ),
+
+            marketplaceError && e('div', { className: 'marketplace-error', role: 'alert' },
+              e('span', null, marketplaceError),
+              e('button', { type: 'button', onClick: () => searchMarketplace(moduleSearchQuery, moduleFilter, marketplaceSubTab === 'installed' ? 'all' : marketplaceSubTab) }, 'Retry')
             ),
 
             // Updates Available Banner
@@ -6789,6 +8255,16 @@
           activeTab === 'environment' && e('div', { className: 'view-environment' },
             e('h2', { style: { fontFamily: 'Newsreader', fontSize: '24px', marginBottom: '6px' } }, 'System & Hardware Auto-Scanner'),
             e('p', { style: { color: 'var(--text-muted)', fontSize: '13px', marginBottom: '16px' } }, 'Auto-detects available GPU hardware, CUDA drivers, Python runtimes, and allows configuring custom workspace paths.'),
+            e('div', {
+              className: `metric-card ${systemDiagnostics.cuda_init_error ? 'warning' : ''}`,
+              style: { marginBottom: '16px', borderLeft: `4px solid ${systemDiagnostics.cuda_initialized ? 'var(--success, #3b8f70)' : (systemDiagnostics.cuda_init_error ? 'var(--danger, #c94d3f)' : 'var(--border-color)')}` }
+            },
+              e('span', { className: 'metric-label' }, 'PyTorch GPU Runtime'),
+              e('span', { className: 'metric-value', style: { fontSize: '15px' } }, systemDiagnostics.cuda_initialized
+                ? `${systemDiagnostics.device_name || 'CUDA'} initialized${systemDiagnostics.model_devices?.length ? ` · model: ${systemDiagnostics.model_devices.join(', ')}` : ''}`
+                : (systemDiagnostics.cuda_init_error ? 'GPU detected but initialization failed' : 'CUDA runtime unavailable; using CPU')),
+              systemDiagnostics.cuda_init_error && e('small', { style: { display: 'block', marginTop: '6px', color: 'var(--danger, #c94d3f)', overflowWrap: 'anywhere' } }, systemDiagnostics.cuda_init_error)
+            ),
 
             // Summary Cards Grid
             systemScan && e('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '14px', marginBottom: '20px' } },

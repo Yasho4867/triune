@@ -8,7 +8,7 @@ from typing import Any, Callable, Dict, List, Optional, Type
 from triune.plugins.node_schema import NodeExecutionType, PortType
 
 
-def _normalize_ports(ports: Optional[List[Any]]) -> List[Dict[str, str]]:
+def _normalize_ports(ports: Optional[List[Any]]) -> List[Dict[str, Any]]:
     if not ports:
         return []
     res = []
@@ -17,19 +17,22 @@ def _normalize_ports(ports: Optional[List[Any]]) -> List[Dict[str, str]]:
             res.append({
                 "name": str(p.get("name", "port")),
                 "type": str(p.get("type", PortType.ANY.value)),
-                "description": str(p.get("description", ""))
+                "description": str(p.get("description", "")),
+                "required": bool(p.get("required", True)),
             })
         elif isinstance(p, str):
             res.append({
                 "name": p,
                 "type": PortType.ANY.value,
-                "description": ""
+                "description": "",
+                "required": True,
             })
         elif hasattr(p, "name") and hasattr(p, "type"):
             res.append({
                 "name": str(p.name),
                 "type": str(p.type),
-                "description": getattr(p, "description", "")
+                "description": getattr(p, "description", ""),
+                "required": bool(getattr(p, "required", True)),
             })
     return res
 
@@ -198,10 +201,11 @@ class NodeRegistry:
                 "inputs": [],
                 "outputs": [
                     {"name": "dataset", "type": PortType.DATASET_STREAM.value, "description": "Local dataset stream"},
+                    {"name": "dataset_stream", "type": PortType.DATASET_STREAM.value, "description": "Configured local dataset consumed by the shared training engine"},
                     {"name": "text_samples", "type": PortType.TEXT.value, "description": "Corpus text samples"},
                     {"name": "text_sample", "type": PortType.TEXT.value, "description": "Single corpus text sample preview"}
                 ],
-                "parameters": {"file_path": "data/fineweb_sample.jsonl", "batch_size": 4, "seq_len": 64},
+                "parameters": {"file_path": "data/fineweb_sample.jsonl", "batch_size": 4, "seq_len": 64, "configure_runtime": True},
             },
             {
                 "name": "BPETokenizer",
@@ -236,84 +240,110 @@ class NodeRegistry:
                 "name": "TriuneTransformer",
                 "category": "Model",
                 "execution_type": NodeExecutionType.EXECUTION.value,
-                "description": "Full Mixture-of-Experts core transformer with Vectorised GLA attention and dynamic hierarchical exit heads.",
+                "description": "Runs a forward pass on the active Studio model; set use_node_config=true to build a separate graph model.",
                 "inputs": [
-                    {"name": "input_ids", "type": PortType.TENSOR.value, "description": "Input sequence tokens [batch, seq_len]"}
+                    {"name": "input_ids", "type": PortType.TENSOR.value, "description": "Input sequence tokens [batch, seq_len]"},
+                    {"name": "model_handle", "type": PortType.MODEL_HANDLE.value, "description": "Optional upstream live Triune model"}
                 ],
                 "outputs": [
                     {"name": "logits", "type": PortType.TENSOR.value, "description": "Output logits tensor [batch, seq_len, vocab_size]"},
                     {"name": "model_handle", "type": PortType.MODEL_HANDLE.value, "description": "Active PyTorch TriuneTransformer nn.Module"},
-                    {"name": "exit_logits", "type": PortType.TENSOR.value, "description": "Hierarchical exit logits tensor"}
+                    {"name": "exit_logits", "type": PortType.TENSOR_TUPLE.value, "description": "Tuple of Reflex, Limbic, and Cortex logits"},
+                    {"name": "router_logits", "type": PortType.TENSOR.value, "description": "Router logits used by RouterZLoss"},
+                    {"name": "balance_loss", "type": PortType.LOSS.value, "description": "MoE router load-balancing objective"},
+                    {"name": "selected_depth", "type": PortType.CONFIG.value, "description": "Per-sequence dynamic depth choice"}
                 ],
-                "parameters": {"vocab_size": 32000, "hidden_dim": 256, "num_layers": 6, "num_heads": 4, "num_experts": 4, "use_fp4": False},
+                "parameters": {"vocab_size": 32000, "hidden_dim": 256, "num_layers": 6, "num_heads": 4, "num_experts": 4, "use_fp4": False, "initialize_only": False},
             },
             {
                 "name": "VectorisedGLA",
                 "category": "Model",
-                "execution_type": NodeExecutionType.SPECIFICATION.value,
+                "execution_type": NodeExecutionType.EXECUTION.value,
                 "description": "Gated Linear Attention layer with fast parallel training chunks and O(1) recurrent inference state cache.",
                 "inputs": [{"name": "hidden_states", "type": PortType.TENSOR.value}],
                 "outputs": [{"name": "attention_out", "type": PortType.TENSOR.value}],
-                "parameters": {"hidden_dim": 1536, "num_heads": 12, "head_dim": 128, "gate_low_rank_dim": 16},
+                "parameters": {"hidden_dim": 256, "num_heads": 4},
             },
             {
                 "name": "HybridAttention",
                 "category": "Model",
-                "execution_type": NodeExecutionType.SPECIFICATION.value,
+                "execution_type": NodeExecutionType.EXECUTION.value,
                 "description": "Vectorized GLA attention combined with Rotary Position Embeddings (RoPE) for long-context numerical stability.",
                 "inputs": [{"name": "hidden_states", "type": PortType.TENSOR.value}],
                 "outputs": [{"name": "attention_out", "type": PortType.TENSOR.value}],
-                "parameters": {"hidden_dim": 1536, "num_heads": 12, "use_rope": True, "rope_max_seq_len": 4096},
+                "parameters": {"hidden_dim": 256, "num_heads": 4},
             },
             {
                 "name": "MoE_FFN",
                 "category": "Model",
-                "execution_type": NodeExecutionType.SPECIFICATION.value,
+                "execution_type": NodeExecutionType.EXECUTION.value,
                 "description": "Sparse Mixture-of-Experts FeedForward network with Gumbel-Softmax top-k gating, centroid tracking, and shared expert.",
                 "inputs": [{"name": "hidden_states", "type": PortType.TENSOR.value}],
                 "outputs": [{"name": "moe_out", "type": PortType.TENSOR.value}],
-                "parameters": {"num_experts": 8, "top_k": 2, "shared_expert": True, "capacity_multiplier": 1.25},
+                "parameters": {"num_experts": 4, "top_k": 2, "shared_expert": True},
             },
             {
                 "name": "DepthRouter",
                 "category": "Model",
-                "execution_type": NodeExecutionType.SPECIFICATION.value,
+                "execution_type": NodeExecutionType.EXECUTION.value,
                 "description": "Hierarchical Exit Head Router: Reflex (Layer 2/6), Limbic (Layer 4/16), and Cortex (Layer 6/24).",
                 "inputs": [{"name": "hidden_states", "type": PortType.TENSOR.value}],
-                "outputs": [{"name": "exit_choice", "type": PortType.CONFIG.value}],
-                "parameters": {"reflex_exit_layer": 6, "limbic_exit_layer": 16, "target_depth_dist": [0.34, 0.33, 0.33]},
+                "outputs": [
+                    {"name": "exit_choice", "type": PortType.CONFIG.value},
+                    {"name": "router_logits", "type": PortType.TENSOR.value},
+                    {"name": "balance_loss", "type": PortType.LOSS.value},
+                ],
+                "parameters": {"target_depth_dist": [0.34, 0.33, 0.33], "temperature": 1.0},
             },
             {
                 "name": "FP8Linear",
                 "category": "Model",
-                "execution_type": NodeExecutionType.SPECIFICATION.value,
+                "execution_type": NodeExecutionType.EXECUTION.value,
                 "description": "Hardware-accelerated FP8 (E4M3) scaled matrix multiplication with dynamic forward/backward scaling.",
                 "inputs": [{"name": "x", "type": PortType.TENSOR.value}],
                 "outputs": [{"name": "linear_out", "type": PortType.TENSOR.value}],
-                "parameters": {"in_features": 1536, "out_features": 1536, "bias": False, "dtype": "fp8_e4m3fn"},
+                "parameters": {"in_features": None, "out_features": None, "bias": False},
             },
             {
                 "name": "FP4Linear",
                 "category": "Model",
-                "execution_type": NodeExecutionType.SPECIFICATION.value,
-                "description": "NVFP4 microscaling precision linear layer for Blackwell and Ada Lovelace architectures.",
+                "execution_type": NodeExecutionType.EXECUTION.value,
+                "description": "Transformer Engine-backed linear operation; uses NVFP4 when the active precision recipe and hardware support it, otherwise the module's BF16 fallback.",
                 "inputs": [{"name": "x", "type": PortType.TENSOR.value}],
                 "outputs": [{"name": "linear_out", "type": PortType.TENSOR.value}],
-                "parameters": {"in_features": 1536, "out_features": 1536, "block_size": 16},
+                "parameters": {"in_features": None, "out_features": None, "bias": True},
+            },
+            {
+                "name": "TensorInspector",
+                "category": "Analysis",
+                "execution_type": NodeExecutionType.EXECUTION.value,
+                "description": "Reports real tensor shape, dtype, device, finite-value count, and numeric range/statistics.",
+                "inputs": [{"name": "x", "type": PortType.TENSOR.value}],
+                "outputs": [{"name": "metrics", "type": PortType.METRICS.value}],
+                "parameters": {},
+            },
+            {
+                "name": "TokenBatchInspector",
+                "category": "Analysis",
+                "execution_type": NodeExecutionType.EXECUTION.value,
+                "description": "Validates and summarizes integer token IDs before training, including shape, range, unique count, and sequence length.",
+                "inputs": [{"name": "tokens", "type": PortType.TENSOR.value}],
+                "outputs": [{"name": "metrics", "type": PortType.METRICS.value}],
+                "parameters": {},
             },
             {
                 "name": "RMSNorm",
                 "category": "Model",
-                "execution_type": NodeExecutionType.SPECIFICATION.value,
+                "execution_type": NodeExecutionType.EXECUTION.value,
                 "description": "Root Mean Square Normalization with custom Triton kernel and epsilon scaling.",
                 "inputs": [{"name": "x", "type": PortType.TENSOR.value}],
                 "outputs": [{"name": "norm_out", "type": PortType.TENSOR.value}],
-                "parameters": {"dim": 1536, "eps": 1e-6},
+                "parameters": {"dim": None, "eps": 1e-6},
             },
             {
                 "name": "LoRAAdapter",
                 "category": "Model",
-                "execution_type": NodeExecutionType.SPECIFICATION.value,
+                "execution_type": NodeExecutionType.EXECUTION.value,
                 "description": "Parameter-Efficient Low-Rank Adaptation (LoRA) injection layer for fine-tuning.",
                 "inputs": [{"name": "base_layer", "type": PortType.MODEL_HANDLE.value}],
                 "outputs": [{"name": "adapted_layer", "type": PortType.MODEL_HANDLE.value}],
@@ -369,7 +399,7 @@ class NodeRegistry:
             {
                 "name": "CosineLRScheduler",
                 "category": "Optimizer",
-                "execution_type": NodeExecutionType.SPECIFICATION.value,
+                "execution_type": NodeExecutionType.EXECUTION.value,
                 "description": "Cosine annealing learning rate schedule with linear warmup.",
                 "inputs": [{"name": "optimizer", "type": PortType.OPTIMIZER_HANDLE.value}],
                 "outputs": [{"name": "scheduled_lr", "type": PortType.CONFIG.value}],
@@ -384,12 +414,15 @@ class NodeRegistry:
                 "description": "Fused chunked cross-entropy loss function with autograd gradient graph preservation.",
                 "inputs": [
                     {"name": "logits", "type": PortType.TENSOR.value},
-                    {"name": "targets", "type": PortType.TENSOR.value}
+                    {"name": "targets", "type": PortType.TENSOR.value},
+                    {"name": "balance_loss", "type": PortType.LOSS.value},
+                    {"name": "router_logits", "type": PortType.TENSOR.value}
                 ],
                 "outputs": [
-                    {"name": "loss", "type": PortType.LOSS.value}
+                    {"name": "loss", "type": PortType.LOSS.value},
+                    {"name": "lm_loss", "type": PortType.LOSS.value}
                 ],
-                "parameters": {"ignore_index": -100, "chunk_size": 2048, "label_smoothing": 0.0},
+                "parameters": {"ignore_index": -100, "chunk_size": 2048, "label_smoothing": 0.0, "balance_loss_weight": 0.3, "router_z_loss_weight": 1e-3},
             },
             {
                 "name": "JointExitLoss",
@@ -397,8 +430,9 @@ class NodeRegistry:
                 "execution_type": NodeExecutionType.EXECUTION.value,
                 "description": "Simultaneous multi-exit supervision combining Reflex (Exit 1), Limbic (Exit 2), and Cortex (Exit 3) cross-entropies.",
                 "inputs": [
-                    {"name": "exit_logits", "type": PortType.TENSOR.value},
-                    {"name": "targets", "type": PortType.TENSOR.value}
+                    {"name": "exit_logits", "type": PortType.TENSOR_TUPLE.value},
+                    {"name": "targets", "type": PortType.TENSOR.value},
+                    {"name": "z_loss", "type": PortType.LOSS.value}
                 ],
                 "outputs": [
                     {"name": "joint_loss", "type": PortType.LOSS.value},
@@ -418,7 +452,7 @@ class NodeRegistry:
             {
                 "name": "FastRoPE",
                 "category": "Kernel",
-                "execution_type": NodeExecutionType.SPECIFICATION.value,
+                "execution_type": NodeExecutionType.EXECUTION.value,
                 "description": "Vectorized Rotary Position Embedding with Triton GPU acceleration and rotate_half fallback.",
                 "inputs": [{"name": "q", "type": PortType.TENSOR.value}, {"name": "k", "type": PortType.TENSOR.value}],
                 "outputs": [{"name": "q_rot", "type": PortType.TENSOR.value}, {"name": "k_rot", "type": PortType.TENSOR.value}],
@@ -427,7 +461,7 @@ class NodeRegistry:
             {
                 "name": "FastRMSNorm",
                 "category": "Kernel",
-                "execution_type": NodeExecutionType.SPECIFICATION.value,
+                "execution_type": NodeExecutionType.EXECUTION.value,
                 "description": "High-throughput fused RMSNorm Triton kernel with epsilon stabilization.",
                 "inputs": [{"name": "x", "type": PortType.TENSOR.value}, {"name": "weight", "type": PortType.TENSOR.value}],
                 "outputs": [{"name": "norm_out", "type": PortType.TENSOR.value}],
@@ -439,25 +473,28 @@ class NodeRegistry:
                 "name": "GradientAccumulator",
                 "category": "Runtime",
                 "execution_type": NodeExecutionType.SPECIFICATION.value,
-                "description": "Multi-microbatch gradient accumulator with loss scaling (1/N), D2H asynchronous offloading, and step sync.",
+                "description": "Declares gradient-accumulation settings for graph planning; use the shared TrainingStep for actual accumulation.",
                 "inputs": [{"name": "loss", "type": PortType.LOSS.value}],
                 "outputs": [{"name": "accum_status", "type": PortType.METRICS.value}],
-                "parameters": {"grad_accum_steps": 4, "max_grad_norm": 1.0, "sync_frequency": 1},
+                "parameters": {"grad_accum_steps": 4},
             },
             {
                 "name": "CheckpointManager",
                 "category": "Runtime",
-                "execution_type": NodeExecutionType.SPECIFICATION.value,
-                "description": "Schema-v2 canonical fingerprinting, atomic WSL2/disk checkpoint saving, and decoupled weights-only resume.",
-                "inputs": [{"name": "model_handle", "type": PortType.MODEL_HANDLE.value}],
+                "execution_type": NodeExecutionType.EXECUTION.value,
+                "description": "Atomically saves the connected model and active optimizer state, with retention of recent checkpoints.",
+                "inputs": [
+                    {"name": "model_handle", "type": PortType.MODEL_HANDLE.value},
+                    {"name": "optimizer_handle", "type": PortType.OPTIMIZER_HANDLE.value}
+                ],
                 "outputs": [{"name": "checkpoint_path", "type": PortType.TEXT.value}],
-                "parameters": {"save_dir": "checkpoints", "keep_last_n": 5, "weights_only_load": False},
+                "parameters": {"save_dir": "checkpoints", "keep_last_n": 5},
             },
             {
                 "name": "DynamicResourceManager",
                 "category": "Runtime",
-                "execution_type": NodeExecutionType.SPECIFICATION.value,
-                "description": "Real-time hardware capability gating, device feasibility probing, and tied-weight deduplicated parameter tracking.",
+                "execution_type": NodeExecutionType.EXECUTION.value,
+                "description": "Probes the requested device and reports actual memory and hardware capabilities.",
                 "inputs": [],
                 "outputs": [{"name": "feasibility_report", "type": PortType.METRICS.value}],
                 "parameters": {"target_device": "cuda:0", "safety_margin_gb": 1.0},
@@ -466,7 +503,7 @@ class NodeRegistry:
                 "name": "AutoregressiveGenerator",
                 "category": "Model",
                 "execution_type": NodeExecutionType.EXECUTION.value,
-                "description": "O(1) GLA recurrent state-cached autoregressive generator with temperature, top-k/top-p, and repetition penalty.",
+                "description": "Runs cached autoregressive generation with temperature, top-k sampling, and repetition penalty on the connected live model.",
                 "inputs": [
                     {"name": "model_handle", "type": PortType.MODEL_HANDLE.value},
                     {"name": "prompt", "type": PortType.TEXT.value}
@@ -481,19 +518,19 @@ class NodeRegistry:
                 "name": "BYOKChatRouter",
                 "category": "Agent",
                 "execution_type": NodeExecutionType.SPECIFICATION.value,
-                "description": "Multi-provider BYOK (Bring Your Own Key) chat router supporting local Triune weights, Ollama, Anthropic Claude, OpenAI, and DeepSeek.",
+                "description": "Provider configuration placeholder only; this node does not authenticate or dispatch remote requests.",
                 "inputs": [{"name": "prompt", "type": PortType.TEXT.value}],
-                "outputs": [{"name": "response_text", "type": PortType.TEXT.value}],
+                "outputs": [{"name": "provider_config", "type": PortType.CONFIG.value}],
                 "parameters": {"provider": "triune-local", "model": "triune-base", "temperature": 0.7, "max_tokens": 256},
             },
             {
                 "name": "LayerStreamingEngine",
                 "category": "Runtime",
-                "execution_type": NodeExecutionType.SPECIFICATION.value,
-                "description": "CPU-GPU ping-pong layer streaming with pinned memory buffers for training large models on 8GB VRAM.",
+                "execution_type": NodeExecutionType.EXECUTION.value,
+                "description": "Attaches Triune's layer-streaming engine to the connected live model and optimizer.",
                 "inputs": [{"name": "model_handle", "type": PortType.MODEL_HANDLE.value}],
                 "outputs": [{"name": "streaming_model", "type": PortType.MODEL_HANDLE.value}],
-                "parameters": {"prefetch": True, "pin_memory": True, "d2h_async": True},
+                "parameters": {"prefetch": True, "pin_memory": True, "chunk_size": 1},
             },
             {
                 "name": "VRAMProfiler",
@@ -519,11 +556,11 @@ class NodeRegistry:
             {
                 "name": "WandbLogger",
                 "category": "Runtime",
-                "execution_type": NodeExecutionType.SPECIFICATION.value,
+                "execution_type": NodeExecutionType.EXECUTION.value,
                 "description": "Weights & Biases cloud telemetry logger for loss curves, throughput, and exit head distribution.",
                 "inputs": [{"name": "metrics", "type": PortType.METRICS.value}],
                 "outputs": [{"name": "log_status", "type": PortType.METRICS.value}],
-                "parameters": {"project": "triune-moe", "entity": "", "log_freq_steps": 10},
+                "parameters": {"step": None},
             },
 
             # Evaluation & Fine-Tuning
@@ -533,13 +570,15 @@ class NodeRegistry:
                 "execution_type": NodeExecutionType.EXECUTION.value,
                 "description": "Executes one autograd training step with gradient accumulation, clipping, and telemetry.",
                 "inputs": [
+                    {"name": "dataset_stream", "type": PortType.DATASET_STREAM.value, "description": "Connected live dataset configured by the source node"},
                     {"name": "model_handle", "type": PortType.MODEL_HANDLE.value},
                     {"name": "optimizer_handle", "type": PortType.OPTIMIZER_HANDLE.value},
                     {"name": "tokens", "type": PortType.TENSOR.value}
                 ],
                 "outputs": [
                     {"name": "step_metrics", "type": PortType.METRICS.value},
-                    {"name": "loss", "type": PortType.LOSS.value}
+                    {"name": "loss", "type": PortType.LOSS.value},
+                    {"name": "model_handle", "type": PortType.MODEL_HANDLE.value, "description": "The model updated by this step"}
                 ],
                 "parameters": {"grad_accum_steps": 4, "max_grad_norm": 1.0},
             },
@@ -547,22 +586,25 @@ class NodeRegistry:
                 "name": "PerplexityEvaluator",
                 "category": "Evaluation",
                 "execution_type": NodeExecutionType.EXECUTION.value,
-                "description": "Computes validation loss, token prediction perplexity, and expert routing utilization from live evaluation batches.",
+                "description": "Computes validation loss and token prediction perplexity from a connected evaluation token batch.",
                 "inputs": [
                     {"name": "model_handle", "type": PortType.MODEL_HANDLE.value},
-                    {"name": "tokens", "type": PortType.TENSOR.value}
+                    {"name": "tokens", "type": PortType.TENSOR.value},
+                    {"name": "targets", "type": PortType.TENSOR.value},
+                    {"name": "exit_logits", "type": PortType.TENSOR_TUPLE.value}
                 ],
                 "outputs": [
                     {"name": "perplexity", "type": PortType.METRICS.value},
-                    {"name": "val_loss", "type": PortType.LOSS.value}
+                    {"name": "val_loss", "type": PortType.LOSS.value},
+                    {"name": "per_exit_metrics", "type": PortType.METRICS.value}
                 ],
-                "parameters": {"eval_steps": 10, "batch_size": 2},
+                "parameters": {},
             },
             {
                 "name": "LoRAFineTuner",
                 "category": "Evaluation",
                 "execution_type": NodeExecutionType.EXECUTION.value,
-                "description": "End-to-end parameter-efficient fine-tuning loop with periodic evaluation and checkpointing.",
+                "description": "Attaches LoRA adapters and performs one real optimizer update on the connected token batch.",
                 "inputs": [
                     {"name": "model_handle", "type": PortType.MODEL_HANDLE.value},
                     {"name": "tokens", "type": PortType.TENSOR.value}
@@ -571,7 +613,7 @@ class NodeRegistry:
                     {"name": "finetuned_adapter", "type": PortType.MODEL_HANDLE.value},
                     {"name": "final_loss", "type": PortType.LOSS.value}
                 ],
-                "parameters": {"epochs": 1, "lr": 2e-4, "save_adapter": True},
+                "parameters": {"rank": 16, "alpha": 32.0, "lr": 2e-4, "max_grad_norm": 1.0},
             },
 
             # Export & Deployment
@@ -582,13 +624,13 @@ class NodeRegistry:
                 "description": "Exports model weights in SafeTensors format with memory-deduplicated tied embeddings.",
                 "inputs": [{"name": "model_handle", "type": PortType.MODEL_HANDLE.value}],
                 "outputs": [{"name": "safetensors_file", "type": PortType.TEXT.value}],
-                "parameters": {"filename": "model.safetensors", "include_optimizer": False},
+                "parameters": {"filename": "model.safetensors", "include_optimizer": False, "adapter_only": False},
             },
             {
                 "name": "GGUFExport",
                 "category": "Export",
                 "execution_type": NodeExecutionType.SPECIFICATION.value,
-                "description": "Quantizes and exports model weights to GGUF format specification for llama.cpp and Ollama.",
+                "description": "GGUF export configuration only; conversion is not performed by this node.",
                 "inputs": [{"name": "model_handle", "type": PortType.MODEL_HANDLE.value}],
                 "outputs": [{"name": "gguf_file", "type": PortType.CONFIG.value}],
                 "parameters": {"quantization": "Q4_K_M", "filename": "model.gguf"},
@@ -597,7 +639,7 @@ class NodeRegistry:
                 "name": "ONNXExport",
                 "category": "Export",
                 "execution_type": NodeExecutionType.SPECIFICATION.value,
-                "description": "Exports model computational graph specification to ONNX for TensorRT and ONNX Runtime acceleration.",
+                "description": "ONNX export configuration only; graph conversion is not performed by this node.",
                 "inputs": [{"name": "model_handle", "type": PortType.MODEL_HANDLE.value}],
                 "outputs": [{"name": "onnx_file", "type": PortType.CONFIG.value}],
                 "parameters": {"opset_version": 17, "dynamic_axes": True},
