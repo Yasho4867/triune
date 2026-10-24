@@ -1358,7 +1358,14 @@
     const [backendRetry, setBackendRetry] = useState(0);
     const [vramUsage, setVramUsage] = useState({ allocated: 0.0, reserved: 0.0, total: 8.0, oom_risk: false });
     const [systemDiagnostics, setSystemDiagnostics] = useState({ device_name: 'PyTorch Engine', cuda_available: false });
-    const [activeModel, setActiveModel] = useState('triune-small');
+    const [activeModel, setActiveModel] = useState(() => {
+    try {
+      const saved = window.localStorage.getItem('triune.studio.activeModel');
+      if (saved && saved !== 'gemini-3.8-flash') return saved;
+      if (saved === 'gemini-3.8-flash') return 'gemini-2.5-flash';
+    } catch (_) {}
+    return 'triune-small';
+  });
     const [weightsLoaded, setWeightsLoaded] = useState(false);
     const [precision, setPrecision] = useState('bf16');
     const [statusToast, setStatusToast] = useState(null);
@@ -5983,7 +5990,9 @@
                     ),
                     e('option', { value: 'gpt-4o-mini' }, 'GPT-4o Mini (OpenAI BYOK)'),
                     e('option', { value: 'claude-3-5-sonnet-latest' }, 'Claude 3.5 Sonnet (Anthropic BYOK)'),
-                    e('option', { value: 'gemini-3.8-flash' }, 'Gemini 3.8 Flash (Google BYOK)')
+                    e('option', { value: 'gemini-2.5-flash' }, 'Gemini 2.5 Flash (Google BYOK)'),
+                    e('option', { value: 'gemini-1.5-flash' }, 'Gemini 1.5 Flash (Google BYOK)'),
+                    e('option', { value: 'gemini-1.5-pro' }, 'Gemini 1.5 Pro (Google BYOK)')
                   )
                 ),
                 activeModel.startsWith('triune') ? e('div', null,

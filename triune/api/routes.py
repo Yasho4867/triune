@@ -392,8 +392,8 @@ if HAS_FASTAPI:
             data = json.loads(resp.read().decode("utf-8"))
             return data["content"][0]["text"]
 
-    def _call_gemini_api(messages: List[Dict[str, str]], api_key: str, model: str = "gemini-3.8-flash", temperature: float = 0.7, max_tokens: int = 2048) -> str:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    def _call_gemini_api(messages: List[Dict[str, str]], api_key: str, model: str = "gemini-2.5-flash", temperature: float = 0.7, max_tokens: int = 2048) -> str:
+        clean_key = (api_key or "").strip()
         contents = []
         system_instruction = None
         for m in messages:
@@ -415,21 +415,56 @@ if HAS_FASTAPI:
         if system_instruction:
             payload_dict["systemInstruction"] = system_instruction
         payload = json.dumps(payload_dict).encode("utf-8")
-        req = urllib.request.Request(
-            url,
-            data=payload,
-            headers={"Content-Type": "application/json", "x-goog-api-key": api_key, "User-Agent": "TriuneStudio/2.1"}
-        )
-        for attempt in range(3):
-            try:
-                with urllib.request.urlopen(req, timeout=_provider_request_timeout()) as resp:
-                    data = json.loads(resp.read().decode("utf-8"))
-                    return data["candidates"][0]["content"]["parts"][0]["text"]
-            except urllib.error.HTTPError as h_err:
-                if h_err.code in (503, 429) and attempt < 2:
-                    time.sleep(1.0 * (attempt + 1))
-                    continue
-                raise
+
+        models_to_try = [model]
+        for fallback in ("gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"):
+            if fallback not in models_to_try:
+                models_to_try.append(fallback)
+
+        last_err = None
+        for current_model in models_to_try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{current_model}:generateContent?key={urllib.parse.quote(clean_key)}"
+            req = urllib.request.Request(
+                url,
+                data=payload,
+                headers={"Content-Type": "application/json", "x-goog-api-key": clean_key, "User-Agent": "TriuneStudio/2.1"}
+            )
+            for attempt in range(3):
+                try:
+                    with urllib.request.urlopen(req, timeout=_provider_request_timeout()) as resp:
+                        data = json.loads(resp.read().decode("utf-8"))
+                        candidates = data.get("candidates") or []
+                        if candidates:
+                            first_cand = candidates[0]
+                            content_obj = first_cand.get("content") or {}
+                            parts = content_obj.get("parts") or []
+                            for part in parts:
+                                if isinstance(part, dict) and "text" in part:
+                                    return part["text"]
+                            finish_reason = first_cand.get("finishReason")
+                            if finish_reason:
+                                return f"[Gemini response completed with reason: {finish_reason}]"
+                        prompt_feedback = data.get("promptFeedback") or {}
+                        if prompt_feedback.get("blockReason"):
+                            return f"[Gemini content blocked: {prompt_feedback.get('blockReason')}]"
+                        return "No text returned by Gemini."
+                except urllib.error.HTTPError as h_err:
+                    last_err = h_err
+                    if h_err.code in (503, 429) and attempt < 2:
+                        time.sleep(1.0 * (attempt + 1))
+                        continue
+                    if h_err.code == 404:
+                        # Model not found; try next model in fallback cascade
+                        break
+                    raise
+            else:
+                continue
+            if last_err and getattr(last_err, "code", None) != 404:
+                raise last_err
+
+        if last_err:
+            raise last_err
+        raise RuntimeError("Google Gemini could not be reached with any supported model identifier.")
 
     class HFRestStreamReader:
         """Streaming reader for Hugging Face datasets via the dataset-server REST API.
@@ -4235,6 +4270,18 @@ if HAS_FASTAPI:
             log_msg = "[AUTH] Hugging Face Access Token registered and active in runtime."
             pytorch_state.logs.insert(0, log_msg)
 
+        openai_k = req.keys.get("openai", "").strip()
+        if openai_k and not _is_masked(openai_k):
+            os.environ["OPENAI_API_KEY"] = openai_k
+
+        anthropic_k = req.keys.get("anthropic", "").strip()
+        if anthropic_k and not _is_masked(anthropic_k):
+            os.environ["ANTHROPIC_API_KEY"] = anthropic_k
+
+        gemini_k = req.keys.get("gemini", "").strip()
+        if gemini_k and not _is_masked(gemini_k):
+            os.environ["GEMINI_API_KEY"] = gemini_k
+
         wandb_k = req.keys.get("wandb", "").strip()
         if wandb_k:
             os.environ["WANDB_API_KEY"] = wandb_k
@@ -4329,7 +4376,10 @@ if HAS_FASTAPI:
         elif provider == "anthropic":
             check_req = urllib.request.Request("https://api.anthropic.com/v1/models?limit=1", headers={"x-api-key": key, "anthropic-version": "2023-06-01", "User-Agent": "TriuneStudio/2.1"})
         else:
-            check_req = urllib.request.Request("https://generativelanguage.googleapis.com/v1beta/models?pageSize=1", headers={"x-goog-api-key": key, "User-Agent": "TriuneStudio/2.1"})
+            check_req = urllib.request.Request(
+                f"https://generativelanguage.googleapis.com/v1beta/models?pageSize=1&key={urllib.parse.quote(key)}",
+                headers={"x-goog-api-key": key, "User-Agent": "TriuneStudio/2.1"}
+            )
         try:
             with urllib.request.urlopen(check_req, timeout=10.0) as resp:
                 if resp.status == 200:

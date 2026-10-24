@@ -579,7 +579,7 @@ class TestStudioApiEndpoints(unittest.TestCase):
             self.assertEqual(os.environ.get("WANDB_API_KEY"), "test-wandb-api-key-40-hex-characters-long")
 
         # Test wandb verification
-        with patch("wandb.login", return_value=True):
+        with patch("wandb.login", return_value=True, create=True):
             test_res = self.client.post(
                 "/v1/byok/test",
                 json={"provider": "wandb", "key": "test-wandb-api-key-40-hex-characters-long"}

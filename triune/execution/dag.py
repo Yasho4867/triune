@@ -1462,6 +1462,11 @@ class ExecutionEngine:
         # and optimizer behavior. The explicit tensor/model path below remains
         # available for standalone custom DAGs.
         runtime_state = context.get("_runtime_training_state")
+        if runtime_state is None:
+            try:
+                from triune.api.routes import pytorch_state as runtime_state
+            except Exception:
+                runtime_state = None
         has_explicit_training_inputs = any(
             key in context.get("current_inputs", {})
             for key in ("model_handle", "optimizer_handle", "tokens", "input_ids")
