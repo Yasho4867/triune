@@ -995,9 +995,11 @@
   ];
 
   const LORA_PRESETS = [
-    { name: 'Low VRAM QLoRA (4-bit NF4)', rank: 8, alpha: 16, quantization: '4-bit NF4', lr: '0.0002', epochs: 3, dropout: 0.05, target_modules: "['q_proj', 'v_proj', 'out_proj']" },
-    { name: 'High Rank LoRA (FP16, r=64)', rank: 64, alpha: 128, quantization: 'FP16 Half', lr: '0.0001', epochs: 5, dropout: 0.05, target_modules: "['q_proj', 'v_proj', 'out_proj']" },
-    { name: 'Fast Adapter (8-bit, r=16)', rank: 16, alpha: 32, quantization: '8-bit', lr: '0.0003', epochs: 2, dropout: 0.05, target_modules: "['q_proj', 'v_proj', 'out_proj']" }
+    { name: 'Low VRAM QLoRA (4-bit NF4)', rank: 8, alpha: 16, quantization: '4-bit NF4', lr: '0.0002', epochs: 3, batch_size: 4, dropout: 0.05 },
+    { name: 'Standard LoRA (BF16, r=16)', rank: 16, alpha: 32, quantization: 'BF16', lr: '0.0002', epochs: 3, batch_size: 4, dropout: 0.05 },
+    { name: 'High Rank LoRA (FP16, r=64)', rank: 64, alpha: 128, quantization: 'FP16 Half', lr: '0.0001', epochs: 5, batch_size: 2, dropout: 0.05 },
+    { name: 'Fast Adapter (8-bit, r=16)', rank: 16, alpha: 32, quantization: '8-bit', lr: '0.0003', epochs: 2, batch_size: 8, dropout: 0.05 },
+    { name: 'Blackwell / Ada FP8 (r=32)', rank: 32, alpha: 64, quantization: 'FP8 E4M3', lr: '0.0002', epochs: 3, batch_size: 4, dropout: 0.05 }
   ];
 
   const SYSTEM_PROMPT_PRESETS = [
@@ -1642,10 +1644,16 @@
       alpha: 32,
       lr: '0.0002',
       epochs: 3,
+      batch_size: 4,
+      max_steps: 0,
       dataset: 'data/fineweb_sample.jsonl',
-      quantization: '4-bit NF4'
+      quantization: '4-bit NF4',
+      name: 'LoRA-Adapter-1'
     });
     const [fineTuningStatus, setFineTuningStatus] = useState(null);
+    const [isFineTuningRunning, setIsFineTuningRunning] = useState(false);
+    const [fineTuningProgress, setFineTuningProgress] = useState({ step: 0, total_steps: 0, loss: null, trainable_params: 0 });
+    const [availableAdapters, setAvailableAdapters] = useState([]);
     const [activeAdapter, setActiveAdapter] = useState(null);
 
     // Dataset Manager State
@@ -2659,10 +2667,23 @@
       handleConnectHfStream(dsName, '', 'train', 'text');
     };
 
+    const fetchAvailableAdapters = async () => {
+      try {
+        const res = await apiFetch('/v1/finetune/adapters');
+        const data = await res.json();
+        if (data.adapters) {
+          setAvailableAdapters(data.adapters);
+        }
+        if (data.active_adapter) {
+          setActiveAdapter(data.active_adapter);
+        }
+      } catch (err) {}
+    };
+
     const handleAttachAdapterToEngine = async (adapterSpec) => {
       const spec = adapterSpec || {
         id: `lora-r${loraConfig.rank}`,
-        name: `LoRA-r${loraConfig.rank}`,
+        name: loraConfig.name || `LoRA-r${loraConfig.rank}`,
         rank: loraConfig.rank,
         alpha: loraConfig.alpha,
         quantization: loraConfig.quantization || '4-bit NF4'
@@ -2688,6 +2709,7 @@
         setActiveAdapter(data.active_adapter);
         syncStateToDAGNodes({ lora_rank: data.active_adapter.rank, lora_alpha: data.active_adapter.alpha });
         showToast(data.message || `Attached ${data.active_adapter.name} to the engine.`);
+        fetchAvailableAdapters();
       } catch (err) {
         showToast(`Could not attach ${spec.name}: ${err.message || 'backend request failed'}`);
       }
@@ -2706,8 +2728,63 @@
         }
         setActiveAdapter(null);
         showToast(data.message || 'Detached LoRA Adapter from Studio Engine');
+        fetchAvailableAdapters();
       } catch (err) {
         showToast(`Could not detach adapter: ${err.message || 'backend request failed'}`);
+      }
+    };
+
+    const handleMergeAdapterIntoEngine = async () => {
+      if (!activeAdapter) return;
+      if (!window.confirm(`Permanently merge adapter "${activeAdapter.name}" into the base model weights? This will directly modify the base model parameters.`)) return;
+      try {
+        const res = await apiFetch('/v1/finetune/merge', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        const data = await res.json();
+        if (data.status === 'success') {
+          setActiveAdapter(null);
+          showToast(data.message || 'LoRA weights successfully merged into base model!');
+          fetchAvailableAdapters();
+          fetchCheckpoints();
+        } else {
+          showToast(`Merge failed: ${data.message}`);
+        }
+      } catch (err) {
+        showToast(`Could not merge adapter: ${err.message || 'network error'}`);
+      }
+    };
+
+    const handleExportAdapter = async (adapterPath) => {
+      try {
+        const res = await apiFetch('/v1/finetune/export', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ adapter_path: adapterPath, format: 'safetensors' })
+        });
+        const data = await res.json();
+        if (data.status === 'success') {
+          showToast(data.message || `Exported adapter to ${data.export_path}`);
+        } else {
+          showToast(`Export failed: ${data.message}`);
+        }
+      } catch (err) {
+        showToast(`Export failed: ${err.message || 'network error'}`);
+      }
+    };
+
+    const handleCancelFineTuning = async () => {
+      try {
+        const res = await apiFetch('/v1/finetune/cancel', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        const data = await res.json();
+        showToast(data.message || 'Fine-tuning cancellation requested.');
+        setIsFineTuningRunning(false);
+      } catch (err) {
+        showToast(`Failed to cancel: ${err.message || 'network error'}`);
       }
     };
 
@@ -2816,6 +2893,7 @@
       fetchInstalledModules();
       fetchDatasets();
       fetchCheckpoints();
+      fetchAvailableAdapters();
       searchMarketplace('', 'all');
       checkModuleUpdates();
     }, []);
@@ -5333,7 +5411,9 @@
 
 
     const handleStartFineTuning = async () => {
-      setFineTuningStatus('Attaching LoRA adapters & initiating fine-tuning run on PyTorch backend...');
+      setIsFineTuningRunning(true);
+      setFineTuningStatus('Initializing LoRA fine-tuning session on PyTorch backend...');
+      setFineTuningProgress({ step: 0, total_steps: 0, loss: null, trainable_params: 0 });
       try {
         const res = await apiFetch('/v1/finetune/start', {
           method: 'POST',
@@ -5342,9 +5422,12 @@
             dataset_path: loraConfig.dataset,
             lora_rank: loraConfig.rank,
             lora_alpha: loraConfig.alpha,
-            epochs: loraConfig.epochs,
+            epochs: parseInt(loraConfig.epochs) || 3,
+            batch_size: parseInt(loraConfig.batch_size) || 4,
+            max_steps: parseInt(loraConfig.max_steps) || null,
             lr: parseFloat(loraConfig.lr) || 2e-4,
-            quantization: loraConfig.quantization || '4-bit NF4'
+            quantization: loraConfig.quantization || '4-bit NF4',
+            adapter_name: loraConfig.name || `LoRA-r${loraConfig.rank}`
           })
         });
         const data = await res.json();
@@ -5360,27 +5443,50 @@
               const sData = await sRes.json();
               if (sData.status === 'completed') {
                 clearInterval(poller);
+                setIsFineTuningRunning(false);
+                setFineTuningProgress(prev => ({ ...prev, step: sData.step, total_steps: sData.step, loss: sData.final_loss }));
                 setFineTuningStatus(`Fine-tuning completed! Final Loss: ${sData.final_loss}. Saved to: ${sData.output_dir}`);
                 const attached = sData.active_adapter || { name: `LoRA-r${loraConfig.rank}`, rank: loraConfig.rank, alpha: loraConfig.alpha, path: sData.output_dir };
                 setActiveAdapter(attached);
                 fetchCheckpoints();
+                fetchAvailableAdapters();
                 showToast('LoRA Fine-Tuning Completed & Attached to Engine!');
               } else if (sData.status === 'failed') {
                 clearInterval(poller);
+                setIsFineTuningRunning(false);
                 setFineTuningStatus(`Fine-tuning failed: ${sData.error}`);
-                showToast('Fine-Tuning Failed');
+                showToast(`Fine-Tuning Failed: ${sData.error || 'unknown error'}`);
+              } else if (sData.status === 'cancelled') {
+                clearInterval(poller);
+                setIsFineTuningRunning(false);
+                setFineTuningStatus('Fine-tuning was cancelled by user.');
+                showToast('Fine-Tuning Cancelled');
+                fetchAvailableAdapters();
               } else if (sData.status === 'running') {
-                setFineTuningStatus(`Training in progress... Step ${sData.step} (Trainable params: ${sData.trainable_params})`);
+                setFineTuningProgress({
+                  step: sData.step || 0,
+                  total_steps: sData.total_steps || 0,
+                  loss: sData.loss !== undefined ? sData.loss : null,
+                  trainable_params: sData.trainable_params || 0
+                });
+                const lossStr = sData.loss !== undefined && sData.loss !== null ? ` · Loss: ${sData.loss}` : '';
+                const totalStr = sData.total_steps ? `/${sData.total_steps}` : '';
+                setFineTuningStatus(`Training in progress... Step ${sData.step}${totalStr}${lossStr} (${(sData.trainable_params || 0).toLocaleString()} trainable params)`);
               }
             } catch (err) {
               clearInterval(poller);
+              setIsFineTuningRunning(false);
             }
-          }, 1000);
+          }, 800);
         } else {
+          setIsFineTuningRunning(false);
           setFineTuningStatus(data.message || 'Could not start fine-tuning');
+          showToast(data.message || 'Could not start fine-tuning');
         }
       } catch (err) {
+        setIsFineTuningRunning(false);
         setFineTuningStatus('Network error: Could not reach backend fine-tuning endpoint');
+        showToast('Network error connecting to fine-tuner');
       }
     };
 
@@ -5730,7 +5836,7 @@
             e('span', { className: 'nav-icon' }, renderIcon('checkpoints', 17)),
             !sidebarCollapsed && e('span', { className: 'nav-label' }, 'Checkpoints & Weights')
           ),
-          e('button', { className: `nav-item ${activeTab === 'finetune' ? 'active' : ''}`, title: 'LoRA / QLoRA Tuner', onClick: () => setActiveTab('finetune') },
+          e('button', { className: `nav-item ${activeTab === 'finetune' ? 'active' : ''}`, title: 'LoRA / QLoRA Tuner', onClick: () => { setActiveTab('finetune'); fetchAvailableAdapters(); } },
             e('span', { className: 'nav-icon' }, renderIcon('finetune', 17)),
             !sidebarCollapsed && e('span', { className: 'nav-label' }, 'LoRA / QLoRA Tuner')
           ),
@@ -7231,7 +7337,16 @@
                     key: idx,
                     className: 'preset-chip',
                     onClick: () => {
-                      setLoraConfig({ ...loraConfig, rank: p.rank, alpha: p.alpha, quantization: p.quantization, lr: p.lr, epochs: p.epochs });
+                      setLoraConfig({
+                        ...loraConfig,
+                        rank: p.rank,
+                        alpha: p.alpha,
+                        quantization: p.quantization,
+                        lr: p.lr,
+                        epochs: p.epochs,
+                        batch_size: p.batch_size || 4,
+                        name: p.name.replace(/\s+/g, '-').replace(/[^a-zA-Z0-9\-_]/g, '')
+                      });
                       showToast(`Applied LoRA Preset: ${p.name}`);
                     }
                   }, p.name)
@@ -7239,12 +7354,16 @@
               ),
               e('h3', { style: { fontFamily: 'Newsreader', fontSize: '20px', marginBottom: '8px' } }, 'Unified LoRA & QLoRA Fine-Tuner Abstraction'),
               e('p', { style: { color: 'var(--text-muted)', fontSize: '13px' } },
-                'Attach adapter weights to native PyTorch models with dynamic gradient accumulation.'
+                'Attach adapter weights to native PyTorch models with dynamic gradient accumulation and isolated parameter freezing.'
               ),
               e('div', { className: 'finetune-grid' },
                 e('div', { className: 'field-group' },
                   e('label', null, 'Dataset Path (JSONL / CSV):'),
                   e('input', { value: loraConfig.dataset, onChange: ev => setLoraConfig({ ...loraConfig, dataset: ev.target.value }) })
+                ),
+                e('div', { className: 'field-group' },
+                  e('label', null, 'Adapter Identifier Name:'),
+                  e('input', { placeholder: 'e.g. LoRA-Domain-Adapter', value: loraConfig.name || '', onChange: ev => setLoraConfig({ ...loraConfig, name: ev.target.value }) })
                 ),
                 e('div', { className: 'field-group' },
                   e('label', null, 'Quantization Precision:'),
@@ -7257,37 +7376,215 @@
                   )
                 ),
                 e('div', { className: 'field-group' },
+                  e('label', null, 'Learning Rate (lr):'),
+                  e('input', { type: 'text', placeholder: '0.0002', value: loraConfig.lr, onChange: ev => setLoraConfig({ ...loraConfig, lr: ev.target.value }) })
+                ),
+                e('div', { className: 'field-group' },
+                  e('label', null, `Epochs (${loraConfig.epochs}):`),
+                  e('input', { type: 'number', min: 1, max: 50, value: loraConfig.epochs, onChange: ev => setLoraConfig({ ...loraConfig, epochs: parseInt(ev.target.value) || 1 }) })
+                ),
+                e('div', { className: 'field-group' },
+                  e('label', null, `Batch Size (${loraConfig.batch_size || 4}):`),
+                  e('input', { type: 'number', min: 1, max: 64, value: loraConfig.batch_size || 4, onChange: ev => setLoraConfig({ ...loraConfig, batch_size: parseInt(ev.target.value) || 1 }) })
+                ),
+                e('div', { className: 'field-group' },
                   e('label', null, `LoRA Rank r (${loraConfig.rank}):`),
                   e('input', { type: 'range', min: 4, max: 128, step: 4, value: loraConfig.rank, onChange: ev => setLoraConfig({ ...loraConfig, rank: parseInt(ev.target.value) }) })
                 ),
                 e('div', { className: 'field-group' },
                   e('label', null, `LoRA Alpha Scaling (${loraConfig.alpha}):`),
                   e('input', { type: 'range', min: 8, max: 256, step: 8, value: loraConfig.alpha, onChange: ev => setLoraConfig({ ...loraConfig, alpha: parseInt(ev.target.value) }) })
+                ),
+                e('div', { className: 'field-group' },
+                  e('label', null, 'Max Steps (0 for all batches):'),
+                  e('input', { type: 'number', min: 0, placeholder: '0 = full epoch', value: loraConfig.max_steps || 0, onChange: ev => setLoraConfig({ ...loraConfig, max_steps: parseInt(ev.target.value) || 0 }) })
                 )
               ),
-              e('div', { style: { display: 'flex', gap: '10px', marginTop: '10px' } },
+              e('div', { style: { display: 'flex', gap: '10px', marginTop: '14px', flexWrap: 'wrap' } },
                 e('button', {
                   className: 'btn-send',
-                  style: { flex: 2, height: '44px' },
+                  disabled: isFineTuningRunning,
+                  style: { flex: '2 1 200px', height: '44px', opacity: isFineTuningRunning ? 0.7 : 1 },
                   onClick: handleStartFineTuning
-                }, 'Start LoRA Fine-Tuning Run'),
+                }, isFineTuningRunning ? [renderIcon('refresh', 13, { marginRight: '6px' }), 'Fine-Tuning in Progress...'] : [renderIcon('play', 13, { marginRight: '6px' }), 'Start LoRA Fine-Tuning Run']),
+
+                isFineTuningRunning && e('button', {
+                  className: 'btn-sec',
+                  style: { flex: '1 1 120px', height: '44px', fontSize: '12px', color: '#dc2626', borderColor: '#dc2626' },
+                  onClick: handleCancelFineTuning
+                }, [renderIcon('trash', 13, { marginRight: '6px' }), 'Cancel Run']),
+
                 e('button', {
                   className: 'btn-sec',
-                  style: { flex: 1, height: '44px', fontSize: '12px' },
+                  style: { flex: '1 1 140px', height: '44px', fontSize: '12px' },
                   onClick: () => handleAttachAdapterToEngine(loraConfig)
-                }, activeAdapter ? 'Re-attach Adapter' : 'Attach to Engine')
+                }, activeAdapter ? 'Re-attach Config' : 'Attach Config to Engine'),
+
+                activeAdapter && e('button', {
+                  className: 'btn-sec',
+                  style: { flex: '1 1 140px', height: '44px', fontSize: '12px', color: 'var(--accent-sage, #2b4c3f)', fontWeight: 600 },
+                  title: 'Merge active LoRA weights permanently into the base model parameters',
+                  onClick: handleMergeAdapterIntoEngine
+                }, [renderIcon('checkpoints', 13, { marginRight: '6px' }), 'Merge into Model']),
+
+                activeAdapter && e('button', {
+                  className: 'btn-sec',
+                  style: { flex: '1 1 120px', height: '44px', fontSize: '12px' },
+                  title: 'Export active adapter weights as SafeTensors',
+                  onClick: () => handleExportAdapter(activeAdapter.path)
+                }, [renderIcon('modules', 13, { marginRight: '6px' }), 'Export Adapter'])
               ),
-              activeAdapter && e('div', { style: { marginTop: '14px', padding: '12px 16px', background: '#e3ebd8', border: '1px solid #c5d6b4', borderRadius: '6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
-                e('div', null,
-                  e('div', { style: { fontWeight: 700, color: '#2b4c3f', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '5px' } }, [
-                    renderIcon('check', 13, { color: '#2b4c3f' }),
-                    `${activeAdapter.name} Active in Studio Engine`
-                  ]),
-                  e('div', { style: { fontSize: '11.5px', color: '#3f6212' } }, `Rank: ${activeAdapter.rank} | Model: ${activeModel} | Precision: ${activeAdapter.quantization || loraConfig.quantization}`)
+
+              // Live Training Progress Bar
+              (isFineTuningRunning || (fineTuningProgress && fineTuningProgress.step > 0)) && e('div', {
+                style: {
+                  marginTop: '16px',
+                  padding: '14px 16px',
+                  background: 'var(--bg-card, rgba(0,0,0,0.03))',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: '8px'
+                }
+              },
+                e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' } },
+                  e('span', { style: { fontWeight: 600, fontSize: '13px', color: 'var(--text-main)' } },
+                    isFineTuningRunning ? 'Fine-Tuning Active' : 'Fine-Tuning Finished / Paused'
+                  ),
+                  e('span', { style: { fontSize: '12px', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' } },
+                    fineTuningProgress.total_steps
+                      ? `${fineTuningProgress.step} / ${fineTuningProgress.total_steps} steps (${Math.round((fineTuningProgress.step / Math.max(1, fineTuningProgress.total_steps)) * 100)}%)`
+                      : `Step ${fineTuningProgress.step}`
+                  )
                 ),
-                e('button', { className: 'btn-sec', style: { fontSize: '11px', padding: '4px 10px' }, onClick: handleDetachAdapterFromEngine }, 'Detach')
+                e('div', { style: { width: '100%', height: '8px', background: 'var(--bg-surface, rgba(0,0,0,0.08))', borderRadius: '4px', overflow: 'hidden' } },
+                  e('div', {
+                    style: {
+                      width: `${fineTuningProgress.total_steps ? Math.min(100, Math.round((fineTuningProgress.step / fineTuningProgress.total_steps) * 100)) : (isFineTuningRunning ? 50 : 100)}%`,
+                      height: '100%',
+                      background: 'linear-gradient(90deg, var(--accent-sage, #2b4c3f), var(--accent-terracotta, #c2410c))',
+                      transition: 'width 0.3s ease'
+                    }
+                  })
+                ),
+                e('div', { style: { display: 'flex', gap: '16px', marginTop: '10px', fontSize: '12px', color: 'var(--text-muted)' } },
+                  fineTuningProgress.loss !== null && e('span', null, [
+                    e('strong', { key: 'l', style: { color: 'var(--text-main)' } }, 'Loss: '),
+                    fineTuningProgress.loss
+                  ]),
+                  fineTuningProgress.trainable_params > 0 && e('span', null, [
+                    e('strong', { key: 'tp', style: { color: 'var(--text-main)' } }, 'Trainable: '),
+                    `${fineTuningProgress.trainable_params.toLocaleString()} params`
+                  ])
+                )
               ),
-              fineTuningStatus && e('div', { className: 'notebook-terminal', style: { marginTop: '14px' } }, fineTuningStatus)
+
+              // Active Adapter Banner (Theme-safe dark/light mode)
+              activeAdapter && e('div', {
+                style: {
+                  marginTop: '16px',
+                  padding: '12px 16px',
+                  background: 'var(--bg-card-active, rgba(43, 76, 63, 0.12))',
+                  border: '1px solid var(--accent-sage, #2b4c3f)',
+                  borderRadius: '8px',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  flexWrap: 'wrap',
+                  gap: '10px'
+                }
+              },
+                e('div', null,
+                  e('div', { style: { fontWeight: 700, color: 'var(--accent-sage, #2b4c3f)', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' } }, [
+                    renderIcon('check', 13),
+                    `${activeAdapter.name || 'LoRA Adapter'} Attached & Active in Engine`
+                  ]),
+                  e('div', { style: { fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' } },
+                    `Rank: ${activeAdapter.rank} · Alpha: ${activeAdapter.alpha} · Precision: ${activeAdapter.quantization || loraConfig.quantization} · Path: ${activeAdapter.path || 'checkpoints/adapters'}`
+                  )
+                ),
+                e('div', { style: { display: 'flex', gap: '8px' } },
+                  e('button', {
+                    className: 'btn-sec',
+                    style: { fontSize: '11px', padding: '5px 12px', color: 'var(--text-main)' },
+                    onClick: handleDetachAdapterFromEngine
+                  }, 'Detach Adapter')
+                )
+              ),
+
+              fineTuningStatus && e('div', { className: 'notebook-terminal', style: { marginTop: '14px' } }, fineTuningStatus),
+
+              // Discovered Adapters Browser
+              e('div', { style: { marginTop: '24px' } },
+                e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' } },
+                  e('h4', { style: { fontSize: '15px', fontWeight: 600, margin: 0, display: 'flex', alignItems: 'center', gap: '6px' } }, [
+                    renderIcon('modules', 14),
+                    'Discovered Adapters on Disk'
+                  ]),
+                  e('button', {
+                    className: 'btn-sec',
+                    style: { fontSize: '11px', padding: '3px 8px' },
+                    onClick: fetchAvailableAdapters
+                  }, [renderIcon('refresh', 11, { marginRight: '4px' }), 'Refresh'])
+                ),
+                availableAdapters.length > 0
+                  ? e('div', { className: 'ckpt-table-wrap', role: 'region', 'aria-label': 'Discovered Adapters', tabIndex: 0 },
+                      e('table', { className: 'ckpt-table' },
+                        e('thead', null,
+                          e('tr', null,
+                            e('th', null, 'Adapter Name'),
+                            e('th', null, 'Rank / Alpha'),
+                            e('th', null, 'Precision'),
+                            e('th', null, 'Size'),
+                            e('th', null, 'Status'),
+                            e('th', { style: { textAlign: 'right' } }, 'Actions')
+                          )
+                        ),
+                        e('tbody', null,
+                          availableAdapters.map((ad, idx) => {
+                            const isActive = activeAdapter && (activeAdapter.path === ad.path || activeAdapter.name === ad.name);
+                            return e('tr', { key: ad.id || idx, style: isActive ? { background: 'rgba(43, 76, 63, 0.08)' } : {} },
+                              e('td', { style: { fontWeight: isActive ? 700 : 500, fontFamily: 'var(--font-mono)' } },
+                                [renderIcon('modules', 12, { marginRight: '6px', color: 'var(--accent-sage, #2b4c3f)' }), ad.name]
+                              ),
+                              e('td', null, `r=${ad.rank}, α=${ad.alpha}`),
+                              e('td', null, e('span', { className: 'badge-folder' }, ad.quantization || '4-bit NF4')),
+                              e('td', null, `${ad.size_mb || 0} MB`),
+                              e('td', null,
+                                isActive
+                                  ? e('span', { className: 'badge-ckpt-active' }, '● Attached')
+                                  : e('span', { className: 'badge-ckpt-idle' }, 'On Disk')
+                              ),
+                              e('td', { style: { textAlign: 'right' } },
+                                e('div', { style: { display: 'flex', gap: '6px', justifyContent: 'flex-end' } },
+                                  e('button', {
+                                    className: 'btn-sec',
+                                    style: { fontSize: '11px', padding: '3px 8px', color: isActive ? 'var(--text-muted)' : 'var(--accent-sage)' },
+                                    disabled: isActive,
+                                    onClick: () => handleAttachAdapterToEngine({
+                                      id: ad.id,
+                                      name: ad.name,
+                                      path: ad.path,
+                                      rank: ad.rank,
+                                      alpha: ad.alpha,
+                                      quantization: ad.quantization
+                                    })
+                                  }, isActive ? 'Active' : 'Attach'),
+                                  e('button', {
+                                    className: 'btn-sec',
+                                    style: { fontSize: '11px', padding: '3px 8px' },
+                                    title: 'Export as SafeTensors',
+                                    onClick: () => handleExportAdapter(ad.path)
+                                  }, renderIcon('download', 11))
+                                )
+                              )
+                            );
+                          })
+                        )
+                      )
+                    )
+                  : e('p', { style: { color: 'var(--text-muted)', fontSize: '12.5px', fontStyle: 'italic', margin: '8px 0' } },
+                      'No saved adapters found on disk. Run a fine-tuning job above or save LoRA weights to checkpoints/adapters/.'
+                    )
+              )
             )
           ),
 

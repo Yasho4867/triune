@@ -49,6 +49,12 @@ class LoRALayer(nn.Module):
         lora_out = (self.dropout(x) @ self.lora_A.T) @ self.lora_B.T
         return orig_out + (lora_out * self.scaling).to(orig_out.dtype)
 
+    def merge(self) -> None:
+        """Merge adapter weights directly into the original linear layer."""
+        if hasattr(self.original_layer, "weight") and self.original_layer.weight is not None:
+            delta = (self.lora_B @ self.lora_A) * self.scaling
+            self.original_layer.weight.data.add_(delta.to(self.original_layer.weight.dtype))
+
 
 class LoRAConfig:
     """Configuration container for LoRA / QLoRA adapters."""
@@ -62,6 +68,7 @@ class LoRAConfig:
         dropout: float = 0.05,
         target_modules: Optional[List[str]] = None,
         use_qlora: bool = False,
+        quantization: Optional[str] = None,
     ):
         self.rank = r if r is not None else rank
         self.alpha = lora_alpha if lora_alpha is not None else alpha
@@ -70,7 +77,8 @@ class LoRAConfig:
             "q_proj", "k_proj", "v_proj", "o_proj", "out_proj",
             "gate_proj", "up_proj", "down_proj", "0", "2"
         ]
-        self.use_qlora = use_qlora
+        self.quantization = quantization or ("4-bit NF4" if use_qlora else "FP16")
+        self.use_qlora = bool(use_qlora or ("4-bit" in str(self.quantization) or "nf4" in str(self.quantization).lower()))
 
 
 class TriuneFineTuner:
@@ -83,14 +91,105 @@ class TriuneFineTuner:
         self.attach_lora()
 
     def attach_lora(self) -> None:
-        """Attach LoRA adapter weights to target modules."""
+        """Attach LoRA adapter weights to target modules, freezing base parameters."""
+        if self.applied_adapters:
+            return
+
+        # Freeze base model parameters
+        for p in self.model.parameters():
+            p.requires_grad = False
+
+        named_mods = dict(self.model.named_modules())
         for name, module in list(self.model.named_modules()):
-            if any(target == name or target in name for target in self.lora_config.target_modules) and isinstance(module, (nn.Linear)):
+            if isinstance(module, LoRALayer):
+                continue
+            if any(target == name or target in name for target in self.lora_config.target_modules) and isinstance(module, nn.Linear):
                 parent_name, attr_name = name.rsplit(".", 1) if "." in name else ("", name)
-                parent = dict(self.model.named_modules())[parent_name] if parent_name else self.model
-                adapter = LoRALayer(module, rank=self.lora_config.rank, alpha=self.lora_config.alpha, dropout=self.lora_config.dropout)
+                if attr_name == "original_layer":
+                    continue
+                parent = named_mods.get(parent_name, self.model) if parent_name else self.model
+                if isinstance(parent, LoRALayer):
+                    continue
+                adapter = LoRALayer(
+                    module,
+                    rank=self.lora_config.rank,
+                    alpha=self.lora_config.alpha,
+                    dropout=self.lora_config.dropout,
+                )
                 setattr(parent, attr_name, adapter)
                 self.applied_adapters[name] = adapter
+
+    def detach_lora(self) -> None:
+        """Detach LoRA adapter weights and restore original layers."""
+        named_mods = dict(self.model.named_modules())
+        for name, adapter in list(self.applied_adapters.items()):
+            parent_name, attr_name = name.rsplit(".", 1) if "." in name else ("", name)
+            parent = named_mods.get(parent_name, self.model) if parent_name else self.model
+            if hasattr(parent, attr_name) and isinstance(getattr(parent, attr_name), LoRALayer):
+                setattr(parent, attr_name, adapter.original_layer)
+        self.applied_adapters.clear()
+        # Unfreeze base model parameters
+        for p in self.model.parameters():
+            p.requires_grad = True
+
+    def merge_and_unload(self) -> None:
+        """Merge adapter weights directly into the original layers and detach."""
+        for adapter in self.applied_adapters.values():
+            adapter.merge()
+        self.detach_lora()
+
+    def save_adapter(self, save_dir: str | Path) -> Path:
+        """Save only LoRA adapter weights and metadata."""
+        p = Path(save_dir)
+        p.mkdir(parents=True, exist_ok=True)
+        state_dict = {}
+        for name, adapter in self.applied_adapters.items():
+            state_dict[f"{name}.lora_A"] = adapter.lora_A.data.cpu()
+            state_dict[f"{name}.lora_B"] = adapter.lora_B.data.cpu()
+        config = {
+            "rank": self.lora_config.rank,
+            "alpha": self.lora_config.alpha,
+            "dropout": self.lora_config.dropout,
+            "target_modules": self.lora_config.target_modules,
+            "quantization": getattr(self.lora_config, "quantization", "4-bit NF4"),
+            "trainable_params": self.count_trainable_parameters(),
+        }
+        with open(p / "adapter_config.json", "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2)
+        try:
+            from safetensors.torch import save_file
+            save_file(state_dict, str(p / "adapter_model.safetensors"))
+        except Exception:
+            torch.save(state_dict, str(p / "adapter_model.pt"))
+        return p
+
+    def load_adapter(self, load_dir: str | Path) -> None:
+        """Load LoRA weights into attached adapters."""
+        p = Path(load_dir)
+        if p.is_file():
+            weights_file = p
+        else:
+            weights_file = p / "adapter_model.safetensors"
+            if not weights_file.is_file():
+                weights_file = p / "adapter_model.pt"
+
+        if not weights_file.is_file():
+            raise FileNotFoundError(f"Adapter weights not found at {load_dir}")
+
+        if weights_file.suffix == ".safetensors":
+            from safetensors.torch import load_file
+            state_dict = load_file(str(weights_file))
+        else:
+            state_dict = torch.load(weights_file, map_location="cpu")
+
+        self.attach_lora()
+        for name, adapter in self.applied_adapters.items():
+            a_key = f"{name}.lora_A"
+            b_key = f"{name}.lora_B"
+            if a_key in state_dict:
+                adapter.lora_A.data.copy_(state_dict[a_key].to(adapter.lora_A.device))
+            if b_key in state_dict:
+                adapter.lora_B.data.copy_(state_dict[b_key].to(adapter.lora_B.device))
 
     def count_trainable_parameters(self) -> int:
         return sum(p.numel() for p in self.model.parameters() if p.requires_grad)
@@ -105,6 +204,8 @@ class TriuneFineTuner:
         lr: float = 2e-4,
         export_formats: Optional[List[str]] = None,
         max_steps: Optional[int] = None,
+        on_step: Optional[Any] = None,
+        cancel_event: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """Run real fine-tuning loop with gradient accumulation, event streaming, and checkpoint export."""
         self.attach_lora()
@@ -217,6 +318,9 @@ class TriuneFineTuner:
         batch_idx = 0
 
         while step < total_steps:
+            if cancel_event is not None and getattr(cancel_event, "is_set", lambda: False)():
+                print(f"[LoRA Fine-Tuning] Cancellation requested at step {step}/{total_steps}.")
+                break
             optimizer.zero_grad()
             # Assemble batch
             batch_tensors = []
@@ -248,21 +352,33 @@ class TriuneFineTuner:
 
             step += 1
             final_loss = float(total_loss.item())
+            lm_loss_val = float(lm_loss.item())
+            if on_step is not None:
+                try:
+                    on_step(step, total_steps, final_loss, lm_loss_val)
+                except Exception:
+                    pass
             global_emitter.emit_loss_update(
                 step=step,
                 loss=final_loss,
-                lm_loss=float(lm_loss.item()),
+                lm_loss=lm_loss_val,
                 router_loss=router_loss_val,
             )
 
         out_path = Path(output_dir)
         out_path.mkdir(parents=True, exist_ok=True)
 
+        # Save standalone LoRA adapter weights and metadata
+        self.save_adapter(out_path)
+
         if export_formats:
             for fmt in export_formats:
                 export_model(self.model, out_path / f"model_finetuned.{fmt}", fmt=fmt)
         else:
-            export_model(self.model, out_path / "model_finetuned.safetensors", fmt="safetensors")
+            try:
+                export_model(self.model, out_path / "model_finetuned.safetensors", fmt="safetensors")
+            except Exception as e:
+                print(f"[LoRA Fine-Tuning] Full model export skipped: {e}")
 
         return {
             "status": "completed",

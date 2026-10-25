@@ -1947,12 +1947,20 @@ if HAS_FASTAPI:
         edges: List[Dict[str, Any]]
 
     class FineTuneRequest(BaseModel):
-        dataset_path: str = "data/finetune.jsonl"
+        dataset_path: str = "data/fineweb_sample.jsonl"
         lora_rank: int = 16
         lora_alpha: float = 32.0
         epochs: int = 3
         lr: float = 2e-4
+        batch_size: int = 4
+        max_steps: Optional[int] = None
         quantization: str = "4-bit NF4"
+        adapter_name: Optional[str] = None
+
+    class AdapterExportRequest(BaseModel):
+        adapter_path: Optional[str] = None
+        format: str = "safetensors"
+        export_name: Optional[str] = None
 
     class SandboxRunRequest(BaseModel):
         code: str
@@ -1961,12 +1969,14 @@ if HAS_FASTAPI:
         "is_running": False,
         "status": "idle",
         "step": 0,
+        "total_steps": 0,
         "loss": 0.0,
         "final_loss": None,
         "trainable_params": 0,
         "output_dir": "",
         "error": None,
     }
+    finetune_cancel_event = threading.Event()
 
     @router.get("/v1/models")
     async def list_models() -> Dict[str, Any]:
@@ -2345,27 +2355,42 @@ if HAS_FASTAPI:
         if finetune_state["is_running"]:
             return {"status": "already_running", "message": "A fine-tuning run is already active."}
 
+        finetune_cancel_event.clear()
         finetune_state["is_running"] = True
         finetune_state["status"] = "running"
         finetune_state["error"] = None
         finetune_state["step"] = 0
+        finetune_state["total_steps"] = 0
+        finetune_state["loss"] = 0.0
+        finetune_state["final_loss"] = None
+
+        adapter_name = req.adapter_name or f"LoRA-r{req.lora_rank}-a{int(req.lora_alpha)}"
+        safe_name = adapter_name.lower().replace(" ", "_").replace("/", "_")
+        out_dir = f"checkpoints/adapters/{safe_name}"
+
         pytorch_state.active_adapter = {
             "id": f"lora-r{req.lora_rank}",
-            "name": f"LoRA Adapter (r={req.lora_rank}, α={req.lora_alpha})",
+            "name": adapter_name,
             "rank": req.lora_rank,
             "alpha": req.lora_alpha,
             "quantization": req.quantization,
             "dataset": req.dataset_path,
-            "path": "checkpoints/lora_adapter",
+            "path": out_dir,
         }
         pytorch_state._save_persisted_session_state()
 
         async def _run_finetune_job():
             try:
                 pytorch_state.lazy_init_model()
+                # Detach any previous adapter first
+                if getattr(pytorch_state, "active_finetuner", None) is not None:
+                    pytorch_state.active_finetuner.detach_lora()
+                    pytorch_state.active_finetuner = None
+
                 cfg = LoRAConfig(
                     rank=req.lora_rank,
                     alpha=req.lora_alpha,
+                    quantization=req.quantization,
                 )
                 finetuner = TriuneFineTuner(pytorch_state.model, cfg)
                 finetune_state["trainable_params"] = finetuner.count_trainable_parameters()
@@ -2377,23 +2402,49 @@ if HAS_FASTAPI:
                             dpath = cand
                             break
 
+                def _on_step(cur_step: int, total_s: int, cur_loss: float, lm_loss_val: float):
+                    finetune_state["step"] = cur_step
+                    finetune_state["total_steps"] = total_s
+                    finetune_state["loss"] = round(cur_loss, 4)
+
                 res = await asyncio.to_thread(
                     finetuner.fit,
                     dataset_path=dpath,
+                    output_dir=out_dir,
                     epochs=req.epochs,
+                    batch_size=req.batch_size,
                     lr=req.lr,
+                    max_steps=req.max_steps,
+                    on_step=_on_step,
+                    cancel_event=finetune_cancel_event,
                 )
-                finetune_state["status"] = "completed"
-                finetune_state["final_loss"] = res.get("final_loss", 0.0)
-                finetune_state["output_dir"] = res.get("output_dir", "")
-                finetune_state["step"] = res.get("total_steps", 0)
-                if pytorch_state.active_adapter:
-                    pytorch_state.active_adapter["path"] = finetune_state["output_dir"] or "checkpoints/lora_adapter"
+
+                if finetune_cancel_event.is_set():
+                    finetune_state["status"] = "cancelled"
+                    finetuner.detach_lora()
+                    pytorch_state.active_finetuner = None
+                    pytorch_state.active_adapter = None
                     pytorch_state._save_persisted_session_state()
-                pytorch_state.logs.insert(0, f"[LORA] Fine-tuning finished! Final Loss: {finetune_state['final_loss']} -> {finetune_state['output_dir']}")
+                    pytorch_state.logs.insert(0, "[LORA] Fine-tuning run cancelled by user.")
+                else:
+                    finetune_state["status"] = "completed"
+                    finetune_state["final_loss"] = res.get("final_loss", 0.0)
+                    finetune_state["output_dir"] = res.get("output_dir", out_dir)
+                    finetune_state["step"] = res.get("total_steps", finetune_state["step"])
+                    pytorch_state.active_finetuner = finetuner
+                    if pytorch_state.active_adapter:
+                        pytorch_state.active_adapter["path"] = finetune_state["output_dir"]
+                        pytorch_state._save_persisted_session_state()
+                    pytorch_state.logs.insert(0, f"[LORA] Fine-tuning finished! Final Loss: {finetune_state['final_loss']} -> {finetune_state['output_dir']}")
             except Exception as exc:
                 finetune_state["status"] = "failed"
                 finetune_state["error"] = str(exc)
+                if getattr(pytorch_state, "active_finetuner", None) is not None:
+                    try:
+                        pytorch_state.active_finetuner.detach_lora()
+                    except Exception:
+                        pass
+                    pytorch_state.active_finetuner = None
             finally:
                 finetune_state["is_running"] = False
 
@@ -2403,6 +2454,14 @@ if HAS_FASTAPI:
             "active_adapter": pytorch_state.active_adapter,
             "message": f"LoRA fine-tuning initiated for {req.epochs} epochs.",
         }
+
+    @router.post("/v1/finetune/cancel")
+    async def cancel_finetune() -> Dict[str, Any]:
+        """Cancel active fine-tuning run gracefully."""
+        if not finetune_state["is_running"]:
+            return {"status": "idle", "message": "No fine-tuning run is active."}
+        finetune_cancel_event.set()
+        return {"status": "cancelling", "message": "Fine-tuning cancellation requested."}
 
     @router.get("/v1/finetune/status")
     async def get_finetune_status() -> Dict[str, Any]:
@@ -2424,24 +2483,174 @@ if HAS_FASTAPI:
         if req.action.lower() == "detach":
             prev = pytorch_state.active_adapter
             pytorch_state.active_adapter = None
+            if getattr(pytorch_state, "active_finetuner", None) is not None:
+                try:
+                    pytorch_state.active_finetuner.detach_lora()
+                except Exception:
+                    pass
+                pytorch_state.active_finetuner = None
             pytorch_state._save_persisted_session_state()
             msg = f"[LORA] Detached adapter {(prev or {}).get('name', '')}."
             pytorch_state.logs.insert(0, msg)
             return {"status": "success", "action": "detached", "active_adapter": None, "message": msg}
 
+        # Detach previous adapter first to avoid nested wrapping
+        if getattr(pytorch_state, "active_finetuner", None) is not None:
+            try:
+                pytorch_state.active_finetuner.detach_lora()
+            except Exception:
+                pass
+            pytorch_state.active_finetuner = None
+
+        pytorch_state.lazy_init_model()
+        adapter_path = req.path or "checkpoints/lora_adapter"
+        p_cfg = Path(adapter_path)
+        rank_val = req.rank
+        alpha_val = req.alpha
+        if p_cfg.is_dir() and (p_cfg / "adapter_config.json").is_file():
+            try:
+                with open(p_cfg / "adapter_config.json", "r", encoding="utf-8") as f:
+                    cdata = json.load(f)
+                    rank_val = cdata.get("rank", rank_val)
+                    alpha_val = cdata.get("alpha", alpha_val)
+            except Exception:
+                pass
+
+        cfg = LoRAConfig(rank=rank_val, alpha=alpha_val, quantization=req.quantization)
+        finetuner = TriuneFineTuner(pytorch_state.model, cfg)
+
+        loaded = False
+        if Path(adapter_path).exists():
+            try:
+                finetuner.load_adapter(adapter_path)
+                loaded = True
+            except Exception as e:
+                print(f"[LORA] Fresh adapter attached (weights not loaded: {e})")
+
+        pytorch_state.active_finetuner = finetuner
         adapter_info = {
-            "id": req.id or f"lora-r{req.rank}",
-            "name": req.name or f"LoRA Adapter (r={req.rank}, α={req.alpha})",
-            "path": req.path or "checkpoints/lora_adapter",
-            "rank": req.rank,
-            "alpha": req.alpha,
+            "id": req.id or f"lora-r{rank_val}",
+            "name": req.name or f"LoRA Adapter (r={rank_val}, α={alpha_val})",
+            "path": str(adapter_path).replace("\\", "/"),
+            "rank": rank_val,
+            "alpha": alpha_val,
             "quantization": req.quantization,
+            "loaded_from_disk": loaded,
         }
         pytorch_state.active_adapter = adapter_info
         pytorch_state._save_persisted_session_state()
         msg = f"[LORA] Attached adapter {adapter_info['name']} ({adapter_info['quantization']})."
         pytorch_state.logs.insert(0, msg)
         return {"status": "success", "action": "attached", "active_adapter": adapter_info, "message": msg}
+
+    @router.post("/v1/finetune/merge")
+    async def merge_active_adapter() -> Dict[str, Any]:
+        """Merge active LoRA adapter weights permanently into the base model."""
+        if getattr(pytorch_state, "active_finetuner", None) is None or getattr(pytorch_state, "active_adapter", None) is None:
+            return {"status": "error", "message": "No active LoRA adapter is currently attached to merge."}
+
+        adapter_name = pytorch_state.active_adapter.get("name", "LoRA")
+        pytorch_state.active_finetuner.merge_and_unload()
+        pytorch_state.active_finetuner = None
+        pytorch_state.active_adapter = None
+        pytorch_state.weights_loaded = True
+        pytorch_state._save_persisted_session_state()
+
+        msg = f"[LORA] Merged adapter '{adapter_name}' permanently into base model weights."
+        pytorch_state.logs.insert(0, msg)
+        return {"status": "success", "message": msg}
+
+    @router.get("/v1/finetune/adapters")
+    async def list_available_adapters() -> Dict[str, Any]:
+        """List all discovered LoRA/QLoRA adapters on disk."""
+        adapters = []
+        scan_dirs = ["checkpoints", "checkpoints/adapters", "exports"]
+        seen_paths = set()
+        for sdir in scan_dirs:
+            p = Path(sdir)
+            if not p.is_dir():
+                continue
+            for item in p.iterdir():
+                clean_path = str(item).replace("\\", "/")
+                if clean_path in seen_paths:
+                    continue
+                if item.is_dir():
+                    cfg_file = item / "adapter_config.json"
+                    weights_file = item / "adapter_model.safetensors"
+                    if not weights_file.exists():
+                        weights_file = item / "adapter_model.pt"
+                    if cfg_file.exists() or weights_file.exists():
+                        seen_paths.add(clean_path)
+                        rank_val = 16
+                        alpha_val = 32.0
+                        quant_val = "4-bit NF4"
+                        trainable_val = 0
+                        if cfg_file.exists():
+                            try:
+                                with open(cfg_file, "r", encoding="utf-8") as f:
+                                    cdata = json.load(f)
+                                    rank_val = cdata.get("rank", rank_val)
+                                    alpha_val = cdata.get("alpha", alpha_val)
+                                    quant_val = cdata.get("quantization", quant_val)
+                                    trainable_val = cdata.get("trainable_params", 0)
+                            except Exception:
+                                pass
+                        sz_mb = round(weights_file.stat().st_size / (1024 * 1024), 2) if weights_file.exists() else 0.0
+                        adapters.append({
+                            "id": item.name,
+                            "name": item.name.replace("_", " ").title(),
+                            "path": clean_path,
+                            "rank": rank_val,
+                            "alpha": alpha_val,
+                            "quantization": quant_val,
+                            "trainable_params": trainable_val,
+                            "size_mb": sz_mb,
+                            "mtime": time.strftime("%Y-%m-%d %H:%M", time.localtime(item.stat().st_mtime)),
+                            "is_active": pytorch_state.active_adapter is not None and pytorch_state.active_adapter.get("path") == clean_path,
+                        })
+                elif item.is_file() and "adapter" in item.name.lower() and item.suffix in (".safetensors", ".pt"):
+                    seen_paths.add(clean_path)
+                    sz_mb = round(item.stat().st_size / (1024 * 1024), 2)
+                    adapters.append({
+                        "id": item.stem,
+                        "name": item.stem.replace("_", " ").title(),
+                        "path": clean_path,
+                        "rank": 16,
+                        "alpha": 32.0,
+                        "quantization": "4-bit NF4",
+                        "trainable_params": 0,
+                        "size_mb": sz_mb,
+                        "mtime": time.strftime("%Y-%m-%d %H:%M", time.localtime(item.stat().st_mtime)),
+                        "is_active": pytorch_state.active_adapter is not None and pytorch_state.active_adapter.get("path") == clean_path,
+                    })
+        return {"adapters": adapters, "active_adapter": getattr(pytorch_state, "active_adapter", None)}
+
+    @router.post("/v1/finetune/export")
+    async def export_adapter(req: AdapterExportRequest) -> Dict[str, Any]:
+        """Export an adapter as a standalone SafeTensors or GGUF package."""
+        target_path = req.adapter_path or (pytorch_state.active_adapter.get("path") if pytorch_state.active_adapter else None)
+        if not target_path or not Path(target_path).exists():
+            return {"status": "error", "message": f"Adapter path does not exist: {target_path}"}
+
+        out_name = req.export_name or "lora_adapter"
+        dest = Path("exports") / f"{out_name}.{req.format}"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+
+        p = Path(target_path)
+        src = p / "adapter_model.safetensors" if p.is_dir() else p
+        if not src.exists():
+            src = p / "adapter_model.pt"
+
+        if src.exists():
+            import shutil
+            shutil.copy2(src, dest)
+            return {
+                "status": "success",
+                "export_path": str(dest).replace("\\", "/"),
+                "size_mb": round(dest.stat().st_size / (1024 * 1024), 2),
+                "message": f"Adapter exported successfully to {dest}."
+            }
+        return {"status": "error", "message": "Source adapter file not found."}
 
     @router.post("/v1/dag/execute")
     async def execute_dag(req: DAGExecuteRequest) -> Dict[str, Any]:
