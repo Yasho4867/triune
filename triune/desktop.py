@@ -62,35 +62,24 @@ def _is_triune_server_alive(port: int) -> bool:
 
 
 def _find_wsl_python() -> str | None:
-    """Detect if WSL2 is installed and has a GPU PyTorch Python environment."""
+    """Find a WSL Python with CUDA only when a caller explicitly opts into WSL."""
     if sys.platform != "win32":
         return None
     try:
-        # Check standard user venv locations with sufficient timeout for WSL wake-up
-        for cand in [
-            "/home/yasho4867/venvs/triune/bin/python",
-            "/root/venvs/triune/bin/python",
-        ]:
-            r = subprocess.run(["wsl.exe", "-e", "test", "-f", cand], capture_output=True, timeout=8.0)
-            if r.returncode == 0:
-                return cand
-
-        # Dynamic check in user home directory
-        dyn = subprocess.run(
-            ["wsl.exe", "bash", "-c", "for p in ~/venvs/triune/bin/python /home/$USER/venvs/triune/bin/python ~/.venv/bin/python; do if [ -f \"$p\" ]; then echo \"$p\"; exit 0; fi; done"],
-            capture_output=True, text=True, timeout=8.0
+        script = (
+            'for p in "$HOME/venvs/triune/bin/python" "$HOME/.venv/bin/python"; do '
+            'if [ -x "$p" ] && "$p" -c "import torch; raise SystemExit(0 if torch.cuda.is_available() else 1)" '
+            '>/dev/null 2>&1; then echo "$p"; exit 0; fi; done; '
+            'if command -v python3 >/dev/null 2>&1 && python3 -c '
+            '"import torch; raise SystemExit(0 if torch.cuda.is_available() else 1)" >/dev/null 2>&1; '
+            'then command -v python3; fi'
         )
-        cand_dyn = dyn.stdout.strip()
-        if cand_dyn:
-            return cand_dyn
-
-        # Check if python3 in WSL has torch with CUDA
-        chk = subprocess.run(
-            ["wsl.exe", "bash", "-c", "python3 -c 'import torch; print(torch.cuda.is_available())'"],
-            capture_output=True, text=True, timeout=8.0
+        result = subprocess.run(
+            ["wsl.exe", "bash", "-lc", script], capture_output=True, text=True, timeout=15.0
         )
-        if "True" in chk.stdout:
-            return "python3"
+        candidate = result.stdout.strip().splitlines()
+        if result.returncode == 0 and candidate:
+            return candidate[-1]
     except Exception:
         pass
     return None
@@ -126,7 +115,12 @@ def _start_fallback_http_server(directory: Path, port: int) -> None:
     t.start()
 
 
-def launch_desktop_app(port: int = 8000, use_browser: bool = False, native_host: bool = False) -> None:
+def launch_desktop_app(
+    port: int = 8000,
+    use_browser: bool = False,
+    native_host: bool = False,
+    allow_wsl: bool = False,
+) -> None:
     """Launch embedded Triune Studio API server and open as a native desktop application window."""
     workspace_root = Path(__file__).resolve().parent.parent
     studio_src = workspace_root / "studio" / "src"
@@ -162,8 +156,10 @@ def launch_desktop_app(port: int = 8000, use_browser: bool = False, native_host:
     except ImportError:
         pass
 
+    # Windows Studio is self-contained around the native managed runtime by
+    # default. WSL is an explicit opt-in, never an invisible fallback.
     wsl_py = None
-    if sys.platform == "win32" and not local_has_cuda:
+    if allow_wsl and not native_host and sys.platform == "win32" and not local_has_cuda:
         wsl_py = _find_wsl_python()
 
     api_proc = None
@@ -266,9 +262,8 @@ def launch_desktop_app(port: int = 8000, use_browser: bool = False, native_host:
                 "The desktop window was not opened; check the backend startup error above."
             )
 
-    # A native Windows WPF host embeds the existing Studio UI in WebView2. Keep
-    # the same backend selection above (including the WSL GPU bridge), but leave
-    # window ownership to that host instead of opening a second browser window.
+    # A native Windows WPF host embeds the Studio UI in WebView2 and owns the
+    # backend lifecycle; it never delegates the backend to WSL.
     if native_host:
         print(f"[Studio] Backend ready for native desktop host at {url}.")
         consecutive_health_failures = 0

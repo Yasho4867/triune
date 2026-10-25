@@ -307,6 +307,25 @@ def install_pytorch(py_bin: Path, hw: HardwareProfile, cuda_choice: str = "auto"
         log_info("Falling back to standard PyTorch distribution...")
         code = run_command([str(py_bin), "-m", "pip", "install", "torch", "torchvision"], show_output=True)
 
+    if code == 0 and hw.has_nvidia and cuda_choice != "cpu":
+        # A successful pip exit is not sufficient: pip can resolve a CPU-only
+        # wheel from a fallback index, leaving Studio online but inference on
+        # CPU. Verify the actual runtime before calling GPU setup successful.
+        probe = subprocess.run(
+            [str(py_bin), "-c", "import torch; print('CUDA_OK' if torch.cuda.is_available() else 'CUDA_UNAVAILABLE', torch.__version__, torch.version.cuda)"],
+            capture_output=True, text=True, timeout=30.0,
+        )
+        if "CUDA_OK" not in probe.stdout:
+            log_error(
+                "NVIDIA hardware is present, but the installed PyTorch runtime cannot initialize CUDA. "
+                "The CUDA wheel may be unavailable for this Python version or incompatible with the installed driver. "
+                "Studio setup is stopping instead of silently accepting CPU-only inference."
+            )
+            if probe.stdout.strip() or probe.stderr.strip():
+                log_info((probe.stdout + "\n" + probe.stderr).strip()[-1200:])
+            return False
+        log_success(f"CUDA runtime verified: {probe.stdout.strip()}")
+
     return code == 0
 
 
@@ -327,6 +346,10 @@ def install_dependencies(py_bin: Path) -> None:
         "datasets>=2.0.0",
         "requests>=2.28.0",
         "psutil>=5.9.0",
+        # BYOK Subscriptions exposes W&B verification and Studio training can
+        # log metrics, so this must be present in a normal Studio setup rather
+        # than only in the optional CLI training extra.
+        "wandb>=0.15.0",
     ]
     # Windows uses the OS Credential Manager API directly, including when the
     # model backend runs in WSL. Python keyring remains required for native
@@ -432,7 +455,7 @@ Categories=Development;Science;ArtificialIntelligence;
 # ---------------------------------------------------------------------------
 # Health Verification
 # ---------------------------------------------------------------------------
-def verify_installation(py_bin: Path, hw: HardwareProfile) -> bool:
+def verify_installation(py_bin: Path, hw: HardwareProfile, allow_cpu: bool = False) -> bool:
     """Run verification checks on all subsystems."""
     all_ok = True
     print(f"\n{BOLD}Verifying Subsystems:{RESET}")
@@ -457,12 +480,14 @@ def verify_installation(py_bin: Path, hw: HardwareProfile) -> bool:
     res = subprocess.run([str(py_bin), "-c", chk_code], capture_output=True, text=True)
     if "TORCH_OK" in res.stdout:
         log_success(f"PyTorch Engine: {res.stdout.strip()}")
-        if hw.has_nvidia and "CUDA: True" not in res.stdout:
+        if hw.has_nvidia and "CUDA: True" not in res.stdout and not allow_cpu:
             log_error(
                 "An NVIDIA GPU was detected, but the native Studio Python environment has no CUDA-enabled PyTorch. "
                 "Local inference will run on CPU; repair PyTorch with the matching CUDA wheel before expecting GPU speed."
             )
             all_ok = False
+        elif hw.has_nvidia and "CUDA: True" not in res.stdout:
+            log_warning("CPU-only PyTorch was explicitly selected; GPU inference is disabled by configuration.")
     else:
         log_error("PyTorch is not present in the native Studio Python environment. Local inference is unavailable.")
         all_ok = False
@@ -526,7 +551,8 @@ def main() -> None:
         cand = venv_path / bin_dir / py_name
         py_bin = cand if cand.exists() else Path(sys.executable)
         log_step(2, TOTAL_STEPS, "System Health Verification")
-        verify_installation(py_bin, hw)
+        if not verify_installation(py_bin, hw, allow_cpu=args.cuda == "cpu"):
+            raise SystemExit(1)
         return
 
     # Step 2: Virtual Environment Setup
@@ -536,7 +562,9 @@ def main() -> None:
     # Step 3: Hardware Acceleration & PyTorch
     log_step(3, TOTAL_STEPS, "Configuring PyTorch & GPU Acceleration")
     if not args.skip_torch:
-        install_pytorch(py_bin, hw, cuda_choice=args.cuda)
+        if not install_pytorch(py_bin, hw, cuda_choice=args.cuda):
+            log_error("PyTorch setup did not produce a usable runtime; Studio was not launched.")
+            raise SystemExit(1)
     else:
         log_info("Skipping PyTorch installation as requested (--skip-torch).")
 
@@ -550,7 +578,7 @@ def main() -> None:
 
     # Step 6: Diagnostic Verification
     log_step(6, TOTAL_STEPS, "End-to-End Installation Verification")
-    healthy = verify_installation(py_bin, hw)
+    healthy = verify_installation(py_bin, hw, allow_cpu=args.cuda == "cpu")
 
     print("\n" + "=" * 80)
     if healthy:
@@ -558,8 +586,11 @@ def main() -> None:
         print("   Ready for local MoE language model research, training, and dynamic routing.")
     else:
         print(f"{YELLOW}{BOLD}   INSTALLATION FINISHED WITH WARNINGS{RESET}")
-        print("   Studio will launch in Host UI Mode.")
+        print("   Studio was not launched because one or more required components failed verification.")
     print("=" * 80 + "\n")
+
+    if not healthy:
+        raise SystemExit(1)
 
     print(f"Launch commands:")
     print(f"  • Windows: Double-click {BOLD}studio\\TriuneStudio.bat{RESET} or desktop icon 'Triune Studio'")

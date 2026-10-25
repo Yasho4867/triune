@@ -61,6 +61,7 @@ def generate_response(
     max_new_tokens: int = 100,
     prompt_is_formatted: bool = False,
     cancel_event=None,
+    on_text=None,
     return_info: bool = False,
 ) -> str | dict[str, object]:
     """Generate a response using the model's established depth-routing options."""
@@ -73,9 +74,6 @@ def generate_response(
     if max_new_tokens <= 0:
         raise ValueError("max_new_tokens must be positive")
     import time
-
-    if max_new_tokens <= 0:
-        raise ValueError("max_new_tokens must be positive")
     formatted = prompt if prompt_is_formatted else f"User: {prompt}\nAssistant:"
     token_ids = tokenizer.encode(formatted).ids
     if not token_ids:
@@ -88,6 +86,8 @@ def generate_response(
     seen = torch.zeros(vocab_size, dtype=torch.bool, device=device)
     cache = model.init_cache(batch_size=1) if hasattr(model, "init_cache") else None
     started = time.perf_counter()
+    first_token_latency_ms: float | None = None
+    decode_started: float | None = None
     with torch.inference_mode():
         if cache is not None:
             logits, cache = model(ids, cache=cache, force_depth=force_depth)
@@ -115,17 +115,28 @@ def generate_response(
             next_logits = torch.where(seen, penalized, next_logits)
             if 0 <= pad_token_id < next_logits.numel():
                 next_logits[pad_token_id] = float("-inf")
-            effective_top_k = min(top_k, next_logits.numel())
-            threshold = torch.topk(next_logits, effective_top_k).values[-1]
-            next_logits[next_logits < threshold] = float("-inf")
-            next_id = (
-                int(torch.argmax(next_logits).item())
-                if temperature == 0
-                else int(torch.multinomial(torch.softmax(next_logits, dim=-1), 1).item())
-            )
+            if temperature == 0:
+                # Top-k masking cannot change an argmax result, so avoid the
+                # extra vocabulary-wide topk kernel on deterministic decoding.
+                next_id = int(torch.argmax(next_logits).item())
+            else:
+                effective_top_k = min(top_k, next_logits.numel())
+                threshold = torch.topk(next_logits, effective_top_k).values[-1]
+                next_logits[next_logits < threshold] = float("-inf")
+                next_id = int(torch.multinomial(torch.softmax(next_logits, dim=-1), 1).item())
             if next_id == eos_token_id:
                 break
             generated.append(next_id)
+            if first_token_latency_ms is None:
+                # next_id.item()/multinomial.item() synchronizes pending device
+                # work, so this includes prompt prefill and first-token sampling.
+                decode_started = time.perf_counter()
+                first_token_latency_ms = (decode_started - started) * 1000.0
+            if on_text is not None:
+                # Send a cumulative decoded snapshot. Some tokenizers revise the
+                # visible suffix as byte-level tokens arrive, so callers can
+                # safely replace a snapshot instead of corrupting partial UTF-8.
+                on_text(tokenizer.decode(generated, skip_special_tokens=True))
             seen[next_id] = True
             next_input = torch.tensor([[next_id]], dtype=torch.long, device=device)
             if cache is not None:
@@ -134,7 +145,9 @@ def generate_response(
                 ids = torch.cat((ids, next_input), dim=1)
                 logits, _ = model(ids, force_depth=decode_depth)
 
-    elapsed = max(time.perf_counter() - started, 1e-3)
+    finished = time.perf_counter()
+    elapsed = max(finished - started, 1e-3)
+    decode_elapsed = max(finished - decode_started, 1e-3) if decode_started is not None else 0.0
     text = tokenizer.decode(generated, skip_special_tokens=True).strip()
     if not return_info:
         return text
@@ -144,6 +157,8 @@ def generate_response(
         "tokens_count": len(generated),
         "tokens_per_sec": len(generated) / elapsed,
         "latency_ms": round(elapsed * 1000, 1),
+        "ttft_ms": round(first_token_latency_ms, 1) if first_token_latency_ms is not None else None,
+        "decode_tokens_per_sec": round(max(0, len(generated) - 1) / decode_elapsed, 2) if decode_elapsed else None,
         "route": route_name,
         "cancelled": cancelled,
     }

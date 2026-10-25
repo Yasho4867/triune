@@ -47,6 +47,7 @@ studio = [
     "pywebview>=4.0.0",
     "keyring>=25.0.0",
     "cryptography>=41.0.0",
+    "wandb>=0.15.0",
 ]
 train = [
     "wandb>=0.15.0",

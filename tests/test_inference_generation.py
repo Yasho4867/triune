@@ -66,6 +66,29 @@ class TestSharedGeneration(unittest.TestCase):
         self.assertEqual(result["text"], "3")
         self.assertEqual(result["route"], "LIMBIC")
         self.assertEqual(model.force_depths, [None, 1])
+        self.assertGreaterEqual(result["ttft_ms"], 0)
+        self.assertEqual(result["decode_tokens_per_sec"], 0.0)
+
+    def test_emits_decoded_snapshots_as_tokens_are_generated(self) -> None:
+        model = _Model()
+        tokenizer = _Tokenizer()
+        snapshots: list[str] = []
+        result = generate_response(
+            model,
+            tokenizer,
+            "hello",
+            device="cpu",
+            pad_token_id=0,
+            eos_token_id=7,
+            temperature=0,
+            max_new_tokens=4,
+            on_text=snapshots.append,
+            return_info=True,
+        )
+
+        self.assertEqual(snapshots, ["3"])
+        self.assertEqual(result["text"], snapshots[-1])
+        self.assertGreaterEqual(result["ttft_ms"], 0)
 
     def test_does_not_reformat_api_conversation_prompt(self) -> None:
         model = _Model()

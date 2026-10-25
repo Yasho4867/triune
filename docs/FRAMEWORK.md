@@ -125,6 +125,12 @@ In Studio, Ctrl-click nodes to select multiple nodes, then choose **Group** (or 
 
 ## CLI Reference
 
+For the native Windows setup and portable package workflow, see
+[`WINDOWS_INSTALLATION.md`](WINDOWS_INSTALLATION.md). The desktop shell can be
+published self-contained for .NET; the framework's Python/CUDA environment is
+provisioned on first setup and therefore still requires a supported Windows
+Python bootstrap path and an installed NVIDIA driver for CUDA.
+
 Direct non-loopback binds require all three of `TRIUNE_API_TOKEN` (at least 32 characters), `TRIUNE_TLS_CERTFILE`, and `TRIUNE_TLS_KEYFILE`; the server refuses to start if any is missing. The token is sent as a bearer credential, so do not disable TLS. For Cloudflare, use a Cloudflare Tunnel with a Cloudflare Access policy and route it to the loopback-only Studio server (for example, `http://127.0.0.1:8000`) so the public host and port stay closed. Configure Access to protect the Studio, API, and WebSocket paths. The tunnel-to-origin connection is loopback, so this deployment relies on Cloudflare Access at the edge; the app does not independently validate Cloudflare Access JWTs. Direct remote access to the Python runner additionally requires `TRIUNE_ALLOW_REMOTE_SANDBOX=1`; keep that disabled unless authenticated operators need it.
 
 ```bash

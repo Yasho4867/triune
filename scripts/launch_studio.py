@@ -16,6 +16,7 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=8000, help="Port to bind Studio on (default: 8000)")
     parser.add_argument("--browser", action="store_true", help="Launch directly in default web browser instead of desktop window")
     parser.add_argument("--native-host", action="store_true", help="Start the backend for the native Windows desktop host without opening a browser window")
+    parser.add_argument("--use-wsl", action="store_true", help="Explicitly allow the non-native Windows launcher to use a CUDA-enabled WSL backend")
     args = parser.parse_args()
 
-    launch_desktop_app(port=args.port, use_browser=args.browser, native_host=args.native_host)
+    launch_desktop_app(port=args.port, use_browser=args.browser, native_host=args.native_host, allow_wsl=args.use_wsl)

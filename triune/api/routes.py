@@ -36,7 +36,8 @@ from pathlib import Path
 
 try:
     from fastapi import APIRouter, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
-    from pydantic import BaseModel
+    from fastapi.responses import StreamingResponse
+    from pydantic import BaseModel, Field
 
     HAS_FASTAPI = True
 except ImportError:
@@ -45,9 +46,11 @@ except ImportError:
     HTTPException = None
     Request = None
     Response = None
+    StreamingResponse = None
     WebSocket = None
     WebSocketDisconnect = Exception
     BaseModel = object
+    Field = None
 
 try:
     from triune.optim import CentroidSteerOptimizer
@@ -981,7 +984,13 @@ if HAS_FASTAPI:
             print(log_msg)
             return base
 
-        def load_model_checkpoint(self, checkpoint_path: str | Path, *, restore_optimizer: bool = True) -> Dict[str, Any]:
+        def load_model_checkpoint(
+            self,
+            checkpoint_path: str | Path,
+            *,
+            restore_optimizer: bool = True,
+            precision_override: Optional[str] = None,
+        ) -> Dict[str, Any]:
             """Load a checkpoint only after matching the model architecture and validating every weight."""
             p = Path(checkpoint_path).resolve()
             if not p.is_file():
@@ -1001,6 +1010,12 @@ if HAS_FASTAPI:
                 "precision": checkpoint.get("config", {}).get("precision", self.precision)
                 if isinstance(checkpoint.get("config"), dict) else self.precision,
             })
+            if precision_override is not None:
+                if precision_override not in ("bf16", "fp16", "fp32", "fp8", "fp4"):
+                    raise ValueError(f"Unsupported precision override: {precision_override}")
+                arch_overrides["precision"] = precision_override
+                arch_overrides["use_fp4"] = precision_override == "fp4"
+                arch_overrides["use_fp8"] = precision_override == "fp8"
             self.reconfigure_architecture(model_id, **arch_overrides)
 
             state_dict = checkpoint.get("model_state", checkpoint)
@@ -1588,7 +1603,7 @@ if HAS_FASTAPI:
             self.logs.insert(0, log_msg)
             print(f"[Triune Engine] {log_msg}")
 
-        def generate_text(self, prompt: str, max_new_tokens: int = 64, temperature: float = 0.7, force_depth: Optional[int] = None, cancel_event: Optional[threading.Event] = None, prompt_is_formatted: bool = False) -> Dict[str, Any]:
+        def generate_text(self, prompt: str, max_new_tokens: int = 64, temperature: float = 0.7, force_depth: Optional[int] = None, cancel_event: Optional[threading.Event] = None, prompt_is_formatted: bool = False, on_text=None) -> Dict[str, Any]:
             if not HAS_TORCH or TriuneTransformer is None:
                 return {
                     "text": "[Host UI Mode] PyTorch is not available in current process. Run in WSL2 for full GPU acceleration.",
@@ -1642,6 +1657,7 @@ if HAS_FASTAPI:
                 max_new_tokens=max_new_tokens,
                 prompt_is_formatted=prompt_is_formatted,
                 cancel_event=cancel_event,
+                on_text=on_text,
                 return_info=True,
             )
             generated_text = sanitize_text(str(result["text"]))
@@ -1655,6 +1671,8 @@ if HAS_FASTAPI:
                 "tokens_count": result["tokens_count"],
                 "tokens_per_sec": int(result["tokens_per_sec"]),
                 "latency_ms": result["latency_ms"],
+                "ttft_ms": result.get("ttft_ms"),
+                "decode_tokens_per_sec": result.get("decode_tokens_per_sec"),
                 "vram_gb": vram_stats.get("allocated_gb", 0.0),
                 "checkpoint": self.active_checkpoint,
                 "weights_loaded": self.weights_loaded,
@@ -1919,7 +1937,8 @@ if HAS_FASTAPI:
         model: str = "triune-base"
         messages: List[Dict[str, str]]
         temperature: float = 0.7
-        max_tokens: int = 2048
+        max_tokens: int = Field(default=256, ge=1, le=8192)
+        stream: bool = False
         route: Optional[str] = None
         force_depth: Optional[int] = None
 
@@ -2127,7 +2146,7 @@ if HAS_FASTAPI:
         cancel_event = threading.Event()
         pytorch_state.active_generation_cancel = cancel_event
 
-        def _locked_generate() -> Dict[str, Any]:
+        def _locked_generate(on_text=None) -> Dict[str, Any]:
             with pytorch_state.worker_lock:
                 try:
                     if pytorch_state.is_training:
@@ -2139,10 +2158,138 @@ if HAS_FASTAPI:
                         force_depth=force_depth,
                         cancel_event=cancel_event,
                         prompt_is_formatted=len(req.messages) > 1,
+                        on_text=on_text,
                     )
                 finally:
                     if pytorch_state.active_generation_cancel is cancel_event:
                         pytorch_state.active_generation_cancel = None
+
+        if req.stream:
+            # Keep the model call on its worker thread, but forward decoded text
+            # snapshots to the HTTP response as soon as tokens are produced.
+            loop = asyncio.get_running_loop()
+            events: asyncio.Queue = asyncio.Queue(maxsize=32)
+
+            def _enqueue(event: Dict[str, Any]) -> None:
+                if events.full():
+                    # Decoded text events are cumulative snapshots. Coalesce a
+                    # backlog to the newest snapshot rather than allowing a
+                    # slow UI/proxy to grow memory without bound. Preserve
+                    # control events; the completion event carries final text.
+                    queued = []
+                    while not events.empty():
+                        queued.append(events.get_nowait())
+                    if event["type"] == "text":
+                        queued = [item for item in queued if item["type"] != "text"]
+                    else:
+                        queued = [item for item in queued if item["type"] != "text"]
+                    for item in queued:
+                        if not events.full():
+                            events.put_nowait(item)
+                    if events.full():
+                        return
+                events.put_nowait(event)
+
+            def _publish(event: Dict[str, Any]) -> None:
+                try:
+                    loop.call_soon_threadsafe(_enqueue, event)
+                except RuntimeError:
+                    # The client may have disconnected while CUDA was finishing
+                    # its current kernel. The generation cancellation flag is
+                    # set by the response iterator's finally block below.
+                    pass
+
+            def _stream_worker() -> None:
+                try:
+                    result = _locked_generate(lambda text: _publish({"type": "text", "text": text}))
+                    _publish({"type": "done", "result": result})
+                except Exception as exc:
+                    _publish({"type": "error", "message": str(exc)})
+
+            async def _stream_events():
+                worker = asyncio.create_task(asyncio.to_thread(_stream_worker))
+                previous_text = ""
+                try:
+                    # Flush an initial comment so clients and local proxies know
+                    # the request is alive while a checkpoint/CUDA context loads.
+                    yield ": triune stream connected\n\n"
+                    while True:
+                        try:
+                            event = await asyncio.wait_for(events.get(), timeout=15.0)
+                        except asyncio.TimeoutError:
+                            yield ": keep-alive\n\n"
+                            continue
+                        if event["type"] == "text":
+                            snapshot = str(event["text"])
+                            if not snapshot or snapshot == previous_text:
+                                continue
+                            # Standard delta chunks are used when the tokenizer
+                            # appends text normally. A snapshot marker handles
+                            # rare byte-level decoder revisions without mangling
+                            # the visible response.
+                            if snapshot.startswith(previous_text):
+                                delta = snapshot[len(previous_text):]
+                                if not delta:
+                                    continue
+                                chunk = {"choices": [{"index": 0, "delta": {"content": delta}, "finish_reason": None}]}
+                            else:
+                                chunk = {
+                                    "choices": [{"index": 0, "delta": {"content": snapshot}, "finish_reason": None}],
+                                    "triune_snapshot": True,
+                                }
+                            previous_text = snapshot
+                            chunk.update({"id": "chatcmpl-triune", "object": "chat.completion.chunk", "model": req.model})
+                            yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+                        elif event["type"] == "error":
+                            yield f"data: {json.dumps({'error': {'message': event['message']}}, ensure_ascii=False)}\n\n"
+                            yield "data: [DONE]\n\n"
+                            break
+                        else:
+                            result = event["result"]
+                            final_text = str(result.get("text", ""))
+                            if final_text != previous_text:
+                                if final_text.startswith(previous_text):
+                                    final_delta = final_text[len(previous_text):]
+                                    final_text_chunk = {"choices": [{"index": 0, "delta": {"content": final_delta}, "finish_reason": None}]}
+                                else:
+                                    final_text_chunk = {
+                                        "choices": [{"index": 0, "delta": {"content": final_text}, "finish_reason": None}],
+                                        "triune_snapshot": True,
+                                    }
+                                final_text_chunk.update({"id": "chatcmpl-triune", "object": "chat.completion.chunk", "model": req.model})
+                                yield f"data: {json.dumps(final_text_chunk, ensure_ascii=False)}\n\n"
+                            final_chunk = {
+                                "id": "chatcmpl-triune",
+                                "object": "chat.completion.chunk",
+                                "model": req.model,
+                                "choices": [{"index": 0, "delta": {}, "finish_reason": "cancelled" if result.get("cancelled") else "stop"}],
+                                "telemetry": {
+                                    "route": result["route"],
+                                    "latency_ms": result["latency_ms"],
+                                    "tokens_per_sec": result["tokens_per_sec"],
+                                    "ttft_ms": result.get("ttft_ms"),
+                                    "decode_tokens_per_sec": result.get("decode_tokens_per_sec"),
+                                    "tokens_count": result["tokens_count"],
+                                    "vram_gb": result["vram_gb"],
+                                    "weights_loaded": result.get("weights_loaded", False),
+                                    "checkpoint": result.get("checkpoint"),
+                                    "active_model": pytorch_state.active_model_id,
+                                    "device": str(pytorch_state.device),
+                                    "device_name": pytorch_state.device_name,
+                                },
+                            }
+                            yield f"data: {json.dumps(final_chunk, ensure_ascii=False)}\n\n"
+                            yield "data: [DONE]\n\n"
+                            break
+                finally:
+                    if not worker.done():
+                        cancel_event.set()
+
+            return StreamingResponse(
+                _stream_events(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
 
         try:
             res = await asyncio.to_thread(_locked_generate)
@@ -2171,12 +2318,15 @@ if HAS_FASTAPI:
                 "route": res["route"],
                 "latency_ms": res["latency_ms"],
                 "tokens_per_sec": res["tokens_per_sec"],
+                "ttft_ms": res.get("ttft_ms"),
+                "decode_tokens_per_sec": res.get("decode_tokens_per_sec"),
                 "tokens_count": res["tokens_count"],
                 "vram_gb": res["vram_gb"],
                 "weights_loaded": res.get("weights_loaded", False),
                 "checkpoint": res.get("checkpoint"),
                 "active_model": pytorch_state.active_model_id,
-                "device": pytorch_state.device_name,
+                "device": str(pytorch_state.device),
+                "device_name": pytorch_state.device_name,
             }
         }
 
@@ -2717,6 +2867,111 @@ if HAS_FASTAPI:
         lr_peak: Optional[float] = None
         warmup_steps: Optional[int] = None
 
+    def _apply_model_gpu_residency(state, requested_layers: int) -> int:
+        """Apply the requested layer residency to the already-loaded model.
+
+        Hardware presets used to update only the UI/session fields. The live
+        LayerStreamingEngine kept its old split, so the app could report 100%
+        offload while most layers were still copied over PCIe for every pass.
+        Rebuild only the streaming wrapper (not the model or optimizer) while
+        the engine is idle, preserving trained weights and optimizer state.
+        """
+        model = getattr(state, "model", None)
+        device = getattr(state, "device", None)
+        if model is None or not HAS_TORCH or getattr(device, "type", None) != "cuda":
+            return 0
+
+        old_engine = getattr(model, "_streaming_engine", None)
+        all_layers = (
+            list(old_engine.all_layers)
+            if old_engine is not None
+            else list(getattr(model, "layers", ()))
+        )
+        if not all_layers:
+            return 0
+        requested = max(0, min(len(all_layers), int(requested_layers)))
+
+        if old_engine is None:
+            parameter_devices = {parameter.device.type for parameter in model.parameters()}
+            currently_resident = len(all_layers) if parameter_devices == {"cuda"} else 0
+        else:
+            currently_resident = len(old_engine.resident_layers)
+
+        # This tuner is used for training: keep the engine's existing 2.5 GiB
+        # headroom for activations, optimizer work, and temporary workspaces.
+        # Count existing resident layer bytes as available when deciding
+        # whether a larger split can fit; never consume all free VRAM blindly.
+        try:
+            free_bytes, _ = torch.cuda.mem_get_info(device)
+            resident_layers = old_engine.resident_layers if old_engine is not None else all_layers[:currently_resident]
+            current_bytes = sum(
+                p.numel() * p.element_size()
+                for layer in resident_layers for p in layer.parameters()
+            )
+            reserve_bytes = 2.5 * (1024 ** 3)
+            usable_bytes = max(0, int(free_bytes + current_bytes - reserve_bytes))
+            cumulative_bytes = 0
+            max_fit = 0
+            for layer in all_layers:
+                layer_bytes = sum(p.numel() * p.element_size() for p in layer.parameters())
+                if cumulative_bytes + layer_bytes > usable_bytes:
+                    break
+                cumulative_bytes += layer_bytes
+                max_fit += 1
+            target = min(requested, max_fit)
+        except Exception:
+            # If device memory cannot be queried, retain the current safe split
+            # instead of attempting an unbounded allocation.
+            target = min(requested, currently_resident)
+
+        if target == currently_resident:
+            return target
+
+        from triune.runtime.streaming import LayerStreamingEngine, StreamingConfig
+
+        old_config = getattr(old_engine, "config", None)
+        config = StreamingConfig(
+            enabled=True,
+            chunk_size=1,
+            pin_memory=getattr(old_config, "pin_memory", False),
+            async_prefetch=getattr(old_config, "async_prefetch", True),
+            fp8_weights=bool(
+                getattr(old_config, "fp8_weights", False)
+                or getattr(state, "precision", "bf16") == "fp8"
+            ),
+            grad_clip=getattr(old_config, "grad_clip", 1.0),
+            instant_optimizer=getattr(old_config, "instant_optimizer", True),
+            layers_path=getattr(old_config, "layers_path", None),
+            resident_gpu_layers=target,
+        )
+        optimizer = getattr(state, "optimizer", None)
+
+        if old_engine is not None:
+            old_engine.cleanup_resident_layers()
+            old_engine.detach()
+        replacement = LayerStreamingEngine(
+            model,
+            device=device,
+            config=config,
+            optimizer=optimizer,
+        )
+        try:
+            replacement.attach(optimizer)
+        except Exception:
+            # Do not leave a half-installed wrapper after an allocation or
+            # staging failure. Restore the previous residency where possible.
+            replacement.detach()
+            if old_engine is not None:
+                rollback = LayerStreamingEngine(
+                    model,
+                    device=device,
+                    config=old_config,
+                    optimizer=optimizer,
+                )
+                rollback.attach(optimizer)
+            raise
+        return len(replacement.resident_layers)
+
     def _compute_hardware_profile() -> Dict[str, Any]:
         """Inspect active GPU/CPU hardware and construct detailed profile with presets and memory breakdown."""
         total_vram_gb = 0.0
@@ -2753,6 +3008,17 @@ if HAS_FASTAPI:
 
         gpu_offload_pct = getattr(pytorch_state, "gpu_offload_pct", 100)
         gpu_layers = getattr(pytorch_state, "gpu_layers", num_layers)
+        active_streamer = getattr(pytorch_state.model, "_streaming_engine", None) if pytorch_state.model is not None else None
+        if active_streamer is not None:
+            gpu_layers = len(active_streamer.resident_layers)
+        elif pytorch_state.model is not None and is_cuda:
+            layer_modules = list(getattr(pytorch_state.model, "layers", ()))
+            if layer_modules and all(
+                parameter.device.type == "cuda"
+                for layer in layer_modules for parameter in layer.parameters()
+            ):
+                gpu_layers = len(layer_modules)
+        gpu_offload_pct = int(round(100 * gpu_layers / max(1, num_layers))) if is_cuda else 0
         offload_mode = "native_gpu" if gpu_offload_pct >= 100 else ("hybrid" if gpu_offload_pct > 0 else "cpu")
 
         if total_vram_gb >= 6.0:
@@ -2800,21 +3066,11 @@ if HAS_FASTAPI:
         total_est_mb = round(weights_mb + opt_mb + act_mb + cuda_mb, 2)
         total_est_gb = round(total_est_mb / 1024.0, 2)
 
-        # Real Empirical / Physics-Grounded Hardware Throughput Baseline
+        # Only report observed throughput. The old FLOPS-derived number was a
+        # theoretical guess presented as a speed estimate and was not a usable
+        # predictor for layer streaming, which can be PCIe-bound.
         recent_tok_s = [h["throughput"] for h in pytorch_state.history if h.get("throughput") and h["throughput"] > 0]
         empirical_tok_s = int(sum(recent_tok_s[-5:]) / len(recent_tok_s[-5:])) if recent_tok_s else 0
-        if is_cuda:
-            try:
-                sms = torch.cuda.get_device_properties(0).multi_processor_count
-                est_cuda_flops = sms * 1.5e12
-                base_calc_tok_s = int((est_cuda_flops * 0.28) / (6 * max(1, active_params)))
-            except Exception:
-                base_calc_tok_s = 2200
-        else:
-            cores = os.cpu_count() or 8
-            base_calc_tok_s = max(15, int((cores * 1.2e10 * 0.20) / (6 * max(1, active_params))))
-
-        baseline_speed = empirical_tok_s if empirical_tok_s > 0 else base_calc_tok_s
 
         active_depth = getattr(pytorch_state, "depth_mode", "dynamic") or "dynamic"
         active_prec = getattr(pytorch_state, "precision", "bf16") or "bf16"
@@ -2832,7 +3088,8 @@ if HAS_FASTAPI:
                 "gpu_layers": num_layers,
                 "effective_tokens": turbo_batch * turbo_seq * turbo_accum,
                 "estimated_vram_gb": round((weights_mb + opt_mb + ((turbo_batch * turbo_seq * hidden_dim * num_layers * 40) / (1024 * 1024)) + cuda_mb) / 1024, 2),
-                "estimated_tok_s": max(10, int(baseline_speed * 1.45)),
+                "estimated_tok_s": empirical_tok_s or None,
+                "throughput_basis": "recent_observed_training_rate" if empirical_tok_s else "not_benchmarked",
                 "description": "Maximum throughput: 100% offload, saturates compute units with vectorized matrix tiling."
             },
             "balanced": {
@@ -2847,7 +3104,8 @@ if HAS_FASTAPI:
                 "gpu_layers": num_layers,
                 "effective_tokens": balanced_batch * balanced_seq * balanced_accum,
                 "estimated_vram_gb": round((weights_mb + opt_mb + ((balanced_batch * balanced_seq * hidden_dim * num_layers * 40) / (1024 * 1024)) + cuda_mb) / 1024, 2),
-                "estimated_tok_s": max(8, int(baseline_speed * 1.0)),
+                "estimated_tok_s": empirical_tok_s or None,
+                "throughput_basis": "recent_observed_training_rate" if empirical_tok_s else "not_benchmarked",
                 "description": "Balanced: Stable gradient convergence, modest VRAM footprint, low heat."
             },
             "eco": {
@@ -2862,7 +3120,8 @@ if HAS_FASTAPI:
                 "gpu_layers": num_layers,
                 "effective_tokens": eco_batch * eco_seq * eco_accum,
                 "estimated_vram_gb": round((weights_mb + opt_mb + ((eco_batch * eco_seq * hidden_dim * num_layers * 40) / (1024 * 1024)) + cuda_mb) / 1024, 2),
-                "estimated_tok_s": max(5, int(baseline_speed * 0.55)),
+                "estimated_tok_s": empirical_tok_s or None,
+                "throughput_basis": "recent_observed_training_rate" if empirical_tok_s else "not_benchmarked",
                 "description": "Ultra-lightweight: Keeps total VRAM minimal for background multitasking."
             },
             "streaming": {
@@ -2877,10 +3136,31 @@ if HAS_FASTAPI:
                 "gpu_layers": 1,
                 "effective_tokens": 2 * 64 * 4,
                 "estimated_vram_gb": round((weights_mb * 0.2 + (opt_mb * 0.25) + 80.0 + cuda_mb) / 1024, 2),
-                "estimated_tok_s": max(3, int(baseline_speed * 0.20)),
+                "estimated_tok_s": empirical_tok_s or None,
+                "throughput_basis": "recent_observed_training_rate" if empirical_tok_s else "not_benchmarked",
                 "description": "Virtualized layer swap: Swaps layers sequentially from RAM. Ultra low VRAM (<600 MB), PCIe-bound."
             }
         }
+
+        if not is_cuda:
+            # CPU recommendations must never claim that CUDA layers were
+            # applied. Auto-optimize remains usable for batch/context tuning.
+            for preset in presets.values():
+                preset["gpu_offload_pct"] = 0
+                preset["gpu_layers"] = 0
+
+        if is_cuda:
+            # Choose the fastest profile whose conservative memory estimate
+            # fits in currently available VRAM. Leave a 0.5 GiB margin for
+            # allocator fragmentation and display/desktop use.
+            budget_gb = max(0.0, free_vram_gb - 0.5)
+            fitting = [
+                key for key in ("turbo", "balanced", "eco", "streaming")
+                if presets[key]["estimated_vram_gb"] <= budget_gb
+            ]
+            recommended_preset = fitting[0] if fitting else "streaming"
+        else:
+            recommended_preset = "eco"
 
         return {
             "device_name": device_name,
@@ -2924,6 +3204,113 @@ if HAS_FASTAPI:
             "presets": presets,
         }
 
+    async def _apply_requested_gpu_layers(requested_layers: int) -> int:
+        """Update an idle loaded model's actual streaming split, not just its UI value."""
+        if not HAS_TORCH:
+            return 0
+        if getattr(getattr(pytorch_state, "device", None), "type", None) != "cuda" or pytorch_state.model is None:
+            return max(0, int(requested_layers))
+        active_engine = getattr(pytorch_state.model, "_streaming_engine", None)
+        if active_engine is not None:
+            active_layers = len(active_engine.resident_layers)
+        else:
+            all_layers = list(getattr(pytorch_state.model, "layers", ()))
+            active_layers = len(all_layers) if all(
+                parameter.device.type == "cuda"
+                for layer in all_layers for parameter in layer.parameters()
+            ) else 0
+        if max(0, int(requested_layers)) == active_layers:
+            return active_layers
+        if pytorch_state.is_training:
+            raise HTTPException(status_code=409, detail="Pause training before changing GPU layer residency.")
+        if pytorch_state.active_generation_cancel is not None:
+            raise HTTPException(status_code=409, detail="Wait for local inference to finish before changing GPU layer residency.")
+
+        def apply_under_lock() -> int:
+            with pytorch_state.worker_lock:
+                if pytorch_state.is_training or pytorch_state.active_generation_cancel is not None:
+                    raise RuntimeError("The model became active while GPU settings were being applied; retry when idle.")
+                return _apply_model_gpu_residency(pytorch_state, requested_layers)
+
+        try:
+            return await asyncio.to_thread(apply_under_lock)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"Could not safely apply GPU layer settings: {exc}") from exc
+
+    async def _apply_requested_precision(precision: str) -> None:
+        """Apply precision changes without dropping the active checkpoint weights."""
+        precision = str(precision).lower()
+        current = str(getattr(pytorch_state, "precision", "bf16")).lower()
+        if precision == current:
+            return
+        if pytorch_state.model is None:
+            pytorch_state.precision = precision
+            if isinstance(pytorch_state.architecture_spec, dict):
+                pytorch_state.architecture_spec["precision"] = precision
+            return
+        if pytorch_state.is_training:
+            raise HTTPException(status_code=409, detail="Pause training before changing model precision.")
+        if pytorch_state.active_generation_cancel is not None:
+            raise HTTPException(status_code=409, detail="Wait for local inference to finish before changing model precision.")
+
+        checkpoint_path = None
+        if pytorch_state.weights_loaded and pytorch_state.active_checkpoint:
+            checkpoint_candidates = [
+                Path("checkpoints") / pytorch_state.active_checkpoint,
+                Path("checkpoints_full") / pytorch_state.active_checkpoint,
+            ]
+            checkpoint_path = next((candidate for candidate in checkpoint_candidates if candidate.is_file()), None)
+            if checkpoint_path is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="The active checkpoint is unavailable; precision cannot be changed without risking the loaded weights.",
+                )
+
+        def apply_under_lock() -> None:
+            with pytorch_state.worker_lock:
+                if pytorch_state.is_training or pytorch_state.active_generation_cancel is not None:
+                    raise RuntimeError("The model became active while precision was being changed; retry when idle.")
+                if checkpoint_path is not None:
+                    try:
+                        pytorch_state.load_model_checkpoint(
+                            checkpoint_path,
+                            restore_optimizer=True,
+                            precision_override=precision,
+                        )
+                    except Exception:
+                        # A precision-specific layout may not be compatible with
+                        # an older checkpoint. Put the previously active model
+                        # back before reporting the failure.
+                        pytorch_state.load_model_checkpoint(
+                            checkpoint_path,
+                            restore_optimizer=True,
+                            precision_override=current,
+                        )
+                        raise
+                else:
+                    arch = dict(pytorch_state.architecture_spec or {})
+                    pytorch_state.reconfigure_architecture(
+                        preset_id=pytorch_state.active_model_id,
+                        num_layers=arch.get("num_layers"),
+                        hidden_dim=arch.get("hidden_dim"),
+                        num_heads=arch.get("num_heads"),
+                        head_dim=arch.get("head_dim"),
+                        num_experts=arch.get("num_experts"),
+                        precision=precision,
+                        batch_size=pytorch_state.batch_size,
+                        seq_len=pytorch_state.seq_len,
+                        depth_mode=pytorch_state.depth_mode,
+                    )
+
+        try:
+            await asyncio.to_thread(apply_under_lock)
+        except Exception as exc:
+            if isinstance(exc, HTTPException):
+                raise
+            raise HTTPException(status_code=503, detail=f"Could not safely apply precision {precision}: {exc}") from exc
+
     @router.get("/v1/hardware/profile")
     async def get_hardware_profile() -> Dict[str, Any]:
         """Return comprehensive hardware profile, GPU offload metrics, memory breakdown, and auto-tuning presets."""
@@ -2934,6 +3321,24 @@ if HAS_FASTAPI:
         """Adjust GPU offload ratio, batch size, context window, and accumulation settings in real time."""
         profile = _compute_hardware_profile()
         presets = profile["presets"]
+
+        target_precision = str(getattr(pytorch_state, "precision", "bf16")).lower()
+        if req.preset and req.preset in presets:
+            target_precision = presets[req.preset]["precision"]
+        if req.precision and req.precision.lower() in ("bf16", "fp8", "fp4", "fp16", "fp32"):
+            target_precision = req.precision.lower()
+        await _apply_requested_precision(target_precision)
+
+        requested_gpu_layers = getattr(pytorch_state, "gpu_layers", profile["num_layers"])
+        if req.preset and req.preset in presets:
+            requested_gpu_layers = presets[req.preset]["gpu_layers"]
+        if req.gpu_offload_pct is not None:
+            requested_gpu_layers = int(round(
+                max(0, min(100, req.gpu_offload_pct)) * profile["num_layers"] / 100
+            ))
+        if req.gpu_layers is not None:
+            requested_gpu_layers = req.gpu_layers
+        effective_gpu_layers = await _apply_requested_gpu_layers(requested_gpu_layers)
 
         if req.preset and req.preset in presets:
             p = presets[req.preset]
@@ -2967,24 +3372,9 @@ if HAS_FASTAPI:
                 pytorch_state.training_engine.config["depth_mode"] = req.depth_mode
         if req.precision and req.precision.lower() in ("bf16", "fp8", "fp4", "fp16", "fp32"):
             new_prec = req.precision.lower()
-            old_prec = getattr(pytorch_state, "precision", "bf16")
             pytorch_state.precision = new_prec
             if isinstance(getattr(pytorch_state, "architecture_spec", None), dict):
                 pytorch_state.architecture_spec["precision"] = new_prec
-            if (("fp8" in (new_prec, old_prec) or "fp4" in (new_prec, old_prec)) and new_prec != old_prec and pytorch_state.model is not None):
-                cur_arch = getattr(pytorch_state, "architecture_spec", {}) or {}
-                pytorch_state.reconfigure_architecture(
-                    preset_id=getattr(pytorch_state, "active_model_id", "triune-small"),
-                    num_layers=cur_arch.get("num_layers"),
-                    hidden_dim=cur_arch.get("hidden_dim"),
-                    num_heads=cur_arch.get("num_heads"),
-                    head_dim=cur_arch.get("head_dim"),
-                    num_experts=cur_arch.get("num_experts"),
-                    precision=new_prec,
-                    batch_size=pytorch_state.batch_size,
-                    seq_len=pytorch_state.seq_len,
-                    depth_mode=pytorch_state.depth_mode,
-                )
         if req.gpu_offload_pct is not None:
             pct = max(0, min(100, req.gpu_offload_pct))
             pytorch_state.gpu_offload_pct = pct
@@ -2992,9 +3382,11 @@ if HAS_FASTAPI:
             pytorch_state.gpu_layers = int(round((pct / 100.0) * num_layers))
         if req.gpu_layers is not None:
             num_layers = profile["num_layers"]
-            l = max(0, min(num_layers, req.gpu_layers))
-            pytorch_state.gpu_layers = l
-            pytorch_state.gpu_offload_pct = int(round((l / max(1, num_layers)) * 100))
+            pytorch_state.gpu_layers = effective_gpu_layers
+            pytorch_state.gpu_offload_pct = int(round((effective_gpu_layers / max(1, num_layers)) * 100))
+        elif req.gpu_offload_pct is not None or (req.preset and req.preset in presets):
+            pytorch_state.gpu_layers = effective_gpu_layers
+            pytorch_state.gpu_offload_pct = int(round((effective_gpu_layers / max(1, profile["num_layers"])) * 100))
 
         target_lr = req.lr if req.lr is not None else req.lr_peak
         if target_lr is not None and target_lr > 0:
@@ -3034,11 +3426,25 @@ if HAS_FASTAPI:
 
     @router.post("/v1/hardware/autotune")
     async def autotune_hardware() -> Dict[str, Any]:
-        """Auto-detect user's GPU hardware and apply the optimal throughput configuration."""
+        """Probe the active CUDA device, then apply a conservative training profile."""
+        if HAS_TORCH and bool(getattr(pytorch_state, "cuda_available", False)):
+            try:
+                # A name/VRAM badge can come from startup diagnostics; make this
+                # action itself verify that the active CUDA context still works.
+                await asyncio.to_thread(torch.cuda.init)
+                await asyncio.to_thread(torch.cuda.synchronize, pytorch_state.device)
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"CUDA GPU probe failed ({pytorch_state.device_name}): {exc}",
+                ) from exc
+
         profile = _compute_hardware_profile()
         rec = profile["recommended_preset"]
         presets = profile["presets"]
         best = presets.get(rec, presets["balanced"])
+
+        effective_gpu_layers = await _apply_requested_gpu_layers(best["gpu_layers"])
 
         pytorch_state.batch_size = best["batch_size"]
         old_seq = pytorch_state.seq_len
@@ -3046,7 +3452,10 @@ if HAS_FASTAPI:
         pytorch_state.grad_accum_steps = best["grad_accum_steps"]
         pytorch_state.depth_mode = best["depth_mode"]
         pytorch_state.gpu_offload_pct = best["gpu_offload_pct"]
-        pytorch_state.gpu_layers = best["gpu_layers"]
+        pytorch_state.gpu_layers = effective_gpu_layers
+        pytorch_state.gpu_offload_pct = int(round(
+            effective_gpu_layers * 100 / max(1, profile["num_layers"])
+        ))
         pytorch_state.precision = best["precision"]
 
         if old_seq != pytorch_state.seq_len:
@@ -3063,7 +3472,8 @@ if HAS_FASTAPI:
         device_str = profile["device_name"]
         log_msg = (
             f"[AUTO-TUNE] ⚡ Optimal profile '{rec.upper()}' auto-selected for {device_str} "
-            f"({profile['total_vram_gb']} GB VRAM): Batch={pytorch_state.batch_size}, "
+            f"({profile['total_vram_gb']} GB VRAM): GPU-resident layers="
+            f"{pytorch_state.gpu_layers}/{profile['num_layers']}, Batch={pytorch_state.batch_size}, "
             f"Context={pytorch_state.seq_len}, Accum={pytorch_state.grad_accum_steps}x ({eff_tokens:,} tok/step)."
         )
         pytorch_state.logs.insert(0, log_msg)
@@ -3072,6 +3482,12 @@ if HAS_FASTAPI:
         return {
             "status": "success",
             "recommended_preset": rec,
+            "gpu_probe": {
+                "status": "verified" if profile["is_cuda"] else "unavailable",
+                "device": profile["device_name"],
+                "cuda_runtime": getattr(torch.version, "cuda", None) if HAS_TORCH else None,
+                "free_vram_gb": profile["free_vram_gb"],
+            },
             "message": log_msg,
             "profile": _compute_hardware_profile(),
         }
@@ -4288,18 +4704,13 @@ if HAS_FASTAPI:
             pytorch_state.wandb_key = wandb_k
             log_msg = "[AUTH] Weights & Biases API Key registered and active in runtime."
             pytorch_state.logs.insert(0, log_msg)
-            try:
-                import wandb
-                wandb.login(key=wandb_k, relogin=False)
-            except Exception:
-                pass
 
         if hf_tok and wandb_k:
-            return {"status": "saved", "message": "BYOK credentials saved. Hugging Face and Weights & Biases activated."}
+            return {"status": "saved", "message": "BYOK credentials saved. Hugging Face is active; verify W&B separately to confirm its SDK and account access."}
         if hf_tok:
             return {"status": "saved", "message": "BYOK credentials saved. Hugging Face Access Token activated for this runtime."}
         if wandb_k:
-            return {"status": "saved", "message": "BYOK credentials saved. Weights & Biases telemetry enabled for this runtime."}
+            return {"status": "saved", "message": "W&B key saved for this runtime. Verify the connection to confirm the SDK and account access."}
         return {"status": "saved", "message": "BYOK credentials saved to Studio configuration."}
 
     @router.post("/v1/byok/test")
@@ -4317,7 +4728,14 @@ if HAS_FASTAPI:
                 return {"provider": provider, "status": "invalid", "message": "Weights & Biases API key is typically a 40-character hexadecimal string."}
             try:
                 import wandb
-                await asyncio.to_thread(wandb.login, key=key, relogin=True)
+                login = getattr(wandb, "login", None)
+                if not callable(login):
+                    return {
+                        "provider": provider,
+                        "status": "unavailable",
+                        "message": "W&B key is saved, but the W&B SDK is not installed or is being shadowed by a local 'wandb' folder. Run Studio setup/repair, then restart the backend.",
+                    }
+                await asyncio.to_thread(login, key=key, relogin=True)
                 os.environ["WANDB_API_KEY"] = key
                 pytorch_state.wandb_key = key
                 return {

@@ -10,8 +10,11 @@ echo.
 :: 1. Detect Python
 where python >nul 2>&1
 if %ERRORLEVEL% equ 0 (
-    set "PY_CMD=python"
-    goto run_installer
+    python --version >nul 2>&1
+    if !ERRORLEVEL! equ 0 (
+        set "PY_CMD=python"
+        goto run_installer
+    )
 )
 
 where py >nul 2>&1
@@ -20,11 +23,25 @@ if %ERRORLEVEL% equ 0 (
     goto run_installer
 )
 
-echo [ERROR] Python was not found on your system PATH!
-echo Please install Python 3.10, 3.11, or 3.12 from https://www.python.org/downloads/
-echo (Make sure to check "Add Python to PATH" during installation)
+:: Bootstrap a supported user-scoped Python runtime when no Python launcher exists.
+where winget >nul 2>&1
+if %ERRORLEVEL% neq 0 goto python_setup_unavailable
+echo [Setup] Python is missing. Installing Python 3.12 for this Windows user...
+winget install --id Python.Python.3.12 --exact --scope user --silent --accept-source-agreements --accept-package-agreements
+if %ERRORLEVEL% neq 0 goto python_setup_unavailable
+set "PY_CMD=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
+if exist "%PY_CMD%" goto run_installer
+where python >nul 2>&1
+if %ERRORLEVEL% equ 0 (
+    set "PY_CMD=python"
+    goto run_installer
+)
+
+:python_setup_unavailable
+echo [ERROR] Could not provision Python automatically.
+echo Install Python 3.12 from python.org or enable Windows Package Manager (winget), then launch setup again.
 echo.
-pause
+if not "%~1"=="--yes" pause
 exit /b 1
 
 :run_installer

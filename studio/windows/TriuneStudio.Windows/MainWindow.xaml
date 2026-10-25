@@ -17,6 +17,8 @@
                      Background="#30343B" Foreground="{StaticResource StudioAccent}" />
         <Button x:Name="RetryButton" Content="Try again" Visibility="Collapsed" Margin="0,22,0,0"
                 Padding="16,8" HorizontalAlignment="Center" Click="RetryButton_Click" />
+        <Button x:Name="SetupButton" Content="Install / repair Studio environment" Visibility="Collapsed" Margin="0,8,0,0"
+                Padding="16,8" HorizontalAlignment="Center" Click="SetupButton_Click" />
         <Button x:Name="OpenLogsButton" Content="Open startup log" Visibility="Collapsed" Margin="0,8,0,0"
                 Padding="16,8" HorizontalAlignment="Center" Click="OpenLogsButton_Click" />
       </StackPanel>

@@ -1061,6 +1061,7 @@
   let activeApiBase = '';
   let apiAuthToken = '';
   let apiAuthPrompt = null;
+  let apiDiscoveryPromise = null;
 
   function isLocalStudioHost(hostname) {
     const host = (hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
@@ -1086,47 +1087,73 @@
     // could otherwise attach it to an unrelated API on the viewer's machine.
     if ((window.location.protocol === 'http:' || window.location.protocol === 'https:') && !isLocalStudioHost(window.location.hostname)) return '';
     if (activeApiBase) {
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 800);
       try {
-        const controller = new AbortController();
-        const tid = setTimeout(() => controller.abort(), 800);
         const res = await fetch(activeApiBase + '/v1/system/diagnostics', { signal: controller.signal });
-        clearTimeout(tid);
         if (res.ok) return activeApiBase;
-      } catch (e) {}
-    }
-    for (let p = 8000; p <= 8020; p++) {
-      const candidate = `http://127.0.0.1:${p}`;
-      try {
-        const controller = new AbortController();
-        const tid = setTimeout(() => controller.abort(), 600);
-        const res = await fetch(candidate + '/v1/system/diagnostics', { signal: controller.signal });
+      } catch (e) {
+      } finally {
         clearTimeout(tid);
-        if (res.ok) {
-          const data = await res.json();
-          if (data.pytorch_version || data.cuda_available !== undefined || data.platform) {
-            console.log('[ApiFetch] Discovered PyTorch Engine on:', candidate);
-            activeApiBase = candidate;
-            return candidate;
-          }
-        }
-      } catch (e) {}
+      }
     }
-    return '';
+    if (apiDiscoveryPromise) return apiDiscoveryPromise;
+    apiDiscoveryPromise = (async () => {
+      const candidates = await Promise.all(Array.from({ length: 21 }, async (_, index) => {
+        const candidate = `http://127.0.0.1:${8000 + index}`;
+        const controller = new AbortController();
+        const tid = setTimeout(() => controller.abort(), 700);
+        try {
+          const res = await fetch(candidate + '/v1/system/diagnostics', { signal: controller.signal });
+          if (!res.ok) return null;
+          const data = await res.json();
+          return data.pytorch_version || data.cuda_available !== undefined || data.platform ? candidate : null;
+        } catch (e) {
+          return null;
+        } finally {
+          clearTimeout(tid);
+        }
+      }));
+      const candidate = candidates.find(Boolean) || '';
+      if (candidate) {
+        console.log('[ApiFetch] Discovered PyTorch Engine on:', candidate);
+        activeApiBase = candidate;
+      }
+      return candidate;
+    })();
+    try {
+      return await apiDiscoveryPromise;
+    } finally {
+      apiDiscoveryPromise = null;
+    }
   }
 
   async function apiFetch(path, options = {}) {
-    const apiBase = await discoverApiBase();
+    const isRemoteOrigin = (window.location.protocol === 'http:' || window.location.protocol === 'https:') && !isLocalStudioHost(window.location.hostname);
+    const apiBase = isRemoteOrigin ? '' : await discoverApiBase();
+    if (!isRemoteOrigin && !apiBase) {
+      throw new Error('Triune backend was not found on localhost ports 8000–8020. Check Studio startup and open the startup log.');
+    }
     const url = apiBase ? (apiBase + path) : path;
     const send = (token) => {
       const headers = new Headers(options.headers || {});
       if (token) headers.set('Authorization', `Bearer ${token}`);
       return fetch(url, { ...options, headers });
     };
-    let response = await send(apiAuthToken);
+    let response;
+    try {
+      response = await send(apiAuthToken);
+    } catch (err) {
+      throw new Error(`Could not reach ${url}: ${err.message || 'connection failed'}. Check that the Studio backend is still running.`);
+    }
     if (response.status !== 401) return response;
     const token = await requestApiAuthToken();
     if (!token) return response;
-    response = await send(token);
+    try {
+      response = await send(token);
+    } catch (err) {
+      throw new Error(`Could not reach ${url} after local API authentication: ${err.message || 'connection failed'}. Check the Studio startup log.`);
+    }
     if (response.status === 401) apiAuthToken = '';
     return response;
   }
@@ -1343,7 +1370,10 @@
         .replace(/[\ufffd\uFFFD]/g, '')
         .replace(/Ġ/g, ' ')
         .replace(/Ċ/g, '\n')
-        .replace(/\s+/g, ' ')
+        .replace(/\r\n?/g, '\n')
+        .replace(/[ \t]+/g, ' ')
+        .replace(/ *\n */g, '\n')
+        .replace(/\n{3,}/g, '\n\n')
         .trim();
     };
     const [activeTab, setActiveTab] = useState(() => {
@@ -1356,7 +1386,7 @@
     });
     const [backendStatus, setBackendStatus] = useState('checking');
     const [backendRetry, setBackendRetry] = useState(0);
-    const [vramUsage, setVramUsage] = useState({ allocated: 0.0, reserved: 0.0, total: 8.0, oom_risk: false });
+    const [vramUsage, setVramUsage] = useState({ allocated: 0.0, reserved: 0.0, total: 0.0, oom_risk: false });
     const [systemDiagnostics, setSystemDiagnostics] = useState({ device_name: 'PyTorch Engine', cuda_available: false });
     const [activeModel, setActiveModel] = useState(() => {
     try {
@@ -3370,7 +3400,7 @@
             });
           }
         } else {
-          showToast(`Notice: ${data.message || 'Config update unconfirmed'}`);
+          showToast(`Notice: ${data.detail || data.message || `Config update failed (${res.status})`}`);
         }
       } catch (err) {
         showToast('Network error: Could not reach hardware tune endpoint');
@@ -3382,9 +3412,20 @@
       setIsAutoTuning(true);
       try {
         const res = await apiFetch('/v1/hardware/autotune', { method: 'POST' });
-        const data = await res.json();
+        const responseText = await res.text();
+        let data;
+        try {
+          data = responseText ? JSON.parse(responseText) : {};
+        } catch (_) {
+          throw new Error(`Auto-tune endpoint returned a non-JSON response (HTTP ${res.status}). The backend may be outdated; restart Studio and retry.`);
+        }
+        if (!res.ok) {
+          throw new Error(data.detail || data.message || `Auto-tune request failed (HTTP ${res.status}).`);
+        }
         if (data.status === 'success') {
-          showToast(data.message || 'Optimal profile auto-applied');
+          showToast(data.gpu_probe?.status === 'unavailable'
+            ? 'CUDA was not detected by the backend; CPU-safe training settings were applied.'
+            : (data.message || 'GPU probe passed; recommended training profile applied.'));
           if (data.profile) {
             setHardwareProfile(data.profile);
             setSelectedHwPreset(data.recommended_preset || 'turbo');
@@ -3417,12 +3458,13 @@
             });
           }
         } else {
-          showToast(`Auto-tune warning: ${data.message || 'Could not auto-tune'}`);
+          showToast(`Auto-tune did not apply: ${data.detail || data.message || 'The backend returned no successful result.'}`);
         }
       } catch (err) {
-        showToast('Network error: Could not trigger hardware auto-tune');
+        showToast(`GPU auto-tune failed: ${err.message || String(err)}`);
+      } finally {
+        setIsAutoTuning(false);
       }
-      setIsAutoTuning(false);
     };
 
     const handleSelectPreset = (presetKey) => {
@@ -3457,7 +3499,7 @@
       const numLayers = (hardwareProfile && hardwareProfile.num_layers) ? hardwareProfile.num_layers : (datasetInfo.num_layers || 6);
       const hiddenDim = (hardwareProfile && hardwareProfile.hidden_dim) ? hardwareProfile.hidden_dim : (datasetInfo.hidden_dim || 256);
       const deviceTitle = (hardwareProfile && hardwareProfile.device_name) ? hardwareProfile.device_name : systemDiagnostics.device_name;
-      const totalVram = (hardwareProfile && hardwareProfile.total_vram_gb) ? hardwareProfile.total_vram_gb : (vramUsage.total || 8.0);
+      const totalVram = Number((hardwareProfile && hardwareProfile.total_vram_gb) || vramUsage.total || 0);
       const effTokens = (parseInt(trainBatchSize) || 4) * (parseInt(trainSeqLen) || 64) * (parseInt(trainGradAccum) || 4);
 
       // Memory breakdown estimates from backend profile or dynamic fallback
@@ -3470,17 +3512,14 @@
       const cudaMb = mb.cuda_context_mb !== undefined ? mb.cuda_context_mb : ((hardwareProfile && hardwareProfile.is_cuda) ? 600.0 : 50.0);
       const totalEstMb = mb.total_estimated_mb !== undefined ? mb.total_estimated_mb : (weightsMb + optMb + actMb + cudaMb);
       const totalEstGb = mb.total_estimated_gb !== undefined ? Number(mb.total_estimated_gb).toFixed(2) : (totalEstMb / 1024.0).toFixed(2);
-      const estTokPerSec = (hardwareProfile && hardwareProfile.presets && hardwareProfile.presets[selectedHwPreset])
-        ? hardwareProfile.presets[selectedHwPreset].estimated_tok_s
-        : Math.min(4500, Math.round(effTokens * 0.9));
+      const speedEstimate = Number(hardwareProfile?.presets?.[selectedHwPreset]?.estimated_tok_s);
 
-      const totalCapMb = totalVram * 1024.0;
-      const pctWeights = Math.min(100, (weightsMb / totalCapMb) * 100);
-      const pctOpt = Math.min(100, (optMb / totalCapMb) * 100);
-      const pctAct = Math.min(100, (actMb / totalCapMb) * 100);
-      const pctCuda = Math.min(100, (cudaMb / totalCapMb) * 100);
-      const pctUsed = Math.min(100, (totalEstMb / totalCapMb) * 100);
-      const headroomGb = Math.max(0.0, totalVram - parseFloat(totalEstGb)).toFixed(2);
+      const totalCapMb = totalVram > 0 ? totalVram * 1024.0 : 0;
+      const pctWeights = totalCapMb ? Math.min(100, (weightsMb / totalCapMb) * 100) : 0;
+      const pctOpt = totalCapMb ? Math.min(100, (optMb / totalCapMb) * 100) : 0;
+      const pctAct = totalCapMb ? Math.min(100, (actMb / totalCapMb) * 100) : 0;
+      const pctCuda = totalCapMb ? Math.min(100, (cudaMb / totalCapMb) * 100) : 0;
+      const pctUsed = totalCapMb ? Math.min(100, (totalEstMb / totalCapMb) * 100) : 0;
 
       return e('div', { className: 'hardware-tuner-card' },
         e('div', { className: 'hardware-tuner-header' },
@@ -3490,19 +3529,19 @@
               'Hardware Acceleration & GPU Offload (Ollama / LM Studio Tuner)'
             ),
             e('span', { className: 'hw-device-badge' },
-              `● ${deviceTitle} (${totalVram} GB VRAM)`
+              `● ${deviceTitle} (${totalVram > 0 ? `${totalVram} GB VRAM` : 'VRAM capacity unavailable'})`
             )
           ),
           e('button', {
             className: 'btn-autotune',
             disabled: isAutoTuning || isUpdatingTrainConfig,
             onClick: handleAutoTuneHardware,
-            title: 'Auto-detect GPU memory and apply maximum stable tokens/sec configuration'
+            title: 'Choose the largest conservative training preset that fits available GPU memory and apply its settings'
           },
             e('span', { style: { display: 'inline-flex', alignItems: 'center' } },
               isAutoTuning
                 ? [renderIcon('refresh', 12, { animation: 'spin 1.5s linear infinite', marginRight: '5px' }), 'Probing GPU...']
-                : [renderIcon('bolt', 12, { marginRight: '5px' }), 'Auto-Optimize for My GPU']
+                : [renderIcon('bolt', 12, { marginRight: '5px' }), 'Auto-Optimize Training']
             )
           )
         ),
@@ -3710,10 +3749,14 @@
               `Effective: ${effTokens.toLocaleString()} tokens/step`
             ),
             e('span', { className: 'badge-eff-tokens', style: { background: 'rgba(154, 52, 18, 0.08)', color: 'var(--accent-terracotta)', borderColor: 'rgba(154, 52, 18, 0.25)' } },
-              `Expected Speed: ~${estTokPerSec.toLocaleString()} tok/s`
+              speedEstimate > 0
+                ? `Recent training rate: ~${Math.round(speedEstimate).toLocaleString()} tok/s`
+                : 'Throughput: not benchmarked'
             ),
             e('span', { className: 'badge-eff-tokens', style: { background: 'rgba(43, 76, 63, 0.08)', color: 'var(--accent-olive, #2b4c3f)', borderColor: 'rgba(43, 76, 63, 0.25)' } },
-              `Est. Memory: ${totalEstGb} GB / ${totalVram} GB`
+              totalVram > 0
+                ? `Est. memory: ${totalEstGb} GB / ${totalVram} GB`
+                : `Est. memory: ${totalEstGb} GB · device capacity unknown`
             )
           ),
           e('button', {
@@ -5050,6 +5093,9 @@
       const controller = new AbortController();
       chatAbortControllerRef.current = controller;
       const requestStartedAt = performance.now();
+      let streamedMessageId = null;
+      let streamedText = '';
+      let streamFirstTokenMs = null;
 
       try {
         const historyTurns = messages
@@ -5075,15 +5121,84 @@
             messages: requestMessages,
             temperature: temperature,
             max_tokens: maxTokens,
-            route: route
+            route: route,
+            stream: true
           })
         });
         let data = {};
-        try {
-          data = await response.json();
-        } catch (_jsonErr) {
-          const rawText = await response.text().catch(() => '');
-          data = { detail: rawText.trim() || `Request failed (${response.status})` };
+        let streamTelemetry = null;
+        if (response.headers.get('content-type')?.includes('text/event-stream')) {
+          if (!response.ok || !response.body) {
+            const rawText = await response.text().catch(() => '');
+            throw new Error(rawText.trim() || `Request failed (${response.status})`);
+          }
+          streamedMessageId = `triune-stream-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+          const streamingSender = activeModel.includes('gpt') || activeModel.includes('claude') || activeModel.includes('gemini')
+            ? activeModel.toUpperCase() : 'Triune MoE Engine';
+          setMessages(prev => [...prev, {
+            id: streamedMessageId,
+            sender: streamingSender,
+            text: '',
+            time: new Date().toLocaleTimeString(),
+            isAssistant: true
+          }]);
+
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let pending = '';
+          let streamCompleted = false;
+          const consumeSseLine = line => {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith('data:')) return;
+            const payload = trimmed.slice(5).trim();
+            if (!payload) return;
+            if (payload === '[DONE]') {
+              streamCompleted = true;
+              return;
+            }
+            let chunk;
+            try { chunk = JSON.parse(payload); } catch (_) { return; }
+            if (chunk.error?.message) throw new Error(chunk.error.message);
+            const choice = chunk.choices?.[0];
+            if (choice?.delta?.content !== undefined) {
+              if (streamFirstTokenMs === null && String(choice.delta.content).length > 0) {
+                streamFirstTokenMs = performance.now() - requestStartedAt;
+              }
+              streamedText = chunk.triune_snapshot
+                ? String(choice.delta.content)
+                : streamedText + String(choice.delta.content);
+              setMessages(prev => prev.map(message => message.id === streamedMessageId
+                ? { ...message, text: streamedText }
+                : message));
+            }
+            if (chunk.telemetry) streamTelemetry = chunk.telemetry;
+          };
+
+          while (true) {
+            const { value, done } = await reader.read();
+            pending += decoder.decode(value || new Uint8Array(), { stream: !done });
+            const lines = pending.split(/\r?\n/);
+            pending = lines.pop() || '';
+            for (const line of lines) consumeSseLine(line);
+            if (done) break;
+          }
+          if (pending) consumeSseLine(pending);
+          if (!streamCompleted && !controller.signal.aborted)
+            throw new Error('The inference stream ended before the backend completed the response.');
+          data = {
+            choices: [{ message: { content: streamedText } }],
+            telemetry: {
+              ...(streamTelemetry || { route: route.toUpperCase(), latency_ms: Math.round(performance.now() - requestStartedAt) }),
+              client_ttft_ms: streamFirstTokenMs
+            }
+          };
+        } else {
+          try {
+            data = await response.json();
+          } catch (_jsonErr) {
+            const rawText = await response.text().catch(() => '');
+            data = { detail: rawText.trim() || `Request failed (${response.status})` };
+          }
         }
         if (!response.ok) {
           const detail = typeof data.detail === 'string' ? data.detail : (data.message || `Request failed (${response.status})`);
@@ -5100,9 +5215,7 @@
         if (tele.checkpoint !== undefined && !isExternal) setActiveCheckpointName(tele.checkpoint || null);
         if (tele.active_model && !isExternal) setActiveModel(tele.active_model);
 
-        setMessages(prev => [
-          ...prev,
-          {
+        const assistantMessage = {
             sender: senderName,
             text: reply,
             time: new Date().toLocaleTimeString(),
@@ -5112,17 +5225,35 @@
               vram: isExternal ? '0.0 GB (Cloud)' : (tele.vram_gb !== undefined ? `${tele.vram_gb} GB` : `${vramUsage.allocated} GB`),
               latency: tele.latency_ms !== undefined ? `${tele.latency_ms}ms` : '18ms',
               speed: tele.tokens_per_sec ? `${tele.tokens_per_sec} t/s` : undefined,
-              tokens_count: tele.tokens_count
+              tokens_count: tele.tokens_count,
+              ttft: tele.client_ttft_ms !== undefined && tele.client_ttft_ms !== null
+                ? `${Math.round(tele.client_ttft_ms)}ms first token`
+                : (tele.ttft_ms !== undefined && tele.ttft_ms !== null ? `${tele.ttft_ms}ms first token` : undefined),
+              decodeSpeed: tele.decode_tokens_per_sec ? `${tele.decode_tokens_per_sec} decode t/s` : undefined,
+              device: tele.device || (isExternal ? 'cloud' : undefined)
             }
-          }
-        ]);
+          };
+        if (streamedMessageId) {
+          setMessages(prev => prev.map(message => message.id === streamedMessageId
+            ? { ...message, ...assistantMessage }
+            : message));
+        } else {
+          setMessages(prev => [...prev, assistantMessage]);
+        }
       } catch (err) {
         if (err.name === 'AbortError') {
+          if (streamedMessageId && streamedText) {
+            setMessages(prev => prev.map(message => message.id === streamedMessageId
+              ? { ...message, text: streamedText, time: new Date().toLocaleTimeString(), telemetry: { route: 'CANCELLED', latency: `${Math.round(performance.now() - requestStartedAt)}ms` } }
+              : message));
+          }
           showToast('Inference cancelled by user');
           return;
         }
         setMessages(prev => [
-          ...prev,
+          ...prev.map(message => message.id === streamedMessageId && streamedText
+            ? { ...message, text: streamedText, telemetry: { route: 'INTERRUPTED', latency: `${Math.round(performance.now() - requestStartedAt)}ms` } }
+            : message).filter(message => message.id !== streamedMessageId || streamedText),
           {
             sender: 'System',
             text: `Chat request failed: ${err.message || 'The backend or selected provider did not return a response.'}`,
@@ -5843,7 +5974,7 @@
             e('div', {
               className: `pill ${vramUsage.oom_risk ? 'warning' : ''}`,
               style: { display: 'flex', alignItems: 'center', gap: '6px' },
-              title: `${systemDiagnostics.device_name || 'GPU'} VRAM: ${vramUsage.allocated} / ${vramUsage.total || 8.0} GB`
+              title: `${systemDiagnostics.device_name || 'GPU'} VRAM used: ${vramUsage.allocated} GB${vramUsage.total > 0 ? ` / ${vramUsage.total} GB` : ' (capacity unavailable)'}`
             },
               e('span', { style: { fontSize: '11px', color: 'var(--text-muted)' } }, 'VRAM:'),
               e('span', { style: { fontWeight: 600 } }, `${vramUsage.allocated}G`),
@@ -5858,7 +5989,7 @@
               },
                 e('div', {
                   style: {
-                    width: `${Math.min(100, Math.max(0, (vramUsage.allocated / (vramUsage.total || 8.0)) * 100))}%`,
+                    width: `${vramUsage.total > 0 ? Math.min(100, Math.max(0, (vramUsage.allocated / vramUsage.total) * 100)) : 0}%`,
                     height: '100%',
                     background: vramUsage.oom_risk ? '#dc2626' : '#2b4c3f',
                     borderRadius: '3px',
@@ -5948,6 +6079,9 @@
                     e('span', null, `Route: ${m.telemetry.route}`),
                     e('span', null, `VRAM: ${m.telemetry.vram}`),
                     e('span', null, `Latency: ${m.telemetry.latency}`),
+                    m.telemetry.ttft && e('span', null, `TTFT: ${m.telemetry.ttft}`),
+                    m.telemetry.decodeSpeed && e('span', null, m.telemetry.decodeSpeed),
+                    m.telemetry.device && e('span', null, `Device: ${m.telemetry.device}`),
                     m.telemetry.tokens_count !== undefined && e('span', null, `${m.telemetry.tokens_count} toks`)
                   )
                 )
@@ -5963,7 +6097,7 @@
                       ? 'Loading and validating trained weights, then generating locally. First load can take a while.'
                       : (!systemDiagnostics.cuda_available
                         ? 'Generating locally on CPU. This is functional but much slower than GPU inference.'
-                        : 'Generating locally on GPU. The response appears when this run finishes.'))
+                      : 'Generating locally on GPU. Tokens will appear as they are produced.'))
                     : 'Waiting for the selected provider. The response appears when this request finishes.'
                 )
               ),

@@ -30,6 +30,7 @@ public partial class MainWindow : Window
     private async Task StartStudioAsync()
     {
         RetryButton.Visibility = Visibility.Collapsed;
+        SetupButton.Visibility = Visibility.Collapsed;
         OpenLogsButton.Visibility = Visibility.Collapsed;
         StartupProgress.Visibility = Visibility.Visible;
         StatusText.Text = "Starting the local model engine…";
@@ -58,8 +59,9 @@ public partial class MainWindow : Window
             await StopBackendAsync();
             StartupProgress.Visibility = Visibility.Collapsed;
             RetryButton.Visibility = Visibility.Visible;
+            SetupButton.Visibility = Visibility.Visible;
             OpenLogsButton.Visibility = hasLog ? Visibility.Visible : Visibility.Collapsed;
-            StatusText.Text = $"Studio could not start.\n\n{ex.Message}\n\nCheck that the project environment is installed, then retry.";
+            StatusText.Text = $"Studio could not start.\n\n{ex.Message}\n\nUse Install / repair to provision the managed Python, PyTorch/CUDA, and Studio environment, then retry.";
         }
     }
 
@@ -283,6 +285,67 @@ public partial class MainWindow : Window
     {
         await StopBackendAsync();
         await StartStudioAsync();
+    }
+
+    private async void SetupButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_workspaceRoot is null) return;
+        var installer = Path.Combine(_workspaceRoot, "studio", "installer", "install_studio.bat");
+        if (!File.Exists(installer))
+        {
+            StatusText.Text = "The Studio setup script is missing from this installation.";
+            return;
+        }
+
+        SetupButton.IsEnabled = false;
+        RetryButton.IsEnabled = false;
+        OpenLogsButton.Visibility = Visibility.Collapsed;
+        StartupProgress.Visibility = Visibility.Visible;
+        StatusText.Text = "Installing or repairing Studio. This can take a while while PyTorch and GPU support are prepared…";
+        string? setupLog = null;
+        try
+        {
+            var logsDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Triune", "logs");
+            Directory.CreateDirectory(logsDirectory);
+            var setupLogPath = Path.Combine(logsDirectory, $"studio-setup-{DateTime.Now:yyyyMMdd-HHmmss}.log");
+            setupLog = setupLogPath;
+            var setupLogLock = new object();
+            var start = new ProcessStartInfo("cmd.exe")
+            {
+                WorkingDirectory = _workspaceRoot,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            start.ArgumentList.Add("/c");
+            start.ArgumentList.Add($"\"{installer}\" --yes --no-launch");
+            using var setup = new Process { StartInfo = start };
+            setup.OutputDataReceived += (_, args) => { if (args.Data is not null) lock (setupLogLock) File.AppendAllText(setupLogPath, args.Data + Environment.NewLine); };
+            setup.ErrorDataReceived += (_, args) => { if (args.Data is not null) lock (setupLogLock) File.AppendAllText(setupLogPath, args.Data + Environment.NewLine); };
+            if (!setup.Start()) throw new InvalidOperationException("Could not start the setup process.");
+            setup.BeginOutputReadLine();
+            setup.BeginErrorReadLine();
+            await setup.WaitForExitAsync();
+            if (setup.ExitCode != 0)
+                throw new InvalidOperationException($"Setup exited with code {setup.ExitCode}. Open the setup log: {setupLog}");
+
+            _workspaceRoot = null;
+            _pythonPath = null;
+            await StartStudioAsync();
+        }
+        catch (Exception ex)
+        {
+            StartupProgress.Visibility = Visibility.Collapsed;
+            StatusText.Text = $"Studio setup failed.\n\n{ex.Message}" + (setupLog is null ? "" : $"\n\nSetup log: {setupLog}");
+            OpenLogsButton.Visibility = setupLog is null ? Visibility.Collapsed : Visibility.Visible;
+            _logPath = setupLog;
+        }
+        finally
+        {
+            SetupButton.IsEnabled = true;
+            RetryButton.IsEnabled = true;
+        }
     }
 
     private void OpenLogsButton_Click(object sender, RoutedEventArgs e)
