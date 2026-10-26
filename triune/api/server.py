@@ -109,10 +109,15 @@ def create_app():
         # path (SPA fallback).  Because this is registered AFTER the
         # router, API routes always win.
         index_path = studio_src / "index.html"
+        no_cache_headers = {
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        }
 
         @app.get("/")
         async def serve_root():
-            return FileResponse(str(index_path))
+            return FileResponse(str(index_path), headers=no_cache_headers)
 
         @app.get("/{full_path:path}")
         async def serve_spa_fallback(full_path: str):
@@ -121,11 +126,11 @@ def create_app():
                 candidate = (studio_src / full_path).resolve(strict=True)
                 candidate.relative_to(studio_src.resolve())
                 if candidate.is_file():
-                    return FileResponse(str(candidate))
+                    return FileResponse(str(candidate), headers=no_cache_headers)
             except (OSError, RuntimeError, ValueError):
                 pass
             # Otherwise fall back to index.html
-            return FileResponse(str(index_path))
+            return FileResponse(str(index_path), headers=no_cache_headers)
 
     return app
 

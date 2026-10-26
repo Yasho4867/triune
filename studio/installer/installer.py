@@ -390,6 +390,7 @@ def create_desktop_shortcut(hw: HardwareProfile) -> None:
     native_studio_candidates = (
         WORKSPACE_ROOT / "studio" / "windows" / "publish" / "TriuneStudio.exe",
         WORKSPACE_ROOT / "studio" / "windows" / "TriuneStudio.Windows" / "bin" / "Release" / "net10.0-windows" / "TriuneStudio.exe",
+        WORKSPACE_ROOT / "studio" / "windows" / "TriuneStudio.Windows" / "bin" / "Release" / "net10.0-windows" / "win-x64" / "TriuneStudio.exe",
     )
     native_studio_exe = next((path for path in native_studio_candidates if path.is_file()), studio_bat)
 

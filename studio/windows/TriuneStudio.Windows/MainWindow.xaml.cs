@@ -162,6 +162,12 @@ public partial class MainWindow : Window
     {
         StatusText.Text = "Opening Studio…";
         await StudioView.EnsureCoreWebView2Async();
+        try
+        {
+            await StudioView.CoreWebView2.Profile.ClearBrowsingDataAsync(
+                CoreWebView2BrowsingDataKinds.DiskCache | CoreWebView2BrowsingDataKinds.CacheStorage);
+        }
+        catch (Exception) { }
         StudioView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = true;
         StudioView.CoreWebView2.Settings.IsStatusBarEnabled = false;
         StudioView.CoreWebView2.Settings.IsZoomControlEnabled = false;
