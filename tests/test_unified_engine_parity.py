@@ -52,6 +52,17 @@ class _CLIStubTrainer:
 
 
 class TestUnifiedEngineParity(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        from pathlib import Path
+        cls._session_file = Path("checkpoints/session_state.json")
+        cls._session_backup = cls._session_file.read_bytes() if cls._session_file.is_file() else None
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        if getattr(cls, "_session_backup", None) is not None:
+            cls._session_file.write_bytes(cls._session_backup)
+
     def test_lazy_init_preserves_explicitly_selected_fresh_model(self) -> None:
         from unittest.mock import patch
 

@@ -53,9 +53,8 @@ class TrainingEngine:
             return 0.5 * (1 + math.cos(math.pi * self.step / steps))
         return 0.0
 
-    def _router_labels(self, x, y):
+    def _router_labels_from_logits(self, reflex, limbic, cortex, x, y):
         with torch.no_grad():
-            reflex, limbic, cortex, _ = self.model.forward_all_exits(x, update_stats=False)
             y_flat = y.reshape(-1)
             valid_mask = y_flat != self.trainer.pad_token_id
             valid_per_sample = valid_mask.reshape(x.size(0), -1).sum(dim=1).clamp_min(1)
@@ -63,15 +62,34 @@ class TrainingEngine:
             for logits in (reflex, limbic, cortex):
                 token_loss = self.trainer.loss_fn(logits.float().reshape(-1, self.trainer.vocab_size), y_flat)
                 losses.append((token_loss * valid_mask.float()).reshape(x.size(0), -1).sum(dim=1) / valid_per_sample)
-            del reflex, limbic, cortex, logits
             all_losses = torch.stack(losses, dim=1)
             if self.target_depth_dist.device != all_losses.device:
                 self.target_depth_dist = self.target_depth_dist.to(all_losses.device)
                 self.depth_usage_ema = self.depth_usage_ema.to(all_losses.device)
-            adjusted = all_losses - self.config["bias_strength"] * (self.target_depth_dist - self.depth_usage_ema).unsqueeze(0)
+
+            # Mean-center exit losses across the batch so an under-trained exit (e.g. Cortex)
+            # is never permanently starved out of argmin, and route harder samples deeper.
+            if x.size(0) > 1:
+                centered = all_losses - all_losses.mean(dim=0, keepdim=True)
+                sample_diff = all_losses[:, 0]
+                z_diff = (sample_diff - sample_diff.mean()) / (sample_diff.std(unbiased=False) + 1e-4)
+                diff_cost = torch.stack([z_diff, z_diff.abs() * 0.6, -z_diff], dim=1) * 0.35
+                cost = 0.65 * centered + diff_cost
+            else:
+                cost = all_losses - all_losses.mean(dim=1, keepdim=True)
+
+            bias_scale = max(1.0, float(self.config.get("bias_strength", 0.5)))
+            adjusted = cost - bias_scale * (self.target_depth_dist - self.depth_usage_ema).unsqueeze(0)
             labels = adjusted.argmin(dim=1)
             usage = F.one_hot(labels, num_classes=3).float().mean(dim=0)
             self.depth_usage_ema.mul_(self.config["usage_ema_decay"]).add_(usage * (1 - self.config["usage_ema_decay"]))
+        return labels
+
+    def _router_labels(self, x, y):
+        with torch.no_grad():
+            reflex, limbic, cortex, _ = self.model.forward_all_exits(x, update_stats=False)
+            labels = self._router_labels_from_logits(reflex, limbic, cortex, x, y)
+            del reflex, limbic, cortex
         return labels
 
     def _log_training(self, *, loss, lm_loss, router_loss, balance_loss, lr, exploration_rate, overflow, labels, route_logits):
@@ -163,24 +181,26 @@ class TrainingEngine:
                 usage = torch.tensor([0.0, 0.0, 1.0], device=self.depth_usage_ema.device)
                 self.depth_usage_ema.mul_(ema_decay).add_(usage * (1.0 - ema_decay))
             elif depth_mode == "joint":
-                labels = torch.full((x.size(0),), 2, dtype=torch.long, device=self.trainer.device)
                 with self.trainer.model_autocast():
                     reflex_logits, limbic_logits, cortex_logits, route_logits = self.model.forward_all_exits(
                         x, update_stats=True
                     )
+                labels = self._router_labels_from_logits(reflex_logits, limbic_logits, cortex_logits, x, y)
                 loss_ref = self.trainer.loss_fn(reflex_logits.float().reshape(-1, vocab_size), y_flat).mean()
                 loss_limb = self.trainer.loss_fn(limbic_logits.float().reshape(-1, vocab_size), y_flat).mean()
                 loss_cort = self.trainer.loss_fn(cortex_logits.float().reshape(-1, vocab_size), y_flat).mean()
-                lm_loss = 0.33 * loss_ref + 0.33 * loss_limb + 0.34 * loss_cort
+                if loss_cort.detach() > loss_limb.detach():
+                    # Accelerate Cortex recovery if deeper layers lag behind shallow exits
+                    lm_loss = 0.22 * loss_ref + 0.23 * loss_limb + 0.55 * loss_cort
+                else:
+                    lm_loss = 0.25 * loss_ref + 0.30 * loss_limb + 0.45 * loss_cort
                 route_f = route_logits.float()
+                router_loss = self.trainer.router_loss_fn(route_f, labels)
                 z_loss = torch.logsumexp(route_f, dim=-1).pow(2).mean()
-                router_loss = z_loss
                 balance_loss = getattr(self.model, "last_balance_loss", None)
                 if balance_loss is None:
-                    balance_loss = torch.tensor(0.0, device=self.trainer.device)
-                micro_loss = lm_loss + z_loss_coef * z_loss
-                usage = torch.tensor([1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0], device=self.depth_usage_ema.device)
-                self.depth_usage_ema.mul_(ema_decay).add_(usage * (1.0 - ema_decay))
+                    balance_loss = (torch.softmax(route_f, dim=-1).mean(dim=0) - self.target_depth_dist).pow(2).mean()
+                micro_loss = lm_loss + 0.5 * router_loss + z_loss_coef * z_loss + balance_coef * balance_loss
             else:
                 labels = self._router_labels(x, y)
                 # Intentional batched exploration: same forced depth across all sequences in the batch
@@ -189,9 +209,28 @@ class TrainingEngine:
 
                 with self.trainer.model_autocast():
                     logits, route_logits = self.model(x, force_depth=chosen_depth)
+                    last_choice = getattr(self.model, "last_depth_choice", None)
+                    saved_balance = getattr(self.model, "last_balance_loss", None)
+                    cortex_anchor_loss = None
+                    if (
+                        streaming_engine is None
+                        and chosen_depth is None
+                        and last_choice is not None
+                        and (last_choice == 2).sum().item() == 0
+                    ):
+                        # Prevent deep Cortex layer starvation when dynamic routing skips d=2
+                        c_logits, _ = self.model(x[:1], force_depth=2)
+                        self.model.last_route_logits = route_logits
+                        self.model.last_depth_choice = last_choice
+                        self.model.last_balance_loss = saved_balance
+                        cortex_anchor_loss = self.trainer.loss_fn(
+                            c_logits.float().reshape(-1, vocab_size), y[:1].reshape(-1)
+                        ).mean()
                 logits_f = logits.float()
                 route_f = route_logits.float()
                 lm_loss = self.trainer.loss_fn(logits_f.reshape(-1, vocab_size), y_flat).mean()
+                if cortex_anchor_loss is not None:
+                    lm_loss = 0.80 * lm_loss + 0.20 * cortex_anchor_loss
                 router_loss = self.trainer.router_loss_fn(route_f, labels)
                 z_loss = torch.logsumexp(route_f, dim=-1).pow(2).mean()
                 # Use router's native balance loss if recorded during forward pass, else compute from softmax distribution

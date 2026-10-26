@@ -262,7 +262,10 @@ class TriuneTransformer(nn.Module):
         device = input_ids.device
         x = self.token_embed(input_ids)
         x_prefix, _ = self._run_layers(x, 0, self.router_prefix_layers)
-        route_logits, _, _, _ = self._route(x_prefix, None, B, device)
+        route_logits, _, depth_choice, balance_loss = self._route(x_prefix, None, B, device)
+        self.last_route_logits = route_logits
+        self.last_depth_choice = depth_choice
+        self.last_balance_loss = balance_loss
 
         # Run every MoE block with the same update_stats value.  Label generation
         # must not alter routing statistics.

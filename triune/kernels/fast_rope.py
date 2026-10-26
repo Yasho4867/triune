@@ -81,8 +81,8 @@ def fast_rope(q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Te
         try:
             B, H, T, D = q.shape
             half_d = D // 2
-            cos_2d = cos.squeeze().contiguous()
-            sin_2d = sin.squeeze().contiguous()
+            cos_2d = cos.reshape(-1, cos.size(-1)).contiguous()
+            sin_2d = sin.reshape(-1, sin.size(-1)).contiguous()
             if cos_2d.dim() == 2 and cos_2d.size(0) >= T and cos_2d.size(1) >= half_d:
                 BLOCK_SIZE = triton.next_power_of_2(half_d)
                 grid = (B * H, T)

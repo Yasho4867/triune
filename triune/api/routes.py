@@ -535,12 +535,12 @@ if HAS_FASTAPI:
                     continue
                 for r in rows:
                     self.total_rows_yielded += 1
+                    self.offset += 1
                     row_data = r.get("row", {})
                     for text_key in ("text", "content", "story", "prompt", "completion", "question"):
                         if text_key in row_data and isinstance(row_data[text_key], str):
                             row_data[text_key] = sanitize_text(row_data[text_key])
                     yield row_data
-                self.offset += len(rows)
 
     # REAL Hardware-Spinning PyTorch Engine State
     class RealPyTorchEngineState:
@@ -715,6 +715,12 @@ if HAS_FASTAPI:
                             self.active_adapter = data["active_adapter"]
                         if data.get("dataset_name"):
                             self.dataset_name = data["dataset_name"]
+                        if data.get("hf_dataset_name"):
+                            self.hf_dataset_name = data["hf_dataset_name"]
+                        if "hf_stream_offset" in data and data["hf_stream_offset"] is not None:
+                            self.hf_stream_offset = max(0, int(data["hf_stream_offset"]))
+                        if os.environ.get("TRIUNE_TESTING") != "1" and self.dataset_name and "/" in self.dataset_name:
+                            self.dataset_path = self.dataset_name
                         if "batch_size" in data and data["batch_size"] > 0:
                             self.batch_size = data["batch_size"]
                         if "seq_len" in data and data["seq_len"] > 0:
@@ -738,6 +744,12 @@ if HAS_FASTAPI:
                             self.current_lr = float(data["lr_peak"])
                         if "warmup_steps" in data and data["warmup_steps"] is not None:
                             self.warmup_steps = int(data["warmup_steps"])
+                        if "lr_cycle_start_step" in data and data["lr_cycle_start_step"] is not None:
+                            self.lr_cycle_start_step = int(data["lr_cycle_start_step"])
+                        elif self.step >= getattr(self, "lr_cycle_steps", 25000):
+                            self.lr_cycle_start_step = self.step
+                        if "lr_cycle_steps" in data and data["lr_cycle_steps"] is not None:
+                            self.lr_cycle_steps = max(100, int(data["lr_cycle_steps"]))
                 except Exception:
                     pass
 
@@ -804,6 +816,7 @@ if HAS_FASTAPI:
                     "active_adapter": getattr(self, "active_adapter", None),
                     "dataset_name": self.dataset_name,
                     "hf_dataset_name": self.hf_dataset_name if self.is_streaming_hf else self.dataset_name,
+                    "hf_stream_offset": int(getattr(self.hf_stream_dataset, "offset", getattr(self, "hf_stream_offset", 0)) or 0),
                     "batch_size": self.batch_size,
                     "seq_len": self.seq_len,
                     "grad_accum_steps": self.grad_accum_steps,
@@ -815,6 +828,8 @@ if HAS_FASTAPI:
                     "depth_mode": getattr(self, "depth_mode", "dynamic"),
                     "lr_peak": getattr(self, "lr_peak", None),
                     "warmup_steps": getattr(self, "warmup_steps", None),
+                    "lr_cycle_start_step": getattr(self, "lr_cycle_start_step", 0),
+                    "lr_cycle_steps": getattr(self, "lr_cycle_steps", 25000),
                     "updated_at": time.time(),
                 }
                 with open(session_file, "w", encoding="utf-8") as f:
@@ -896,10 +911,14 @@ if HAS_FASTAPI:
 
                 num_layers = spec.num_layers
                 pct = getattr(self, "gpu_offload_pct", 100)
-                requested_gpu_layers = getattr(self, "gpu_layers", None)
                 if "gpu_layers" in kwargs and kwargs["gpu_layers"] is not None:
-                    requested_gpu_layers = int(kwargs["gpu_layers"])
-                if requested_gpu_layers is None:
+                    requested_gpu_layers = max(0, min(num_layers, int(kwargs["gpu_layers"])))
+                elif total_p <= 150_000_000 and not getattr(spec, "use_layer_streaming", False) and self.device.type == "cuda":
+                    # Sub-150M models fit in <300MB VRAM; keep 100% resident on GPU unless explicitly offloaded
+                    requested_gpu_layers = num_layers
+                    pct = 100
+                    self.gpu_offload_pct = 100
+                else:
                     requested_gpu_layers = max(0, min(num_layers, int(round((pct / 100.0) * num_layers))))
 
                 if self.device.type == "cuda":
@@ -963,8 +982,6 @@ if HAS_FASTAPI:
             if "gpu_layers" in kwargs and kwargs["gpu_layers"] is not None:
                 self.gpu_layers = max(0, min(base["num_layers"], int(kwargs["gpu_layers"])))
                 self.gpu_offload_pct = int(round((self.gpu_layers / max(1, base["num_layers"])) * 100))
-            elif getattr(self, "gpu_layers", None) is not None:
-                self.gpu_layers = max(0, min(base["num_layers"], int(self.gpu_layers)))
             else:
                 pct = getattr(self, "gpu_offload_pct", 100)
                 self.gpu_layers = max(0, min(base["num_layers"], int(round((pct / 100.0) * base["num_layers"]))))
@@ -1220,7 +1237,7 @@ if HAS_FASTAPI:
             self.hf_split = split
             self.hf_text_column = col or "text"
             self.hf_stream_dataset = ds
-            self.hf_stream_iter = iter(ds)
+            self.hf_stream_iter = test_iter if test_iter is not None else iter(ds)
             self.hf_stream_buffer.clear()
             self._token_accumulator.clear()
             self.is_streaming_hf = True
@@ -1420,17 +1437,30 @@ if HAS_FASTAPI:
                     sample = next(self.hf_stream_iter)
                     self.hf_stream_stats["total_samples_ingested"] += 1
                     if isinstance(sample, dict):
-                        text = sample.get(self.hf_text_column, "")
-                        if not text and "text" in sample:
-                            text = sample.get("text", "")
-                        elif not text and "content" in sample:
-                            text = sample.get("content", "")
-                        elif not text and "story" in sample:
-                            text = sample.get("story", "")
-                        elif not text and "question" in sample:
-                            text = sample.get("question", "")
-                        elif not text and "prompt" in sample:
-                            text = sample.get("prompt", "")
+                        if "question" in sample and "answer" in sample and sample.get("question") and sample.get("answer"):
+                            text = f"User: {str(sample['question']).strip()}\nAssistant: {str(sample['answer']).strip()}"
+                        elif "instruction" in sample and (sample.get("output") or sample.get("response")):
+                            ans = sample.get("output") or sample.get("response")
+                            text = f"User: {str(sample['instruction']).strip()}\nAssistant: {str(ans).strip()}"
+                        elif "prompt" in sample and (sample.get("completion") or sample.get("response")):
+                            ans = sample.get("completion") or sample.get("response")
+                            p_str = str(sample["prompt"]).strip()
+                            if p_str.startswith("User:"):
+                                text = f"{p_str} {str(ans).strip()}"
+                            else:
+                                text = f"User: {p_str}\nAssistant: {str(ans).strip()}"
+                        else:
+                            text = sample.get(self.hf_text_column, "")
+                            if not text and "text" in sample:
+                                text = sample.get("text", "")
+                            elif not text and "content" in sample:
+                                text = sample.get("content", "")
+                            elif not text and "story" in sample:
+                                text = sample.get("story", "")
+                            elif not text and "question" in sample:
+                                text = sample.get("question", "")
+                            elif not text and "prompt" in sample:
+                                text = sample.get("prompt", "")
                     else:
                         text = str(sample)
 
@@ -1643,23 +1673,24 @@ if HAS_FASTAPI:
             pad_id = self.tokenizer.token_to_id("[PAD]")
             if pad_id is None:
                 pad_id = self.pad_token_id
-            result = generate_response(
-                self.model,
-                self.tokenizer,
-                prompt,
-                device=self.device,
-                pad_token_id=pad_id,
-                eos_token_id=eos_id,
-                force_depth=force_depth,
-                temperature=temperature,
-                top_k=50,
-                repetition_penalty=1.2,
-                max_new_tokens=max_new_tokens,
-                prompt_is_formatted=prompt_is_formatted,
-                cancel_event=cancel_event,
-                on_text=on_text,
-                return_info=True,
-            )
+            with self.model_autocast():
+                result = generate_response(
+                    self.model,
+                    self.tokenizer,
+                    prompt,
+                    device=self.device,
+                    pad_token_id=pad_id,
+                    eos_token_id=eos_id,
+                    force_depth=force_depth,
+                    temperature=temperature,
+                    top_k=50,
+                    repetition_penalty=1.2,
+                    max_new_tokens=max_new_tokens,
+                    prompt_is_formatted=prompt_is_formatted,
+                    cancel_event=cancel_event,
+                    on_text=on_text,
+                    return_info=True,
+                )
             generated_text = sanitize_text(str(result["text"]))
             if not self.weights_loaded:
                 banner = "[Notice: Model is running with initialized weights without trained checkpoint. Train this model or load weights in Checkpoints & Weights.]\n\n"
@@ -2137,9 +2168,16 @@ if HAS_FASTAPI:
                     break
 
         # Multi-turn conversation prompt assembly (OpenAI / LM Studio style)
-        if len(req.messages) > 1:
+        chat_messages = [
+            m for m in req.messages
+            if not (
+                (m.get("role") or "").strip().lower() == "system"
+                and (m.get("content") or "").strip().startswith("You are Triune, a helpful")
+            )
+        ]
+        if len(chat_messages) > 1:
             turns = []
-            for m in req.messages:
+            for m in chat_messages:
                 role = (m.get("role") or "user").strip().capitalize()
                 content = (m.get("content") or "").strip()
                 if content:
@@ -2167,7 +2205,7 @@ if HAS_FASTAPI:
                         temperature=req.temperature,
                         force_depth=force_depth,
                         cancel_event=cancel_event,
-                        prompt_is_formatted=len(req.messages) > 1,
+                        prompt_is_formatted=len(chat_messages) > 1,
                         on_text=on_text,
                     )
                 finally:

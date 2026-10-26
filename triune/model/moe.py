@@ -89,13 +89,27 @@ class MoE_FFN(nn.Module):
         if self.top_k > 1:
             flat_vals = flat_vals / (flat_vals.sum(dim=-1, keepdim=True) + 1e-20)
 
+        # Fast path for single-token autoregressive decoding: evaluate only the selected top-k
+        # experts directly without per-expert nonzero() CUDA stream syncs, padding, or bincount.
+        if not self.training and B * T == 1 and not any(isinstance(m, FP4Linear) for m in self.experts.modules()):
+            if self.shared_expert:
+                out = (self.shared_scale * self.shared(flat_x)).to(flat_x.dtype)
+            else:
+                out = torch.zeros_like(flat_x)
+            chosen_experts = flat_idx[0].tolist()
+            for k_idx, e_idx in enumerate(chosen_experts):
+                w = flat_vals[0, k_idx]
+                out = out + (self.experts[e_idx](flat_x) * w).to(out.dtype)
+            return out.reshape(B, T, D)
+
         if self.training:
             capacity = int(math.ceil((B * T) / self.num_experts * MOE_CAPACITY_MULTIPLIER))
         else:
             capacity = B * T
         out = torch.zeros_like(flat_x)
-        accepted_counts = torch.zeros(self.num_experts, dtype=torch.long, device=x.device)
-        accepted_mask = torch.zeros((B * T, self.top_k), dtype=torch.bool, device=x.device)
+        need_stats = bool(self.training and update_stats)
+        accepted_counts = torch.zeros(self.num_experts, dtype=torch.long, device=x.device) if need_stats else None
+        accepted_mask = torch.zeros((B * T, self.top_k), dtype=torch.bool, device=x.device) if need_stats else None
 
         if self.shared_expert:
             shared_out = self.shared(flat_x)
@@ -119,8 +133,9 @@ class MoE_FFN(nn.Module):
                 else:
                     val_k_keep = val_k[indices]
 
-                accepted_counts[e] += indices.numel()
-                accepted_mask[indices, k] = True
+                if need_stats:
+                    accepted_counts[e] += indices.numel()
+                    accepted_mask[indices, k] = True
                 expert_input = flat_x[indices]
 
                 orig_tokens = expert_input.size(0)
@@ -137,18 +152,17 @@ class MoE_FFN(nn.Module):
                 # Fix C-1: out-of-place to preserve autograd graph
                 out = out.index_add(0, indices, (expert_output * val_k_keep.unsqueeze(-1)).to(out.dtype))
 
-        requested_counts = torch.bincount(flat_idx.flatten(), minlength=self.num_experts)
-        dropped_counts = (requested_counts - accepted_counts).clamp_min(0)
-        routing_result = RoutingResult(
-            indices=flat_idx,
-            weights=flat_vals,
-            accepted_mask=accepted_mask,
-            requested_counts=requested_counts,
-            accepted_counts=accepted_counts,
-            dropped_counts=dropped_counts,
-        )
-
-        if self.training and update_stats:
+        if need_stats:
+            requested_counts = torch.bincount(flat_idx.flatten(), minlength=self.num_experts)
+            dropped_counts = (requested_counts - accepted_counts).clamp_min(0)
+            routing_result = RoutingResult(
+                indices=flat_idx,
+                weights=flat_vals,
+                accepted_mask=accepted_mask,
+                requested_counts=requested_counts,
+                accepted_counts=accepted_counts,
+                dropped_counts=dropped_counts,
+            )
             self._update_routing_stats(flat_x, routing_result)
 
         if self.training:

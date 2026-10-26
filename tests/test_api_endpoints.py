@@ -18,6 +18,8 @@ from triune.api.routes import ChatCompletionRequest, pytorch_state, router
 class TestStudioApiEndpoints(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        cls._session_file = Path("checkpoints/session_state.json")
+        cls._session_backup = cls._session_file.read_text(encoding="utf-8") if cls._session_file.is_file() else None
         # The API intentionally requires bearer auth for non-loopback peers.
         # Model the local Studio client rather than Starlette's default
         # "testclient" hostname, which is not an IP address and is treated as
@@ -26,6 +28,11 @@ class TestStudioApiEndpoints(unittest.TestCase):
         if "client" in inspect.signature(TestClient).parameters:
             client_kwargs["client"] = ("127.0.0.1", 43210)
         cls.client = TestClient(create_app(), **client_kwargs)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        if getattr(cls, "_session_backup", None) is not None:
+            cls._session_file.write_text(cls._session_backup, encoding="utf-8")
 
     def test_plugins_endpoint_returns_serializable_nodes(self) -> None:
         response = self.client.get("/v1/plugins")

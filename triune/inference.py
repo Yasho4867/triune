@@ -26,18 +26,45 @@ def load_checkpoint_model(
     if pad_token_id is None or eos_token_id is None:
         raise ValueError("Tokenizer must define [PAD] and [SEP] special tokens")
 
-    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
-    state_dict = checkpoint["model_state"]
-    if any(key.startswith("_orig_mod.") for key in state_dict):
-        state_dict = {key.removeprefix("_orig_mod."): value for key, value in state_dict.items()}
-    saved_config = checkpoint.get("config", {})
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    state_dict = checkpoint.get("model_state", checkpoint)
+    if any(str(key).startswith("_orig_mod.") for key in state_dict):
+        state_dict = {str(key).removeprefix("_orig_mod."): value for key, value in state_dict.items()}
+    saved_config = checkpoint.get("config") or {}
+    if not isinstance(saved_config, dict):
+        saved_config = {}
     use_fp4 = saved_config.get(
         "use_fp4", any(".ffn.experts." in key and ".linear.weight" in key for key in state_dict)
     )
+
+    import re
+    embed_weight = state_dict.get("token_embed.weight")
+    inferred_vocab = int(embed_weight.shape[0]) if embed_weight is not None and embed_weight.ndim == 2 else tokenizer.get_vocab_size()
+    inferred_dim = int(embed_weight.shape[1]) if embed_weight is not None and embed_weight.ndim == 2 else None
+    layer_ids = [int(m.group(1)) for k in state_dict if (m := re.match(r"layers\.(\d+)\.", str(k)))]
+    expert_ids = [int(m.group(1)) for k in state_dict if (m := re.match(r"layers\.\d+\.ffn\.experts\.(\d+)\.", str(k)))]
+    exit_ids = [int(m.group(1)) for k in state_dict if (m := re.match(r"layers\.(\d+)\.exit_head\.weight$", str(k)))]
+    inferred_layers = (max(layer_ids) + 1) if layer_ids else None
+    inferred_experts = (max(expert_ids) + 1) if expert_ids else None
+
+    hidden_dim = saved_config.get("hidden_dim") or inferred_dim
+    num_layers = saved_config.get("num_layers") or inferred_layers
+    head_dim = saved_config.get("head_dim") or (64 if hidden_dim and hidden_dim % 64 == 0 and hidden_dim < 1536 else 128)
+    num_heads = saved_config.get("num_heads") or (hidden_dim // head_dim if hidden_dim and head_dim else None)
+    reflex_exit = saved_config.get("reflex_exit_layer") or (min(exit_ids) if len(exit_ids) >= 2 else None)
+    limbic_exit = saved_config.get("limbic_exit_layer") or (max(exit_ids) if len(exit_ids) >= 2 else None)
+    prefix_layers = saved_config.get("router_prefix_layers") or (1 if reflex_exit is not None and reflex_exit <= 3 else None)
+
     config = build_config({
-        "vocab_size": saved_config.get("vocab_size", tokenizer.get_vocab_size()),
-        "hidden_dim": saved_config.get("hidden_dim"),
-        "num_layers": saved_config.get("num_layers"),
+        "vocab_size": saved_config.get("vocab_size", inferred_vocab),
+        "hidden_dim": hidden_dim,
+        "num_layers": num_layers,
+        "num_heads": num_heads,
+        "head_dim": head_dim,
+        "num_experts": saved_config.get("num_experts") or inferred_experts,
+        "router_prefix_layers": prefix_layers,
+        "reflex_exit_layer": reflex_exit,
+        "limbic_exit_layer": limbic_exit,
         "use_fp4": use_fp4,
     })
     model = build_model(config)
@@ -90,6 +117,7 @@ def generate_response(
     ids = torch.tensor(token_ids, dtype=torch.long, device=device).unsqueeze(0)
     generated: list[int] = []
     seen = torch.zeros(vocab_size, dtype=torch.bool, device=device)
+    token_counts = torch.zeros(vocab_size, dtype=torch.float32, device=device)
     cache = model.init_cache(batch_size=1) if hasattr(model, "init_cache") else None
     started = time.perf_counter()
     first_token_latency_ms: float | None = None
@@ -113,23 +141,28 @@ def generate_response(
             next_logits = logits[0, -1].float()
             if temperature > 0:
                 next_logits = next_logits / temperature
-            penalized = torch.where(
-                next_logits > 0,
-                next_logits / repetition_penalty,
-                next_logits * repetition_penalty,
-            )
-            next_logits = torch.where(seen, penalized, next_logits)
+            if repetition_penalty != 1.0:
+                penalized = torch.where(
+                    next_logits > 0,
+                    next_logits / repetition_penalty,
+                    next_logits * repetition_penalty,
+                )
+                next_logits = torch.where(seen, penalized, next_logits)
+                # Frequency penalty prevents degenerate punctuation/token loops over long sequences
+                next_logits = next_logits - 0.35 * (token_counts - 1.0).clamp_min(0.0)
             if 0 <= pad_token_id < next_logits.numel():
                 next_logits[pad_token_id] = float("-inf")
             if temperature == 0:
                 # Top-k masking cannot change an argmax result, so avoid the
                 # extra vocabulary-wide topk kernel on deterministic decoding.
-                next_id = int(torch.argmax(next_logits).item())
+                next_input = torch.argmax(next_logits).view(1, 1)
+                next_id = int(next_input.item())
             else:
                 effective_top_k = min(top_k, next_logits.numel())
-                threshold = torch.topk(next_logits, effective_top_k).values[-1]
-                next_logits[next_logits < threshold] = float("-inf")
-                next_id = int(torch.multinomial(torch.softmax(next_logits, dim=-1), 1).item())
+                top_vals, top_indices = torch.topk(next_logits, effective_top_k)
+                sampled_pos = torch.multinomial(torch.softmax(top_vals, dim=-1), 1)
+                next_input = top_indices.gather(0, sampled_pos).view(1, 1)
+                next_id = int(next_input.item())
             if next_id == eos_token_id:
                 break
             generated.append(next_id)
@@ -142,9 +175,19 @@ def generate_response(
                 # Send a cumulative decoded snapshot. Some tokenizers revise the
                 # visible suffix as byte-level tokens arrive, so callers can
                 # safely replace a snapshot instead of corrupting partial UTF-8.
-                on_text(tokenizer.decode(generated, skip_special_tokens=True))
+                decoded_so_far = tokenizer.decode(generated, skip_special_tokens=True)
+                for stop_seq in ("\nUser:", "\nSystem:", "User:", "Assistant:"):
+                    if stop_seq in decoded_so_far:
+                        decoded_so_far = decoded_so_far.split(stop_seq, 1)[0]
+                        on_text(decoded_so_far)
+                        break
+                else:
+                    on_text(decoded_so_far)
+                    decoded_so_far = None
+                if decoded_so_far is not None:
+                    break
             seen[next_id] = True
-            next_input = torch.tensor([[next_id]], dtype=torch.long, device=device)
+            token_counts[next_id] += 1.0
             if cache is not None:
                 logits, cache = model(next_input, cache=cache, force_depth=decode_depth)
             else:
@@ -155,6 +198,9 @@ def generate_response(
     elapsed = max(finished - started, 1e-3)
     decode_elapsed = max(finished - decode_started, 1e-3) if decode_started is not None else 0.0
     text = tokenizer.decode(generated, skip_special_tokens=True).strip()
+    for stop_seq in ("\nUser:", "\nSystem:", "User:", "Assistant:"):
+        if stop_seq in text:
+            text = text.split(stop_seq, 1)[0].strip()
     if not return_info:
         return text
     route_name = "AUTO" if decode_depth is None else ("REFLEX", "LIMBIC", "CORTEX")[decode_depth]

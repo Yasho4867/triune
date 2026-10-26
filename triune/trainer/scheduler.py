@@ -11,8 +11,13 @@ def lr_schedule(config: dict, step: int) -> float:
         return config["lr"] * (rel_step + 1) / warmup_steps
     if cycle_steps <= warmup_steps:
         return config["min_lr"]
-    progress = min(max(0, rel_step - warmup_steps) / max(1, cycle_steps - warmup_steps), 1.0)
-    return config["min_lr"] + 0.5 * (config["lr"] - config["min_lr"]) * (1 + math.cos(math.pi * progress))
+    span = max(1, cycle_steps - warmup_steps)
+    if rel_step > cycle_steps:
+        # When training continues past cycle_steps, wrap into a fresh cosine cycle instead of pinning at min_lr
+        rel_progress = ((rel_step - warmup_steps) % span) / span
+    else:
+        rel_progress = min(max(0, rel_step - warmup_steps) / span, 1.0)
+    return config["min_lr"] + 0.5 * (config["lr"] - config["min_lr"]) * (1 + math.cos(math.pi * rel_progress))
 
 
 def set_optimizer_lr(optimizer, lr: float) -> None:

@@ -44,17 +44,26 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
         self.layer_groups = []
         seen_param_ids = set()
 
-        # Identify router parameters and token embeddings (these must stay on AdamW)
+        # Identify router parameters and token embeddings / vocabulary exit heads (these must stay on AdamW)
         router_param_ids = set()
         for name, module in model.named_modules():
             if isinstance(module, MoE_FFN) and hasattr(module, 'router'):
                 for p in module.router.parameters():
                     router_param_ids.add(id(p))
+            elif module.__class__.__name__ == 'GumbelSoftmaxRouter' or name == 'router' or name.endswith('.router'):
+                for p in module.parameters():
+                    router_param_ids.add(id(p))
 
         embedding_param_ids = set()
         for name, param in model.named_parameters():
             name_lower = name.lower()
-            if 'embed' in name_lower or 'wte' in name_lower:
+            if (
+                'embed' in name_lower
+                or 'wte' in name_lower
+                or 'exit_head' in name_lower
+                or 'final_head' in name_lower
+                or 'lm_head' in name_lower
+            ):
                 embedding_param_ids.add(id(param))
 
         # 1. Count MoE routed experts
