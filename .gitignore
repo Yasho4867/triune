@@ -48,6 +48,7 @@ unsloth_compiled_cache/
 studio/windows/**/bin/
 studio/windows/**/obj/
 studio/windows/publish/
+*.WebView2/
 
 # Logs
 *.log

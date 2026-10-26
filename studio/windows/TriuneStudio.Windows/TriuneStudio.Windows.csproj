@@ -11,6 +11,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>..\triune.ico</ApplicationIcon>
     <AssemblyName>TriuneStudio</AssemblyName>
     <RootNamespace>TriuneStudio.Windows</RootNamespace>
   </PropertyGroup>

@@ -113,6 +113,7 @@
       </Grid.ColumnDefinitions>
       <TextBlock x:Name="FooterHintText" Grid.Column="0" Text="Native Windows WPF Host + WebView2 + Python/CUDA Engine" VerticalAlignment="Center" FontSize="12" Foreground="{StaticResource InstallerMuted}" />
       <StackPanel Grid.Column="1" Orientation="Horizontal">
+        <Button x:Name="ShortcutButton" Content="Create Desktop Shortcut" Padding="14,9" Margin="0,0,10,0" Background="#1E293B" Foreground="#38BDF8" BorderBrush="#334155" Click="ShortcutButton_Click" />
         <Button x:Name="VerifyButton" Content="Verify Health Only" Padding="16,9" Margin="0,0,10,0" Background="#1F2937" Foreground="#F3F4F6" BorderBrush="#374151" Click="VerifyButton_Click" />
         <Button x:Name="InstallButton" Content="Install / Repair Studio" Padding="20,9" Margin="0,0,10,0" Background="#C2410C" Foreground="White" FontWeight="SemiBold" BorderBrush="#EA580C" Click="InstallButton_Click" />
         <Button x:Name="LaunchStudioButton" Content="Launch Triune Studio →" Padding="20,9" Background="#059669" Foreground="White" FontWeight="SemiBold" BorderBrush="#10B981" IsEnabled="False" Click="LaunchStudioButton_Click" />

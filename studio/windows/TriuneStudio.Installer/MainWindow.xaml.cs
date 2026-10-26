@@ -49,7 +49,13 @@ public partial class MainWindow : Window
         if (File.Exists(existingPy))
         {
             LaunchStudioButton.IsEnabled = true;
-            AppendLog($"[Detected] Existing managed environment found at: {existingPy}");
+            SkipTorchCheck.IsChecked = true;
+            AppendLog($"[Detected] Existing managed environment found at: {existingPy} (Fast repair mode enabled)");
+        }
+
+        if (DesktopShortcutCheck.IsChecked == true)
+        {
+            await EnsureWindowsShortcutsAsync();
         }
 
         if (verifyOnly)
@@ -291,6 +297,10 @@ public partial class MainWindow : Window
             if (verifyOnly)
             {
                 psi.ArgumentList.Add("--verify");
+                if (DesktopShortcutCheck.IsChecked == false)
+                    psi.ArgumentList.Add("--no-shortcuts");
+                if (RegisterPathCheck.IsChecked == false)
+                    psi.ArgumentList.Add("--no-path");
             }
             else
             {
@@ -300,6 +310,11 @@ public partial class MainWindow : Window
                     psi.ArgumentList.Add("--no-shortcuts");
                 if (RegisterPathCheck.IsChecked == false)
                     psi.ArgumentList.Add("--no-path");
+            }
+
+            if (DesktopShortcutCheck.IsChecked == true)
+            {
+                await EnsureWindowsShortcutsAsync();
             }
 
             _activeProcess = new Process { StartInfo = psi, EnableRaisingEvents = true };
@@ -343,6 +358,107 @@ public partial class MainWindow : Window
             InstallButton.IsEnabled = true;
             VerifyButton.IsEnabled = true;
         }
+    }
+
+    private async Task EnsureWindowsShortcutsAsync()
+    {
+        if (_workspaceRoot is null) return;
+        try
+        {
+            var studioCandidates = new[]
+            {
+                Path.Combine(_workspaceRoot, "TriuneStudio.exe"),
+                Path.Combine(_workspaceRoot, "studio", "windows", "publish", "TriuneStudio.exe"),
+                Path.Combine(_workspaceRoot, "studio", "windows", "TriuneStudio.Windows", "bin", "Release", "net10.0-windows", "TriuneStudio.exe"),
+                Path.Combine(_workspaceRoot, "studio", "TriuneStudio.bat")
+            };
+            var studioExe = studioCandidates.FirstOrDefault(File.Exists) ?? studioCandidates[0];
+            var setupExe = Path.Combine(_workspaceRoot, "TriuneStudioSetup.exe");
+            var iconPath = Path.Combine(_workspaceRoot, "studio", "windows", "triune.ico");
+            var iconTarget = File.Exists(iconPath) ? iconPath : studioExe;
+
+            var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            var desktopDirs = new[]
+            {
+                Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
+                Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+                Path.Combine(userProfile, "OneDrive", "Desktop"),
+                Path.Combine(userProfile, "Desktop")
+            }
+            .Where(d => !string.IsNullOrWhiteSpace(d) && Directory.Exists(d))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+            var startMenuDir = Environment.GetFolderPath(Environment.SpecialFolder.Programs);
+            var sb = new StringBuilder();
+            sb.AppendLine("$WshShell = New-Object -comObject WScript.Shell");
+            foreach (var dir in desktopDirs)
+            {
+                var lnk = Path.Combine(dir, "Triune Studio.lnk");
+                try { if (File.Exists(lnk)) File.Delete(lnk); } catch { }
+                sb.AppendLine($"$s = $WshShell.CreateShortcut('{lnk.Replace("'", "''")}');");
+                sb.AppendLine($"$s.TargetPath = '{studioExe.Replace("'", "''")}';");
+                sb.AppendLine($"$s.WorkingDirectory = '{_workspaceRoot.Replace("'", "''")}';");
+                sb.AppendLine($"$s.IconLocation = '{iconTarget.Replace("'", "''")},0';");
+                sb.AppendLine("$s.Description = 'Triune Studio - AI Engine and Visual Research IDE';");
+                sb.AppendLine("$s.Save();");
+            }
+
+            if (!string.IsNullOrWhiteSpace(startMenuDir) && Directory.Exists(startMenuDir))
+            {
+                var startLnk = Path.Combine(startMenuDir, "Triune Studio.lnk");
+                try { if (File.Exists(startLnk)) File.Delete(startLnk); } catch { }
+                sb.AppendLine($"$sm = $WshShell.CreateShortcut('{startLnk.Replace("'", "''")}');");
+                sb.AppendLine($"$sm.TargetPath = '{studioExe.Replace("'", "''")}';");
+                sb.AppendLine($"$sm.WorkingDirectory = '{_workspaceRoot.Replace("'", "''")}';");
+                sb.AppendLine($"$sm.IconLocation = '{iconTarget.Replace("'", "''")},0';");
+                sb.AppendLine("$sm.Description = 'Triune Studio - AI Engine and Visual Research IDE';");
+                sb.AppendLine("$sm.Save();");
+
+                if (File.Exists(setupExe))
+                {
+                    var setupLnk = Path.Combine(startMenuDir, "Triune Studio Setup.lnk");
+                    try { if (File.Exists(setupLnk)) File.Delete(setupLnk); } catch { }
+                    sb.AppendLine($"$su = $WshShell.CreateShortcut('{setupLnk.Replace("'", "''")}');");
+                    sb.AppendLine($"$su.TargetPath = '{setupExe.Replace("'", "''")}';");
+                    sb.AppendLine($"$su.WorkingDirectory = '{_workspaceRoot.Replace("'", "''")}';");
+                    sb.AppendLine($"$su.IconLocation = '{iconTarget.Replace("'", "''")},0';");
+                    sb.AppendLine("$su.Description = 'Triune Studio Setup - Repair or Reconfigure AI Engine';");
+                    sb.AppendLine("$su.Save();");
+                }
+            }
+
+            var psi = new ProcessStartInfo("powershell.exe")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            psi.ArgumentList.Add("-NoProfile");
+            psi.ArgumentList.Add("-Command");
+            psi.ArgumentList.Add(sb.ToString());
+
+            using var proc = Process.Start(psi);
+            if (proc is not null)
+            {
+                await proc.WaitForExitAsync();
+                if (proc.ExitCode == 0)
+                {
+                    AppendLog($"[Shortcuts] Created Desktop & Start Menu shortcuts ({string.Join(", ", desktopDirs)}) -> {Path.GetFileName(studioExe)}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"[Shortcuts Notice] {ex.Message}");
+        }
+    }
+
+    private async void ShortcutButton_Click(object sender, RoutedEventArgs e)
+    {
+        await EnsureWindowsShortcutsAsync();
+        StatusHeadlineText.Text = "Desktop and Start Menu shortcuts created for Triune Studio.";
     }
 
     private async void InstallButton_Click(object sender, RoutedEventArgs e)

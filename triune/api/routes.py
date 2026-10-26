@@ -592,7 +592,8 @@ if HAS_FASTAPI:
             self.min_lr = 1e-5
             self.current_lr = 5e-4
             self.lr_cycle_start_step = 0
-            self.lr_cycle_steps = 25000
+            self.lr_cycle_steps = 50000
+            self.total_steps = 50000
             self.dataset_path = "data/fineweb_sample.jsonl"
             self.dataset_name = "HuggingFaceFW/fineweb-edu"
             self.dataset_type = "streaming"
@@ -741,15 +742,14 @@ if HAS_FASTAPI:
                             self.depth_mode = data["depth_mode"]
                         if data.get("lr_peak"):
                             self.lr_peak = float(data["lr_peak"])
-                            self.current_lr = float(data["lr_peak"])
                         if "warmup_steps" in data and data["warmup_steps"] is not None:
                             self.warmup_steps = int(data["warmup_steps"])
-                        if "lr_cycle_start_step" in data and data["lr_cycle_start_step"] is not None:
-                            self.lr_cycle_start_step = int(data["lr_cycle_start_step"])
-                        elif self.step >= getattr(self, "lr_cycle_steps", 25000):
-                            self.lr_cycle_start_step = self.step
                         if "lr_cycle_steps" in data and data["lr_cycle_steps"] is not None:
-                            self.lr_cycle_steps = max(100, int(data["lr_cycle_steps"]))
+                            saved_cycle = int(data["lr_cycle_steps"])
+                            self.lr_cycle_steps = max(50000 if saved_cycle == 25000 else 100, saved_cycle)
+                        self.lr_cycle_start_step = 0
+                        self.total_steps = max(self.lr_cycle_steps, self.step + 1)
+                        self.current_lr = float(self.lr_schedule(self.config, self.step))
                 except Exception:
                     pass
 
@@ -780,6 +780,7 @@ if HAS_FASTAPI:
 
             self.total_tokens_trained = restored
             self.tokens_trained = restored
+            self.current_lr = float(self.lr_schedule(self.config, self.step))
             if restored > 0:
                 msg = f"[Triune Engine] Restored {restored:,} historical cumulative trained tokens from previous sessions (step {self.step})."
                 self.logs.insert(0, msg)
@@ -796,7 +797,7 @@ if HAS_FASTAPI:
 
                 if target_ckpt is not None:
                     try:
-                        self.load_model_checkpoint(target_ckpt, restore_optimizer=False)
+                        self.load_model_checkpoint(target_ckpt, restore_optimizer=True)
                         loaded_msg = f"[Triune Engine] Auto-restored weights from active checkpoint: {target_ckpt.name}"
                         self.logs.insert(0, loaded_msg)
                         print(loaded_msg)
@@ -827,9 +828,10 @@ if HAS_FASTAPI:
                     "architecture_spec": getattr(self, "architecture_spec", {}),
                     "depth_mode": getattr(self, "depth_mode", "dynamic"),
                     "lr_peak": getattr(self, "lr_peak", None),
+                    "current_lr": getattr(self, "current_lr", None),
                     "warmup_steps": getattr(self, "warmup_steps", None),
                     "lr_cycle_start_step": getattr(self, "lr_cycle_start_step", 0),
-                    "lr_cycle_steps": getattr(self, "lr_cycle_steps", 25000),
+                    "lr_cycle_steps": getattr(self, "lr_cycle_steps", 50000),
                     "updated_at": time.time(),
                 }
                 with open(session_file, "w", encoding="utf-8") as f:
@@ -838,15 +840,8 @@ if HAS_FASTAPI:
                 pass
 
         def get_scheduled_lr(self, step: int) -> float:
-            """Cosine learning rate schedule with linear warmup and warm-restart support."""
-            cycle_start = getattr(self, "lr_cycle_start_step", 0)
-            cycle_steps = getattr(self, "lr_cycle_steps", 25000)
-            rel_step = max(0, step - cycle_start)
-            if rel_step < self.warmup_steps:
-                return max(self.min_lr, self.lr_peak * float(rel_step + 1) / max(1, self.warmup_steps))
-            progress = min(1.0, float(max(0, rel_step - self.warmup_steps)) / float(max(1, cycle_steps - self.warmup_steps)))
-            cosine_factor = 0.5 * (1.0 + math.cos(math.pi * progress))
-            return max(self.min_lr, self.min_lr + (self.lr_peak - self.min_lr) * cosine_factor)
+            """Cosine learning rate schedule with linear warmup delegating to canonical scheduler."""
+            return float(self.lr_schedule(self.config, step))
 
         def load_tokenizer(self):
             if self.tokenizer is not None:
@@ -1050,16 +1045,27 @@ if HAS_FASTAPI:
                 self.step = int(checkpoint["step"])
             if self.training_engine is not None:
                 self.training_engine.step = self.step
+                if checkpoint.get("depth_usage_ema") is not None:
+                    try:
+                        ema_t = checkpoint["depth_usage_ema"]
+                        if not isinstance(ema_t, torch.Tensor):
+                            ema_t = torch.tensor(ema_t, dtype=torch.float32)
+                        self.training_engine.depth_usage_ema = ema_t.to(device=self.device, dtype=torch.float32)
+                    except Exception:
+                        pass
             config = checkpoint.get("config", {}) if isinstance(checkpoint.get("config"), dict) else {}
             restored_tokens = checkpoint.get("total_tokens_trained", checkpoint.get("tokens_trained", 0))
             if not restored_tokens and self.step > 0:
                 restored_tokens = self.step * int(config.get("batch_size", checkpoint.get("batch_size", 4))) \
                     * int(config.get("seq_len", checkpoint.get("seq_len", 64))) \
                     * int(config.get("grad_accum_steps", checkpoint.get("grad_accum_steps", 4)))
-            self.total_tokens_trained = int(restored_tokens or 0)
+            self.total_tokens_trained = max(int(getattr(self, "total_tokens_trained", 0) or 0), int(restored_tokens or 0))
             self.tokens_trained = self.total_tokens_trained
             self.active_checkpoint = p.name
             self.weights_loaded = True
+            self.current_lr = float(self.lr_schedule(self.config, self.step))
+            if self.optimizer is not None:
+                self.set_optimizer_lr(self.optimizer, self.current_lr)
 
             if restore_optimizer and checkpoint.get("optimizer_state") and self.optimizer:
                 try:
@@ -1727,7 +1733,7 @@ if HAS_FASTAPI:
                 "exploration_steps": int(getattr(self, "exploration_steps", 500)),
                 "grad_clip": float(getattr(self, "grad_clip", 1.0)),
                 "grad_accum_steps": int(self.grad_accum_steps),
-                "total_steps": int(getattr(self, "total_steps", 25000)),
+                "total_steps": int(getattr(self, "total_steps", 50000)),
                 "depth_mode": str(getattr(self, "depth_mode", "dynamic")),
                 "log_every": 10,
                 "eval_every": 250,
@@ -1736,7 +1742,7 @@ if HAS_FASTAPI:
                 "min_lr": float(self.min_lr),
                 "warmup_steps": int(self.warmup_steps),
                 "cycle_start_step": int(getattr(self, "lr_cycle_start_step", 0)),
-                "cycle_steps": int(getattr(self, "lr_cycle_steps", 25000)),
+                "cycle_steps": int(getattr(self, "lr_cycle_steps", 50000)),
             }
 
         @property
@@ -1807,6 +1813,55 @@ if HAS_FASTAPI:
                     self.current_batch_preview = f"Stream token chunk #{self.step}"
 
             return x, targets
+
+        def _build_checkpoint_payload(self, loss_val: float) -> Dict[str, Any]:
+            """Build unified checkpoint dictionary shared by auto-save and manual save."""
+            depth_ema = None
+            if getattr(self, "training_engine", None) is not None and hasattr(self.training_engine, "depth_usage_ema"):
+                try:
+                    depth_ema = self.training_engine.depth_usage_ema.detach().cpu()
+                except Exception:
+                    depth_ema = None
+            cfg_dict = {
+                **(self.model.model_spec.to_dict()
+                   if getattr(self.model, "model_spec", None) is not None
+                   and hasattr(self.model.model_spec, "to_dict")
+                   else dict(self.architecture_spec or {})),
+                "vocab_size": int(getattr(self.model, "vocab_size", 32000)),
+                "hidden_dim": int(getattr(self.model, "hidden_dim", 256)),
+                "num_layers": len(getattr(self.model, "layers", [])),
+                "num_heads": int(getattr(self.model, "num_heads", 4)),
+                "head_dim": int(getattr(self.model, "head_dim", 64)),
+                "num_experts": int(getattr(self.model, "num_experts", 4)),
+                "router_prefix_layers": int(getattr(self.model, "router_prefix_layers", 1)),
+                "reflex_exit_layer": int(getattr(self.model, "reflex_exit_layer", 2)),
+                "limbic_exit_layer": int(getattr(self.model, "limbic_exit_layer", 4)),
+                "depth_mode": getattr(self, "depth_mode", "dynamic"),
+                "precision": getattr(self, "precision", "bf16"),
+                "use_fp4": bool(getattr(self.model, "use_fp4", False)),
+                "use_fp8": bool(getattr(self.model, "use_fp8", False)),
+                "batch_size": self.batch_size,
+                "seq_len": self.seq_len,
+                "grad_accum_steps": self.grad_accum_steps,
+                "lr_peak": self.lr_peak,
+                "current_lr": self.current_lr,
+                "warmup_steps": self.warmup_steps,
+                "lr_cycle_start_step": getattr(self, "lr_cycle_start_step", 0),
+                "lr_cycle_steps": getattr(self, "lr_cycle_steps", 50000),
+            }
+            return {
+                "step": self.step,
+                "model_state": self.model.state_dict(),
+                "optimizer_state": self.optimizer.state_dict() if self.optimizer else None,
+                "loss": loss_val,
+                "total_tokens_trained": self.total_tokens_trained,
+                "tokens_trained": self.total_tokens_trained,
+                "batch_size": self.batch_size,
+                "seq_len": self.seq_len,
+                "grad_accum_steps": self.grad_accum_steps,
+                "depth_usage_ema": depth_ema,
+                "config": cfg_dict,
+            }
 
         def step_once(self) -> Dict[str, Any]:
             if not HAS_TORCH or TriuneTransformer is None:
@@ -1909,17 +1964,7 @@ if HAS_FASTAPI:
                     ckpt_dir.mkdir(parents=True, exist_ok=True)
                     auto_name = f"triune_studio_step_{self.step}.pt"
                     auto_path = ckpt_dir / auto_name
-                    torch.save({
-                        "step": self.step,
-                        "model_state": self.model.state_dict(),
-                        "optimizer_state": self.optimizer.state_dict() if self.optimizer else None,
-                        "loss": payload["loss"],
-                        "total_tokens_trained": self.total_tokens_trained,
-                        "tokens_trained": self.total_tokens_trained,
-                        "batch_size": self.batch_size,
-                        "seq_len": self.seq_len,
-                        "grad_accum_steps": self.grad_accum_steps,
-                    }, auto_path)
+                    torch.save(self._build_checkpoint_payload(payload["loss"]), auto_path)
                     self.active_checkpoint = auto_name
                     self.logs.insert(0, f"[CHECKPOINT] Periodic auto-save: {auto_name} at step {self.step}.")
                 except Exception:
@@ -1933,7 +1978,7 @@ if HAS_FASTAPI:
                 except Exception:
                     pass
 
-            log_line = f"[STEP {self.step}] Loss: {payload['loss']} | {tok_per_sec} tok/s | Ingesting [{self.dataset_name}]: \"{self.current_batch_preview[:36]}...\""
+            log_line = f"[STEP {self.step}] Loss: {payload['loss']:.4f} | LR: {self.current_lr:.2e} | {tok_per_sec} tok/s | Ingesting [{self.dataset_name}]: \"{self.current_batch_preview[:36]}...\""
             self.logs.insert(0, log_line)
             if len(self.logs) > 50:
                 self.logs.pop()
@@ -3577,22 +3622,19 @@ if HAS_FASTAPI:
             pytorch_state.gpu_layers = effective_gpu_layers
             pytorch_state.gpu_offload_pct = int(round((effective_gpu_layers / max(1, profile["num_layers"])) * 100))
 
+        if req.warmup_steps is not None and req.warmup_steps >= 0:
+            pytorch_state.warmup_steps = int(req.warmup_steps)
+
         target_lr = req.lr if req.lr is not None else req.lr_peak
         if target_lr is not None and target_lr > 0:
             pytorch_state.lr_peak = float(target_lr)
-            pytorch_state.current_lr = float(target_lr)
-            # Warm restart cosine cycle from current training step
-            pytorch_state.lr_cycle_start_step = pytorch_state.step
-            pytorch_state.lr_cycle_steps = 25000
-            pytorch_state.total_steps = pytorch_state.step + 25000
+            pytorch_state.lr_cycle_start_step = 0
+            pytorch_state.lr_cycle_steps = max(50000, int(getattr(pytorch_state, "lr_cycle_steps", 50000)))
+            pytorch_state.total_steps = max(pytorch_state.lr_cycle_steps, pytorch_state.step + 1)
+            scheduled_lr = float(pytorch_state.lr_schedule(pytorch_state.config, pytorch_state.step))
+            pytorch_state.current_lr = scheduled_lr
             if pytorch_state.optimizer is not None:
-                if hasattr(pytorch_state.optimizer, "set_lr"):
-                    pytorch_state.optimizer.set_lr(float(target_lr))
-                elif hasattr(pytorch_state.optimizer, "param_groups"):
-                    for g in pytorch_state.optimizer.param_groups:
-                        g["lr"] = float(target_lr)
-        if req.warmup_steps is not None and req.warmup_steps >= 0:
-            pytorch_state.warmup_steps = int(req.warmup_steps)
+                pytorch_state.set_optimizer_lr(pytorch_state.optimizer, scheduled_lr)
 
         pytorch_state._save_persisted_session_state()
 
@@ -3910,39 +3952,8 @@ if HAS_FASTAPI:
             filename += ".pt"
         ckpt_path = ckpt_dir / filename
 
-        ckpt = {
-            "step": pytorch_state.step,
-            "model_state": pytorch_state.model.state_dict(),
-            "optimizer_state": pytorch_state.optimizer.state_dict() if pytorch_state.optimizer else None,
-            "loss": pytorch_state.history[-1]["loss"] if pytorch_state.history else 0.0,
-            "total_tokens_trained": pytorch_state.total_tokens_trained,
-            "tokens_trained": pytorch_state.total_tokens_trained,
-            "batch_size": pytorch_state.batch_size,
-            "seq_len": pytorch_state.seq_len,
-            "grad_accum_steps": pytorch_state.grad_accum_steps,
-            "config": {
-                **(pytorch_state.model.model_spec.to_dict()
-                   if getattr(pytorch_state.model, "model_spec", None) is not None
-                   and hasattr(pytorch_state.model.model_spec, "to_dict")
-                   else dict(pytorch_state.architecture_spec or {})),
-                "vocab_size": 32000,
-                "hidden_dim": getattr(pytorch_state.model, "hidden_dim", 256),
-                "num_layers": len(getattr(pytorch_state.model, "layers", [])),
-                "num_heads": getattr(pytorch_state.model, "num_heads", 4),
-                "head_dim": getattr(pytorch_state.model, "head_dim", 64),
-                "num_experts": getattr(pytorch_state.model, "num_experts", 4),
-                "router_prefix_layers": getattr(pytorch_state.model, "router_prefix_layers", 1),
-                "reflex_exit_layer": getattr(pytorch_state.model, "reflex_exit_layer", 2),
-                "limbic_exit_layer": getattr(pytorch_state.model, "limbic_exit_layer", 4),
-                "depth_mode": getattr(pytorch_state, "depth_mode", "dynamic"),
-                "precision": getattr(pytorch_state, "precision", "bf16"),
-                "use_fp4": bool(getattr(pytorch_state.model, "use_fp4", False)),
-                "use_fp8": bool(getattr(pytorch_state.model, "use_fp8", False)),
-                "batch_size": pytorch_state.batch_size,
-                "seq_len": pytorch_state.seq_len,
-                "grad_accum_steps": pytorch_state.grad_accum_steps,
-            }
-        }
+        loss_val = float(pytorch_state.history[-1]["loss"]) if pytorch_state.history else 0.0
+        ckpt = pytorch_state._build_checkpoint_payload(loss_val)
         torch.save(ckpt, ckpt_path)
         pytorch_state.active_checkpoint = filename
         pytorch_state._save_persisted_session_state()
@@ -3969,21 +3980,23 @@ if HAS_FASTAPI:
             pytorch_state.grad_accum_steps = req.grad_accum_steps
         if req.depth_mode in ("cortex", "joint", "dynamic"):
             pytorch_state.depth_mode = req.depth_mode
-        if req.lr_peak is not None and req.lr_peak > 0:
-            pytorch_state.lr_peak = req.lr_peak
         if req.warmup_steps is not None and req.warmup_steps >= 0:
             pytorch_state.warmup_steps = req.warmup_steps
-        if req.lr is not None and req.lr > 0:
-            pytorch_state.lr_peak = req.lr
-            pytorch_state.current_lr = req.lr
-            if pytorch_state.optimizer:
-                for g in pytorch_state.optimizer.param_groups:
-                    g["lr"] = req.lr
+        target_lr = req.lr if req.lr is not None else req.lr_peak
+        if target_lr is not None and target_lr > 0:
+            pytorch_state.lr_peak = float(target_lr)
+            pytorch_state.lr_cycle_start_step = 0
+            pytorch_state.lr_cycle_steps = max(50000, int(getattr(pytorch_state, "lr_cycle_steps", 50000)))
+            scheduled_lr = float(pytorch_state.lr_schedule(pytorch_state.config, pytorch_state.step))
+            pytorch_state.current_lr = scheduled_lr
+            if pytorch_state.optimizer is not None:
+                pytorch_state.set_optimizer_lr(pytorch_state.optimizer, scheduled_lr)
         if req.dataset_path:
             pytorch_state.load_training_data(req.dataset_path)
+        pytorch_state._save_persisted_session_state()
 
         eff_tokens = pytorch_state.batch_size * pytorch_state.seq_len * pytorch_state.grad_accum_steps
-        log_msg = f"[CONFIG] Hyperparameters updated: Batch={pytorch_state.batch_size}, SeqLen={pytorch_state.seq_len}, Accum={pytorch_state.grad_accum_steps}x (Tokens/Step={eff_tokens:,}), DepthMode={pytorch_state.depth_mode.upper()}, PeakLR={pytorch_state.lr_peak}"
+        log_msg = f"[CONFIG] Hyperparameters updated: Batch={pytorch_state.batch_size}, SeqLen={pytorch_state.seq_len}, Accum={pytorch_state.grad_accum_steps}x (Tokens/Step={eff_tokens:,}), DepthMode={pytorch_state.depth_mode.upper()}, PeakLR={pytorch_state.lr_peak:.2e}, LiveLR={pytorch_state.current_lr:.2e}"
         pytorch_state.logs.insert(0, log_msg)
         print(f"[Triune Engine] {log_msg}")
 
@@ -4012,17 +4025,14 @@ if HAS_FASTAPI:
     async def update_optimizer_config(req: OptimizerConfigRequest) -> Dict[str, Any]:
         """Dynamically update CentroidSteer and Muon optimizer parameters."""
         if req.lr is not None and req.lr > 0:
-            pytorch_state.current_lr = req.lr
-            pytorch_state.lr_peak = req.lr
-            pytorch_state.lr_cycle_start_step = pytorch_state.step
-            pytorch_state.lr_cycle_steps = 25000
-            pytorch_state.total_steps = pytorch_state.step + 25000
+            pytorch_state.lr_peak = float(req.lr)
+            pytorch_state.lr_cycle_start_step = 0
+            pytorch_state.lr_cycle_steps = max(50000, int(getattr(pytorch_state, "lr_cycle_steps", 50000)))
+            pytorch_state.total_steps = max(pytorch_state.lr_cycle_steps, pytorch_state.step + 1)
+            scheduled_lr = float(pytorch_state.lr_schedule(pytorch_state.config, pytorch_state.step))
+            pytorch_state.current_lr = scheduled_lr
             if pytorch_state.optimizer is not None:
-                if hasattr(pytorch_state.optimizer, "set_lr"):
-                    pytorch_state.optimizer.set_lr(req.lr)
-                elif hasattr(pytorch_state.optimizer, "param_groups"):
-                    for g in pytorch_state.optimizer.param_groups:
-                        g["lr"] = req.lr
+                pytorch_state.set_optimizer_lr(pytorch_state.optimizer, scheduled_lr)
 
         if req.centroid_lr is not None and req.centroid_lr > 0:
             pytorch_state.centroid_lr = req.centroid_lr

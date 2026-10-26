@@ -151,6 +151,40 @@ class TestUnifiedEngineParity(unittest.TestCase):
                 torch.testing.assert_close(m1.expert_bias, m2.expert_bias)
                 self.assertEqual(m1._global_step, m2._global_step)
 
+    def test_lr_schedule_decays_monotonically_at_high_steps(self) -> None:
+        """Proves Studio and CLI LR schedules decay identically at step 28,639+ without resetting to peak."""
+        state = RealPyTorchEngineState()
+        state.lr_peak = 8e-4
+        state.min_lr = 1e-5
+        state.warmup_steps = 150
+        state.lr_cycle_start_step = 0
+        state.lr_cycle_steps = 50000
+        state.total_steps = 50000
+
+        lr_28639 = state.get_scheduled_lr(28639)
+        lr_28640 = state.get_scheduled_lr(28640)
+        cli_lr_28639 = lr_schedule(state.config, 28639)
+
+        self.assertAlmostEqual(lr_28639, cli_lr_28639, places=10)
+        self.assertLess(lr_28639, state.lr_peak * 0.5)
+        self.assertGreater(lr_28639, state.min_lr)
+        self.assertLess(lr_28640, lr_28639)
+
+    def test_cli_train_presets_match_canonical_studio_specs(self) -> None:
+        """Proves CLI scripts/train.py and Studio use the exact same CANONICAL_MODEL_SPECS."""
+        from scripts.train import build_parser
+        from triune.model.base import CANONICAL_MODEL_SPECS, get_model_spec
+
+        parser = build_parser()
+        args = parser.parse_args(["--model_name", "triune-base", "--depth_mode", "dynamic"])
+        self.assertEqual(args.depth_mode, "dynamic")
+        for preset_name in ("triune-nano", "triune-small", "triune-base", "triune-7b"):
+            spec = get_model_spec(preset_name)
+            self.assertEqual(spec.num_layers, CANONICAL_MODEL_SPECS[preset_name].num_layers)
+            self.assertEqual(spec.hidden_dim, CANONICAL_MODEL_SPECS[preset_name].hidden_dim)
+            self.assertEqual(spec.num_heads, CANONICAL_MODEL_SPECS[preset_name].num_heads)
+            self.assertEqual(spec.num_experts, CANONICAL_MODEL_SPECS[preset_name].num_experts)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -46,9 +46,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--compile", action="store_true")
     parser.add_argument("--seq_len", type=int)
     parser.add_argument("--lr", type=float)
+    parser.add_argument("--warmup_steps", type=int)
     parser.add_argument("--total_steps", type=int)
     parser.add_argument("--batch_size", type=int)
     parser.add_argument("--grad_accum_steps", type=int)
+    parser.add_argument("--depth_mode", choices=("dynamic", "joint", "cortex"), help="Depth routing supervision mode")
     parser.add_argument("--grad_checkpoint", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--save_every", type=int)
     parser.add_argument("--log_every", type=int)
@@ -129,8 +131,9 @@ def main(argv: list[str] | None = None) -> dict:
     overrides = {
         key: getattr(args, key)
         for key in (
-            "checkpoint_dir", "seq_len", "lr", "total_steps", "batch_size", "grad_accum_steps",
-            "save_every", "log_every", "eval_every", "eval_batches", "target_depth_dist", "usage_ema_decay", "bias_strength",
+            "checkpoint_dir", "seq_len", "lr", "warmup_steps", "total_steps", "batch_size", "grad_accum_steps",
+            "depth_mode", "save_every", "log_every", "eval_every", "eval_batches", "target_depth_dist",
+            "usage_ema_decay", "bias_strength",
             "balance_coef", "exploration", "exploration_steps", "steer_scale", "use_muon", "muon_lr",
             "galore", "galore_rank", "galore_update_gap", "galore_lr", "galore_weight_decay",
             "dataset_name",
@@ -138,18 +141,22 @@ def main(argv: list[str] | None = None) -> dict:
         )
         if getattr(args, key) is not None
     }
-    model_name_str = (args.model_name or "triune-2.5b").lower()
-    preset_configs = {
-        "triune-nano": {"num_layers": 8, "hidden_dim": 512, "num_heads": 4, "head_dim": 128, "num_experts": 4, "router_prefix_layers": 2, "reflex_exit_layer": 3, "limbic_exit_layer": 6},
-        "triune-small": {"num_layers": 14, "hidden_dim": 1024, "num_heads": 8, "head_dim": 128, "num_experts": 4, "router_prefix_layers": 3, "reflex_exit_layer": 5, "limbic_exit_layer": 10},
-        "triune-2.5b": {"num_layers": 18, "hidden_dim": 1280, "num_heads": 10, "head_dim": 128, "num_experts": 8, "router_prefix_layers": 3, "reflex_exit_layer": 5, "limbic_exit_layer": 13},
-        "triune-7b": {"num_layers": 32, "hidden_dim": 2048, "num_heads": 16, "head_dim": 128, "num_experts": 8, "router_prefix_layers": 4, "reflex_exit_layer": 8, "limbic_exit_layer": 22},
-        "triune-base": {"num_layers": 24, "hidden_dim": 1536, "num_heads": 12, "head_dim": 128, "num_experts": 8, "router_prefix_layers": 3, "reflex_exit_layer": 6, "limbic_exit_layer": 16},
-        "triune-moe": {"num_layers": 32, "hidden_dim": 1536, "num_heads": 12, "head_dim": 128, "num_experts": 16, "router_prefix_layers": 3, "reflex_exit_layer": 6, "limbic_exit_layer": 16},
-    }
-    if model_name_str in preset_configs:
-        for k, v in preset_configs[model_name_str].items():
-            overrides.setdefault(k, v)
+    from triune.model.base import CANONICAL_MODEL_SPECS, _LEGACY_PRESET_ALIASES, get_model_spec
+    model_name_str = (args.model_name or "triune-2.5b").strip().lower()
+    is_canonical_preset = model_name_str in CANONICAL_MODEL_SPECS or model_name_str in _LEGACY_PRESET_ALIASES
+    if is_canonical_preset:
+        spec = get_model_spec(model_name_str)
+        for k in (
+            "num_layers",
+            "hidden_dim",
+            "num_heads",
+            "head_dim",
+            "num_experts",
+            "router_prefix_layers",
+            "reflex_exit_layer",
+            "limbic_exit_layer",
+        ):
+            overrides.setdefault(k, getattr(spec, k))
 
     if overrides.get("checkpoint_dir"):
         overrides["checkpoint_dir"] = str(overrides["checkpoint_dir"])
@@ -215,7 +222,7 @@ def main(argv: list[str] | None = None) -> dict:
         )
 
         # Build model with BF16 default dtype
-        if model_name_str not in preset_configs and ("/" in args.model_name or not Path(args.model_name).exists()):
+        if not is_canonical_preset and ("/" in args.model_name or not Path(args.model_name).exists()):
             try:
                 from transformers import AutoModelForCausalLM
                 print(f"⏳ Loading Hugging Face model '{args.model_name}'...", flush=True)

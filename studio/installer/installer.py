@@ -428,32 +428,54 @@ fi
     # Create Windows Desktop & Start Menu .lnk shortcuts via PowerShell
     if hw.is_windows:
         try:
+            icon_file = WORKSPACE_ROOT / "studio" / "windows" / "triune.ico"
+            icon_loc = str(icon_file) if icon_file.is_file() else str(native_studio_exe)
             setup_snippet = ""
             if native_setup_exe is not None:
                 setup_snippet = f"""
-$SetupShortcut = $WshShell.CreateShortcut("$StartMenuPath\\Triune Studio Setup.lnk")
+$SetupLnk = Join-Path $StartMenuPath "Triune Studio Setup.lnk"
+if (Test-Path $SetupLnk) {{ Remove-Item $SetupLnk -Force -ErrorAction SilentlyContinue }}
+$SetupShortcut = $WshShell.CreateShortcut($SetupLnk)
 $SetupShortcut.TargetPath = "{native_setup_exe}"
 $SetupShortcut.WorkingDirectory = "{WORKSPACE_ROOT}"
+$SetupShortcut.IconLocation = "{icon_loc},0"
 $SetupShortcut.Description = "Triune Studio Setup - Repair or Reconfigure AI Engine"
 $SetupShortcut.Save()
 """
             ps_script = f"""
 $WshShell = New-Object -comObject WScript.Shell
-$DesktopPath = [Environment]::GetFolderPath('Desktop')
+$DesktopDirs = @(
+    [Environment]::GetFolderPath('Desktop'),
+    [Environment]::GetFolderPath('DesktopDirectory'),
+    (Join-Path $env:USERPROFILE 'OneDrive\\Desktop'),
+    (Join-Path $env:USERPROFILE 'Desktop')
+) | Where-Object {{ $_ -and (Test-Path $_) }} | Select-Object -Unique
+
+foreach ($DesktopPath in $DesktopDirs) {{
+    foreach ($Name in @("Triune Studio.lnk", "Triune.lnk")) {{
+        $LnkPath = Join-Path $DesktopPath $Name
+        if (Test-Path $LnkPath) {{ Remove-Item $LnkPath -Force -ErrorAction SilentlyContinue }}
+    }}
+    $Shortcut = $WshShell.CreateShortcut((Join-Path $DesktopPath "Triune Studio.lnk"))
+    $Shortcut.TargetPath = "{native_studio_exe}"
+    $Shortcut.WorkingDirectory = "{WORKSPACE_ROOT}"
+    $Shortcut.IconLocation = "{icon_loc},0"
+    $Shortcut.Description = "Triune Studio - AI Engine and Visual Research IDE"
+    $Shortcut.Save()
+}}
+
 $StartMenuPath = [Environment]::GetFolderPath('Programs')
-$Shortcut = $WshShell.CreateShortcut("$DesktopPath\\Triune Studio.lnk")
-$Shortcut.TargetPath = "{native_studio_exe}"
-$Shortcut.WorkingDirectory = "{WORKSPACE_ROOT}"
-$Shortcut.Description = "Triune Studio - AI Engine and Visual Research IDE"
-$Shortcut.Save()
-$StartShortcut = $WshShell.CreateShortcut("$StartMenuPath\\Triune Studio.lnk")
+$StartLnk = Join-Path $StartMenuPath "Triune Studio.lnk"
+if (Test-Path $StartLnk) {{ Remove-Item $StartLnk -Force -ErrorAction SilentlyContinue }}
+$StartShortcut = $WshShell.CreateShortcut($StartLnk)
 $StartShortcut.TargetPath = "{native_studio_exe}"
 $StartShortcut.WorkingDirectory = "{WORKSPACE_ROOT}"
+$StartShortcut.IconLocation = "{icon_loc},0"
 $StartShortcut.Description = "Triune Studio - AI Engine and Visual Research IDE"
 $StartShortcut.Save()
 {setup_snippet}
 """
-            res = subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], capture_output=True, timeout=8.0)
+            res = subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], capture_output=True, timeout=10.0)
             if res.returncode == 0:
                 log_success(f"Created Windows Desktop & Start Menu Shortcuts -> {native_studio_exe.name}")
         except Exception as e:
@@ -623,6 +645,8 @@ def main() -> None:
         bin_dir = "Scripts" if is_win else "bin"
         cand = venv_path / bin_dir / py_name
         py_bin = cand if cand.exists() else Path(sys.executable)
+        create_desktop_shortcut(hw, create_shortcuts=not args.no_shortcuts)
+        register_cli_on_path(py_bin, hw, enable_path=not args.no_path)
         log_step(2, TOTAL_STEPS, "System Health Verification")
         if not verify_installation(py_bin, hw, allow_cpu=args.cuda == "cpu"):
             raise SystemExit(1)

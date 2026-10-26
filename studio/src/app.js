@@ -2163,13 +2163,17 @@
           if (statusData.history && statusData.history.length > 0) {
             setMetricsHistory(statusData.history);
             const latest = statusData.history[statusData.history.length - 1];
-            setMetrics(latest);
+            setMetrics({
+              ...latest,
+              lr: (typeof latest.lr === 'number' && latest.lr > 0) ? latest.lr : (statusData.current_lr || latest.lr)
+            });
             if (latest.exit_usage) setExitUsage(latest.exit_usage);
             if (latest.batch_preview) setActiveBatchPreview(latest.batch_preview);
           } else if (typeof statusData.step === 'number' && statusData.step > 0) {
             setMetrics(prev => ({
               ...prev,
               step: statusData.step,
+              lr: statusData.current_lr || prev.lr,
               tokens_trained: statusData.tokens_trained || prev.tokens_trained
             }));
           }
@@ -2933,7 +2937,10 @@
             if (data.history && data.history.length > 0) {
               setMetricsHistory(data.history);
               const latest = data.history[data.history.length - 1];
-              setMetrics(latest);
+              setMetrics({
+                ...latest,
+                lr: (typeof latest.lr === 'number' && latest.lr > 0) ? latest.lr : (data.current_lr || latest.lr)
+              });
               if (latest.exit_usage) setExitUsage(latest.exit_usage);
               if (latest.batch_preview) setActiveBatchPreview(latest.batch_preview);
             }
@@ -3464,6 +3471,9 @@
               setPrecision(cc.precision);
             }
             if (cc.lr !== undefined) setTrainLR(String(cc.lr));
+            if (cc.current_lr !== undefined) {
+              setMetrics(prev => ({ ...prev, lr: cc.current_lr }));
+            }
             if (cc.warmup_steps !== undefined) setTrainWarmup(cc.warmup_steps);
             setGpuOffloadPct(data.profile.gpu_offload_pct);
             setGpuLayers(data.profile.gpu_layers);
@@ -3472,7 +3482,8 @@
               batch_size: cc.batch_size,
               seq_len: cc.seq_len,
               grad_accum_steps: cc.grad_accum_steps,
-              depth_mode: cc.depth_mode
+              depth_mode: cc.depth_mode,
+              current_lr: cc.current_lr !== undefined ? cc.current_lr : prev.current_lr
             }));
             syncStateToDAGNodes({
               batch_size: cc.batch_size,
@@ -3523,6 +3534,9 @@
               setPrecision(cc.precision);
             }
             if (cc.lr !== undefined) setTrainLR(String(cc.lr));
+            if (cc.current_lr !== undefined) {
+              setMetrics(prev => ({ ...prev, lr: cc.current_lr }));
+            }
             if (cc.warmup_steps !== undefined) setTrainWarmup(cc.warmup_steps);
             setGpuOffloadPct(data.profile.gpu_offload_pct);
             setGpuLayers(data.profile.gpu_layers);
@@ -3531,7 +3545,8 @@
               batch_size: cc.batch_size,
               seq_len: cc.seq_len,
               grad_accum_steps: cc.grad_accum_steps,
-              depth_mode: cc.depth_mode
+              depth_mode: cc.depth_mode,
+              current_lr: cc.current_lr !== undefined ? cc.current_lr : prev.current_lr
             }));
             syncStateToDAGNodes({
               batch_size: cc.batch_size,
@@ -3790,7 +3805,7 @@
             )
           ),
           e('div', { className: 'hyperparam-col' },
-            e('label', null, 'Peak Learning Rate:'),
+            e('label', null, `Peak Learning Rate (Live: ${Number((metrics && typeof metrics.lr === 'number' && metrics.lr > 0) ? metrics.lr : ((datasetInfo && typeof datasetInfo.current_lr === 'number' && datasetInfo.current_lr > 0) ? datasetInfo.current_lr : (trainLR || 0.0005))).toExponential(2)}):`),
             e('select', {
               value: trainLR,
               onChange: ev => {
@@ -6407,7 +6422,7 @@
               e('div', { className: 'card-stat' },
                 e('div', { className: 'stat-label' }, 'Total Loss'),
                 e('div', { className: 'stat-value' }, (metrics.loss !== undefined && metrics.loss !== null) ? Number(metrics.loss).toFixed(4) : '--'),
-                e('div', { className: 'stat-sub' }, `Batch: ${trainBatchSize || datasetInfo.batch_size || 4} | Accum: ${trainGradAccum || datasetInfo.grad_accum_steps || 4}x | LR: ${Number(trainLR || 0.0005).toExponential(1)}`)
+                e('div', { className: 'stat-sub' }, `Batch: ${trainBatchSize || datasetInfo.batch_size || 4} | Accum: ${trainGradAccum || datasetInfo.grad_accum_steps || 4}x | LR: ${Number((metrics && typeof metrics.lr === 'number' && metrics.lr > 0) ? metrics.lr : ((datasetInfo && typeof datasetInfo.current_lr === 'number' && datasetInfo.current_lr > 0) ? datasetInfo.current_lr : (trainLR || 0.0005))).toExponential(2)}`)
               ),
               e('div', { className: 'card-stat' },
                 e('div', { className: 'stat-label' }, 'Global Steps'),
