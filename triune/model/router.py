@@ -69,25 +69,7 @@ class GumbelSoftmaxRouter(nn.Module):
             # Straight-through gradient identity block
             y_route = y_hard + y_soft - y_soft.detach()
         else:
-            # Calibrated inference routing: combine debiased MLP signal with sequence & activation complexity prior
-            x_tail = x[:, -min(T, 12):, :]
-            if x_tail.size(1) > 1:
-                x_norm = F.normalize(x_tail.float(), dim=-1)
-                mean_dir = F.normalize(x_norm.mean(dim=1, keepdim=True), dim=-1)
-                disp = (1.0 - (x_norm * mean_dir).sum(dim=-1)).mean(dim=-1).clamp(0.0, 1.0)
-            else:
-                disp = torch.zeros(B, device=x.device, dtype=torch.float32)
-
-            len_score = min(1.2, max(0.0, (float(T) - 9.0) / 14.0))
-            complexity = 0.85 * len_score + 0.15 * disp
-            prior_reflex = -6.5 * (complexity - 0.15).pow(2)
-            prior_limbic = -6.5 * (complexity - 0.48).pow(2)
-            prior_cortex = -6.5 * (complexity - 0.90).pow(2)
-            prior_logits = torch.stack([prior_reflex, prior_limbic, prior_cortex], dim=-1).to(raw_logits.dtype)
-
-            centered_raw = (raw_logits - raw_logits.mean(dim=-1, keepdim=True)).clamp(-1.5, 1.5)
-            logits = raw_logits + (prior_logits + 0.08 * centered_raw - raw_logits).detach()
-
+            logits = raw_logits
             # Greedy inference path (deterministic argmax)
             index = logits.argmax(dim=-1)
             y_route = F.one_hot(index, num_classes=3).float()
