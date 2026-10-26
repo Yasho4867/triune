@@ -387,3 +387,108 @@ class TriuneFineTuner:
             "trainable_params": self.count_trainable_parameters(),
             "output_dir": str(out_path),
         }
+
+
+def list_adapters(scan_dirs: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    """Discover all saved LoRA/QLoRA adapters on disk across standard directories."""
+    import time
+    scan_dirs = scan_dirs or ["checkpoints", "checkpoints/adapters", "exports"]
+    adapters: List[Dict[str, Any]] = []
+    seen_paths = set()
+    for sdir in scan_dirs:
+        p = Path(sdir)
+        if not p.is_dir():
+            continue
+        for item in p.iterdir():
+            clean_path = str(item).replace("\\", "/")
+            if clean_path in seen_paths:
+                continue
+            if item.is_dir():
+                cfg_file = item / "adapter_config.json"
+                weights_file = item / "adapter_model.safetensors"
+                if not weights_file.exists():
+                    weights_file = item / "adapter_model.pt"
+                if cfg_file.exists() or weights_file.exists():
+                    seen_paths.add(clean_path)
+                    rank_val = 16
+                    alpha_val = 32.0
+                    quant_val = "4-bit NF4"
+                    trainable_val = 0
+                    if cfg_file.exists():
+                        try:
+                            with open(cfg_file, "r", encoding="utf-8") as f:
+                                cdata = json.load(f)
+                                rank_val = cdata.get("rank", rank_val)
+                                alpha_val = cdata.get("alpha", alpha_val)
+                                quant_val = cdata.get("quantization", quant_val)
+                                trainable_val = cdata.get("trainable_params", 0)
+                        except Exception:
+                            pass
+                    sz_mb = round(weights_file.stat().st_size / (1024 * 1024), 2) if weights_file.exists() else 0.0
+                    adapters.append({
+                        "id": item.name,
+                        "name": item.name.replace("_", " ").title(),
+                        "path": clean_path,
+                        "rank": rank_val,
+                        "alpha": alpha_val,
+                        "quantization": quant_val,
+                        "trainable_params": trainable_val,
+                        "size_mb": sz_mb,
+                        "mtime": time.strftime("%Y-%m-%d %H:%M", time.localtime(item.stat().st_mtime)),
+                    })
+            elif item.is_file() and "adapter" in item.name.lower() and item.suffix in (".safetensors", ".pt"):
+                seen_paths.add(clean_path)
+                sz_mb = round(item.stat().st_size / (1024 * 1024), 2)
+                adapters.append({
+                    "id": item.stem,
+                    "name": item.stem.replace("_", " ").title(),
+                    "path": clean_path,
+                    "rank": 16,
+                    "alpha": 32.0,
+                    "quantization": "4-bit NF4",
+                    "trainable_params": 0,
+                    "size_mb": sz_mb,
+                    "mtime": time.strftime("%Y-%m-%d %H:%M", time.localtime(item.stat().st_mtime)),
+                })
+    return adapters
+
+
+def export_adapter(adapter_path: str | Path, output_path: str | Path | None = None, fmt: str = "safetensors") -> Path:
+    """Export an adapter as a standalone SafeTensors package."""
+    import shutil
+    p = Path(adapter_path)
+    if not p.exists():
+        raise FileNotFoundError(f"Adapter source not found: {adapter_path}")
+    src = p / "adapter_model.safetensors" if p.is_dir() else p
+    if not src.exists():
+        src = p / "adapter_model.pt"
+    if not src.exists():
+        raise FileNotFoundError(f"No adapter weight file in {adapter_path}")
+    if output_path is None:
+        name = p.name if p.is_dir() else p.stem
+        out = Path("exports") / f"{name}.{fmt}"
+    else:
+        out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, out)
+    return out
+
+
+def merge_adapter_checkpoint(
+    adapter_path: str | Path,
+    checkpoint_path: str | Path,
+    output_path: str | Path | None = None,
+    tokenizer_path: str | Path = "triune_tokenizer.json",
+) -> Path:
+    """Load base model checkpoint, attach and merge adapter, and save updated checkpoint."""
+    from triune.inference import load_checkpoint_model
+    model, tokenizer, checkpoint, device, _, _ = load_checkpoint_model(checkpoint_path, tokenizer_path)
+    cfg = LoRAConfig()
+    tuner = TriuneFineTuner(model, cfg)
+    tuner.load_adapter(adapter_path)
+    tuner.merge_and_unload()
+    out = Path(output_path or f"checkpoints/merged_{Path(checkpoint_path).name}")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    checkpoint["model_state"] = model.state_dict()
+    torch.save(checkpoint, str(out))
+    return out

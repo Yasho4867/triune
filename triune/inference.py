@@ -16,6 +16,7 @@ def load_checkpoint_model(
     tokenizer_path: str | Path = "triune_tokenizer.json",
     *,
     device: str | torch.device | None = None,
+    adapter_path: str | Path | None = None,
 ):
     """Load a training checkpoint for generation and return model plus tokenizer."""
     device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
@@ -42,6 +43,11 @@ def load_checkpoint_model(
     model = build_model(config)
     model.load_state_dict(state_dict)
     model = model.to(device).bfloat16().eval()
+    if adapter_path is not None and Path(adapter_path).exists():
+        from triune.trainer.finetune import LoRAConfig, TriuneFineTuner
+        cfg = LoRAConfig()
+        tuner = TriuneFineTuner(model, cfg)
+        tuner.load_adapter(adapter_path)
     return model, tokenizer, checkpoint, device, pad_token_id, eos_token_id
 
 

@@ -16,6 +16,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Chat with a Triune checkpoint")
     parser.add_argument("--checkpoint", default="checkpoints_full/best.pt")
     parser.add_argument("--tokenizer_path", default="triune_tokenizer.json")
+    parser.add_argument("--adapter", default=None, help="LoRA adapter directory or safetensors path to attach")
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--repetition_penalty", type=float, default=1.1)
     parser.add_argument("--max_new_tokens", type=int, default=100)
@@ -24,7 +25,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
-    model, tokenizer, checkpoint, device, pad_id, eos_id = load_checkpoint_model(args.checkpoint, args.tokenizer_path)
+    model, tokenizer, checkpoint, device, pad_id, eos_id = load_checkpoint_model(
+        args.checkpoint, args.tokenizer_path, adapter_path=args.adapter
+    )
+    if args.adapter:
+        print(f"LoRA Adapter attached from: {args.adapter}")
     print(f"Model loaded. Best eval loss: {checkpoint.get('best_eval_loss', 'unknown')}")
     print("Triune chat mode. Commands: reflex / limbic / cortex / auto; exit to quit.")
     while True:

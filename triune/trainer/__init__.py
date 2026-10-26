@@ -1,7 +1,14 @@
 from .engine import TrainingEngine as Engine, TrainingEngine
 from .trainer import Trainer
 from .logger import NullLogger, WandbLogger
-from .finetune import LoRAConfig, LoRALayer, TriuneFineTuner
+from .finetune import (
+    LoRAConfig,
+    LoRALayer,
+    TriuneFineTuner,
+    list_adapters,
+    export_adapter,
+    merge_adapter_checkpoint,
+)
 
 __all__ = [
     "Engine",
@@ -12,4 +19,7 @@ __all__ = [
     "LoRAConfig",
     "LoRALayer",
     "TriuneFineTuner",
+    "list_adapters",
+    "export_adapter",
+    "merge_adapter_checkpoint",
 ]

@@ -2563,94 +2563,34 @@ if HAS_FASTAPI:
     @router.get("/v1/finetune/adapters")
     async def list_available_adapters() -> Dict[str, Any]:
         """List all discovered LoRA/QLoRA adapters on disk."""
-        adapters = []
-        scan_dirs = ["checkpoints", "checkpoints/adapters", "exports"]
-        seen_paths = set()
-        for sdir in scan_dirs:
-            p = Path(sdir)
-            if not p.is_dir():
-                continue
-            for item in p.iterdir():
-                clean_path = str(item).replace("\\", "/")
-                if clean_path in seen_paths:
-                    continue
-                if item.is_dir():
-                    cfg_file = item / "adapter_config.json"
-                    weights_file = item / "adapter_model.safetensors"
-                    if not weights_file.exists():
-                        weights_file = item / "adapter_model.pt"
-                    if cfg_file.exists() or weights_file.exists():
-                        seen_paths.add(clean_path)
-                        rank_val = 16
-                        alpha_val = 32.0
-                        quant_val = "4-bit NF4"
-                        trainable_val = 0
-                        if cfg_file.exists():
-                            try:
-                                with open(cfg_file, "r", encoding="utf-8") as f:
-                                    cdata = json.load(f)
-                                    rank_val = cdata.get("rank", rank_val)
-                                    alpha_val = cdata.get("alpha", alpha_val)
-                                    quant_val = cdata.get("quantization", quant_val)
-                                    trainable_val = cdata.get("trainable_params", 0)
-                            except Exception:
-                                pass
-                        sz_mb = round(weights_file.stat().st_size / (1024 * 1024), 2) if weights_file.exists() else 0.0
-                        adapters.append({
-                            "id": item.name,
-                            "name": item.name.replace("_", " ").title(),
-                            "path": clean_path,
-                            "rank": rank_val,
-                            "alpha": alpha_val,
-                            "quantization": quant_val,
-                            "trainable_params": trainable_val,
-                            "size_mb": sz_mb,
-                            "mtime": time.strftime("%Y-%m-%d %H:%M", time.localtime(item.stat().st_mtime)),
-                            "is_active": pytorch_state.active_adapter is not None and pytorch_state.active_adapter.get("path") == clean_path,
-                        })
-                elif item.is_file() and "adapter" in item.name.lower() and item.suffix in (".safetensors", ".pt"):
-                    seen_paths.add(clean_path)
-                    sz_mb = round(item.stat().st_size / (1024 * 1024), 2)
-                    adapters.append({
-                        "id": item.stem,
-                        "name": item.stem.replace("_", " ").title(),
-                        "path": clean_path,
-                        "rank": 16,
-                        "alpha": 32.0,
-                        "quantization": "4-bit NF4",
-                        "trainable_params": 0,
-                        "size_mb": sz_mb,
-                        "mtime": time.strftime("%Y-%m-%d %H:%M", time.localtime(item.stat().st_mtime)),
-                        "is_active": pytorch_state.active_adapter is not None and pytorch_state.active_adapter.get("path") == clean_path,
-                    })
-        return {"adapters": adapters, "active_adapter": getattr(pytorch_state, "active_adapter", None)}
+        from triune.trainer.finetune import list_adapters
+        raw_adapters = list_adapters()
+        for ad in raw_adapters:
+            ad["is_active"] = bool(
+                pytorch_state.active_adapter is not None
+                and (pytorch_state.active_adapter.get("path") == ad["path"] or pytorch_state.active_adapter.get("name") == ad["name"])
+            )
+        return {"adapters": raw_adapters, "active_adapter": getattr(pytorch_state, "active_adapter", None)}
 
     @router.post("/v1/finetune/export")
     async def export_adapter(req: AdapterExportRequest) -> Dict[str, Any]:
         """Export an adapter as a standalone SafeTensors or GGUF package."""
+        from triune.trainer.finetune import export_adapter as do_export_adapter
         target_path = req.adapter_path or (pytorch_state.active_adapter.get("path") if pytorch_state.active_adapter else None)
         if not target_path or not Path(target_path).exists():
             return {"status": "error", "message": f"Adapter path does not exist: {target_path}"}
-
-        out_name = req.export_name or "lora_adapter"
-        dest = Path("exports") / f"{out_name}.{req.format}"
-        dest.parent.mkdir(parents=True, exist_ok=True)
-
-        p = Path(target_path)
-        src = p / "adapter_model.safetensors" if p.is_dir() else p
-        if not src.exists():
-            src = p / "adapter_model.pt"
-
-        if src.exists():
-            import shutil
-            shutil.copy2(src, dest)
+        try:
+            out_name = req.export_name or "lora_adapter"
+            dest = Path("exports") / f"{out_name}.{req.format}"
+            exported = do_export_adapter(target_path, dest, fmt=req.format)
             return {
                 "status": "success",
-                "export_path": str(dest).replace("\\", "/"),
-                "size_mb": round(dest.stat().st_size / (1024 * 1024), 2),
-                "message": f"Adapter exported successfully to {dest}."
+                "export_path": str(exported).replace("\\", "/"),
+                "size_mb": round(exported.stat().st_size / (1024 * 1024), 2),
+                "message": f"Adapter exported successfully to {exported}."
             }
-        return {"status": "error", "message": "Source adapter file not found."}
+        except Exception as exc:
+            return {"status": "error", "message": str(exc)}
 
     @router.post("/v1/dag/execute")
     async def execute_dag(req: DAGExecuteRequest) -> Dict[str, Any]:
