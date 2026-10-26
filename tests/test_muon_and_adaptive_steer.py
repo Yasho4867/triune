@@ -225,10 +225,93 @@ def test_full_triune_3tier_optimizer():
     print("✅ Full Triune 3-Tier Optimizer & Serialization test passed!\n")
 
 
+def test_centroid_steer_mathematical_invariants():
+    print("=== Testing CentroidSteer Mathematical Invariants (GaLore min-dim, Transport, Orthonormal Variance) ===")
+    torch.manual_seed(42)
+    dim = 64
+    rank = 16
+    num_experts = 4
+
+    moe = MoE_FFN(dim=dim, num_experts=num_experts, top_k=2, shared_expert=False)
+    opt = CentroidSteerOptimizer(
+        moe, lr=1e-3, betas=(0.9, 0.95), weight_decay=0.0,
+        rank=rank, update_gap=2, steer_scale=0.25, use_muon=False
+    )
+
+    x = torch.randn(4, 16, dim)
+    for step_idx in range(4):
+        opt.zero_grad()
+        out = moe(x, update_stats=True)
+        loss = out.pow(2).mean()
+        loss.backward()
+        opt.step()
+
+    for group in opt.layer_groups:
+        p = group['param']
+        m, n = p.shape
+        proj = group['projection']
+        side = group['projection_side']
+        state = group['state']
+
+        # 1. GaLore Theorem 3.2: always project smaller dimension min(m, n) == dim
+        expected_side = 'left' if m <= n else 'right'
+        assert side == expected_side, f"Expected side {expected_side} for shape {p.shape}, got {side}"
+        assert proj.shape == (min(m, n), rank), f"Expected projection shape {(min(m, n), rank)}, got {proj.shape}"
+
+        # 2. Subspace transport across update_gap=2: step count must reach 4 without resetting to 1
+        assert state['step'] == 4, f"Expected continuous step=4 across update_gap=2, got {state['step']}"
+        assert not torch.isnan(state['momentum']).any(), "Momentum contains NaNs after basis transport"
+        assert not torch.isnan(state['variance']).any(), "Variance contains NaNs after basis transport"
+        assert (state['variance'] >= 0).all(), "Variance must remain non-negative after basis transport"
+
+    # 3. Verify orthonormal forward projection vs scaled reconstruction on step 1
+    torch.manual_seed(99)
+    moe_a = MoE_FFN(dim=dim, num_experts=2, top_k=2, shared_expert=False)
+    moe_b = MoE_FFN(dim=dim, num_experts=2, top_k=2, shared_expert=False)
+    moe_b.load_state_dict(moe_a.state_dict())
+
+    opt_small = CentroidSteerOptimizer(
+        moe_a, lr=1e-2, betas=(0.9, 0.95), weight_decay=0.0,
+        rank=rank, update_gap=10, steer_scale=0.10, use_muon=False
+    )
+    opt_large = CentroidSteerOptimizer(
+        moe_b, lr=1e-2, betas=(0.9, 0.95), weight_decay=0.0,
+        rank=rank, update_gap=10, steer_scale=0.80, use_muon=False
+    )
+
+    # Synchronize random initial orthogonal projections
+    for ga, gb in zip(opt_small.layer_groups, opt_large.layer_groups):
+        init_p = torch.empty(dim, rank)
+        torch.nn.init.orthogonal_(init_p)
+        ga['projection'] = init_p.clone()
+        gb['projection'] = init_p.clone()
+        ga['projection_side'] = 'left' if ga['param'].shape[0] <= ga['param'].shape[1] else 'right'
+        gb['projection_side'] = ga['projection_side']
+
+    x_test = torch.randn(2, 16, dim)
+    out_a = moe_a(x_test, update_stats=True)
+    out_a.pow(2).mean().backward()
+    opt_small.step()
+
+    out_b = moe_b(x_test, update_stats=True)
+    out_b.pow(2).mean().backward()
+    opt_large.step()
+
+    # Forward variance must be identical (uncorrupted by steer_scale^2), while parameter updates differ
+    for ga, gb in zip(opt_small.layer_groups, opt_large.layer_groups):
+        var_diff = (ga['state']['variance'] - gb['state']['variance']).abs().max().item()
+        assert var_diff < 1e-6, f"Second moment EMA was corrupted by steer_scale! Max diff: {var_diff}"
+        param_diff = (ga['param'].data - gb['param'].data).abs().max().item()
+        assert param_diff > 1e-6, "Parameter reconstruction should scale with steer_scale!"
+
+    print("✅ CentroidSteer mathematical invariants passed!\n")
+
+
 if __name__ == "__main__":
     test_newtonschulz5_orthogonality()
     test_muon_optimizer_step()
     test_muon_invariants_and_device_discipline()
     test_adaptive_steer_scale_and_load_ratio()
     test_full_triune_3tier_optimizer()
+    test_centroid_steer_mathematical_invariants()
     print("🎉 ALL TESTS PASSED SUCCESSFULLY!")

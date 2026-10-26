@@ -231,12 +231,9 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
 
             if group['projection'] is None:
                 rank = min(self.rank, m, n)
-                if m >= n:
+                # GaLore Theorem 3.2: always project the smaller dimension min(m, n)
+                if m <= n:
                     group['projection_side'] = 'left'
-                    # QR-based orthogonal initialization is unsupported for
-                    # CPU bfloat16 and is less stable in low precision. Build
-                    # the small projection in fp32, then cast to the gradient
-                    # dtype used by the optimizer update.
                     init_p = torch.empty(m, rank, device=grad.device, dtype=torch.float32)
                     torch.nn.init.orthogonal_(init_p)
                     group['projection'] = init_p.to(dtype=grad.dtype)
@@ -255,26 +252,61 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                 U, S, V = torch.svd_lowrank(grad_fp32, q=min(self.rank + 10, m, n), niter=2)
                 rank = min(self.rank, m, n)
 
-                if m >= n:
-                    group['projection_side'] = 'left'
-                    group['projection'] = U[:, :rank].to(device=grad.device, dtype=grad.dtype).contiguous()
-                else:
-                    group['projection_side'] = 'right'
-                    group['projection'] = V[:, :rank].to(device=grad.device, dtype=grad.dtype).contiguous()
+                old_proj = group['projection'].to(device=grad.device, dtype=torch.float32)
+                old_side = group.get('projection_side', 'left')
 
-                del grad_fp32, U, S, V
+                if m <= n:
+                    new_side = 'left'
+                    new_proj_fp32 = U[:, :rank].contiguous()
+                else:
+                    new_side = 'right'
+                    new_proj_fp32 = V[:, :rank].contiguous()
+
+                # Subspace basis-change transport: project accumulated low-rank moments
+                # into the new SVD basis via T = P_old^T @ P_new instead of wiping state to zero.
+                if (
+                    state['momentum'] is not None
+                    and state['variance'] is not None
+                    and old_side == new_side
+                    and old_proj.shape == new_proj_fp32.shape
+                ):
+                    T_mat = old_proj.T @ new_proj_fp32  # [r, r]
+                    T_sq = T_mat.pow(2)
+                    mom_fp32 = state['momentum'].to(device=grad.device, dtype=torch.float32)
+                    var_fp32 = state['variance'].to(device=grad.device, dtype=torch.float32)
+                    if new_side == 'left' and mom_fp32.size(0) >= rank:
+                        mom_r = T_mat.T @ mom_fp32[:rank, :]
+                        row_energy = T_sq.sum(dim=0, keepdim=True).T.clamp(0.0, 1.0)
+                        var_mean = var_fp32[:rank, :].mean(dim=0, keepdim=True)
+                        var_r = (T_sq.T @ var_fp32[:rank, :]) + (1.0 - row_energy) * var_mean
+                        mom_fp32 = torch.cat([mom_r, mom_fp32[rank:, :]], dim=0)
+                        var_fp32 = torch.cat([var_r, var_fp32[rank:, :]], dim=0)
+                    elif new_side == 'right' and mom_fp32.size(1) >= rank:
+                        mom_r = mom_fp32[:, :rank] @ T_mat
+                        col_energy = T_sq.sum(dim=0, keepdim=True).clamp(0.0, 1.0)
+                        var_mean = var_fp32[:, :rank].mean(dim=1, keepdim=True)
+                        var_r = (var_fp32[:, :rank] @ T_sq) + var_mean * (1.0 - col_energy)
+                        mom_fp32 = torch.cat([mom_r, mom_fp32[:, rank:]], dim=1)
+                        var_fp32 = torch.cat([var_r, var_fp32[:, rank:]], dim=1)
+                    state['momentum'] = mom_fp32.to(dtype=grad.dtype)
+                    state['variance'] = var_fp32.to(dtype=grad.dtype)
+                else:
+                    state['momentum'] = None
+                    state['variance'] = None
+                    state['step'] = 0
+
+                group['projection_side'] = new_side
+                group['projection'] = new_proj_fp32.to(device=grad.device, dtype=grad.dtype).contiguous()
+                del grad_fp32, U, S, V, old_proj, new_proj_fp32
                 group['proj_step'] = self.step_count
-                state['momentum'] = None
-                state['variance'] = None
-                state['step'] = 0
-                group['last_c_orth'] = None
 
             proj = group['projection'].to(device=grad.device, dtype=grad.dtype)
             side = group.get('projection_side', 'left')
 
-            # Centroid steering
+            # Centroid steering: Gram-Schmidt orthogonalization of live expert centroid against P
             centroids = module.last_centroids if module is not None else None
             steer_applied = False
+            effective_steer = torch.tensor(0.0, device=proj.device, dtype=proj.dtype)
 
             if centroids is not None and expert_idx is not None and expert_idx < centroids.size(0) and self.steer_scale > 0:
                 c = centroids[expert_idx]
@@ -302,26 +334,28 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                                 c_orth = -c_orth
                         group['last_c_orth'] = c_orth.detach()
                         if hasattr(module, 'expert_load_ratio') and expert_idx < module.expert_load_ratio.size(0):
-                            # Fix H-6: Replace .item() with tensor ops to avoid CPU-GPU sync
-                            load_r = module.expert_load_ratio[expert_idx]
+                            load_r = module.expert_load_ratio[expert_idx].to(device=proj.device, dtype=proj.dtype)
                             util_mult = torch.clamp(1.0 + (1.0 - load_r), min=0.3, max=2.0)
                         else:
                             util_mult = torch.tensor(1.0, device=proj.device, dtype=proj.dtype)
-                        # Fix H-6: Also replace c_res_norm.item()
-                        residual_mult = torch.clamp(c_res_norm, min=0.1, max=1.0)
-                        effective_steer = self.steer_scale * util_mult * residual_mult
-                        proj_aug = torch.cat([proj, (effective_steer * c_orth).unsqueeze(1)], dim=1)
+                        # Exact sin(theta) = ||c_res||_2 scaling (vanishes smoothly as centroid enters span(P))
+                        residual_mult = torch.clamp(c_res_norm, min=0.0, max=1.0)
+                        effective_steer = (self.steer_scale * util_mult * residual_mult).to(dtype=proj.dtype)
+                        # Keep forward basis strictly orthonormal [P, c_orth] so second moments are uncorrupted
+                        proj_unit = torch.cat([proj, c_orth.unsqueeze(1)], dim=1)
+                        proj_recon = torch.cat([proj, (effective_steer * c_orth).unsqueeze(1)], dim=1)
                         steer_applied = True
 
             if not steer_applied:
                 zero_vec = torch.zeros(m if side == 'left' else n, 1, dtype=proj.dtype, device=proj.device)
-                proj_aug = torch.cat([proj, zero_vec], dim=1)
+                proj_unit = torch.cat([proj, zero_vec], dim=1)
+                proj_recon = proj_unit
                 group['last_c_orth'] = None
 
             if side == 'left':
-                g_lr = proj_aug.T @ grad
+                g_lr = proj_unit.T @ grad
             else:
-                g_lr = grad @ proj_aug
+                g_lr = grad @ proj_unit
 
             state['step'] += 1
             if state['momentum'] is None:
@@ -340,9 +374,9 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
             delta_lr = m_hat / (v_hat.sqrt() + 1e-8)
 
             if side == 'left':
-                delta_full = proj_aug @ delta_lr
+                delta_full = proj_recon @ delta_lr
             else:
-                delta_full = delta_lr @ proj_aug.T
+                delta_full = delta_lr @ proj_recon.T
 
             if expert_wd != 0:
                 p.data.mul_(1.0 - expert_lr * expert_wd)  # Fix M-3: decoupled weight decay without .data subtraction
