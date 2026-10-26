@@ -7,6 +7,20 @@ echo            TRIUNE STUDIO - AUTOMATED AI ENGINE INSTALLER
 echo ===============================================================================
 echo.
 
+:: If interactive and the native WPF Setup Wizard exists, launch TriuneStudioSetup.exe
+if "%~1"=="" (
+    if exist "%~dp0..\..\TriuneStudioSetup.exe" (
+        echo [Setup] Launching Native Windows Setup Wizard (TriuneStudioSetup.exe)...
+        start "" "%~dp0..\..\TriuneStudioSetup.exe"
+        exit /b 0
+    )
+    if exist "%~dp0..\windows\publish\TriuneStudioSetup.exe" (
+        echo [Setup] Launching Native Windows Setup Wizard (TriuneStudioSetup.exe)...
+        start "" "%~dp0..\windows\publish\TriuneStudioSetup.exe"
+        exit /b 0
+    )
+)
+
 :: 1. Detect Python
 where python >nul 2>&1
 if %ERRORLEVEL% equ 0 (

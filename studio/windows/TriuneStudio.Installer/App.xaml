@@ -1,0 +1,14 @@
+<Application x:Class="TriuneStudio.Installer.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Startup="Application_Startup">
+  <Application.Resources>
+    <SolidColorBrush x:Key="InstallerBackground" Color="#111317" />
+    <SolidColorBrush x:Key="InstallerSurface" Color="#1A1D24" />
+    <SolidColorBrush x:Key="InstallerBorder" Color="#2A2F3A" />
+    <SolidColorBrush x:Key="InstallerForeground" Color="#F3F4F6" />
+    <SolidColorBrush x:Key="InstallerMuted" Color="#9CA3AF" />
+    <SolidColorBrush x:Key="InstallerAccent" Color="#C2410C" />
+    <SolidColorBrush x:Key="InstallerSuccess" Color="#10B981" />
+  </Application.Resources>
+</Application>

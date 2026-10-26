@@ -1048,6 +1048,8 @@ if HAS_FASTAPI:
 
             if "step" in checkpoint:
                 self.step = int(checkpoint["step"])
+            if self.training_engine is not None:
+                self.training_engine.step = self.step
             config = checkpoint.get("config", {}) if isinstance(checkpoint.get("config"), dict) else {}
             restored_tokens = checkpoint.get("total_tokens_trained", checkpoint.get("tokens_trained", 0))
             if not restored_tokens and self.step > 0:

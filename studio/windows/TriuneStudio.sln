@@ -4,6 +4,8 @@ VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TriuneStudio.Windows", "TriuneStudio.Windows\TriuneStudio.Windows.csproj", "{73D62343-A63E-4888-B8B6-E109DCA3E5BF}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TriuneStudio.Installer", "TriuneStudio.Installer\TriuneStudio.Installer.csproj", "{8B4E1A29-9C71-42D1-A512-90E11234AB01}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -14,5 +16,9 @@ Global
 		{73D62343-A63E-4888-B8B6-E109DCA3E5BF}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{73D62343-A63E-4888-B8B6-E109DCA3E5BF}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{73D62343-A63E-4888-B8B6-E109DCA3E5BF}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8B4E1A29-9C71-42D1-A512-90E11234AB01}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8B4E1A29-9C71-42D1-A512-90E11234AB01}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8B4E1A29-9C71-42D1-A512-90E11234AB01}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8B4E1A29-9C71-42D1-A512-90E11234AB01}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

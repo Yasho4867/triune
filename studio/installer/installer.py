@@ -338,6 +338,7 @@ def install_dependencies(py_bin: Path) -> None:
     core_pkgs = [
         "fastapi>=0.100.0",
         "uvicorn>=0.22.0",
+        "websockets>=12.0",
         "pywebview>=4.0.0",
         "cryptography>=41.0.0",
         "pydantic>=2.0.0",
@@ -383,16 +384,23 @@ def install_dependencies(py_bin: Path) -> None:
 # ---------------------------------------------------------------------------
 # Desktop Shortcuts & Launchers
 # ---------------------------------------------------------------------------
-def create_desktop_shortcut(hw: HardwareProfile) -> None:
-    """Create a 1-click desktop shortcut on Windows or Linux."""
+def create_desktop_shortcut(hw: HardwareProfile, create_shortcuts: bool = True) -> None:
+    """Create 1-click Desktop and Start Menu shortcuts on Windows, Linux, or macOS."""
     studio_bat = STUDIO_DIR / "TriuneStudio.bat"
     studio_sh = STUDIO_DIR / "TriuneStudio.sh"
     native_studio_candidates = (
+        WORKSPACE_ROOT / "TriuneStudio.exe",
         WORKSPACE_ROOT / "studio" / "windows" / "publish" / "TriuneStudio.exe",
         WORKSPACE_ROOT / "studio" / "windows" / "TriuneStudio.Windows" / "bin" / "Release" / "net10.0-windows" / "TriuneStudio.exe",
         WORKSPACE_ROOT / "studio" / "windows" / "TriuneStudio.Windows" / "bin" / "Release" / "net10.0-windows" / "win-x64" / "TriuneStudio.exe",
     )
     native_studio_exe = next((path for path in native_studio_candidates if path.is_file()), studio_bat)
+    native_setup_candidates = (
+        WORKSPACE_ROOT / "TriuneStudioSetup.exe",
+        WORKSPACE_ROOT / "studio" / "windows" / "publish" / "TriuneStudioSetup.exe",
+        WORKSPACE_ROOT / "studio" / "windows" / "TriuneStudio.Installer" / "bin" / "Release" / "net10.0-windows" / "TriuneStudioSetup.exe",
+    )
+    native_setup_exe = next((path for path in native_setup_candidates if path.is_file()), None)
 
     # Create studio/TriuneStudio.sh for Linux/macOS
     sh_content = f"""#!/usr/bin/env bash
@@ -413,21 +421,41 @@ fi
 
     log_success("Configured Studio launch scripts in studio/ directory.")
 
-    # Create Windows Desktop .lnk shortcut via PowerShell
+    if not create_shortcuts:
+        log_info("Skipping shortcut creation as requested (--no-shortcuts).")
+        return
+
+    # Create Windows Desktop & Start Menu .lnk shortcuts via PowerShell
     if hw.is_windows:
         try:
+            setup_snippet = ""
+            if native_setup_exe is not None:
+                setup_snippet = f"""
+$SetupShortcut = $WshShell.CreateShortcut("$StartMenuPath\\Triune Studio Setup.lnk")
+$SetupShortcut.TargetPath = "{native_setup_exe}"
+$SetupShortcut.WorkingDirectory = "{WORKSPACE_ROOT}"
+$SetupShortcut.Description = "Triune Studio Setup - Repair or Reconfigure AI Engine"
+$SetupShortcut.Save()
+"""
             ps_script = f"""
 $WshShell = New-Object -comObject WScript.Shell
 $DesktopPath = [Environment]::GetFolderPath('Desktop')
+$StartMenuPath = [Environment]::GetFolderPath('Programs')
 $Shortcut = $WshShell.CreateShortcut("$DesktopPath\\Triune Studio.lnk")
 $Shortcut.TargetPath = "{native_studio_exe}"
 $Shortcut.WorkingDirectory = "{WORKSPACE_ROOT}"
 $Shortcut.Description = "Triune Studio - AI Engine and Visual Research IDE"
 $Shortcut.Save()
+$StartShortcut = $WshShell.CreateShortcut("$StartMenuPath\\Triune Studio.lnk")
+$StartShortcut.TargetPath = "{native_studio_exe}"
+$StartShortcut.WorkingDirectory = "{WORKSPACE_ROOT}"
+$StartShortcut.Description = "Triune Studio - AI Engine and Visual Research IDE"
+$StartShortcut.Save()
+{setup_snippet}
 """
-            res = subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], capture_output=True, timeout=5.0)
+            res = subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], capture_output=True, timeout=8.0)
             if res.returncode == 0:
-                log_success("Created Windows Desktop Shortcut: 'Triune Studio.lnk'")
+                log_success(f"Created Windows Desktop & Start Menu Shortcuts -> {native_studio_exe.name}")
         except Exception as e:
             log_warning(f"Could not create Windows desktop shortcut: {e}")
 
@@ -451,6 +479,48 @@ Categories=Development;Science;ArtificialIntelligence;
             log_success(f"Created Linux application launcher: {desktop_file}")
         except Exception as e:
             log_warning(f"Could not create Linux desktop entry: {e}")
+
+
+def register_cli_on_path(py_bin: Path, hw: HardwareProfile, enable_path: bool = True) -> None:
+    """Register the virtual environment's Scripts/bin directory on User PATH so 'triune' CLI works globally."""
+    if not enable_path:
+        log_info("Skipping global PATH registration as requested (--no-path).")
+        return
+
+    scripts_dir = str(py_bin.parent.resolve())
+    if hw.is_windows:
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment", 0, winreg.KEY_READ | winreg.KEY_WRITE) as key:
+                try:
+                    current_path, reg_type = winreg.QueryValueEx(key, "Path")
+                except FileNotFoundError:
+                    current_path, reg_type = "", winreg.REG_EXPAND_SZ
+                entries = [p.strip() for p in current_path.split(";") if p.strip()]
+                normalized = {os.path.normcase(os.path.normpath(p)) for p in entries}
+                target_norm = os.path.normcase(os.path.normpath(scripts_dir))
+                if target_norm not in normalized:
+                    entries.insert(0, scripts_dir)
+                    new_path = ";".join(entries)
+                    winreg.SetValueEx(key, "Path", 0, reg_type, new_path)
+                    log_success(f"Registered 'triune' CLI on Windows User PATH: {scripts_dir}")
+                else:
+                    log_success(f"Unified 'triune' CLI already registered on Windows User PATH: {scripts_dir}")
+        except Exception as e:
+            log_warning(f"Could not update Windows User PATH: {e}")
+    else:
+        local_bin = Path.home() / ".local" / "bin"
+        try:
+            local_bin.mkdir(parents=True, exist_ok=True)
+            triune_bin = py_bin.parent / "triune"
+            if triune_bin.exists():
+                target_link = local_bin / "triune"
+                if target_link.is_symlink() or target_link.exists():
+                    target_link.unlink()
+                target_link.symlink_to(triune_bin)
+                log_success(f"Linked 'triune' CLI to {target_link}")
+        except Exception as e:
+            log_warning(f"Could not symlink 'triune' into ~/.local/bin: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -521,6 +591,8 @@ def main() -> None:
     parser.add_argument("--venv", default="studio/studio_env", help="Target virtual environment directory (default: studio/studio_env)")
     parser.add_argument("--cuda", default="auto", choices=["auto", "13.2", "13.0", "12.6", "12.4", "12.1", "11.8", "cpu"], help="Target CUDA version")
     parser.add_argument("--skip-torch", action="store_true", help="Skip PyTorch installation")
+    parser.add_argument("--no-shortcuts", action="store_true", help="Skip Desktop and Start Menu shortcut creation")
+    parser.add_argument("--no-path", action="store_true", help="Skip registering triune CLI on User PATH")
     parser.add_argument("--no-launch", action="store_true", help="Do not launch Studio after install")
     parser.add_argument("--verify", action="store_true", help="Only verify existing environment health")
     parser.add_argument("-y", "--yes", action="store_true", help="Automatic yes to all prompts (unattended mode)")
@@ -574,8 +646,9 @@ def main() -> None:
     install_dependencies(py_bin)
 
     # Step 5: Desktop Shortcuts & Launchers
-    log_step(5, TOTAL_STEPS, "Configuring Launchers & Desktop Shortcuts")
-    create_desktop_shortcut(hw)
+    log_step(5, TOTAL_STEPS, "Configuring Launchers, Shortcuts & Global CLI PATH")
+    create_desktop_shortcut(hw, create_shortcuts=not args.no_shortcuts)
+    register_cli_on_path(py_bin, hw, enable_path=not args.no_path)
 
     # Step 6: Diagnostic Verification
     log_step(6, TOTAL_STEPS, "End-to-End Installation Verification")

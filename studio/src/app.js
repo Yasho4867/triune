@@ -2166,6 +2166,12 @@
             setMetrics(latest);
             if (latest.exit_usage) setExitUsage(latest.exit_usage);
             if (latest.batch_preview) setActiveBatchPreview(latest.batch_preview);
+          } else if (typeof statusData.step === 'number' && statusData.step > 0) {
+            setMetrics(prev => ({
+              ...prev,
+              step: statusData.step,
+              tokens_trained: statusData.tokens_trained || prev.tokens_trained
+            }));
           }
           if (statusData.logs && statusData.logs.length > 0) setTelemetryLogs(statusData.logs);
         } catch (err) {

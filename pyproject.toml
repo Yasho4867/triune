@@ -43,6 +43,7 @@ dependencies = [
 studio = [
     "fastapi>=0.100.0",
     "uvicorn>=0.22.0",
+    "websockets>=12.0",
     "httpx>=0.24.0",
     "pywebview>=4.0.0",
     "keyring>=25.0.0",

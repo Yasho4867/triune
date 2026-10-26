@@ -3,7 +3,20 @@
 from __future__ import annotations
 
 import importlib
+import os
+import sys
 from typing import Any
+
+# Ensure UTF-8 standard streams on Windows pipes/consoles so Unicode log symbols never raise UnicodeEncodeError
+os.environ.setdefault("PYTHONUTF8", "1")
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+if sys.platform == "win32":
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            if hasattr(_stream, "reconfigure"):
+                _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 
 # Eager core imports (fast, zero heavy web/agent/export dependencies)
 try:

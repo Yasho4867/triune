@@ -106,6 +106,34 @@ def main() -> None:
     mem_parser = subparsers.add_parser("plan-memory", help="Estimate VRAM budget for target GPU")
     mem_parser.add_argument("--vram-gb", type=float, default=8.0, help="Target VRAM in GB")
 
+    # 12. Install / Setup command
+    install_parser = subparsers.add_parser("install", help="Launch Triune Studio Setup Wizard or automated environment provisioner")
+    install_parser.add_argument("--cuda", default="auto", choices=("auto", "13.2", "13.0", "12.6", "12.4", "12.1", "11.8", "cpu"), help="CUDA wheel target")
+    install_parser.add_argument("--verify", action="store_true", help="Verify existing installation health only")
+    install_parser.add_argument("--skip-torch", action="store_true", help="Skip PyTorch wheel installation")
+    install_parser.add_argument("--no-launch", action="store_true", help="Do not launch Studio after installation")
+    install_parser.add_argument("-y", "--yes", action="store_true", help="Run unattended without GUI prompt")
+
+    # 13. Doctor command
+    subparsers.add_parser("doctor", help="Run comprehensive end-to-end diagnostics on GPU, optimizer, router, and Studio backend")
+
+    # 14. Build Native Apps command
+    native_parser = subparsers.add_parser("build-native", help="Build native desktop apps & installers for Windows (.exe), Linux (AppDir), and macOS (.app)")
+    native_parser.add_argument("--platform", default="all", choices=("all", "windows", "linux", "macos"), help="Target OS platform (default: all)")
+
+    # 15. Profile command
+    prof_parser = subparsers.add_parser("profile", help="Profile Triune training steps")
+    prof_parser.add_argument("--checkpoint", default="checkpoints_full/latest.pt", help="Checkpoint path")
+    prof_parser.add_argument("--tokenizer", default="triune_tokenizer.json", help="Tokenizer path")
+    prof_parser.add_argument("--output", default="profiler_output.txt", help="Profiler output report path")
+    prof_parser.add_argument("--batch-size", type=int, default=4, help="Batch size")
+    prof_parser.add_argument("--seq-len", type=int, default=256, help="Sequence length")
+
+    # 16. Tokenizer command
+    tok_parser = subparsers.add_parser("tokenizer", help="Build or train a BPE tokenizer")
+    tok_parser.add_argument("--output", default="triune_tokenizer.json", help="Output tokenizer JSON path")
+    tok_parser.add_argument("--vocab-size", type=int, default=32000, help="Vocabulary size")
+
     args = parser.parse_args()
 
     if args.command == "studio":
@@ -283,6 +311,75 @@ def main() -> None:
         print(f"   Recommended Batch Size: {plan.recommended_batch_size}")
         print(f"   Recommended Grad Accum: {plan.recommended_grad_accum}")
         print(f"   Recommended Precision: {plan.recommended_precision}")
+
+    elif args.command == "install":
+        import subprocess
+        workspace = Path(__file__).resolve().parent.parent
+        setup_exe = workspace / "TriuneStudioSetup.exe"
+        if not setup_exe.is_file():
+            setup_exe = workspace / "studio" / "windows" / "publish" / "TriuneStudioSetup.exe"
+        if sys.platform == "win32" and setup_exe.is_file() and not args.yes and not args.verify:
+            print(f"[Triune CLI] Launching Native Windows Setup Wizard: {setup_exe}")
+            subprocess.Popen([str(setup_exe)], cwd=str(workspace))
+        else:
+            installer_script = workspace / "studio" / "installer" / "installer.py"
+            cmd = [sys.executable, str(installer_script), "--cuda", args.cuda]
+            if args.verify:
+                cmd.append("--verify")
+            if args.skip_torch:
+                cmd.append("--skip-torch")
+            if args.no_launch:
+                cmd.append("--no-launch")
+            if args.yes:
+                cmd.append("--yes")
+            raise SystemExit(subprocess.call(cmd, cwd=str(workspace)))
+
+    elif args.command == "doctor":
+        import torch
+        from triune.utils.device import device_diagnostic
+        from triune.api.server import HAS_FASTAPI
+
+        diag = device_diagnostic()
+        print("\n=== Triune System & Engine Doctor ===")
+        print(f"  Python Runtime   : {diag['python']}")
+        print(f"  PyTorch Version  : {diag['torch']}")
+        print(f"  CUDA Available   : {diag['cuda_available']}")
+        for idx, gpu in enumerate(diag.get("gpus", [])):
+            maj, min_v = gpu["capability"]
+            print(f"  GPU [{idx}]          : {gpu['name']} ({gpu['memory_gib']:.2f} GiB, SM{maj}.{min_v})")
+        print(f"  Studio FastAPI   : {'Operational' if HAS_FASTAPI else 'Missing'}")
+        session_p = Path("checkpoints/session_state.json")
+        if session_p.is_file():
+            import json
+            st = json.loads(session_p.read_text(encoding="utf-8"))
+            print(f"  Active Checkpoint: {st.get('active_checkpoint')} (step {st.get('step')}, {st.get('total_tokens_trained', 0):,} tokens)")
+            print(f"  Streaming Dataset: {st.get('dataset_name')} (offset {st.get('hf_stream_offset', 0)})")
+        print("  Status           : HEALTHY\n")
+
+    elif args.command == "build-native":
+        from triune.packaging import build_native_targets
+        import json
+        res = build_native_targets(args.platform)
+        print("\n[Triune Native Packager] Build Summary:")
+        print(json.dumps(res, indent=2))
+
+    elif args.command == "profile":
+        from scripts.profile_model import main as prof_main
+        prof_main([
+            "--checkpoint", args.checkpoint,
+            "--tokenizer_path", args.tokenizer,
+            "--output", args.output,
+            "--batch_size", str(args.batch_size),
+            "--seq_len", str(args.seq_len),
+        ])
+
+    elif args.command == "tokenizer":
+        from scripts.tokenizer import main as tok_main
+        tok_main([
+            "--output", args.output,
+            "--vocab_size", str(args.vocab_size),
+        ])
+
     else:
         parser.print_help()
 

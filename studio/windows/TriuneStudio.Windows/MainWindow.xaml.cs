@@ -261,8 +261,12 @@ public partial class MainWindow : Window
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardOutput = true,
-            RedirectStandardError = true
+            RedirectStandardError = true,
+            StandardOutputEncoding = System.Text.Encoding.UTF8,
+            StandardErrorEncoding = System.Text.Encoding.UTF8
         };
+        start.Environment["PYTHONUTF8"] = "1";
+        start.Environment["PYTHONIOENCODING"] = "utf-8";
         if (Path.GetFileNameWithoutExtension(python).Equals("py", StringComparison.OrdinalIgnoreCase))
             start.ArgumentList.Add("-3");
         start.ArgumentList.Add(Path.Combine(root, "scripts", "launch_studio.py"));
@@ -322,8 +326,12 @@ public partial class MainWindow : Window
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,
-                RedirectStandardError = true
+                RedirectStandardError = true,
+                StandardOutputEncoding = System.Text.Encoding.UTF8,
+                StandardErrorEncoding = System.Text.Encoding.UTF8
             };
+            start.Environment["PYTHONUTF8"] = "1";
+            start.Environment["PYTHONIOENCODING"] = "utf-8";
             start.ArgumentList.Add("/c");
             start.ArgumentList.Add($"\"{installer}\" --yes --no-launch");
             using var setup = new Process { StartInfo = start };
