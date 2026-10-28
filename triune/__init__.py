@@ -21,7 +21,21 @@ if sys.platform == "win32":
 # Eager core imports (fast, zero heavy web/agent/export dependencies)
 try:
     from .configs.config import build_config, default_config, validate_config
-    from .kernels import fast_cross_entropy, fast_rmsnorm, fast_rope
+    from .kernels import (
+        fast_cross_entropy,
+        fast_rmsnorm,
+        fast_rope,
+        fast_swiglu,
+        fast_gelu,
+        FastSwiGLU,
+        FastGELU,
+        fast_chunk_gla,
+        fast_zeropower_via_newtonschulz5,
+        fast_lora_forward,
+        get_kernel_telemetry,
+        is_turbo_mode_enabled,
+        set_turbo_mode,
+    )
     from .model import (
         TriuneModel,
         TriuneTransformer,
@@ -89,6 +103,16 @@ __all__ = [
     "fast_cross_entropy",
     "fast_rmsnorm",
     "fast_rope",
+    "fast_swiglu",
+    "fast_gelu",
+    "FastSwiGLU",
+    "FastGELU",
+    "fast_chunk_gla",
+    "fast_zeropower_via_newtonschulz5",
+    "fast_lora_forward",
+    "get_kernel_telemetry",
+    "is_turbo_mode_enabled",
+    "set_turbo_mode",
     "TriuneModel",
     "TriuneTransformer",
     "attach_early_exits",

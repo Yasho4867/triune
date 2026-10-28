@@ -13,9 +13,14 @@ from torch.optim import Optimizer
 def zeropower_via_newtonschulz5(G: torch.Tensor, steps: int = 5, eps: float = 1e-7) -> torch.Tensor:
     """Newton-Schulz iteration to compute the approximate zeroth power (orthogonalization) of G.
     
-    Uses a quintic polynomial whose coefficients (a=3.4445, b=-4.7750, c=2.0315) are optimized
-    for rapid convergence to the nearest semi-orthogonal matrix.
+    Delegates to the fused Triune kernel for in-place buffer reuse and Tensor Core GEMM optimization.
     """
+    try:
+        from triune.kernels.fast_muon import fast_zeropower_via_newtonschulz5
+        return fast_zeropower_via_newtonschulz5(G, steps=steps, eps=eps)
+    except Exception:
+        pass
+
     if G.ndim != 2:
         raise ValueError(
             f"zeropower_via_newtonschulz5 requires a 2D matrix, got ndim={G.ndim} with shape {tuple(G.shape)}"

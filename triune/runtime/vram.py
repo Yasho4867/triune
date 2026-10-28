@@ -28,7 +28,7 @@ class VRAMProfiler:
         reserved = torch.cuda.memory_reserved(dev) / (1024 ** 3)
         max_allocated = torch.cuda.max_memory_allocated(dev) / (1024 ** 3)
         total = torch.cuda.get_device_properties(dev).total_memory / (1024 ** 3)
-        oom_risk = (allocated / total) >= 0.90 if total > 0 else False
+        oom_risk = ((reserved / total) >= 0.85 or (allocated / total) >= 0.85) if total > 0 else False
 
         return {
             "allocated_gb": round(allocated, 3),

@@ -15,6 +15,7 @@ venvs/
 # Distribution / packaging
 build/
 dist/
+exports/
 *.egg-info/
 *.spec
 *.exe
@@ -48,6 +49,7 @@ unsloth_compiled_cache/
 studio/windows/**/bin/
 studio/windows/**/obj/
 studio/windows/publish/
+studio/windows/publish_installer/
 *.WebView2/
 
 # Logs

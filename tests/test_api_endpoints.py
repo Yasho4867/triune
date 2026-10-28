@@ -620,6 +620,16 @@ class TestStudioApiEndpoints(unittest.TestCase):
             self.assertTrue(engine._is_word_boundary(296))
             self.assertFalse(engine._is_word_boundary(22713))
 
+    def test_optimizer_telemetry_endpoint(self) -> None:
+        response = self.client.get("/v1/training/optimizer")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("tier1_muon", data)
+        self.assertIn("tier2_centroid", data)
+        self.assertIn("tier3_adamw", data)
+        self.assertIn("comparison_vs_unsloth", data)
+        self.assertIn("memory", data)
+
 
 class TestLocalChatStreaming(unittest.TestCase):
     def test_stream_emits_incremental_text_and_final_telemetry(self) -> None:

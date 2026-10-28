@@ -21,7 +21,7 @@ class TestKernelSuite(unittest.TestCase):
         avail = is_triton_available()
         self.assertIsInstance(avail, bool)
         backend = get_kernel_backend()
-        self.assertIn(backend, ("triton", "pytorch"))
+        self.assertIn(backend, ("triton", "pytorch", "native-cuda-analytical", "triton-hardware-fused", "vectorized-cpu"))
 
     def test_fast_rmsnorm_forward_and_backward(self):
         B, T, D = 2, 8, 64
@@ -131,6 +131,90 @@ class TestKernelSuite(unittest.TestCase):
         out2 = chunked_cross_entropy_from_hidden(hidden, head, torch.full((10,), -100), chunk_size=4)
         out2.backward()
         self.assertEqual(out2.item(), 0.0)
+
+    def test_fast_swiglu_and_gelu(self):
+        from triune.kernels import fast_swiglu, fast_gelu, FastSwiGLU, FastGELU
+        gate = torch.randn(4, 16, 64, requires_grad=True)
+        up = torch.randn(4, 16, 64, requires_grad=True)
+
+        # Fused SwiGLU forward & backward
+        out = fast_swiglu(gate, up)
+        self.assertEqual(out.shape, (4, 16, 64))
+        loss = out.sum()
+        loss.backward()
+        self.assertIsNotNone(gate.grad)
+        self.assertIsNotNone(up.grad)
+
+        # Compare with naive SwiGLU forward
+        naive_out = F.silu(gate.detach()) * up.detach()
+        self.assertTrue(torch.allclose(out.detach(), naive_out, atol=1e-5))
+
+        # Fast GELU module
+        gelu_mod = FastGELU()
+        x = torch.randn(2, 8, 32, requires_grad=True)
+        gx = gelu_mod(x)
+        self.assertEqual(gx.shape, (2, 8, 32))
+        gx.sum().backward()
+        self.assertIsNotNone(x.grad)
+
+    def test_fast_muon_newton_schulz(self):
+        from triune.kernels import fast_zeropower_via_newtonschulz5
+        # 64x128 matrix
+        G = torch.randn(64, 128)
+        X = fast_zeropower_via_newtonschulz5(G, steps=5)
+        self.assertEqual(X.shape, (64, 128))
+        
+        # Verify semi-orthogonality: X @ X.T should be close to identity
+        gram = X @ X.t()
+        eye = torch.eye(64, device=X.device, dtype=X.dtype)
+        diff = (gram - eye).abs().mean().item()
+        self.assertLess(diff, 0.35)
+
+    def test_fast_lora_forward(self):
+        from triune.kernels import fast_lora_forward
+        B, T, D_in, D_out, rank = 2, 8, 32, 48, 8
+        x = torch.randn(B, T, D_in, requires_grad=True)
+        lora_A = torch.randn(rank, D_in, requires_grad=True)
+        lora_B = torch.randn(D_out, rank, requires_grad=True)
+        scaling = 2.0
+
+        out = fast_lora_forward(x, lora_A, lora_B, scaling)
+        self.assertEqual(out.shape, (B, T, D_out))
+
+        loss = out.sum()
+        loss.backward()
+        self.assertIsNotNone(x.grad)
+        self.assertIsNotNone(lora_A.grad)
+        self.assertIsNotNone(lora_B.grad)
+
+    def test_fast_chunk_gla(self):
+        from triune.kernels import fast_chunk_gla
+        B, T, H, HD = 2, 64, 4, 32
+        q = torch.randn(B, T, H, HD)
+        k = torch.randn(B, T, H, HD)
+        v = torch.randn(B, T, H, HD)
+        g = -torch.rand(B, T, H, HD)  # Negative log decays
+
+        out, state = fast_chunk_gla(q, k, v, g, chunk_size=32)
+        self.assertEqual(out.shape, (B, T, H, HD))
+        self.assertEqual(state.shape, (B, H, HD, HD))
+
+    def test_kernel_telemetry_and_turbo_mode(self):
+        from triune.kernels import get_kernel_telemetry, is_turbo_mode_enabled, set_turbo_mode
+        self.assertTrue(is_turbo_mode_enabled())
+        telem = get_kernel_telemetry()
+        self.assertIn("kernels", telem)
+        self.assertIn("fast_swiglu", telem["kernels"])
+        self.assertIn("fast_muon", telem["kernels"])
+        self.assertIn("fast_gla", telem["kernels"])
+        self.assertIn("fast_lora", telem["kernels"])
+        self.assertIn("benchmarks_vs_baselines", telem)
+
+        # Toggle test
+        set_turbo_mode(False)
+        self.assertFalse(is_turbo_mode_enabled())
+        set_turbo_mode(True)
+        self.assertTrue(is_turbo_mode_enabled())
 
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for memory measurement")
     def test_chunked_from_hidden_saves_memory(self):

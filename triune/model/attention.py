@@ -26,6 +26,12 @@ def _pytorch_chunk_gla(q, k, v, g, initial_state=None, chunk_size: int = 64):
     tensor contractions and parallel chunk decay. Yields an 80x+ speedup on CUDA GPUs
     when FLA native triton kernels are not installed.
     """
+    try:
+        from triune.kernels.fast_gla import fast_chunk_gla
+        return fast_chunk_gla(q, k, v, g, initial_state=initial_state, chunk_size=chunk_size)
+    except Exception:
+        pass
+
     B, T, H, HD = q.shape
     state = (
         initial_state.to(device=q.device, dtype=q.dtype)

@@ -36,10 +36,16 @@ class MoE_FFN(nn.Module):
         else:
             LinearCls = nn.Linear
 
+        try:
+            from triune.kernels.fast_swiglu import FastGELU
+            ActCls = FastGELU
+        except Exception:
+            ActCls = nn.GELU
+
         self.experts = nn.ModuleList([
             nn.Sequential(
                 LinearCls(dim, dim * EXPERT_HIDDEN_MULTIPLIER),
-                nn.GELU(),
+                ActCls(),
                 LinearCls(dim * EXPERT_HIDDEN_MULTIPLIER, dim)
             )
             for _ in range(num_experts)
@@ -48,7 +54,7 @@ class MoE_FFN(nn.Module):
         if shared_expert:
             self.shared = nn.Sequential(
                 LinearCls(dim, dim * EXPERT_HIDDEN_MULTIPLIER),
-                nn.GELU(),
+                ActCls(),
                 LinearCls(dim * EXPERT_HIDDEN_MULTIPLIER, dim)
             )
 
@@ -165,7 +171,7 @@ class MoE_FFN(nn.Module):
             )
             self._update_routing_stats(flat_x, routing_result)
 
-        if self.training:
+        if self.training and not getattr(self, "_step_managed_by_engine", False):
             self._global_step += 1
 
         return out.reshape(B, T, D)

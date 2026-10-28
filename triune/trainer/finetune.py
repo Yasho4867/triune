@@ -46,8 +46,13 @@ class LoRALayer(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         orig_out = self.original_layer(x)
-        lora_out = (self.dropout(x) @ self.lora_A.T) @ self.lora_B.T
-        return orig_out + (lora_out * self.scaling).to(orig_out.dtype)
+        drop_x = self.dropout(x)
+        try:
+            from triune.kernels.fast_lora import fast_lora_forward
+            lora_out = fast_lora_forward(drop_x, self.lora_A, self.lora_B, self.scaling)
+        except Exception:
+            lora_out = ((drop_x @ self.lora_A.T) @ self.lora_B.T) * self.scaling
+        return orig_out + lora_out.to(orig_out.dtype)
 
     def merge(self) -> None:
         """Merge adapter weights directly into the original linear layer."""

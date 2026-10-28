@@ -15,4 +15,7 @@
     <AssemblyName>TriuneStudioSetup</AssemblyName>
     <RootNamespace>TriuneStudio.Installer</RootNamespace>
   </PropertyGroup>
+  <ItemGroup>
+    <Resource Include="..\triune.ico" Link="triune.ico" />
+  </ItemGroup>
 </Project>

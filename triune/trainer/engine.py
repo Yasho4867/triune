@@ -137,6 +137,7 @@ class TrainingEngine:
         for module in self.model.modules():
             if isinstance(module, MoE_FFN):
                 module._global_step = self.step
+                module._step_managed_by_engine = True
 
         streaming_engine = getattr(self.model, "_streaming_engine", None)
         if streaming_engine is not None:

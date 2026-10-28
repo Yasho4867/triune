@@ -80,7 +80,7 @@ class AllotmentPlan:
 class LiveVRAMMonitor:
     """Real-time GPU memory monitor with active defragmentation and telemetry."""
 
-    def __init__(self, device: torch.device, defrag_threshold: float = 0.85):
+    def __init__(self, device: torch.device, defrag_threshold: float = 0.70):
         self.device = device
         self.defrag_threshold = defrag_threshold
         self.total_gb = (
@@ -105,8 +105,10 @@ class LiveVRAMMonitor:
         self.last_reserved_gb = res
         self.peak_allocated_gb = peak
 
-        # Proactive defragmentation: if reserved memory exceeds threshold, purge cached blocks
-        if (res / self.total_gb) >= self.defrag_threshold:
+        # Proactive defragmentation: if reserved memory exceeds threshold OR unused cached pool exceeds 1.5 GB,
+        # purge cached blocks back to the OS and driver to prevent Windows DWM / desktop OOM crashes.
+        cached_unused = max(0.0, res - alloc)
+        if (res / self.total_gb) >= self.defrag_threshold or cached_unused >= 1.5:
             torch.cuda.empty_cache()
             self.defrag_count += 1
             res = torch.cuda.memory_reserved(self.device) / (1024 ** 3)
