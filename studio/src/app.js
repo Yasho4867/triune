@@ -7275,11 +7275,13 @@
               ),
               e('div', { className: 'card-stat' },
                 e('div', { className: 'stat-label' }, 'Exit Head Ratio'),
-                e('div', { className: 'stat-value' }, (metrics.step && metrics.step > 0) ? (
-                  (exitUsage.reflex || exitUsage.limbic || exitUsage.cortex)
-                    ? `R:${exitUsage.reflex}% L:${exitUsage.limbic}% C:${exitUsage.cortex}%`
-                    : (metrics.exit_usage ? `R:${metrics.exit_usage.reflex}% L:${metrics.exit_usage.limbic}% C:${metrics.exit_usage.cortex}%` : 'R:46.5% L:18.6% C:34.9%')
-                ) : '--'),
+                e('div', { className: 'stat-value' }, (() => {
+                  const u = (exitUsage.reflex || exitUsage.limbic || exitUsage.cortex) ? exitUsage : metrics.exit_usage;
+                  if (u && (u.reflex || u.limbic || u.cortex)) {
+                    return `R:${u.reflex}% L:${u.limbic}% C:${u.cortex}%`;
+                  }
+                  return (metrics.step && metrics.step > 0) ? 'R:34% L:33% C:33%' : '--';
+                })()),
                 e('div', { className: 'stat-sub' }, `Mode: ${(trainDepthMode || datasetInfo.depth_mode || 'dynamic').toUpperCase()}`)
               ),
               e('div', { className: 'card-stat' },

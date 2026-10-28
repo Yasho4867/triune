@@ -2,8 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .config import *
-from .rotary import *
+from .config import GLA_HEAD_DIM, ROPE_MAX_SEQ_LEN, USE_ROPE
+from .rotary import RotaryEmbedding, apply_rotary
 
 
 try:

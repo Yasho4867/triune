@@ -4,10 +4,18 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .fp4 import *
+from .config import (
+    CENTROID_EMA,
+    EXPERT_HIDDEN_MULTIPLIER,
+    MOE_BIAS_UPDATE_RATE,
+    MOE_CAPACITY_MULTIPLIER,
+    NUM_EXPERTS,
+    SHARED_EXPERT,
+    SHARED_EXPERT_SCALE,
+    TOP_K_EXPERTS,
+)
+from .fp4 import FP4Linear
 from .fp8 import FP8Linear
-from .norms import *
-from .config import *
 
 
 @dataclass

@@ -121,6 +121,18 @@ if VRAMProfiler is None:
     VRAMProfiler = FallbackVRAMProfiler
 
 
+def _format_tokens(n: int | float | None) -> str:
+    """Format token counts consistently across API status and checkpoints."""
+    if n is None or n == 0:
+        return "0 tok"
+    n_int = int(n)
+    if n_int >= 1_000_000_000:
+        return f"{n_int / 1_000_000_000:.2f}B tok"
+    if n_int >= 1_000_000:
+        return f"{n_int / 1_000_000:.2f}M tok"
+    return f"{n_int:,} tok"
+
+
 def sanitize_text(text: str) -> str:
     """Repair common UTF-8 / Windows-1252 Mojibake artifacts in raw datasets and generations."""
     if not text or not isinstance(text, str):
@@ -1093,6 +1105,40 @@ if HAS_FASTAPI:
             print(log_msg)
             return base
 
+        def _get_current_exit_usage(self) -> Dict[str, float]:
+            """Compute the current or fallback exit head usage percentages dynamically."""
+            if self.history and "exit_usage" in self.history[-1]:
+                return self.history[-1]["exit_usage"]
+            if getattr(self, "last_exit_usage", None):
+                return self.last_exit_usage
+            if getattr(self, "training_engine", None) is not None and hasattr(self.training_engine, "depth_usage_ema"):
+                try:
+                    ema = self.training_engine.depth_usage_ema
+                    if ema is not None:
+                        d_vals = ema.tolist() if torch.is_tensor(ema) else list(ema)
+                        if d_vals and len(d_vals) >= 3:
+                            tot = sum(d_vals) or 1.0
+                            return {
+                                "reflex": round((float(d_vals[0]) / tot) * 100.0, 1),
+                                "limbic": round((float(d_vals[1]) / tot) * 100.0, 1),
+                                "cortex": round((float(d_vals[2]) / tot) * 100.0, 1),
+                            }
+                except Exception:
+                    pass
+            dist = getattr(self.model, "target_depth_dist", None) or (0.40, 0.35, 0.25)
+            tot = sum(dist) or 1.0
+            return {
+                "reflex": round((float(dist[0]) / tot) * 100.0, 1),
+                "limbic": round((float(dist[1]) / tot) * 100.0, 1),
+                "cortex": round((float(dist[2]) / tot) * 100.0, 1),
+            }
+
+        def _get_current_throughput(self) -> int:
+            """Return the latest measured step throughput or 0 if idle."""
+            if self.history and "throughput" in self.history[-1]:
+                return int(self.history[-1]["throughput"] or 0)
+            return 0
+
         def load_model_checkpoint(
             self,
             checkpoint_path: str | Path,
@@ -1195,7 +1241,7 @@ if HAS_FASTAPI:
 
             saved_loss = float(checkpoint.get("loss", 0.0) or 0.0)
             saved_depth_ema = checkpoint.get("depth_usage_ema")
-            exit_usage_dict = {"reflex": 46.5, "limbic": 18.6, "cortex": 34.9}
+            exit_usage_dict = None
             if saved_depth_ema is not None:
                 try:
                     if torch.is_tensor(saved_depth_ema):
@@ -1207,12 +1253,14 @@ if HAS_FASTAPI:
                     if d_vals and len(d_vals) >= 3:
                         tot = sum(d_vals) or 1.0
                         exit_usage_dict = {
-                            "reflex": round((float(d_vals[0]) / tot) * 100, 1),
-                            "limbic": round((float(d_vals[1]) / tot) * 100, 1),
-                            "cortex": round((float(d_vals[2]) / tot) * 100, 1),
+                            "reflex": round((float(d_vals[0]) / tot) * 100.0, 1),
+                            "limbic": round((float(d_vals[1]) / tot) * 100.0, 1),
+                            "cortex": round((float(d_vals[2]) / tot) * 100.0, 1),
                         }
                 except Exception:
                     pass
+            if exit_usage_dict is None:
+                exit_usage_dict = self._get_current_exit_usage()
 
             self.last_loss = saved_loss if saved_loss > 0 else getattr(self, "last_loss", None)
             self.last_exit_usage = exit_usage_dict
@@ -1223,7 +1271,7 @@ if HAS_FASTAPI:
                     "loss": round(saved_loss, 4),
                     "lm_loss": round(saved_loss, 4),
                     "router_loss": 0.0,
-                    "throughput": 780,
+                    "throughput": self._get_current_throughput(),
                     "lr": round(self.current_lr, 7),
                     "tokens_trained": self.total_tokens_trained,
                     "exit_usage": exit_usage_dict,
@@ -1236,7 +1284,7 @@ if HAS_FASTAPI:
                 "tokens_trained": self.total_tokens_trained,
                 "loss": saved_loss if saved_loss > 0 else None,
                 "exit_usage": exit_usage_dict,
-                "throughput": 780,
+                "throughput": self._get_current_throughput(),
                 "architecture": self.architecture_spec,
                 "active_model": self.active_model_id,
             }
@@ -3918,12 +3966,12 @@ if HAS_FASTAPI:
                 pytorch_state.total_tokens_trained = tot_tok
             else:
                 tot_tok = 0
-        tokens_fmt = f"{tot_tok / 1_000_000:.2f}M tok" if tot_tok >= 1_000_000 else f"{tot_tok:,} tok"
+        tokens_fmt = _format_tokens(tot_tok)
 
         latest_h = pytorch_state.history[-1] if pytorch_state.history else {}
         cur_loss = latest_h.get("loss", getattr(pytorch_state, "last_loss", None))
-        cur_throughput = latest_h.get("throughput", 0)
-        cur_exit_usage = latest_h.get("exit_usage", getattr(pytorch_state, "last_exit_usage", {"reflex": 46.5, "limbic": 18.6, "cortex": 34.9}))
+        cur_throughput = pytorch_state._get_current_throughput()
+        cur_exit_usage = pytorch_state._get_current_exit_usage()
 
         return {
             "is_training": pytorch_state.is_training,
@@ -4469,7 +4517,7 @@ if HAS_FASTAPI:
             # model hydration off the asyncio event loop so Studio health/UI calls stay responsive.
             restored = await asyncio.to_thread(_load_checkpoint_safely)
             restored_tokens = restored["tokens_trained"]
-            tokens_fmt = f"{restored_tokens / 1_000_000:.2f}M tok" if restored_tokens >= 1_000_000 else f"{restored_tokens:,} tok"
+            tokens_fmt = _format_tokens(restored_tokens)
             log_msg = f"[CHECKPOINT] Loaded {p.name} into {restored['active_model']} (step {restored['step']}, {tokens_fmt})."
             pytorch_state.logs.insert(0, log_msg)
 
@@ -4479,8 +4527,8 @@ if HAS_FASTAPI:
                     "data": {
                         "step": restored["step"],
                         "loss": restored.get("loss"),
-                        "throughput": restored.get("throughput", 780),
-                        "exit_usage": restored.get("exit_usage"),
+                        "throughput": restored.get("throughput", pytorch_state._get_current_throughput()),
+                        "exit_usage": restored.get("exit_usage", pytorch_state._get_current_exit_usage()),
                         "tokens_trained": restored_tokens,
                         "active_checkpoint": p.name,
                         "active_model": restored["active_model"],
@@ -4496,8 +4544,8 @@ if HAS_FASTAPI:
                 "message": log_msg,
                 "step": restored["step"],
                 "loss": restored.get("loss"),
-                "throughput": restored.get("throughput", 780),
-                "exit_usage": restored.get("exit_usage"),
+                "throughput": restored.get("throughput", pytorch_state._get_current_throughput()),
+                "exit_usage": restored.get("exit_usage", pytorch_state._get_current_exit_usage()),
                 "checkpoint": p.name,
                 "tokens_trained": restored_tokens,
                 "tokens_formatted": tokens_fmt,
@@ -5690,8 +5738,8 @@ SYSTEM \"\"\"You are Triune AI, a high-efficiency cognitive language model train
         try:
             latest_h = pytorch_state.history[-1] if pytorch_state.history else {}
             cur_loss = latest_h.get("loss", getattr(pytorch_state, "last_loss", None))
-            cur_exit = latest_h.get("exit_usage", getattr(pytorch_state, "last_exit_usage", {"reflex": 46.5, "limbic": 18.6, "cortex": 34.9}))
-            cur_thru = latest_h.get("throughput", 0)
+            cur_exit = pytorch_state._get_current_exit_usage()
+            cur_thru = pytorch_state._get_current_throughput()
             snapshot_msg = {
                 "type": "telemetry_snapshot",
                 "data": {

@@ -3,11 +3,22 @@ from typing import Any, List, Optional
 import torch
 import torch.nn as nn
 
-from .block import *
-from .fp4 import te
-from .norms import *
+from .block import TransformerBlock
+from .config import (
+    DEPTH_BALANCE_COEF,
+    GLA_HEAD_DIM,
+    HIDDEN_DIM,
+    LIMBIC_EXIT_LAYER,
+    NUM_EXPERTS,
+    NUM_HEADS,
+    NUM_LAYERS,
+    REFLEX_EXIT_LAYER,
+    ROUTER_PREFIX_LAYERS,
+    TARGET_DEPTH_DIST,
+    VOCAB_SIZE,
+)
+from .norms import RMSNorm
 from .router import GumbelSoftmaxRouter
-from .config import *
 
 
 class TriuneTransformer(nn.Module):

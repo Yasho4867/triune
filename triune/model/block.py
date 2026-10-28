@@ -1,15 +1,31 @@
+"""Transformer block containing GLA attention, MoE FFN, and early exit heads."""
+
+from __future__ import annotations
+
 import torch
 import torch.nn as nn
 
-from .attention import *
-from .router import *
-from .moe import *
-from .norms import *
+from .attention import HybridAttention
+from .config import NUM_EXPERTS
+from .fp4 import FP4Linear
 from .fp8 import FP8Linear
+from .moe import MoE_FFN
+from .norms import RMSNorm
 
-from .config import *
+
 class TransformerBlock(nn.Module):
-    def __init__(self, dim, heads, layer_idx, vocab_size, exit_layers, num_experts=NUM_EXPERTS, use_moe=True, use_fp4=False, use_fp8=False):
+    def __init__(
+        self,
+        dim: int,
+        heads: int,
+        layer_idx: int,
+        vocab_size: int,
+        exit_layers: tuple[int, ...] | list[int],
+        num_experts: int = NUM_EXPERTS,
+        use_moe: bool = True,
+        use_fp4: bool = False,
+        use_fp8: bool = False,
+    ):
         super().__init__()
         self.attn = HybridAttention(dim, heads, use_fp4=use_fp4, use_fp8=use_fp8)
         if use_moe:
@@ -17,7 +33,7 @@ class TransformerBlock(nn.Module):
         else:
             DenseLinear = FP8Linear if use_fp8 else (FP4Linear if use_fp4 else nn.Linear)
             self.ffn = nn.Sequential(
-                DenseLinear(dim, dim*4), nn.GELU(), DenseLinear(dim*4, dim)
+                DenseLinear(dim, dim * 4), nn.GELU(), DenseLinear(dim * 4, dim)
             )
         self.norm1 = RMSNorm(dim)
         self.norm2 = RMSNorm(dim)
@@ -31,7 +47,7 @@ class TransformerBlock(nn.Module):
         self.use_moe = use_moe
         self._use_gradient_checkpointing = False
 
-    def forward(self, x, return_exit=False, cache=None, update_stats=True):
+    def forward(self, x: torch.Tensor, return_exit: bool = False, cache=None, update_stats: bool = True):
         if self._use_gradient_checkpointing and self.training:
             attn_out, new_cache = torch.utils.checkpoint.checkpoint(
                 lambda n: self.attn(n, cache=cache), self.norm1(x), use_reentrant=False
@@ -58,5 +74,3 @@ class TransformerBlock(nn.Module):
             exit_logits = self.exit_head(self.exit_norm(x))
             return x, exit_logits, new_cache
         return x, None, new_cache
-
-# ─── TriuneTransformer ──────────────────────────────────────────
