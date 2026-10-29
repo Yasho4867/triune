@@ -15,17 +15,17 @@ comparing **CentroidSteer**, **Muon**, **PyTorch Standard AdamW**, and native **
 | :--- | :--- | :--- | :--- | :--- |
 | **PyTorch Standard AdamW** | 17.02M | 48.37 MB | 2.98 B/p | Baseline (0%) |
 | **Native BitsAndBytes 8-bit AdamW** | 17.02M | 24.74 MB | 1.52 B/p | -48.9% |
-| **Triune CentroidSteer (SVD basis + low-rank)** | 17.02M | 27.27 MB | 1.68 B/p | -43.6% |
+| **Triune CentroidSteer (SVD basis + low-rank)** | 17.02M | 27.40 MB | 1.69 B/p | -43.4% |
 | **Triune Muon (Orthogonal matrix momentum)** | 17.02M | 44.38 MB | 2.73 B/p | -8.2% |
 
 ## 3. Experiment B: Pure Step Throughput & Latency
 
 | Optimizer | Median Step Latency (ms) | Mean Latency (ms) | Update Throughput (steps/sec) |
 | :--- | :--- | :--- | :--- |
-| **PyTorch Standard AdamW** | 1.85 ms | 1.83 ms | 540.8 steps/s |
-| **Native BitsAndBytes 8-bit AdamW** | 9.30 ms | 9.24 ms | 107.5 steps/s |
-| **Triune CentroidSteer (SVD basis + low-rank)** | 77.16 ms | 89.35 ms | 13.0 steps/s |
-| **Triune Muon (Orthogonal matrix momentum)** | 67.49 ms | 68.36 ms | 14.8 steps/s |
+| **PyTorch Standard AdamW** | 1.69 ms | 1.76 ms | 591.2 steps/s |
+| **Native BitsAndBytes 8-bit AdamW** | 9.27 ms | 9.18 ms | 107.9 steps/s |
+| **Triune CentroidSteer (SVD basis + low-rank)** | 72.87 ms | 72.87 ms | 13.7 steps/s |
+| **Triune Muon (Orthogonal matrix momentum)** | 71.14 ms | 71.22 ms | 14.1 steps/s |
 
 ## 4. Experiment C: 50-Step Optimization Trajectory & Stability
 
@@ -33,7 +33,7 @@ comparing **CentroidSteer**, **Muon**, **PyTorch Standard AdamW**, and native **
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **PyTorch Standard AdamW** | 7.6875 | 7.6250 | **-0.81%** | 3.3125 | 0.1154 |
 | **Native BitsAndBytes 8-bit AdamW** | 7.6875 | 7.6250 | **-0.81%** | 3.3125 | 0.1160 |
-| **Triune CentroidSteer (SVD basis + low-rank)** | 7.6875 | 7.6875 | **-0.0%** | 1.9688 | 2.1227 |
+| **Triune CentroidSteer (SVD basis + low-rank)** | 7.6875 | 7.6875 | **-0.0%** | 1.8906 | 2.1206 |
 | **Triune Muon (Orthogonal matrix momentum)** | 7.6875 | 7.6562 | **-0.41%** | 2.9844 | 0.3372 |
 
 ## 5. Architectural Insights

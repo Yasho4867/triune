@@ -1,6 +1,6 @@
 {
   "workload": {
-    "steps": 15,
+    "steps": 30,
     "batch_size": 4,
     "seq_len": 256,
     "tokens_per_step": 1024,
@@ -8,29 +8,29 @@
   },
   "baseline": {
     "name": "Standard PyTorch + FP32 AdamW + Softmax + Full CE",
-    "step_time_ms": 42.08,
-    "throughput_tok_s": 24333.0,
-    "peak_vram_mb": 905.8,
+    "step_time_ms": 41.73,
+    "throughput_tok_s": 24541.0,
+    "peak_vram_mb": 906.1,
     "peak_vram_gb": 0.88,
-    "vram_efficiency_tok_s_per_gb": 27507.0,
+    "vram_efficiency_tok_s_per_gb": 27735.0,
     "initial_loss": 10.5559,
-    "final_loss": 10.5224,
-    "loss_drop": 0.0335
+    "final_loss": 10.5828,
+    "loss_drop": -0.0269
   },
   "triune": {
     "name": "Triune Compounded Stack (GLA + MoE + CentroidSteer + Muon + Chunked CE)",
-    "step_time_ms": 406.77,
-    "throughput_tok_s": 2517.0,
-    "peak_vram_mb": 2042.7,
-    "peak_vram_gb": 1.99,
-    "vram_efficiency_tok_s_per_gb": 1262.0,
-    "initial_loss": 10.4528,
-    "final_loss": 10.4679,
-    "loss_drop": -0.0152
+    "step_time_ms": 317.81,
+    "throughput_tok_s": 3222.0,
+    "peak_vram_mb": 940.5,
+    "peak_vram_gb": 0.92,
+    "vram_efficiency_tok_s_per_gb": 3508.0,
+    "initial_loss": 10.4492,
+    "final_loss": NaN,
+    "loss_drop": NaN
   },
   "compounding_advantages": {
-    "vram_saved_pct": -125.5,
-    "step_speedup": 0.1,
-    "compounding_vram_efficiency_gain": 0.05
+    "vram_saved_pct": -3.8,
+    "step_speedup": 0.13,
+    "compounding_vram_efficiency_gain": 0.13
   }
 }

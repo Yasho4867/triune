@@ -22,8 +22,8 @@
     {
       "optimizer": "Triune CentroidSteer (SVD basis + low-rank)",
       "total_params": 17016591,
-      "state_memory_mb": 27.27,
-      "bytes_per_param": 1.68
+      "state_memory_mb": 27.4,
+      "bytes_per_param": 1.69
     },
     {
       "optimizer": "Triune Muon (Orthogonal matrix momentum)",
@@ -35,27 +35,27 @@
   "experiment_b_step_throughput": [
     {
       "optimizer": "PyTorch Standard AdamW",
-      "median_step_latency_ms": 1.85,
-      "mean_step_latency_ms": 1.83,
-      "steps_per_sec": 540.8
+      "median_step_latency_ms": 1.69,
+      "mean_step_latency_ms": 1.76,
+      "steps_per_sec": 591.2
     },
     {
       "optimizer": "Native BitsAndBytes 8-bit AdamW",
-      "median_step_latency_ms": 9.3,
-      "mean_step_latency_ms": 9.24,
-      "steps_per_sec": 107.5
+      "median_step_latency_ms": 9.27,
+      "mean_step_latency_ms": 9.18,
+      "steps_per_sec": 107.9
     },
     {
       "optimizer": "Triune CentroidSteer (SVD basis + low-rank)",
-      "median_step_latency_ms": 77.16,
-      "mean_step_latency_ms": 89.35,
-      "steps_per_sec": 13.0
+      "median_step_latency_ms": 72.87,
+      "mean_step_latency_ms": 72.87,
+      "steps_per_sec": 13.7
     },
     {
       "optimizer": "Triune Muon (Orthogonal matrix momentum)",
-      "median_step_latency_ms": 67.49,
-      "mean_step_latency_ms": 68.36,
-      "steps_per_sec": 14.8
+      "median_step_latency_ms": 71.14,
+      "mean_step_latency_ms": 71.22,
+      "steps_per_sec": 14.1
     }
   ],
   "experiment_c_50_step_convergence": [
@@ -95,11 +95,11 @@
       "sample_loss_trajectory": [
         7.6875,
         7.71875,
-        7.625,
+        7.6875,
         7.6875
       ],
-      "final_grad_norm": 1.9688,
-      "mean_update_norm": 2.1227
+      "final_grad_norm": 1.8906,
+      "mean_update_norm": 2.1206
     },
     {
       "optimizer": "Triune Muon (Orthogonal matrix momentum)",

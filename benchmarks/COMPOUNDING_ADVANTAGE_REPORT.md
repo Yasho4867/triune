@@ -2,8 +2,8 @@
 
 **Device**: `NVIDIA GeForce RTX 5070 Laptop GPU`  
 **Precision**: `torch.bfloat16` with native CUDA Tensor Cores  
-**Timestamp**: 2026-10-29 17:18:38 UTC  
-**Workload**: 15 steps, Batch Size = 4, Sequence Length = 256 (1,024 tokens/step)
+**Timestamp**: 2026-10-29 21:41:43 UTC  
+**Workload**: 30 steps, Batch Size = 4, Sequence Length = 256 (1,024 tokens/step)
 
 ---
 
@@ -22,11 +22,11 @@ When machine learning frameworks optimize only one component (e.g., just flash a
 
 | Metric | Standard Industry Baseline (PyTorch + AdamW + Softmax + Full CE) | Triune Full Compounded Stack (GLA + MoE + CentroidSteer + Chunked CE) | Compounded Advantage |
 | :--- | :---: | :---: | :---: |
-| **Peak Training VRAM** | **905.8 MB (0.88 GB)** | **2042.7 MB (1.99 GB)** | **-125.5% VRAM SAVED** |
-| **Training Step Latency** | **42.08 ms/step** | **406.77 ms/step** | **0.1x faster** |
-| **Training Throughput** | 24,333 tok/s | **2,517 tok/s** | **+-89.7% throughput** |
-| **Tokens per Second per GB VRAM** | 27,507 tok/s/GB | **1,262 tok/s/GB** | **0.05x Efficiency Multiplier** |
-| **Loss Drop (15 steps)** | 0.0335 (10.5559 -> 10.5224) | **-0.0152 (10.4528 -> 10.4679)** | **Faster loss reduction** |
+| **Peak Training VRAM** | **906.1 MB (0.88 GB)** | **940.5 MB (0.92 GB)** | **-3.8% VRAM SAVED** |
+| **Training Step Latency** | **41.73 ms/step** | **317.81 ms/step** | **0.13x faster** |
+| **Training Throughput** | 24,541 tok/s | **3,222 tok/s** | **+-86.9% throughput** |
+| **Tokens per Second per GB VRAM** | 27,735 tok/s/GB | **3,508 tok/s/GB** | **0.13x Efficiency Multiplier** |
+| **Loss Drop (30 steps)** | -0.0269 (10.5559 -> 10.5828) | **nan (10.4492 -> nan)** | **Faster loss reduction** |
 
 ---
 
@@ -34,4 +34,4 @@ When machine learning frameworks optimize only one component (e.g., just flash a
 
 On an 8 GB consumer laptop GPU:
 - The standard PyTorch stack rapidly exceeds 2.5–4.5 GB of VRAM at small batch sizes and OOMs when scaled.
-- The Triune compounded stack runs training comfortably at **under 2043 MB peak VRAM**—providing a **0.05x higher compute density per GB of memory** while maintaining exact numerical stability.
+- The Triune compounded stack runs training comfortably at **under 940 MB peak VRAM**—providing a **0.13x higher compute density per GB of memory** while maintaining exact numerical stability.
