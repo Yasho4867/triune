@@ -5247,6 +5247,18 @@ if HAS_FASTAPI:
             "telemetry": get_kernel_telemetry()
         }
 
+    @router.get("/v1/engine/benchmarks")
+    async def get_competitive_benchmarks_endpoint() -> Dict[str, Any]:
+        """Return the latest tested empirical competitor benchmarks (PyTorch, AdamW, Unsloth, Fixed-Depth LLMs)."""
+        results_path = Path("benchmarks/benchmark_results.json")
+        if results_path.is_file():
+            try:
+                with open(results_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception as exc:
+                return {"status": "error", "message": str(exc)}
+        return {"status": "not_run", "message": "Run python scripts/benchmark_competitors.py to generate live benchmarks."}
+
     # -------------------------------------------------------------------------
     # Model Export Endpoints
     # -------------------------------------------------------------------------
