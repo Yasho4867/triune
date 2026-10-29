@@ -2,7 +2,7 @@
 
 **Benchmarked Hardware**: `NVIDIA GeForce RTX 5070 Laptop GPU`  
 **Precision**: `torch.bfloat16` with native CUDA Tensor Cores  
-**Timestamp**: 2026-10-29 17:30:52 UTC  
+**Timestamp**: 2026-10-29 19:41:40 UTC  
 **Architecture Scope**: Universal Dense Transformers (76M) & Triune Multi-Exit MoE (76M) across Pre-Training and LoRA Fine-Tuning.
 
 ---
@@ -11,12 +11,12 @@
 
 | Architecture | Framework Stack | Step Latency | Throughput | Peak VRAM | VRAM Saved vs AdamW | Loss Drop (15 steps) |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
-| Universal Dense (76M) | Standard AdamW | 44.01 ms | 23,269 tok/s | **882.8 MB** | **0.0%** | 0.0657 |
-| Universal Dense (76M) | Unsloth Style | 155.52 ms | 6,584 tok/s | **664.5 MB** | **24.7%** | nan |
-| Universal Dense (76M) | **Triune Stack** | 126.77 ms | 8,077 tok/s | **1958.8 MB** | **-121.9%** | 0.0591 |
-| Triune MoE (76M) | Standard AdamW | 238.51 ms | 4,293 tok/s | **2321.7 MB** | **0.0%** | -0.0052 |
-| Triune MoE (76M) | Unsloth Style | 435.34 ms | 2,352 tok/s | **2065.7 MB** | **11.0%** | nan |
-| Triune MoE (76M) | **Triune Stack** | 429.64 ms | 2,383 tok/s | **2041.1 MB** | **12.1%** | -0.0235 |
+| Universal Dense (76M) | Standard AdamW | 45.63 ms | 22,442 tok/s | **882.8 MB** | **0.0%** | 0.0659 |
+| Universal Dense (76M) | Unsloth Style | 51.84 ms | 19,753 tok/s | **665.9 MB** | **24.6%** | 0.0655 |
+| Universal Dense (76M) | **Triune Stack** | 123.74 ms | 8,275 tok/s | **1958.8 MB** | **-121.9%** | 0.053 |
+| Triune MoE (76M) | Standard AdamW | 222.24 ms | 4,608 tok/s | **2323.3 MB** | **0.0%** | -0.0072 |
+| Triune MoE (76M) | Unsloth Style | 218.2 ms | 4,693 tok/s | **2063.9 MB** | **11.2%** | -0.0077 |
+| Triune MoE (76M) | **Triune Stack** | 370.94 ms | 2,761 tok/s | **2020.0 MB** | **13.1%** | -0.0166 |
 
 ---
 
@@ -24,12 +24,12 @@
 
 | Architecture | Framework Stack | Step Latency | Throughput | Peak VRAM | VRAM Saved vs AdamW | Loss Drop (15 steps) |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
-| Universal Dense (76M) | Standard AdamW | 35.2 ms | 29,093 tok/s | **698.5 MB** | **0.0%** | 0.0382 |
-| Universal Dense (76M) | Unsloth Style | 30.45 ms | 33,631 tok/s | **570.5 MB** | **18.3%** | 0.0382 |
-| Universal Dense (76M) | **Triune Stack** | 114.45 ms | 8,947 tok/s | **1767.5 MB** | **-153.0%** | -0.0064 |
-| Triune MoE (76M) | Standard AdamW | 222.81 ms | 4,596 tok/s | **2187.7 MB** | **0.0%** | -0.0035 |
-| Triune MoE (76M) | Unsloth Style | 206.03 ms | 4,970 tok/s | **2058.5 MB** | **5.9%** | -0.0035 |
-| Triune MoE (76M) | **Triune Stack** | 210.02 ms | 4,876 tok/s | **2060.5 MB** | **5.8%** | -0.0035 |
+| Universal Dense (76M) | Standard AdamW | 31.56 ms | 32,448 tok/s | **698.5 MB** | **0.0%** | 0.0381 |
+| Universal Dense (76M) | Unsloth Style | 33.55 ms | 30,522 tok/s | **570.5 MB** | **18.3%** | 0.0381 |
+| Universal Dense (76M) | **Triune Stack** | 100.94 ms | 10,145 tok/s | **1767.5 MB** | **-153.0%** | -0.0066 |
+| Triune MoE (76M) | Standard AdamW | 226.91 ms | 4,513 tok/s | **2187.7 MB** | **0.0%** | -0.0038 |
+| Triune MoE (76M) | Unsloth Style | 203.69 ms | 5,027 tok/s | **2058.5 MB** | **5.9%** | -0.0038 |
+| Triune MoE (76M) | **Triune Stack** | 192.23 ms | 5,327 tok/s | **2060.5 MB** | **5.8%** | -0.0038 |
 
 ---
 

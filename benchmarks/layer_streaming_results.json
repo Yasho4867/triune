@@ -1,0 +1,82 @@
+{
+  "hardware": {
+    "device_name": "NVIDIA GeForce RTX 5070 Laptop GPU",
+    "total_vram_gb": 7.93,
+    "cuda_version": "13.2",
+    "pytorch_version": "2.14.1+cu132",
+    "python_version": "3.14.7"
+  },
+  "config": {
+    "batch_size": 2,
+    "seq_len": 512,
+    "vocab_size": 4096
+  },
+  "comparisons": [
+    {
+      "scale": "76M",
+      "params_m": 101.97,
+      "gpu_resident": {
+        "median_latency_ms": 367.91,
+        "mean_latency_ms": 361.95,
+        "peak_allocated_mb": 2657.52,
+        "peak_reserved_mb": 3348.0,
+        "tokens_per_sec": 2783.3,
+        "last_loss": 7.5938
+      },
+      "layer_streaming": {
+        "median_latency_ms": 1019.27,
+        "mean_latency_ms": 1035.78,
+        "peak_allocated_mb": 2217.86,
+        "peak_reserved_mb": 3182.0,
+        "tokens_per_sec": 1004.6,
+        "last_loss": 7.5938
+      },
+      "vram_reduction_pct": 16.54,
+      "pcie_latency_overhead_pct": 177.04
+    },
+    {
+      "scale": "150M",
+      "params_m": 270.56,
+      "gpu_resident": {
+        "median_latency_ms": 374.1,
+        "mean_latency_ms": 375.58,
+        "peak_allocated_mb": 5376.7,
+        "peak_reserved_mb": 6580.0,
+        "tokens_per_sec": 2737.2,
+        "last_loss": 7.0
+      },
+      "layer_streaming": {
+        "median_latency_ms": 1911.68,
+        "mean_latency_ms": 1995.3,
+        "peak_allocated_mb": 4211.03,
+        "peak_reserved_mb": 6376.0,
+        "tokens_per_sec": 535.7,
+        "last_loss": 7.0
+      },
+      "vram_reduction_pct": 21.68,
+      "pcie_latency_overhead_pct": 411.01
+    },
+    {
+      "scale": "350M",
+      "params_m": 694.85,
+      "gpu_resident": {
+        "median_latency_ms": 3825.01,
+        "mean_latency_ms": 4043.22,
+        "peak_allocated_mb": 10893.02,
+        "peak_reserved_mb": 12498.0,
+        "tokens_per_sec": 267.7,
+        "last_loss": 6.0938
+      },
+      "layer_streaming": {
+        "median_latency_ms": 14237.67,
+        "mean_latency_ms": 25615.47,
+        "peak_allocated_mb": 8097.9,
+        "peak_reserved_mb": 11322.0,
+        "tokens_per_sec": 71.9,
+        "last_loss": 6.1562
+      },
+      "vram_reduction_pct": 25.66,
+      "pcie_latency_overhead_pct": 272.23
+    }
+  ]
+}

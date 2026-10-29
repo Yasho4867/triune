@@ -1,0 +1,64 @@
+{
+  "hardware": {
+    "device_name": "NVIDIA GeForce RTX 5070 Laptop GPU",
+    "total_vram_gb": 7.93,
+    "cuda_version": "13.2",
+    "pytorch_version": "2.14.1+cu132",
+    "python_version": "3.14.7"
+  },
+  "config": {
+    "batch_size": 4,
+    "seq_len": 512,
+    "vocab_size": 4096
+  },
+  "exits": [
+    {
+      "name": "Reflex Exit (L2)",
+      "depth_code": 0,
+      "description": "Shallowest path: Layer 2 exit for high-confidence tokens",
+      "forward_latency_ms": 27.81,
+      "forward_throughput_tok_s": 73640.9,
+      "peak_vram_mb": 783.07,
+      "decode_tok_s": 70.9,
+      "decode_latency_per_tok_ms": 14.1,
+      "val_loss": 8.4313,
+      "perplexity": 4588.23
+    },
+    {
+      "name": "Limbic Exit (L5)",
+      "depth_code": 1,
+      "description": "Intermediate path: Layer 5 exit for moderate context",
+      "forward_latency_ms": 65.15,
+      "forward_throughput_tok_s": 31436.2,
+      "peak_vram_mb": 783.07,
+      "decode_tok_s": 43.6,
+      "decode_latency_per_tok_ms": 22.96,
+      "val_loss": 8.425,
+      "perplexity": 4559.64
+    },
+    {
+      "name": "Cortex Exit (L8)",
+      "depth_code": 2,
+      "description": "Deep path: Layer 8 full contextual processing",
+      "forward_latency_ms": 88.86,
+      "forward_throughput_tok_s": 23048.7,
+      "peak_vram_mb": 783.07,
+      "decode_tok_s": 49.4,
+      "decode_latency_per_tok_ms": 20.25,
+      "val_loss": 8.425,
+      "perplexity": 4559.64
+    },
+    {
+      "name": "Learned Dynamic Routing",
+      "depth_code": null,
+      "description": "Adaptive token routing via confidence gate",
+      "forward_latency_ms": 29.55,
+      "forward_throughput_tok_s": 69294.7,
+      "peak_vram_mb": 783.07,
+      "decode_tok_s": 73.6,
+      "decode_latency_per_tok_ms": 13.59,
+      "val_loss": 8.4313,
+      "perplexity": 4588.23
+    }
+  ]
+}

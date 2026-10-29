@@ -42,78 +42,20 @@ from triune.trainer.finetune import LoRAConfig, LoRALayer
 
 
 # =========================================================================
-# Simulated Unsloth 8-bit Optimizer (for exact Unsloth memory profile)
+# Native Unsloth / BitsAndBytes 8-bit AdamW
 # =========================================================================
-class Unsloth8BitAdamW(torch.optim.Optimizer):
-    """Exact functional model of Unsloth's 8-bit quantized AdamW.
-    
-    Quantizes first and second moments to 8-bit signed/unsigned blocks,
-    consuming 2 bytes/parameter instead of 8-16 bytes/parameter.
-    """
+try:
+    import bitsandbytes as bnb
+    BnbAdamW8bit = bnb.optim.AdamW8bit
+except (ImportError, Exception):
+    BnbAdamW8bit = None
 
-    def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.01):
-        defaults = dict(lr=lr, betas=betas, eps=eps, weight_decay=weight_decay)
-        super().__init__(params, defaults)
 
-    @torch.no_grad()
-    def step(self, closure=None):
-        loss = None
-        if closure is not None:
-            with torch.enable_grad():
-                loss = closure()
-
-        for group in self.param_groups:
-            lr = group["lr"]
-            beta1, beta2 = group["betas"]
-            eps = group["eps"]
-            wd = group["weight_decay"]
-
-            for p in group["params"]:
-                if p.grad is None:
-                    continue
-                grad = p.grad.data
-                state = self.state[p]
-
-                # State initialization: 8-bit quantized representation
-                if len(state) == 0:
-                    state["step"] = 0
-                    # Store 8-bit quantized moments (1 byte m, 1 byte v per param = 2 bytes)
-                    state["exp_avg_8bit"] = torch.zeros(p.shape, dtype=torch.int8, device=p.device)
-                    state["exp_avg_scale_m"] = 1.0
-                    state["exp_avg_sq_8bit"] = torch.zeros(p.shape, dtype=torch.uint8, device=p.device)
-                    state["exp_avg_scale_v"] = 1.0
-
-                state["step"] += 1
-                step = state["step"]
-
-                # Weight decay
-                if wd > 0:
-                    p.data.mul_(1.0 - lr * wd)
-
-                # Dequantize, update moments, and requantize
-                m = state["exp_avg_8bit"].float() * state["exp_avg_scale_m"]
-                v = state["exp_avg_sq_8bit"].float() * state["exp_avg_scale_v"]
-
-                m.mul_(beta1).add_(grad, alpha=1 - beta1)
-                v.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
-
-                # Bias correction
-                bias_correction1 = 1 - beta1 ** step
-                bias_correction2 = 1 - beta2 ** step
-                step_size = lr / bias_correction1
-                denom = (v.sqrt() / math.sqrt(bias_correction2)).add_(eps)
-
-                p.data.addcdiv_(m, denom, value=-step_size)
-
-                # Requantize moments to 8-bit
-                scale_m = max(1e-8, m.abs().max().item() / 127.0)
-                scale_v = max(1e-8, v.max().item() / 255.0)
-                state["exp_avg_8bit"].copy_((m / scale_m).round().clamp(-127, 127).to(torch.int8))
-                state["exp_avg_scale_m"] = scale_m
-                state["exp_avg_sq_8bit"].copy_((v / scale_v).round().clamp(0, 255).to(torch.uint8))
-                state["exp_avg_scale_v"] = scale_v
-
-        return loss
+def get_unsloth_optimizer(trainable_params, lr=1e-3, weight_decay=0.01):
+    """Instantiates genuine native BitsAndBytes 8-bit AdamW used by Unsloth."""
+    if BnbAdamW8bit is not None:
+        return BnbAdamW8bit(trainable_params, lr=lr, weight_decay=weight_decay)
+    return torch.optim.AdamW(trainable_params, lr=lr, weight_decay=weight_decay)
 
 
 import math
@@ -194,7 +136,7 @@ def run_benchmark_cell(
     if stack == "adamw":
         optimizer = torch.optim.AdamW(trainable_params, lr=1e-3, weight_decay=0.01)
     elif stack == "unsloth":
-        optimizer = Unsloth8BitAdamW(trainable_params, lr=1e-3, weight_decay=0.01)
+        optimizer = get_unsloth_optimizer(trainable_params, lr=1e-3, weight_decay=0.01)
     elif stack == "triune":
         if model_type == "moe" and task == "pretrain":
             optimizer = CentroidSteerOptimizer(model.core if hasattr(model, 'core') else model, lr=1e-3, rank=16, use_muon=True)

@@ -1,0 +1,119 @@
+{
+  "hardware": {
+    "device_name": "NVIDIA GeForce RTX 5070 Laptop GPU",
+    "total_vram_gb": 7.93,
+    "cuda_version": "13.2",
+    "pytorch_version": "2.14.1+cu132",
+    "python_version": "3.14.7"
+  },
+  "experiment_a_state_memory": [
+    {
+      "optimizer": "PyTorch Standard AdamW",
+      "total_params": 17016591,
+      "state_memory_mb": 48.37,
+      "bytes_per_param": 2.98
+    },
+    {
+      "optimizer": "Native BitsAndBytes 8-bit AdamW",
+      "total_params": 17016591,
+      "state_memory_mb": 24.74,
+      "bytes_per_param": 1.52
+    },
+    {
+      "optimizer": "Triune CentroidSteer (SVD basis + low-rank)",
+      "total_params": 17016591,
+      "state_memory_mb": 14.14,
+      "bytes_per_param": 0.87
+    },
+    {
+      "optimizer": "Triune Muon (Orthogonal matrix momentum)",
+      "total_params": 17016591,
+      "state_memory_mb": 24.13,
+      "bytes_per_param": 1.49
+    }
+  ],
+  "experiment_b_step_throughput": [
+    {
+      "optimizer": "PyTorch Standard AdamW",
+      "median_step_latency_ms": 1.72,
+      "mean_step_latency_ms": 1.83,
+      "steps_per_sec": 581.1
+    },
+    {
+      "optimizer": "Native BitsAndBytes 8-bit AdamW",
+      "median_step_latency_ms": 10.04,
+      "mean_step_latency_ms": 9.99,
+      "steps_per_sec": 99.6
+    },
+    {
+      "optimizer": "Triune CentroidSteer (SVD basis + low-rank)",
+      "median_step_latency_ms": 78.56,
+      "mean_step_latency_ms": 78.46,
+      "steps_per_sec": 12.7
+    },
+    {
+      "optimizer": "Triune Muon (Orthogonal matrix momentum)",
+      "median_step_latency_ms": 72.46,
+      "mean_step_latency_ms": 72.42,
+      "steps_per_sec": 13.8
+    }
+  ],
+  "experiment_c_50_step_convergence": [
+    {
+      "optimizer": "PyTorch Standard AdamW",
+      "initial_loss": 7.6875,
+      "final_loss": 7.65625,
+      "loss_reduction_pct": 0.41,
+      "sample_loss_trajectory": [
+        7.6875,
+        7.6875,
+        7.65625,
+        7.65625
+      ],
+      "final_grad_norm": 1.5703,
+      "mean_update_norm": 0.9498
+    },
+    {
+      "optimizer": "Native BitsAndBytes 8-bit AdamW",
+      "initial_loss": 7.6875,
+      "final_loss": 7.65625,
+      "loss_reduction_pct": 0.41,
+      "sample_loss_trajectory": [
+        7.6875,
+        7.6875,
+        7.625,
+        7.65625
+      ],
+      "final_grad_norm": 1.5703,
+      "mean_update_norm": 0.97
+    },
+    {
+      "optimizer": "Triune CentroidSteer (SVD basis + low-rank)",
+      "initial_loss": 7.6875,
+      "final_loss": 7.6875,
+      "loss_reduction_pct": 0.0,
+      "sample_loss_trajectory": [
+        7.6875,
+        7.71875,
+        7.65625,
+        7.6875
+      ],
+      "final_grad_norm": 1.7891,
+      "mean_update_norm": 2.3141
+    },
+    {
+      "optimizer": "Triune Muon (Orthogonal matrix momentum)",
+      "initial_loss": 7.6875,
+      "final_loss": 7.71875,
+      "loss_reduction_pct": -0.41,
+      "sample_loss_trajectory": [
+        7.6875,
+        7.65625,
+        7.65625,
+        7.71875
+      ],
+      "final_grad_norm": 2.6562,
+      "mean_update_norm": 1.6184
+    }
+  ]
+}
