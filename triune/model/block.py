@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 
 from .attention import HybridAttention
-from .config import NUM_EXPERTS
+from .config import NUM_EXPERTS, checkpoint_bwd_ctx, checkpoint_fwd_ctx
 from .fp4 import FP4Linear
 from .fp8 import FP8Linear
 from .moe import MoE_FFN
@@ -50,17 +50,26 @@ class TransformerBlock(nn.Module):
     def forward(self, x: torch.Tensor, return_exit: bool = False, cache=None, update_stats: bool = True):
         if self._use_gradient_checkpointing and self.training:
             attn_out, new_cache = torch.utils.checkpoint.checkpoint(
-                lambda n: self.attn(n, cache=cache), self.norm1(x), use_reentrant=False
+                lambda n: self.attn(n, cache=cache),
+                self.norm1(x),
+                use_reentrant=False,
+                context_fn=lambda: (checkpoint_fwd_ctx(), checkpoint_bwd_ctx()),
             )
             x = x + attn_out
             norm2_x = self.norm2(x)
             if isinstance(self.ffn, MoE_FFN):
                 ffn_out = torch.utils.checkpoint.checkpoint(
-                    lambda n: self.ffn(n, update_stats=update_stats), norm2_x, use_reentrant=False
+                    lambda n: self.ffn(n, update_stats=update_stats),
+                    norm2_x,
+                    use_reentrant=False,
+                    context_fn=lambda: (checkpoint_fwd_ctx(), checkpoint_bwd_ctx()),
                 )
             else:
                 ffn_out = torch.utils.checkpoint.checkpoint(
-                    self.ffn, norm2_x, use_reentrant=False
+                    self.ffn,
+                    norm2_x,
+                    use_reentrant=False,
+                    context_fn=lambda: (checkpoint_fwd_ctx(), checkpoint_bwd_ctx()),
                 )
             x = x + ffn_out
         else:

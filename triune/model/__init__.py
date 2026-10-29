@@ -19,7 +19,7 @@ from .fp4 import FP4Linear
 from .fp8 import FP8Linear
 from .moe import MoE_FFN, RoutingResult
 from .norms import RMSNorm
-from .rotary import RotaryEmbedding, apply_rotary
+from .rotary import RotaryEmbedding, apply_rotary, rotate_half
 from .router import GumbelSoftmaxRouter
 from .transformer import TriuneTransformer
 from .zoo import load_model
@@ -38,6 +38,7 @@ __all__ = [
     "RMSNorm",
     "RotaryEmbedding",
     "apply_rotary",
+    "rotate_half",
     "GumbelSoftmaxRouter",
     "FP4Linear",
     "FP8Linear",

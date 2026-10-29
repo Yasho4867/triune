@@ -27,40 +27,46 @@ def fast_subspace_projection(grad: torch.Tensor, rank: int, niter: int = 2) -> t
     if side == 'left':
         Omega = torch.randn(n, q, device=grad.device, dtype=grad.dtype)
         Y = torch.mm(grad, Omega)
-        Gram = torch.mm(Y.t(), Y).float()
+        Y_f = Y.float()
+        Gram = torch.mm(Y_f.t(), Y_f)
         Gram.diagonal().add_(1e-7)
         L = torch.linalg.cholesky(Gram)
-        Q = torch.linalg.solve_triangular(L, Y.float().t(), upper=False).t()
+        Q = torch.linalg.solve_triangular(L, Y_f.t(), upper=False).t()
         for _ in range(niter):
             Z = torch.mm(grad.t(), Q.to(grad.dtype))
-            Gram_z = torch.mm(Z.t(), Z).float()
+            Z_f = Z.float()
+            Gram_z = torch.mm(Z_f.t(), Z_f)
             Gram_z.diagonal().add_(1e-7)
             L_z = torch.linalg.cholesky(Gram_z)
-            Q_z = torch.linalg.solve_triangular(L_z, Z.float().t(), upper=False).t()
+            Q_z = torch.linalg.solve_triangular(L_z, Z_f.t(), upper=False).t()
             Y = torch.mm(grad, Q_z.to(grad.dtype))
-            Gram_y = torch.mm(Y.t(), Y).float()
+            Y_f = Y.float()
+            Gram_y = torch.mm(Y_f.t(), Y_f)
             Gram_y.diagonal().add_(1e-7)
             L_y = torch.linalg.cholesky(Gram_y)
-            Q = torch.linalg.solve_triangular(L_y, Y.float().t(), upper=False).t()
+            Q = torch.linalg.solve_triangular(L_y, Y_f.t(), upper=False).t()
         proj = Q[:, :rank].to(device=grad.device, dtype=grad.dtype)
     else:
         Omega = torch.randn(m, q, device=grad.device, dtype=grad.dtype)
         Y = torch.mm(grad.t(), Omega)
-        Gram = torch.mm(Y.t(), Y).float()
+        Y_f = Y.float()
+        Gram = torch.mm(Y_f.t(), Y_f)
         Gram.diagonal().add_(1e-7)
         L = torch.linalg.cholesky(Gram)
-        Q = torch.linalg.solve_triangular(L, Y.float().t(), upper=False).t()
+        Q = torch.linalg.solve_triangular(L, Y_f.t(), upper=False).t()
         for _ in range(niter):
             Z = torch.mm(grad, Q.to(grad.dtype))
-            Gram_z = torch.mm(Z.t(), Z).float()
+            Z_f = Z.float()
+            Gram_z = torch.mm(Z_f.t(), Z_f)
             Gram_z.diagonal().add_(1e-7)
             L_z = torch.linalg.cholesky(Gram_z)
-            Q_z = torch.linalg.solve_triangular(L_z, Z.float().t(), upper=False).t()
+            Q_z = torch.linalg.solve_triangular(L_z, Z_f.t(), upper=False).t()
             Y = torch.mm(grad.t(), Q_z.to(grad.dtype))
-            Gram_y = torch.mm(Y.t(), Y).float()
+            Y_f = Y.float()
+            Gram_y = torch.mm(Y_f.t(), Y_f)
             Gram_y.diagonal().add_(1e-7)
             L_y = torch.linalg.cholesky(Gram_y)
-            Q = torch.linalg.solve_triangular(L_y, Y.float().t(), upper=False).t()
+            Q = torch.linalg.solve_triangular(L_y, Y_f.t(), upper=False).t()
         proj = Q[:, :rank].to(device=grad.device, dtype=grad.dtype)
     return proj, side
 
@@ -84,6 +90,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
         self.step_count = 0
         self.steer_scale = steer_scale
         self.expert_lr = expert_lr
+        self.initial_expert_lr = expert_lr
         self.expert_betas = expert_betas
         self.expert_wd = expert_wd
         self.use_muon = use_muon
@@ -212,10 +219,16 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                     p.grad.detach_()
                     p.grad.zero_()
 
-    def set_lr(self, lr):
+    def set_lr(self, lr, expert_lr=None):
         for pg in self.base_optimizer.param_groups:
             pg['lr'] = lr
-        self.expert_lr = lr
+        if expert_lr is not None:
+            self.expert_lr = expert_lr
+        elif hasattr(self, "initial_expert_lr") and self.initial_expert_lr is not None:
+            ratio = lr / max(1e-12, self.initial_base_lr)
+            self.expert_lr = self.initial_expert_lr * ratio
+        else:
+            self.expert_lr = lr
         if self.muon_optimizer is not None:
             ratio = lr / max(1e-12, self.initial_base_lr)
             for pg in self.muon_optimizer.param_groups:

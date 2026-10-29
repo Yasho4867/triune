@@ -140,3 +140,35 @@ CHECKPOINT_DIR = "checkpoints_full"
 EPS = 1e-6
 
 ROUTER_Z_LOSS = 1e-3
+
+
+# ============================================================
+# ACTIVATION CHECKPOINTING STATE
+# ============================================================
+
+import contextlib
+
+_checkpoint_recomputing: bool = False
+
+
+@contextlib.contextmanager
+def checkpoint_fwd_ctx():
+    """Forward context manager for torch.utils.checkpoint non-reentrant mode."""
+    yield
+
+
+@contextlib.contextmanager
+def checkpoint_bwd_ctx():
+    """Backward recomputation context manager preventing duplicate EMA/counter mutations."""
+    global _checkpoint_recomputing
+    old = _checkpoint_recomputing
+    _checkpoint_recomputing = True
+    try:
+        yield
+    finally:
+        _checkpoint_recomputing = old
+
+
+def is_checkpoint_recomputing() -> bool:
+    """Return True if currently executing activation recomputation during backward pass."""
+    return _checkpoint_recomputing

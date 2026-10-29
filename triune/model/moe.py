@@ -13,6 +13,7 @@ from .config import (
     SHARED_EXPERT,
     SHARED_EXPERT_SCALE,
     TOP_K_EXPERTS,
+    is_checkpoint_recomputing,
 )
 from .fp4 import FP4Linear
 from .fp8 import FP8Linear
@@ -30,47 +31,51 @@ class RoutingResult:
 
 
 class MoE_FFN(nn.Module):
-    def __init__(self, dim, num_experts=NUM_EXPERTS, top_k=TOP_K_EXPERTS, use_fp4=False, use_fp8=False, shared_expert=SHARED_EXPERT):
+    def __init__(
+        self,
+        dim: int,
+        num_experts: int = NUM_EXPERTS,
+        top_k: int = TOP_K_EXPERTS,
+        shared_expert: bool = SHARED_EXPERT,
+        shared_scale: float = SHARED_EXPERT_SCALE,
+        use_fp4: bool = False,
+        use_fp8: bool = False,
+    ):
         super().__init__()
+        self.dim = dim
         self.num_experts = num_experts
         self.top_k = top_k
-        self.dim = dim
         self.shared_expert = shared_expert
-        self.shared_scale = SHARED_EXPERT_SCALE
-        if use_fp8:
-            LinearCls = FP8Linear
-        elif use_fp4:
-            LinearCls = FP4Linear
-        else:
-            LinearCls = nn.Linear
+        self.shared_scale = shared_scale
+        self.use_fp4 = use_fp4
+        self.use_fp8 = use_fp8
 
-        try:
-            from triune.kernels.fast_swiglu import FastGELU
-            ActCls = FastGELU
-        except Exception:
-            ActCls = nn.GELU
+        Linear = FP8Linear if use_fp8 else (FP4Linear if use_fp4 else nn.Linear)
+        hidden_dim = dim * EXPERT_HIDDEN_MULTIPLIER
 
+        # Standard expert MLP: SwiGLU activation (gate_proj * silu(gate) * up_proj -> down_proj)
         self.experts = nn.ModuleList([
             nn.Sequential(
-                LinearCls(dim, dim * EXPERT_HIDDEN_MULTIPLIER),
-                ActCls(),
-                LinearCls(dim * EXPERT_HIDDEN_MULTIPLIER, dim)
-            )
-            for _ in range(num_experts)
+                Linear(dim, hidden_dim),
+                nn.SiLU(),
+                Linear(hidden_dim, dim)
+            ) for _ in range(num_experts)
         ])
 
-        if shared_expert:
+        # DeepSeek-V3 inspired Shared Expert: always processes every token with fixed scale
+        if self.shared_expert:
             self.shared = nn.Sequential(
-                LinearCls(dim, dim * EXPERT_HIDDEN_MULTIPLIER),
-                ActCls(),
-                LinearCls(dim * EXPERT_HIDDEN_MULTIPLIER, dim)
+                Linear(dim, hidden_dim),
+                nn.SiLU(),
+                Linear(hidden_dim, dim)
             )
+        else:
+            self.shared = None
 
         self.router = nn.Linear(dim, num_experts)
-        self.register_buffer('expert_bias', torch.zeros(num_experts))
-        self.register_buffer('expert_load_ratio', torch.ones(num_experts))
-        self.register_buffer('last_centroids', torch.zeros(num_experts, dim), persistent=False)
-        self.centroid_ema = CENTROID_EMA
+        self.register_buffer("expert_bias", torch.zeros(num_experts))
+        self.register_buffer("expert_load_ratio", torch.ones(num_experts))
+        self.last_centroids = None
         self.last_counts = None
         self.last_requested_counts = None
         self.last_accepted_counts = None
@@ -87,7 +92,7 @@ class MoE_FFN(nn.Module):
         bias_free_logits = self.router(x)
         biased_logits = bias_free_logits + self.expert_bias
 
-        if self.training and update_stats:
+        if self.training:
             temp = max(0.1, 1.0 - self._global_step / 5000)
             gate_weights = F.softmax(bias_free_logits / temp, dim=-1)
         else:
@@ -121,7 +126,7 @@ class MoE_FFN(nn.Module):
         else:
             capacity = B * T
         out = torch.zeros_like(flat_x)
-        need_stats = bool(self.training and update_stats)
+        need_stats = bool(self.training and update_stats and not is_checkpoint_recomputing())
         accepted_counts = torch.zeros(self.num_experts, dtype=torch.long, device=x.device) if need_stats else None
         accepted_mask = torch.zeros((B * T, self.top_k), dtype=torch.bool, device=x.device) if need_stats else None
 
@@ -141,7 +146,8 @@ class MoE_FFN(nn.Module):
                 if dropped > 0:
                     scores = val_k[indices]
                     keep = torch.argsort(scores, descending=True)[:capacity]
-                    self.overflow_counter += dropped
+                    if need_stats:
+                        self.overflow_counter += dropped
                     indices = indices[keep]
                     val_k_keep = val_k[indices]
                 else:
@@ -179,7 +185,7 @@ class MoE_FFN(nn.Module):
             )
             self._update_routing_stats(flat_x, routing_result)
 
-        if self.training and not getattr(self, "_step_managed_by_engine", False):
+        if self.training and not getattr(self, "_step_managed_by_engine", False) and not is_checkpoint_recomputing():
             self._global_step += 1
 
         return out.reshape(B, T, D)
@@ -277,5 +283,3 @@ class MoE_FFN(nn.Module):
             dropped_counts=dropped_counts,
         )
         self._update_routing_stats(flat_x, result)
-
-# ─── Transformer Block ──────────────────────────────────────────

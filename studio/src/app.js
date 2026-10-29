@@ -7280,7 +7280,7 @@
                   if (u && (u.reflex || u.limbic || u.cortex)) {
                     return `R:${u.reflex}% L:${u.limbic}% C:${u.cortex}%`;
                   }
-                  return (metrics.step && metrics.step > 0) ? 'R:34% L:33% C:33%' : '--';
+                  return '--';
                 })()),
                 e('div', { className: 'stat-sub' }, `Mode: ${(trainDepthMode || datasetInfo.depth_mode || 'dynamic').toUpperCase()}`)
               ),

@@ -117,5 +117,5 @@ class Trainer:
         return lr_schedule(config, step)
 
     @staticmethod
-    def set_optimizer_lr(optimizer, lr: float) -> None:
-        set_optimizer_lr(optimizer, lr)
+    def set_optimizer_lr(optimizer, lr: float, expert_lr: float | None = None) -> None:
+        set_optimizer_lr(optimizer, lr, expert_lr=expert_lr)

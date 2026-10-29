@@ -53,6 +53,16 @@ class TrainingEngine:
             return 0.5 * (1 + math.cos(math.pi * self.step / steps))
         return 0.0
 
+    def _compute_lm_loss(self, logits: torch.Tensor, y_flat: torch.Tensor, vocab_size: int) -> torch.Tensor:
+        """Compute mean language modeling loss normalized strictly by valid non-padding tokens."""
+        raw_loss = self.trainer.loss_fn(logits.reshape(-1, vocab_size), y_flat)
+        if raw_loss.dim() == 0:
+            return raw_loss
+        pad_id = getattr(self.trainer, "pad_token_id", -100)
+        valid_mask = y_flat != pad_id
+        valid_count = valid_mask.sum().clamp_min(1)
+        return (raw_loss * valid_mask.float()).sum() / valid_count
+
     def _router_labels_from_logits(self, reflex, limbic, cortex, x, y):
         with torch.no_grad():
             y_flat = y.reshape(-1)
@@ -133,15 +143,17 @@ class TrainingEngine:
         self.model.train()
         self.vram_monitor.tick()
         lr = self.trainer.lr_schedule(self.config, self.step)
-        self.trainer.set_optimizer_lr(self.optimizer, lr)
+        expert_lr = getattr(self.trainer, "centroid_lr", getattr(self.trainer, "expert_lr", None))
+        try:
+            self.trainer.set_optimizer_lr(self.optimizer, lr, expert_lr=expert_lr)
+        except TypeError:
+            self.trainer.set_optimizer_lr(self.optimizer, lr)
         for module in self.model.modules():
             if isinstance(module, MoE_FFN):
                 module._global_step = self.step
                 module._step_managed_by_engine = True
 
         streaming_engine = getattr(self.model, "_streaming_engine", None)
-        if streaming_engine is not None:
-            self.sync_streaming_engine()
         self.optimizer.zero_grad()
         if streaming_engine is not None:
             streaming_engine.zero_grad()
@@ -174,7 +186,7 @@ class TrainingEngine:
                     )
                 logits_f = logits.float()
                 route_f = route_logits.float()
-                lm_loss = self.trainer.loss_fn(logits_f.reshape(-1, vocab_size), y_flat).mean()
+                lm_loss = self._compute_lm_loss(logits_f, y_flat, vocab_size)
                 router_loss = torch.tensor(0.0, device=self.trainer.device)
                 z_loss = torch.tensor(0.0, device=self.trainer.device)
                 balance_loss = torch.tensor(0.0, device=self.trainer.device)
@@ -187,9 +199,9 @@ class TrainingEngine:
                         x, update_stats=True
                     )
                 labels = self._router_labels_from_logits(reflex_logits, limbic_logits, cortex_logits, x, y)
-                loss_ref = self.trainer.loss_fn(reflex_logits.float().reshape(-1, vocab_size), y_flat).mean()
-                loss_limb = self.trainer.loss_fn(limbic_logits.float().reshape(-1, vocab_size), y_flat).mean()
-                loss_cort = self.trainer.loss_fn(cortex_logits.float().reshape(-1, vocab_size), y_flat).mean()
+                loss_ref = self._compute_lm_loss(reflex_logits.float(), y_flat, vocab_size)
+                loss_limb = self._compute_lm_loss(limbic_logits.float(), y_flat, vocab_size)
+                loss_cort = self._compute_lm_loss(cortex_logits.float(), y_flat, vocab_size)
                 if loss_cort.detach() > loss_limb.detach():
                     # Accelerate Cortex recovery if deeper layers lag behind shallow exits
                     lm_loss = 0.22 * loss_ref + 0.23 * loss_limb + 0.55 * loss_cort
@@ -224,12 +236,12 @@ class TrainingEngine:
                         self.model.last_route_logits = route_logits
                         self.model.last_depth_choice = last_choice
                         self.model.last_balance_loss = saved_balance
-                        cortex_anchor_loss = self.trainer.loss_fn(
-                            c_logits.float().reshape(-1, vocab_size), y[:1].reshape(-1)
-                        ).mean()
+                        cortex_anchor_loss = self._compute_lm_loss(
+                            c_logits.float(), y[:1].reshape(-1), vocab_size
+                        )
                 logits_f = logits.float()
                 route_f = route_logits.float()
-                lm_loss = self.trainer.loss_fn(logits_f.reshape(-1, vocab_size), y_flat).mean()
+                lm_loss = self._compute_lm_loss(logits_f, y_flat, vocab_size)
                 if cortex_anchor_loss is not None:
                     lm_loss = 0.80 * lm_loss + 0.20 * cortex_anchor_loss
                 router_loss = self.trainer.router_loss_fn(route_f, labels)

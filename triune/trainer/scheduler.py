@@ -20,9 +20,18 @@ def lr_schedule(config: dict, step: int) -> float:
     return config["min_lr"] + 0.5 * (config["lr"] - config["min_lr"]) * (1 + math.cos(math.pi * rel_progress))
 
 
-def set_optimizer_lr(optimizer, lr: float) -> None:
+def set_optimizer_lr(optimizer, lr: float, expert_lr: float | None = None) -> None:
     if hasattr(optimizer, "set_lr"):
+        if expert_lr is not None:
+            try:
+                optimizer.set_lr(lr, expert_lr=expert_lr)
+                return
+            except TypeError:
+                pass
         optimizer.set_lr(lr)
     else:
         for param_group in optimizer.param_groups:
-            param_group["lr"] = lr
+            if param_group.get("is_expert", False) and expert_lr is not None:
+                param_group["lr"] = expert_lr
+            else:
+                param_group["lr"] = lr

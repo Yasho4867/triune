@@ -126,11 +126,13 @@ def _format_tokens(n: int | float | None) -> str:
     if n is None or n == 0:
         return "0 tok"
     n_int = int(n)
-    if n_int >= 1_000_000_000:
-        return f"{n_int / 1_000_000_000:.2f}B tok"
-    if n_int >= 1_000_000:
-        return f"{n_int / 1_000_000:.2f}M tok"
-    return f"{n_int:,} tok"
+    prefix = "-" if n_int < 0 else ""
+    val = abs(n_int)
+    if round(val / 1_000_000_000, 2) >= 1.0:
+        return f"{prefix}{val / 1_000_000_000:.2f}B tok"
+    if round(val / 1_000_000, 2) >= 1.0:
+        return f"{prefix}{val / 1_000_000:.2f}M tok"
+    return f"{prefix}{val:,} tok"
 
 
 def sanitize_text(text: str) -> str:
@@ -1080,6 +1082,12 @@ if HAS_FASTAPI:
                 self.training_engine = TrainingEngine(self)
                 self.training_engine.step = self.step
 
+            if p_id != getattr(self, "active_model_id", None):
+                self.history = []
+                self.last_exit_usage = None
+                self.last_loss = None
+                self.active_checkpoint = None
+
             self.active_model_id = p_id
             self.architecture_spec = base
             self.weights_loaded = False
@@ -1105,9 +1113,9 @@ if HAS_FASTAPI:
             print(log_msg)
             return base
 
-        def _get_current_exit_usage(self) -> Dict[str, float]:
+        def _get_current_exit_usage(self) -> Optional[Dict[str, float]]:
             """Compute the current or fallback exit head usage percentages dynamically."""
-            if self.history and "exit_usage" in self.history[-1]:
+            if self.history and "exit_usage" in self.history[-1] and self.history[-1]["exit_usage"]:
                 return self.history[-1]["exit_usage"]
             if getattr(self, "last_exit_usage", None):
                 return self.last_exit_usage
@@ -1125,16 +1133,32 @@ if HAS_FASTAPI:
                             }
                 except Exception:
                     pass
-            dist = getattr(self.model, "target_depth_dist", None) or (0.40, 0.35, 0.25)
-            tot = sum(dist) or 1.0
-            return {
-                "reflex": round((float(dist[0]) / tot) * 100.0, 1),
-                "limbic": round((float(dist[1]) / tot) * 100.0, 1),
-                "cortex": round((float(dist[2]) / tot) * 100.0, 1),
-            }
+            router = getattr(self.model, "router", None)
+            dist = getattr(router, "target_depth_dist", None)
+            if dist is not None:
+                try:
+                    d_vals = dist.tolist() if torch.is_tensor(dist) else list(dist)
+                    if d_vals and len(d_vals) >= 3:
+                        tot = sum(d_vals) or 1.0
+                        return {
+                            "reflex": round((float(d_vals[0]) / tot) * 100.0, 1),
+                            "limbic": round((float(d_vals[1]) / tot) * 100.0, 1),
+                            "cortex": round((float(d_vals[2]) / tot) * 100.0, 1),
+                        }
+                except Exception:
+                    pass
+            return None
 
         def _get_current_throughput(self) -> int:
             """Return the latest measured step throughput or 0 if idle."""
+            if not getattr(self, "is_training", False):
+                return 0
+            if self.history and "throughput" in self.history[-1]:
+                return int(self.history[-1]["throughput"] or 0)
+            return 0
+
+        def _get_last_measured_throughput(self) -> int:
+            """Return the last measured step throughput regardless of whether training is active."""
             if self.history and "throughput" in self.history[-1]:
                 return int(self.history[-1]["throughput"] or 0)
             return 0
@@ -1259,19 +1283,17 @@ if HAS_FASTAPI:
                         }
                 except Exception:
                     pass
-            if exit_usage_dict is None:
-                exit_usage_dict = self._get_current_exit_usage()
-
+            self.history = []
             self.last_loss = saved_loss if saved_loss > 0 else getattr(self, "last_loss", None)
             self.last_exit_usage = exit_usage_dict
 
-            if not self.history and self.step > 0 and saved_loss > 0:
+            if self.step > 0 and saved_loss > 0:
                 self.history.append({
                     "step": self.step,
                     "loss": round(saved_loss, 4),
                     "lm_loss": round(saved_loss, 4),
                     "router_loss": 0.0,
-                    "throughput": self._get_current_throughput(),
+                    "throughput": 0,
                     "lr": round(self.current_lr, 7),
                     "tokens_trained": self.total_tokens_trained,
                     "exit_usage": exit_usage_dict,
@@ -1951,9 +1973,11 @@ if HAS_FASTAPI:
             from triune.trainer.scheduler import lr_schedule as _canonical_lr_schedule
             return _canonical_lr_schedule(config, step)
 
-        def set_optimizer_lr(self, optimizer, lr: float) -> None:
+        def set_optimizer_lr(self, optimizer, lr: float, expert_lr: Optional[float] = None) -> None:
             from triune.trainer.scheduler import set_optimizer_lr as _canonical_set_lr
-            _canonical_set_lr(optimizer, lr)
+            if expert_lr is None and hasattr(self, "centroid_lr") and self.centroid_lr is not None:
+                expert_lr = self.centroid_lr
+            _canonical_set_lr(optimizer, lr, expert_lr=expert_lr)
 
         def model_autocast(self):
             from triune.recipes import bf16_autocast, build_fp8_precision_context, build_precision_context
