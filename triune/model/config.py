@@ -77,6 +77,7 @@ GALORE_BETAS = (0.9, 0.999)
 GALORE_WEIGHT_DECAY = 0.05
 
 STEER_SCALE = 0.20
+USE_TRIANGULAR_CORE = True
 
 # ============================================================
 # MUON / Non-Expert 2D Optimizer
