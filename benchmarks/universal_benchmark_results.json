@@ -1,0 +1,34 @@
+{
+  "unsloth_finetuning": {
+    "benchmark": "unsloth_lora_comparison",
+    "standard_time_ms": 22.69,
+    "triune_time_ms": 39.42,
+    "speedup": 0.58,
+    "standard_vram_mb": 1270.1,
+    "triune_vram_mb": 1026.8,
+    "vram_saved_pct": 19.2
+  },
+  "universal_pretraining": {
+    "benchmark": "universal_pretraining",
+    "dense": {
+      "step_time_ms": 114.74,
+      "throughput_tok_s": 8925.0,
+      "peak_vram_mb": 1960.1,
+      "loss_drop": 6.0218
+    },
+    "moe": {
+      "step_time_ms": 364.03,
+      "throughput_tok_s": 2813.0,
+      "peak_vram_mb": 2040.3,
+      "loss_drop": 6.2011
+    }
+  },
+  "cross_architecture_inference": {
+    "benchmark": "cross_architecture_inference",
+    "dense_softmax_tok_s": 66.4,
+    "dense_gla_tok_s": 21.4,
+    "moe_cortex_tok_s": 19.0,
+    "moe_reflex_tok_s": 75.4,
+    "reflex_speedup_vs_cortex": 3.97
+  }
+}

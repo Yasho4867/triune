@@ -93,6 +93,10 @@ _LAZY_IMPORTS = {
     "LoRAConfig": ".trainer",
     "LoRALayer": ".trainer",
     "TriuneFineTuner": ".trainer",
+    # Universal Framework
+    "UniversalDenseTransformer": ".universal",
+    "UniversalMoETransformer": ".universal",
+    "TriuneUniversalEngine": ".universal",
 }
 
 __all__ = [
