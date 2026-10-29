@@ -1114,7 +1114,7 @@ if HAS_FASTAPI:
             return base
 
         def _get_current_exit_usage(self) -> Optional[Dict[str, float]]:
-            """Compute the current or fallback exit head usage percentages dynamically."""
+            """Return strictly measured exit head usage percentages, or None if unmeasured."""
             if self.history and "exit_usage" in self.history[-1] and self.history[-1]["exit_usage"]:
                 return self.history[-1]["exit_usage"]
             if getattr(self, "last_exit_usage", None):
@@ -1122,7 +1122,7 @@ if HAS_FASTAPI:
             if getattr(self, "training_engine", None) is not None and hasattr(self.training_engine, "depth_usage_ema"):
                 try:
                     ema = self.training_engine.depth_usage_ema
-                    if ema is not None:
+                    if ema is not None and getattr(self, "step", 0) > 0:
                         d_vals = ema.tolist() if torch.is_tensor(ema) else list(ema)
                         if d_vals and len(d_vals) >= 3:
                             tot = sum(d_vals) or 1.0
@@ -1133,8 +1133,14 @@ if HAS_FASTAPI:
                             }
                 except Exception:
                     pass
-            router = getattr(self.model, "router", None)
+            return None
+
+        def _get_target_exit_distribution(self) -> Optional[Dict[str, float]]:
+            """Return the configured target depth distribution of the active model as percentages."""
+            router = getattr(getattr(self, "model", None), "router", None)
             dist = getattr(router, "target_depth_dist", None)
+            if dist is None and getattr(self, "architecture_spec", None):
+                dist = self.architecture_spec.get("target_depth_dist")
             if dist is not None:
                 try:
                     d_vals = dist.tolist() if torch.is_tensor(dist) else list(dist)
@@ -1306,6 +1312,7 @@ if HAS_FASTAPI:
                 "tokens_trained": self.total_tokens_trained,
                 "loss": saved_loss if saved_loss > 0 else None,
                 "exit_usage": exit_usage_dict,
+                "target_exit_distribution": self._get_target_exit_distribution(),
                 "throughput": self._get_current_throughput(),
                 "architecture": self.architecture_spec,
                 "active_model": self.active_model_id,
@@ -4003,6 +4010,7 @@ if HAS_FASTAPI:
             "loss": cur_loss,
             "throughput": cur_throughput,
             "exit_usage": cur_exit_usage,
+            "target_exit_distribution": pytorch_state._get_target_exit_distribution(),
             "tokens_trained": tot_tok,
             "tokens_formatted": tokens_fmt,
             "history": pytorch_state.history,
@@ -4553,6 +4561,7 @@ if HAS_FASTAPI:
                         "loss": restored.get("loss"),
                         "throughput": restored.get("throughput", pytorch_state._get_current_throughput()),
                         "exit_usage": restored.get("exit_usage", pytorch_state._get_current_exit_usage()),
+                        "target_exit_distribution": pytorch_state._get_target_exit_distribution(),
                         "tokens_trained": restored_tokens,
                         "active_checkpoint": p.name,
                         "active_model": restored["active_model"],
@@ -4570,6 +4579,7 @@ if HAS_FASTAPI:
                 "loss": restored.get("loss"),
                 "throughput": restored.get("throughput", pytorch_state._get_current_throughput()),
                 "exit_usage": restored.get("exit_usage", pytorch_state._get_current_exit_usage()),
+                "target_exit_distribution": pytorch_state._get_target_exit_distribution(),
                 "checkpoint": p.name,
                 "tokens_trained": restored_tokens,
                 "tokens_formatted": tokens_fmt,
@@ -5771,6 +5781,7 @@ SYSTEM \"\"\"You are Triune AI, a high-efficiency cognitive language model train
                     "loss": cur_loss,
                     "throughput": cur_thru,
                     "exit_usage": cur_exit,
+                    "target_exit_distribution": pytorch_state._get_target_exit_distribution(),
                     "tokens_trained": pytorch_state.total_tokens_trained,
                     "active_checkpoint": pytorch_state.active_checkpoint,
                     "active_model": pytorch_state.active_model_id,

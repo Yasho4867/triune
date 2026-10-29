@@ -36,29 +36,29 @@ class MoE_FFN(nn.Module):
         dim: int,
         num_experts: int = NUM_EXPERTS,
         top_k: int = TOP_K_EXPERTS,
-        shared_expert: bool = SHARED_EXPERT,
-        shared_scale: float = SHARED_EXPERT_SCALE,
         use_fp4: bool = False,
         use_fp8: bool = False,
+        shared_expert: bool = SHARED_EXPERT,
+        shared_scale: float = SHARED_EXPERT_SCALE,
     ):
         super().__init__()
         self.dim = dim
         self.num_experts = num_experts
         self.top_k = top_k
-        self.shared_expert = shared_expert
-        self.shared_scale = shared_scale
         self.use_fp4 = use_fp4
         self.use_fp8 = use_fp8
+        self.shared_expert = shared_expert
+        self.shared_scale = shared_scale
 
         Linear = FP8Linear if use_fp8 else (FP4Linear if use_fp4 else nn.Linear)
         hidden_dim = dim * EXPERT_HIDDEN_MULTIPLIER
 
-        # Standard expert MLP: SwiGLU activation (gate_proj * silu(gate) * up_proj -> down_proj)
+        # Standard expert MLP: canonical GELU activation matching pre-trained checkpoints
         self.experts = nn.ModuleList([
             nn.Sequential(
                 Linear(dim, hidden_dim),
-                nn.SiLU(),
-                Linear(hidden_dim, dim)
+                nn.GELU(),
+                Linear(hidden_dim, dim),
             ) for _ in range(num_experts)
         ])
 
@@ -66,8 +66,8 @@ class MoE_FFN(nn.Module):
         if self.shared_expert:
             self.shared = nn.Sequential(
                 Linear(dim, hidden_dim),
-                nn.SiLU(),
-                Linear(hidden_dim, dim)
+                nn.GELU(),
+                Linear(hidden_dim, dim),
             )
         else:
             self.shared = None

@@ -15,6 +15,20 @@ except ImportError:
     AdamW8bit = None
 
 
+def _cholesky_qr(Y_f: torch.Tensor) -> torch.Tensor:
+    """Robust Cholesky-QR orthogonalization with column pre-conditioning and QR fallback."""
+    col_norms = torch.linalg.norm(Y_f, dim=0, keepdim=True).clamp_min(1e-12)
+    Y_norm = Y_f / col_norms
+    Gram = torch.mm(Y_norm.t(), Y_norm)
+    Gram.diagonal().add_(1e-7)
+    try:
+        L = torch.linalg.cholesky(Gram)
+        return torch.linalg.solve_triangular(L, Y_norm.t(), upper=False).t()
+    except torch.linalg.LinAlgError:
+        Q, _ = torch.linalg.qr(Y_f)
+        return Q
+
+
 def fast_subspace_projection(grad: torch.Tensor, rank: int, niter: int = 2) -> tuple[torch.Tensor, str]:
     """High-performance CUDA/CPU Subspace Iteration via Cholesky-QR.
     
@@ -27,46 +41,22 @@ def fast_subspace_projection(grad: torch.Tensor, rank: int, niter: int = 2) -> t
     if side == 'left':
         Omega = torch.randn(n, q, device=grad.device, dtype=grad.dtype)
         Y = torch.mm(grad, Omega)
-        Y_f = Y.float()
-        Gram = torch.mm(Y_f.t(), Y_f)
-        Gram.diagonal().add_(1e-7)
-        L = torch.linalg.cholesky(Gram)
-        Q = torch.linalg.solve_triangular(L, Y_f.t(), upper=False).t()
+        Q = _cholesky_qr(Y.float())
         for _ in range(niter):
             Z = torch.mm(grad.t(), Q.to(grad.dtype))
-            Z_f = Z.float()
-            Gram_z = torch.mm(Z_f.t(), Z_f)
-            Gram_z.diagonal().add_(1e-7)
-            L_z = torch.linalg.cholesky(Gram_z)
-            Q_z = torch.linalg.solve_triangular(L_z, Z_f.t(), upper=False).t()
+            Q_z = _cholesky_qr(Z.float())
             Y = torch.mm(grad, Q_z.to(grad.dtype))
-            Y_f = Y.float()
-            Gram_y = torch.mm(Y_f.t(), Y_f)
-            Gram_y.diagonal().add_(1e-7)
-            L_y = torch.linalg.cholesky(Gram_y)
-            Q = torch.linalg.solve_triangular(L_y, Y_f.t(), upper=False).t()
+            Q = _cholesky_qr(Y.float())
         proj = Q[:, :rank].to(device=grad.device, dtype=grad.dtype)
     else:
         Omega = torch.randn(m, q, device=grad.device, dtype=grad.dtype)
         Y = torch.mm(grad.t(), Omega)
-        Y_f = Y.float()
-        Gram = torch.mm(Y_f.t(), Y_f)
-        Gram.diagonal().add_(1e-7)
-        L = torch.linalg.cholesky(Gram)
-        Q = torch.linalg.solve_triangular(L, Y_f.t(), upper=False).t()
+        Q = _cholesky_qr(Y.float())
         for _ in range(niter):
             Z = torch.mm(grad, Q.to(grad.dtype))
-            Z_f = Z.float()
-            Gram_z = torch.mm(Z_f.t(), Z_f)
-            Gram_z.diagonal().add_(1e-7)
-            L_z = torch.linalg.cholesky(Gram_z)
-            Q_z = torch.linalg.solve_triangular(L_z, Z_f.t(), upper=False).t()
+            Q_z = _cholesky_qr(Z.float())
             Y = torch.mm(grad.t(), Q_z.to(grad.dtype))
-            Y_f = Y.float()
-            Gram_y = torch.mm(Y_f.t(), Y_f)
-            Gram_y.diagonal().add_(1e-7)
-            L_y = torch.linalg.cholesky(Gram_y)
-            Q = torch.linalg.solve_triangular(L_y, Y_f.t(), upper=False).t()
+            Q = _cholesky_qr(Y.float())
         proj = Q[:, :rank].to(device=grad.device, dtype=grad.dtype)
     return proj, side
 

@@ -7282,7 +7282,14 @@
                   }
                   return '--';
                 })()),
-                e('div', { className: 'stat-sub' }, `Mode: ${(trainDepthMode || datasetInfo.depth_mode || 'dynamic').toUpperCase()}`)
+                e('div', { className: 'stat-sub' }, (() => {
+                  const t = (metrics && metrics.target_exit_distribution) || null;
+                  const mode = (trainDepthMode || datasetInfo.depth_mode || 'dynamic').toUpperCase();
+                  if (t && (t.reflex || t.limbic || t.cortex)) {
+                    return `Target R:${t.reflex}% L:${t.limbic}% C:${t.cortex}% | ${mode}`;
+                  }
+                  return `Mode: ${mode}`;
+                })())
               ),
               e('div', { className: 'card-stat' },
                 e('div', { className: 'stat-label' }, 'Throughput'),

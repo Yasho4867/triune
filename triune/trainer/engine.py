@@ -143,9 +143,14 @@ class TrainingEngine:
         self.model.train()
         self.vram_monitor.tick()
         lr = self.trainer.lr_schedule(self.config, self.step)
-        expert_lr = getattr(self.trainer, "centroid_lr", getattr(self.trainer, "expert_lr", None))
+        explicit_expert_lr = getattr(self.trainer, "centroid_lr", getattr(self.trainer, "expert_lr", None))
+        if explicit_expert_lr is not None:
+            peak_lr = max(1e-12, float(self.config.get("lr", self.config.get("lr_peak", getattr(self.trainer, "current_lr", lr)))))
+            scheduled_expert_lr = float(explicit_expert_lr) * (lr / peak_lr)
+        else:
+            scheduled_expert_lr = None
         try:
-            self.trainer.set_optimizer_lr(self.optimizer, lr, expert_lr=expert_lr)
+            self.trainer.set_optimizer_lr(self.optimizer, lr, expert_lr=scheduled_expert_lr)
         except TypeError:
             self.trainer.set_optimizer_lr(self.optimizer, lr)
         for module in self.model.modules():
