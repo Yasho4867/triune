@@ -283,20 +283,17 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
             expert_idx = group['expert_idx']
             state = group['state']
             m, n = grad.shape
+            rank = min(self.rank, m, n)
 
-            if group['projection'] is None:
-                rank = min(self.rank, m, n)
-                # GaLore Theorem 3.2: always project the smaller dimension min(m, n)
-                if m <= n:
-                    group['projection_side'] = 'left'
-                    init_p = torch.empty(m, rank, device=grad.device, dtype=torch.float32)
-                    torch.nn.init.orthogonal_(init_p)
-                    group['projection'] = init_p.to(dtype=grad.dtype)
-                else:
-                    group['projection_side'] = 'right'
-                    init_p = torch.empty(n, rank, device=grad.device, dtype=torch.float32)
-                    torch.nn.init.orthogonal_(init_p)
-                    group['projection'] = init_p.to(dtype=grad.dtype)
+            if group.get('proj_basis') is None:
+                target_dim = m if m <= n else n
+                group['projection_side'] = 'left' if m <= n else 'right'
+                basis = torch.zeros(target_dim, rank + 1, device=grad.device, dtype=grad.dtype)
+                init_p = torch.empty(target_dim, rank, device=grad.device, dtype=torch.float32)
+                torch.nn.init.orthogonal_(init_p)
+                basis[:, :rank] = init_p.to(dtype=grad.dtype)
+                group['projection'] = basis[:, :rank]
+                group['proj_basis'] = basis
                 state['momentum'] = None
                 state['variance'] = None
                 state['step'] = 0
@@ -344,7 +341,11 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                     state['step'] = 0
 
                 group['projection_side'] = new_side
-                group['projection'] = new_proj.to(device=grad.device, dtype=grad.dtype).contiguous()
+                target_dim = m if new_side == 'left' else n
+                basis = torch.zeros(target_dim, rank + 1, device=grad.device, dtype=grad.dtype)
+                basis[:, :rank] = new_proj.to(device=grad.device, dtype=grad.dtype)
+                group['projection'] = basis[:, :rank]
+                group['proj_basis'] = basis
                 del new_proj, old_proj, new_proj_fp32
                 group['proj_step'] = self.step_count
 
@@ -389,15 +390,19 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                         # Exact sin(theta) = ||c_res||_2 scaling (vanishes smoothly as centroid enters span(P))
                         residual_mult = torch.clamp(c_res_norm, min=0.0, max=1.0)
                         effective_steer = (self.steer_scale * util_mult * residual_mult).to(dtype=proj.dtype)
-                        # Keep forward basis strictly orthonormal [P, c_orth] so second moments are uncorrupted
-                        proj_unit = torch.cat([proj, c_orth.unsqueeze(1)], dim=1)
-                        proj_recon = torch.cat([proj, (effective_steer * c_orth).unsqueeze(1)], dim=1)
+                        # Zero-allocation basis reuse
+                        basis = group['proj_basis']
+                        basis[:, rank].copy_(c_orth)
+                        proj_unit = basis
+                        proj_recon = basis.clone()
+                        proj_recon[:, rank].mul_(effective_steer)
                         steer_applied = True
 
             if not steer_applied:
-                zero_vec = torch.zeros(m if side == 'left' else n, 1, dtype=proj.dtype, device=proj.device)
-                proj_unit = torch.cat([proj, zero_vec], dim=1)
-                proj_recon = proj_unit
+                basis = group['proj_basis']
+                basis[:, rank].zero_()
+                proj_unit = basis
+                proj_recon = basis
                 group['last_c_orth'] = None
 
             if side == 'left':
@@ -413,8 +418,8 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                 if state['momentum'].device != g_lr.device:
                     state['momentum'] = state['momentum'].to(g_lr.device)
                     state['variance'] = state['variance'].to(g_lr.device)
-                state['momentum'] = expert_beta1 * state['momentum'] + (1 - expert_beta1) * g_lr
-                state['variance'] = expert_beta2 * state['variance'] + (1 - expert_beta2) * g_lr.pow(2)
+                state['momentum'].mul_(expert_beta1).add_(g_lr, alpha=1.0 - expert_beta1)
+                state['variance'].mul_(expert_beta2).addcmul_(g_lr, g_lr, value=1.0 - expert_beta2)
 
             step = state['step']
             m_hat = state['momentum'] / (1 - expert_beta1 ** step)
@@ -433,8 +438,6 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
 
         if is_global_step_end:
             self.step_count += 1
-            if torch.cuda.is_available() and (self.step_count <= 2 or self.step_count % 50 == 0):
-                torch.cuda.empty_cache()
 
     @torch.no_grad()
     def step(self, closure=None):

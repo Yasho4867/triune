@@ -1,6 +1,6 @@
 # Triune Category B: Optimizer Microbenchmark Report
 
-**Date**: October 29, 2026
+**Date**: October 30, 2026
 **Hardware**: NVIDIA GeForce RTX 5070 Laptop GPU (7.93 GB VRAM)
 **Software**: PyTorch 2.14.1+cu132, CUDA 13.2, Python 3.14.7
 
@@ -15,26 +15,26 @@ comparing **CentroidSteer**, **Muon**, **PyTorch Standard AdamW**, and native **
 | :--- | :--- | :--- | :--- | :--- |
 | **PyTorch Standard AdamW** | 17.02M | 48.37 MB | 2.98 B/p | Baseline (0%) |
 | **Native BitsAndBytes 8-bit AdamW** | 17.02M | 24.74 MB | 1.52 B/p | -48.9% |
-| **Triune CentroidSteer (SVD basis + low-rank)** | 17.02M | 14.14 MB | 0.87 B/p | -70.8% |
-| **Triune Muon (Orthogonal matrix momentum)** | 17.02M | 24.13 MB | 1.49 B/p | -50.1% |
+| **Triune CentroidSteer (SVD basis + low-rank)** | 17.02M | 27.27 MB | 1.68 B/p | -43.6% |
+| **Triune Muon (Orthogonal matrix momentum)** | 17.02M | 44.38 MB | 2.73 B/p | -8.2% |
 
 ## 3. Experiment B: Pure Step Throughput & Latency
 
 | Optimizer | Median Step Latency (ms) | Mean Latency (ms) | Update Throughput (steps/sec) |
 | :--- | :--- | :--- | :--- |
-| **PyTorch Standard AdamW** | 1.72 ms | 1.83 ms | 581.1 steps/s |
-| **Native BitsAndBytes 8-bit AdamW** | 10.04 ms | 9.99 ms | 99.6 steps/s |
-| **Triune CentroidSteer (SVD basis + low-rank)** | 78.56 ms | 78.46 ms | 12.7 steps/s |
-| **Triune Muon (Orthogonal matrix momentum)** | 72.46 ms | 72.42 ms | 13.8 steps/s |
+| **PyTorch Standard AdamW** | 1.85 ms | 1.83 ms | 540.8 steps/s |
+| **Native BitsAndBytes 8-bit AdamW** | 9.30 ms | 9.24 ms | 107.5 steps/s |
+| **Triune CentroidSteer (SVD basis + low-rank)** | 77.16 ms | 89.35 ms | 13.0 steps/s |
+| **Triune Muon (Orthogonal matrix momentum)** | 67.49 ms | 68.36 ms | 14.8 steps/s |
 
 ## 4. Experiment C: 50-Step Optimization Trajectory & Stability
 
 | Optimizer | Initial Loss | Final Loss (Step 50) | Total Loss Reduction | Final Grad Norm | Mean Update Norm |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **PyTorch Standard AdamW** | 7.6875 | 7.6562 | **-0.41%** | 1.5703 | 0.9498 |
-| **Native BitsAndBytes 8-bit AdamW** | 7.6875 | 7.6562 | **-0.41%** | 1.5703 | 0.9700 |
-| **Triune CentroidSteer (SVD basis + low-rank)** | 7.6875 | 7.6875 | **-0.0%** | 1.7891 | 2.3141 |
-| **Triune Muon (Orthogonal matrix momentum)** | 7.6875 | 7.7188 | **--0.41%** | 2.6562 | 1.6184 |
+| **PyTorch Standard AdamW** | 7.6875 | 7.6250 | **-0.81%** | 3.3125 | 0.1154 |
+| **Native BitsAndBytes 8-bit AdamW** | 7.6875 | 7.6250 | **-0.81%** | 3.3125 | 0.1160 |
+| **Triune CentroidSteer (SVD basis + low-rank)** | 7.6875 | 7.6875 | **-0.0%** | 1.9688 | 2.1227 |
+| **Triune Muon (Orthogonal matrix momentum)** | 7.6875 | 7.6562 | **-0.41%** | 2.9844 | 0.3372 |
 
 ## 5. Architectural Insights
 

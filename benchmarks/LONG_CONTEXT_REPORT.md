@@ -15,20 +15,20 @@ and sub-millisecond per-token latency even at context lengths exceeding 16,384 t
 
 | Context Length ($L$) | Standard SDPA Latency | GLA Latency | SDPA Peak VRAM | GLA Peak VRAM | VRAM Reduction | Speedup |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **512** | 0.36 ms | 5.04 ms | 40.5 MB | 168.82 MB | -316.8% | **0.07x** |
-| **1024** | 0.58 ms | 7.35 ms | 43.5 MB | 300.07 MB | -589.8% | **0.08x** |
-| **2048** | 0.49 ms | 11.05 ms | 49.5 MB | 562.57 MB | -1036.5% | **0.04x** |
-| **4096** | 1.36 ms | 19.79 ms | 61.5 MB | 1087.57 MB | -1668.4% | **0.07x** |
-| **8192** | 4.22 ms | 39.48 ms | 85.5 MB | 2137.57 MB | -2400.1% | **0.11x** |
-| **16384** | 14.95 ms | 79.04 ms | 133.5 MB | 4237.57 MB | -3074.2% | **0.19x** |
+| **512** | 0.82 ms | 2.97 ms | 40.5 MB | 44.89 MB | -10.8% | **0.28x** |
+| **1024** | 0.33 ms | 3.98 ms | 43.5 MB | 52.15 MB | -19.9% | **0.08x** |
+| **2048** | 0.46 ms | 10.77 ms | 49.5 MB | 66.66 MB | -34.7% | **0.04x** |
+| **4096** | 1.29 ms | 10.54 ms | 61.5 MB | 95.69 MB | -55.6% | **0.12x** |
+| **8192** | 4.05 ms | 19.35 ms | 85.5 MB | 153.75 MB | -79.8% | **0.21x** |
+| **16384** | 14.52 ms | 36.48 ms | 133.5 MB | 269.88 MB | -102.2% | **0.4x** |
 
 ## 3. Autoregressive Decode Scaling ($O(1)$ vs $O(L)$)
 
 | Prompt Context Length | SDPA KV-Cache Memory | GLA Recurrent State Memory | SDPA Decode Latency | GLA Decode Latency | Decode Latency Advantage |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **512** | 1024.0 KB | **64.0 KB (Fixed)** | 0.36 ms/tok | **1.139 ms/tok** | **0.32x faster** |
-| **2048** | 4096.0 KB | **64.0 KB (Fixed)** | 0.37 ms/tok | **1.132 ms/tok** | **0.33x faster** |
-| **8192** | 16384.0 KB | **64.0 KB (Fixed)** | 0.491 ms/tok | **1.134 ms/tok** | **0.43x faster** |
+| **512** | 1024.0 KB | **64.0 KB (Fixed)** | 0.917 ms/tok | **1.094 ms/tok** | **0.84x faster** |
+| **2048** | 4096.0 KB | **64.0 KB (Fixed)** | 0.335 ms/tok | **1.102 ms/tok** | **0.3x faster** |
+| **8192** | 16384.0 KB | **64.0 KB (Fixed)** | 0.482 ms/tok | **1.795 ms/tok** | **0.27x faster** |
 
 ## 4. Key Takeaways
 

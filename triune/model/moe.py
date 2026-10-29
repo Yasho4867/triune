@@ -17,6 +17,7 @@ from .config import (
 )
 from .fp4 import FP4Linear
 from .fp8 import FP8Linear
+from triune.kernels.fast_swiglu import FastGELU
 
 
 @dataclass
@@ -57,7 +58,7 @@ class MoE_FFN(nn.Module):
         self.experts = nn.ModuleList([
             nn.Sequential(
                 Linear(dim, hidden_dim),
-                nn.GELU(),
+                FastGELU(),
                 Linear(hidden_dim, dim),
             ) for _ in range(num_experts)
         ])
@@ -66,7 +67,7 @@ class MoE_FFN(nn.Module):
         if self.shared_expert:
             self.shared = nn.Sequential(
                 Linear(dim, hidden_dim),
-                nn.GELU(),
+                FastGELU(),
                 Linear(hidden_dim, dim),
             )
         else:

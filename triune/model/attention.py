@@ -60,30 +60,30 @@ def _pytorch_chunk_gla(q, k, v, g, initial_state=None, chunk_size: int = 64):
         g_c = g[:, :T_chunk].reshape(B, num_chunks, C, H, HD).permute(0, 3, 1, 2, 4)
 
         g_cumsum = torch.cumsum(g_c, dim=-2)
-        causal_mask = torch.tril(torch.ones(C, C, device=q.device, dtype=torch.bool))
-        mask_6d = causal_mask.view(1, 1, 1, C, C, 1)
-        g_diff = (g_cumsum.unsqueeze(-2) - g_cumsum.unsqueeze(-3)).masked_fill(~mask_6d, 0.0)
-        decay_matrix = torch.exp(g_diff) * mask_6d
-        attn_weights = (q_c.unsqueeze(-2) * k_c.unsqueeze(-3) * decay_matrix).sum(dim=-1)
+        causal_mask = torch.tril(torch.ones(C, C, device=q.device, dtype=torch.bool)).view(1, 1, 1, C, C)
+
+        # High-performance intra-chunk attention via factored Tensor Core BMM
+        q_exp = q_c * torch.exp(g_cumsum)
+        k_exp = k_c * torch.exp(-g_cumsum)
+        attn_weights = torch.matmul(q_exp, k_exp.transpose(-1, -2)).masked_fill(~causal_mask, 0.0)
         out_intra = torch.matmul(attn_weights, v_c)
 
-        out_inter = []
-        q_decayed_all = q_c * torch.exp(g_cumsum)
+        # Inter-chunk recurrent state propagation with batched KV GEMM
         g_last = g_cumsum[:, :, :, -1:, :]
         k_decayed_all = k_c * torch.exp(g_last - g_cumsum)
         chunk_decay = torch.exp(g_last)
 
+        # Batch all chunk KV state projections into a single fused Tensor Core GEMM
+        kv_all = torch.matmul(k_decayed_all.transpose(-1, -2), v_c)
+
+        out_inter = []
         for i in range(num_chunks):
-            q_i = q_decayed_all[:, :, i]
+            q_i = q_exp[:, :, i]
             out_from_prev = torch.matmul(q_i, state)
             out_inter.append(out_from_prev)
 
-            k_i = k_decayed_all[:, :, i]
-            v_i = v_c[:, :, i]
-            kv_chunk = torch.matmul(k_i.transpose(-1, -2), v_i)
-
             decay_i = chunk_decay[:, :, i, 0, :].unsqueeze(-1)
-            state = state * decay_i + kv_chunk
+            state = state * decay_i + kv_all[:, :, i]
 
         out_inter = torch.stack(out_inter, dim=2)
         out_chunks = (out_intra + out_inter).permute(0, 2, 3, 1, 4).reshape(B, T_chunk, H, HD)

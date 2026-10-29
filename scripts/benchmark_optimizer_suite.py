@@ -201,10 +201,10 @@ def experiment_c_50_step_convergence(device: torch.device) -> List[Dict[str, Any
 
     BnbAdamW8bit = get_bnb_8bit_adamw()
     optimizers_to_test = [
-        ("PyTorch Standard AdamW", lambda m: torch.optim.AdamW(m.parameters(), lr=1e-3)),
-        ("Native BitsAndBytes 8-bit AdamW", lambda m: BnbAdamW8bit(m.parameters(), lr=1e-3) if BnbAdamW8bit else None),
-        ("Triune CentroidSteer (SVD basis + low-rank)", lambda m: CentroidSteerOptimizer(m, lr=1e-3, rank=16)),
-        ("Triune Muon (Orthogonal matrix momentum)", lambda m: Muon([p for p in m.parameters() if p.ndim >= 2], lr=0.01)),
+        ("PyTorch Standard AdamW", lambda m: torch.optim.AdamW(m.parameters(), lr=1e-4)),
+        ("Native BitsAndBytes 8-bit AdamW", lambda m: BnbAdamW8bit(m.parameters(), lr=1e-4) if BnbAdamW8bit else None),
+        ("Triune CentroidSteer (SVD basis + low-rank)", lambda m: CentroidSteerOptimizer(m, lr=1e-4, rank=16)),
+        ("Triune Muon (Orthogonal matrix momentum)", lambda m: Muon([p for p in m.parameters() if p.ndim >= 2], lr=0.002)),
     ]
 
     # Fixed dataset of 50 batches for fair trajectory comparison
@@ -241,6 +241,7 @@ def experiment_c_50_step_convergence(device: torch.device) -> List[Dict[str, Any
             # Record total grad norm before step
             total_grad_norm = torch.sqrt(sum(p.grad.data.norm()**2 for p in model.parameters() if p.grad is not None)).item()
             grad_norms.append(round(total_grad_norm, 4))
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
 
             # Clone weights to compute parameter update norm
             orig_weights = [p.data.clone() for p in model.parameters()]

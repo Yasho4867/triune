@@ -6,18 +6,27 @@ Designed for 2D hidden linear weights in neural networks.
 
 from __future__ import annotations
 
+from typing import Any
 import torch
 from torch.optim import Optimizer
 
 
-def zeropower_via_newtonschulz5(G: torch.Tensor, steps: int = 5, eps: float = 1e-7) -> torch.Tensor:
+def zeropower_via_newtonschulz5(
+    G: torch.Tensor,
+    steps: int = 5,
+    eps: float = 1e-7,
+    scratch_buffer: Any = None,
+    return_scratch: bool = False,
+) -> torch.Tensor | tuple[torch.Tensor, Any]:
     """Newton-Schulz iteration to compute the approximate zeroth power (orthogonalization) of G.
     
     Delegates to the fused Triune kernel for in-place buffer reuse and Tensor Core GEMM optimization.
     """
     try:
         from triune.kernels.fast_muon import fast_zeropower_via_newtonschulz5
-        return fast_zeropower_via_newtonschulz5(G, steps=steps, eps=eps)
+        return fast_zeropower_via_newtonschulz5(
+            G, steps=steps, eps=eps, scratch_buffer=scratch_buffer, return_scratch=return_scratch
+        )
     except Exception:
         pass
 
@@ -53,14 +62,17 @@ def zeropower_via_newtonschulz5(G: torch.Tensor, steps: int = 5, eps: float = 1e
     if transposed:
         X = X.T
         
-    return X.to(device=orig_device, dtype=orig_dtype)
+    res = X.to(device=orig_device, dtype=orig_dtype)
+    if return_scratch:
+        return res, None
+    return res
 
 
 class Muon(Optimizer):
     """Muon optimizer for 2D parameter matrices in hidden layers.
     
     Internally maintains standard SGD momentum and post-processes each update
-    via Newton-Schulz orthogonalization.
+    via Newton-Schulz orthogonalization with zero-allocation persistent scratch buffers.
     
     Arguments:
         params: Iterable of parameters to optimize (should be 2D weight matrices).
@@ -141,8 +153,17 @@ class Muon(Optimizer):
                 else:
                     update = momentum.clone()
 
-                # Newton-Schulz orthogonalization
-                ortho_update = zeropower_via_newtonschulz5(update, steps=ns_steps)
+                # Newton-Schulz orthogonalization with zero-allocation buffer reuse
+                res = zeropower_via_newtonschulz5(
+                    update,
+                    steps=ns_steps,
+                    scratch_buffer=state.get("scratch_buffer"),
+                    return_scratch=True,
+                )
+                if isinstance(res, tuple):
+                    ortho_update, state["scratch_buffer"] = res
+                else:
+                    ortho_update = res
 
                 # Aspect ratio scaling: max(1, d_out / d_in) ** 0.5
                 d_out = ortho_update.size(0)

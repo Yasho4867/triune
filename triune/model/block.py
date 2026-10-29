@@ -11,6 +11,7 @@ from .fp4 import FP4Linear
 from .fp8 import FP8Linear
 from .moe import MoE_FFN
 from .norms import RMSNorm
+from triune.kernels.fast_swiglu import FastGELU
 
 
 class TransformerBlock(nn.Module):
@@ -33,7 +34,7 @@ class TransformerBlock(nn.Module):
         else:
             DenseLinear = FP8Linear if use_fp8 else (FP4Linear if use_fp4 else nn.Linear)
             self.ffn = nn.Sequential(
-                DenseLinear(dim, dim * 4), nn.GELU(), DenseLinear(dim * 4, dim)
+                DenseLinear(dim, dim * 4), FastGELU(), DenseLinear(dim * 4, dim)
             )
         self.norm1 = RMSNorm(dim)
         self.norm2 = RMSNorm(dim)
