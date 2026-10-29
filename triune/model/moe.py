@@ -135,43 +135,98 @@ class MoE_FFN(nn.Module):
             shared_out = self.shared(flat_x)
             out = out + (self.shared_scale * shared_out).to(out.dtype)
 
+        can_batch_bmm = (not self.use_fp4 and not self.use_fp8 and all(isinstance(e[0], nn.Linear) and isinstance(e[2], nn.Linear) for e in self.experts))
+
         for k in range(self.top_k):
             idx_k = flat_idx[:, k]
             val_k = flat_vals[:, k]
-            for e in range(self.num_experts):
-                mask = (idx_k == e)
-                indices = mask.nonzero(as_tuple=True)[0]
-                if indices.numel() == 0:
-                    continue
-                dropped = indices.numel() - capacity
-                if dropped > 0:
-                    scores = val_k[indices]
-                    keep = torch.argsort(scores, descending=True)[:capacity]
+
+            if can_batch_bmm:
+                expert_token_indices = []
+                expert_val_keeps = []
+                max_tokens = 0
+                for e in range(self.num_experts):
+                    mask = (idx_k == e)
+                    indices = mask.nonzero(as_tuple=True)[0]
+                    if indices.numel() == 0:
+                        expert_token_indices.append(indices)
+                        expert_val_keeps.append(indices)
+                        continue
+                    dropped = indices.numel() - capacity
+                    if dropped > 0:
+                        scores = val_k[indices]
+                        keep = torch.argsort(scores, descending=True)[:capacity]
+                        if need_stats:
+                            self.overflow_counter += dropped
+                        indices = indices[keep]
+                        val_k_keep = val_k[indices]
+                    else:
+                        val_k_keep = val_k[indices]
+
                     if need_stats:
-                        self.overflow_counter += dropped
-                    indices = indices[keep]
-                    val_k_keep = val_k[indices]
-                else:
-                    val_k_keep = val_k[indices]
+                        accepted_counts[e] += indices.numel()
+                        accepted_mask[indices, k] = True
 
-                if need_stats:
-                    accepted_counts[e] += indices.numel()
-                    accepted_mask[indices, k] = True
-                expert_input = flat_x[indices]
+                    expert_token_indices.append(indices)
+                    expert_val_keeps.append(val_k_keep)
+                    if indices.numel() > max_tokens:
+                        max_tokens = indices.numel()
 
-                orig_tokens = expert_input.size(0)
-                pad = (-orig_tokens) % 16
+                if max_tokens > 0:
+                    pad_m = (-max_tokens) % 16
+                    aligned_m = max_tokens + pad_m
+                    padded_input = torch.zeros(self.num_experts, aligned_m, D, device=flat_x.device, dtype=flat_x.dtype)
+                    for e in range(self.num_experts):
+                        idx = expert_token_indices[e]
+                        if idx.numel() > 0:
+                            padded_input[e, :idx.numel()] = flat_x[idx]
 
-                if pad:
-                     expert_input = F.pad(expert_input, (0, 0, 0, pad))
+                    W1_stack = torch.stack([e[0].weight for e in self.experts], dim=0)
+                    W2_stack = torch.stack([e[2].weight for e in self.experts], dim=0)
 
-                expert_output = self.experts[e](expert_input)
+                    h = self.experts[0][1](torch.bmm(padded_input, W1_stack.transpose(1, 2)))
+                    y = torch.bmm(h, W2_stack.transpose(1, 2))
 
-                if pad:
-                    expert_output = expert_output[:orig_tokens]
+                    for e in range(self.num_experts):
+                        idx = expert_token_indices[e]
+                        if idx.numel() > 0:
+                            val_keep = expert_val_keeps[e]
+                            out = out.index_add(0, idx, (y[e, :idx.numel()] * val_keep.unsqueeze(-1)).to(out.dtype))
+            else:
+                for e in range(self.num_experts):
+                    mask = (idx_k == e)
+                    indices = mask.nonzero(as_tuple=True)[0]
+                    if indices.numel() == 0:
+                        continue
+                    dropped = indices.numel() - capacity
+                    if dropped > 0:
+                        scores = val_k[indices]
+                        keep = torch.argsort(scores, descending=True)[:capacity]
+                        if need_stats:
+                            self.overflow_counter += dropped
+                        indices = indices[keep]
+                        val_k_keep = val_k[indices]
+                    else:
+                        val_k_keep = val_k[indices]
 
-                # Fix C-1: out-of-place to preserve autograd graph
-                out = out.index_add(0, indices, (expert_output * val_k_keep.unsqueeze(-1)).to(out.dtype))
+                    if need_stats:
+                        accepted_counts[e] += indices.numel()
+                        accepted_mask[indices, k] = True
+                    expert_input = flat_x[indices]
+
+                    orig_tokens = expert_input.size(0)
+                    pad = (-orig_tokens) % 16
+
+                    if pad:
+                         expert_input = F.pad(expert_input, (0, 0, 0, pad))
+
+                    expert_output = self.experts[e](expert_input)
+
+                    if pad:
+                        expert_output = expert_output[:orig_tokens]
+
+                    # Fix C-1: out-of-place to preserve autograd graph
+                    out = out.index_add(0, indices, (expert_output * val_k_keep.unsqueeze(-1)).to(out.dtype))
 
         if need_stats:
             requested_counts = torch.bincount(flat_idx.flatten(), minlength=self.num_experts)

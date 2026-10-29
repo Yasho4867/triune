@@ -8,14 +8,14 @@
 
 | Optimizer | Median Latency (ms) | State VRAM (MB) |
 | :--- | :---: | :---: |
-| PyTorch Standard AdamW | **1.31 ms** | **45.12 MB** |
-| CentroidSteer (Legacy BMM) | **39.65 ms** | **11.56 MB** |
-| CentroidSteer (Universal Triangular Core) | **38.71 ms** | **10.33 MB** |
+| PyTorch Standard AdamW | **1.77 ms** | **60.05 MB** |
+| CentroidSteer (Legacy BMM) | **55.37 ms** | **12.82 MB** |
+| CentroidSteer (Universal Triangular Core) | **26.5 ms** | **11.08 MB** |
 
 ## 2. End-to-End Training Step (Forward + Backward + Step)
 
 | Optimizer | Step Latency (ms) | Peak VRAM (MB) | Loss (0 -> 20) | Final Grad Norm |
 | :--- | :---: | :---: | :---: | :---: |
-| PyTorch Standard AdamW | **188.4 ms** | **247.4 MB** | 7.25 -> 6.3125 | 1.6849 |
-| CentroidSteer (Legacy BMM) | **298.46 ms** | **218.0 MB** | 5.75 -> 4.9688 | 1.2115 |
-| CentroidSteer (Universal Triangular Core) | **325.7 ms** | **216.7 MB** | 5.75 -> 4.9688 | 1.212 |
+| PyTorch Standard AdamW | **179.52 ms** | **279.8 MB** | 7.25 -> 6.3125 | 1.7106 |
+| CentroidSteer (Legacy BMM) | **293.94 ms** | **245.0 MB** | 5.7188 -> 5.0 | 1.2064 |
+| CentroidSteer (Universal Triangular Core) | **291.81 ms** | **243.8 MB** | 5.7188 -> 5.0 | 1.2052 |

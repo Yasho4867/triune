@@ -78,6 +78,7 @@ GALORE_WEIGHT_DECAY = 0.05
 
 STEER_SCALE = 0.20
 USE_TRIANGULAR_CORE = True
+STEER_UPDATE_GAP = 10
 
 # ============================================================
 # MUON / Non-Expert 2D Optimizer

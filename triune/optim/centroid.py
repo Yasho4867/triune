@@ -114,6 +114,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
     def __init__(self, model, lr=defaults.LR, betas=defaults.BETAS, weight_decay=defaults.WEIGHT_DECAY,
                  rank=defaults.GALORE_RANK, update_gap=defaults.GALORE_UPDATE_GAP,
                  steer_scale=defaults.STEER_SCALE,
+                 steer_update_gap=getattr(defaults, 'STEER_UPDATE_GAP', 10),
                  expert_lr=defaults.GALORE_LR, expert_betas=defaults.GALORE_BETAS,
                  expert_wd=defaults.GALORE_WEIGHT_DECAY,
                  use_muon=getattr(defaults, 'USE_MUON', True),
@@ -130,6 +131,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
         self.update_gap = update_gap
         self.step_count = 0
         self.steer_scale = steer_scale
+        self.steer_update_gap = steer_update_gap
         self.expert_lr = expert_lr
         self.initial_expert_lr = expert_lr
         self.expert_betas = expert_betas
@@ -381,36 +383,50 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                         st['variance'] = torch.zeros(self.rank + 1, self.rank + 1, device=device, dtype=dtype)
                         st['step'] = 0
 
-                # Fix 2: Live Centroid Steering with dual orthonormal vector (preserves steering on diagonal)
+                # Step 1: Incremental Centroid Steering with dual orthonormal vector (eliminates redundant every-step QR)
                 centroids = g['module'].last_centroids if g['module'] is not None else None
                 expert_idx = g['expert_idx']
-                steer_applied = False
+                steer_applied = g.get('steer_applied', False)
                 if centroids is not None and expert_idx is not None and expert_idx < centroids.size(0) and self.steer_scale > 0:
                     c = centroids[expert_idx]
                     if c.size(0) == d_small:
-                        c_d = c.to(device=device, dtype=dtype)
-                        c_proj = g['Q_L'][:, :r] @ (g['Q_L'][:, :r].t() @ c_d)
-                        c_res = c_d - c_proj
-                        c_res_norm = c_res.norm()
-                        if c_res_norm > 1e-8:
-                            c_orth = c_res / c_res_norm
-                            g['Q_L'][:, r].copy_(c_orth)
+                        needs_steer_refresh = (
+                            needs_init
+                            or needs_update
+                            or (g.get('last_steer_step') is None)
+                            or ((self.step_count - g.get('last_steer_step', 0)) >= self.steer_update_gap)
+                        )
+                        if needs_steer_refresh:
+                            c_d = c.to(device=device, dtype=dtype)
+                            c_proj = g['Q_L'][:, :r] @ (g['Q_L'][:, :r].t() @ c_d)
+                            c_res = c_d - c_proj
+                            c_res_norm = c_res.norm()
+                            if c_res_norm > 1e-8:
+                                c_orth = c_res / c_res_norm
+                                g['Q_L'][:, r].copy_(c_orth)
 
-                            # Dual right vector ensures S[r, r] > 0 and survives torch.triu
-                            G_canon = grad if m <= n else grad.t()
-                            v = G_canon.t() @ c_orth
-                            v_proj = g['Q_R'][:, :r] @ (g['Q_R'][:, :r].t() @ v)
-                            v_res = v - v_proj
-                            v_res_norm = v_res.norm()
-                            if v_res_norm > 1e-8:
-                                v_orth = v_res / v_res_norm
-                                g['Q_R'][:, r].copy_(v_orth)
-                                steer_applied = True
+                                # Dual right vector ensures S[r, r] > 0 and survives torch.triu
+                                G_canon = grad if m <= n else grad.t()
+                                v = G_canon.t() @ c_orth
+                                v_proj = g['Q_R'][:, :r] @ (g['Q_R'][:, :r].t() @ v)
+                                v_res = v - v_proj
+                                v_res_norm = v_res.norm()
+                                if v_res_norm > 1e-8:
+                                    v_orth = v_res / v_res_norm
+                                    g['Q_R'][:, r].copy_(v_orth)
+                                    steer_applied = True
+                                else:
+                                    g['Q_R'][:, r].zero_()
+                                    steer_applied = False
                             else:
+                                g['Q_L'][:, r].zero_()
                                 g['Q_R'][:, r].zero_()
-                if not steer_applied:
+                                steer_applied = False
+                            g['last_steer_step'] = self.step_count
+                else:
                     g['Q_L'][:, r].zero_()
                     g['Q_R'][:, r].zero_()
+                    steer_applied = False
                 g['steer_applied'] = steer_applied
 
             # 2. Project all gradients into unified (N, rank+1, rank+1) Upper Triangles
@@ -424,38 +440,72 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                     'batch_mom': torch.zeros(N, self.rank + 1, self.rank + 1, device=device, dtype=dtype),
                     'batch_var': torch.zeros(N, self.rank + 1, self.rank + 1, device=device, dtype=dtype),
                     'step_vals': torch.zeros(N, 1, 1, device=device, dtype=torch.float32),
+                    'batch_delta': torch.zeros(N, self.rank + 1, self.rank + 1, device=device, dtype=dtype),
                 }
             buf = self._triangular_buffers[buf_key]
             R_batch = buf['R_batch'].zero_()
             batch_mom = buf['batch_mom']
             batch_var = buf['batch_var']
             step_vals = buf['step_vals']
+            batch_delta_R = buf['batch_delta']
 
+            # Step 2: Layer-Level Batched Projections using torch.bmm for matching matrix dimensions
+            shape_buckets = {}
             for idx, g in enumerate(active_groups):
-                p = g['param']
-                grad = p.grad.data
-                m, n = grad.shape
-                G_canon = grad if m <= n else grad.t()
+                m, n = g['param'].shape
                 r = min(self.rank, min(m, n))
-                S = g['Q_L'][:, :r+1].t() @ G_canon @ g['Q_R'][:, :r+1]
-                if g.get('steer_applied', False):
-                    S[r, r] *= (1.0 + self.steer_scale)
-                R_batch[idx, :r+1, :r+1] = torch.triu(S)
+                key = (m, n, r)
+                if key not in shape_buckets:
+                    shape_buckets[key] = []
+                shape_buckets[key].append((idx, g))
 
-                # Fix 1: Load persistent moment states into batched buffer
-                batch_mom[idx].copy_(g['state']['momentum'])
-                batch_var[idx].copy_(g['state']['variance'])
-                step_vals[idx, 0, 0] = float(g['state']['step'] + 1)
+            for (m, n, r), bucket in shape_buckets.items():
+                K = len(bucket)
+                if K >= 2:
+                    G_canon_list = [g['param'].grad.data if m <= n else g['param'].grad.data.t() for _, g in bucket]
+                    G_stack = torch.stack(G_canon_list, dim=0)
+                    QL_stack = torch.stack([g['Q_L'][:, :r+1] for _, g in bucket], dim=0)
+                    QR_stack = torch.stack([g['Q_R'][:, :r+1] for _, g in bucket], dim=0)
 
-            # 3. Unified Single-Kernel Batched Adam Step
-            batch_mom.mul_(expert_beta1).add_(R_batch, alpha=1.0 - expert_beta1)
-            batch_var.mul_(expert_beta2).addcmul_(R_batch, R_batch, value=1.0 - expert_beta2)
+                    temp = torch.bmm(G_stack, QR_stack)
+                    S_bmm = torch.bmm(QL_stack.transpose(1, 2), temp)
 
-            bias_c1 = (1.0 - (expert_beta1 ** step_vals)).to(dtype=dtype)
-            bias_c2 = (1.0 - (expert_beta2 ** step_vals)).clamp_min(1e-7).to(dtype=dtype)
-            batch_m_hat = batch_mom / bias_c1
-            batch_v_hat = batch_var / bias_c2
-            batch_delta_R = torch.triu(batch_m_hat / (batch_v_hat.sqrt() + 1e-8))
+                    for b_idx, (idx, g) in enumerate(bucket):
+                        S_i = S_bmm[b_idx]
+                        if g.get('steer_applied', False):
+                            S_i[r, r] *= (1.0 + self.steer_scale)
+                        R_batch[idx, :r+1, :r+1] = torch.triu(S_i)
+                        batch_mom[idx].copy_(g['state']['momentum'])
+                        batch_var[idx].copy_(g['state']['variance'])
+                        step_vals[idx, 0, 0] = float(g['state']['step'] + 1)
+                else:
+                    idx, g = bucket[0]
+                    p = g['param']
+                    grad = p.grad.data
+                    G_canon = grad if m <= n else grad.t()
+                    S = g['Q_L'][:, :r+1].t() @ G_canon @ g['Q_R'][:, :r+1]
+                    if g.get('steer_applied', False):
+                        S[r, r] *= (1.0 + self.steer_scale)
+                    R_batch[idx, :r+1, :r+1] = torch.triu(S)
+                    batch_mom[idx].copy_(g['state']['momentum'])
+                    batch_var[idx].copy_(g['state']['variance'])
+                    step_vals[idx, 0, 0] = float(g['state']['step'] + 1)
+
+            # Step 4: Unified Fused Triton Triangular AdamW Step with PyTorch Vectorized Fallback
+            try:
+                from triune.kernels.fast_triangular import fast_triangular_adamw
+                fast_triangular_adamw(
+                    R_batch, batch_mom, batch_var, batch_delta_R, step_vals,
+                    beta1=expert_beta1, beta2=expert_beta2, eps=1e-8
+                )
+            except Exception:
+                batch_mom.mul_(expert_beta1).add_(R_batch, alpha=1.0 - expert_beta1)
+                batch_var.mul_(expert_beta2).addcmul_(R_batch, R_batch, value=1.0 - expert_beta2)
+                bias_c1 = (1.0 - (expert_beta1 ** step_vals)).to(dtype=dtype)
+                bias_c2 = (1.0 - (expert_beta2 ** step_vals)).clamp_min(1e-7).to(dtype=dtype)
+                batch_m_hat = batch_mom / bias_c1
+                batch_v_hat = batch_var / bias_c2
+                batch_delta_R.copy_(torch.triu(batch_m_hat / (batch_v_hat.sqrt() + 1e-8)))
 
             # Fix 1: Save updated persistent moments back to each group
             for idx, g in enumerate(active_groups):
