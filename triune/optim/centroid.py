@@ -120,7 +120,8 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                  muon_lr=getattr(defaults, 'MUON_LR', 0.02),
                  muon_momentum=getattr(defaults, 'MUON_MOMENTUM', 0.95),
                  muon_weight_decay=getattr(defaults, 'MUON_WEIGHT_DECAY', 0.01),
-                 svd_device="auto"):
+                 svd_device="auto",
+                 use_triangular_core=getattr(defaults, 'USE_TRIANGULAR_CORE', False)):
         defaults_dict = dict(lr=lr, betas=betas, weight_decay=weight_decay)
         dummy_param = torch.nn.Parameter(torch.zeros(1))
         super().__init__([{'params': [dummy_param]}], defaults_dict)
@@ -137,6 +138,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
         self.svd_device = svd_device
         self.initial_base_lr = lr
         self.initial_muon_lr = muon_lr
+        self.use_triangular_core = use_triangular_core
 
         self.non_expert_params = []
         self.muon_params = []
@@ -324,6 +326,111 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                 active_groups.append(group)
 
         if not active_groups:
+            if is_global_step_end:
+                self.step_count += 1
+            return
+
+        if self.use_triangular_core:
+            # Universal Triangular I-Matrix Engine (Zero Shape Buckets)
+            # Condenses all parameter matrices into (N, rank+1, rank+1) Upper Triangles
+            # using dual isometric I-bases (Q_L^T Q_L = I, Q_R^T Q_R = I)
+            N = len(active_groups)
+            device = active_groups[0]['param'].device
+            dtype = active_groups[0]['param'].dtype
+
+            # 1. Initialize or periodically update Q_L and Q_R isometric bases
+            for g in active_groups:
+                p = g['param']
+                grad = p.grad.data
+                m, n = grad.shape
+                d_small, d_large = min(m, n), max(m, n)
+                r = min(self.rank, d_small, d_large)
+                st = g['state']
+
+                needs_init = g.get('Q_L') is None
+                needs_update = (self.step_count - g.get('proj_step', 0)) >= self.update_gap
+                if needs_init or needs_update:
+                    G_canon = grad if m <= n else grad.t()
+                    Omega = torch.randn(d_large, r, device=device, dtype=dtype)
+                    Y = G_canon @ Omega
+                    ql, _ = torch.linalg.qr(Y.float())
+                    ql = ql.to(dtype)
+                    Z = G_canon.t() @ ql
+                    qr, _ = torch.linalg.qr(Z.float())
+                    qr = qr.to(dtype)
+                    Y = G_canon @ qr
+                    ql, _ = torch.linalg.qr(Y.float())
+                    ql = ql.to(dtype)
+
+                    Q_L_basis = torch.zeros(d_small, r + 1, device=device, dtype=dtype)
+                    Q_L_basis[:, :r] = ql
+                    Q_R_basis = torch.zeros(d_large, r + 1, device=device, dtype=dtype)
+                    Q_R_basis[:, :r] = qr
+
+                    g['Q_L'] = Q_L_basis
+                    g['Q_R'] = Q_R_basis
+                    g['proj_step'] = self.step_count
+
+                    if needs_init:
+                        st['momentum'] = torch.zeros(r + 1, r + 1, device=device, dtype=dtype)
+                        st['variance'] = torch.zeros(r + 1, r + 1, device=device, dtype=dtype)
+                        st['step'] = 0
+
+                # Live Centroid Steering in Q_L
+                centroids = g['module'].last_centroids if g['module'] is not None else None
+                expert_idx = g['expert_idx']
+                steer_applied = False
+                if centroids is not None and expert_idx is not None and expert_idx < centroids.size(0) and self.steer_scale > 0:
+                    c = centroids[expert_idx]
+                    if c.size(0) == d_small:
+                        c_proj = g['Q_L'][:, :r] @ (g['Q_L'][:, :r].t() @ c.to(device=device, dtype=dtype))
+                        c_res = c.to(device=device, dtype=dtype) - c_proj
+                        c_res_norm = c_res.norm()
+                        if c_res_norm > 1e-8:
+                            c_orth = c_res / c_res_norm
+                            g['Q_L'][:, r].copy_(c_orth)
+                            steer_applied = True
+                if not steer_applied:
+                    g['Q_L'][:, r].zero_()
+
+            # 2. Project all gradients into unified (N, rank+1, rank+1) Upper Triangles
+            R_batch = torch.zeros(N, self.rank + 1, self.rank + 1, device=device, dtype=dtype)
+            for idx, g in enumerate(active_groups):
+                p = g['param']
+                grad = p.grad.data
+                m, n = grad.shape
+                G_canon = grad if m <= n else grad.t()
+                r = min(self.rank, min(m, n))
+                S = g['Q_L'].t() @ G_canon @ g['Q_R']
+                R_batch[idx, :r+1, :r+1] = torch.triu(S)
+
+            # 3. Unified Single-Kernel Batched Adam Step
+            batch_mom = torch.stack([g['state']['momentum'] for g in active_groups], dim=0)
+            batch_var = torch.stack([g['state']['variance'] for g in active_groups], dim=0)
+            batch_mom.mul_(expert_beta1).add_(R_batch, alpha=1.0 - expert_beta1)
+            batch_var.mul_(expert_beta2).addcmul_(R_batch, R_batch, value=1.0 - expert_beta2)
+
+            for idx, g in enumerate(active_groups):
+                g['state']['step'] += 1
+            step_vals = torch.tensor([g['state']['step'] for g in active_groups], device=device, dtype=torch.float32).view(N, 1, 1)
+            bias_c1 = (1.0 - (expert_beta1 ** step_vals)).to(dtype=dtype)
+            bias_c2 = (1.0 - (expert_beta2 ** step_vals)).clamp_min(1e-7).to(dtype=dtype)
+            batch_m_hat = batch_mom / bias_c1
+            batch_v_hat = batch_var / bias_c2
+            batch_delta_R = torch.triu(batch_m_hat / (batch_v_hat.sqrt() + 1e-8))
+
+            # 4. Reconstruction and in-place parameter update with Frobenius 1/sqrt(r) scaling
+            for idx, g in enumerate(active_groups):
+                p = g['param']
+                m, n = p.shape
+                r = min(self.rank, min(m, n))
+                scale = 1.0 / (r ** 0.5)
+                delta_canon = (g['Q_L'] @ batch_delta_R[idx, :r+1, :r+1] @ g['Q_R'].t()) * scale
+                delta_full = delta_canon if m <= n else delta_canon.t()
+                if expert_wd != 0:
+                    p.data.mul_(1.0 - expert_lr * expert_wd)
+                p.data.sub_(delta_full.reshape(p.shape), alpha=expert_lr)
+
             if is_global_step_end:
                 self.step_count += 1
             return
@@ -532,9 +639,9 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
 
                 batch_mom = torch.stack([g['state']['momentum'] for g in bucket_groups], dim=0)
                 batch_var = torch.stack([g['state']['variance'] for g in bucket_groups], dim=0)
-                step_vals = torch.tensor([g['state']['step'] for g in bucket_groups], device=device, dtype=batch_mom.dtype).view(B, 1, 1)
-                bias_c1 = 1.0 - (expert_beta1 ** step_vals)
-                bias_c2 = 1.0 - (expert_beta2 ** step_vals)
+                step_vals = torch.tensor([g['state']['step'] for g in bucket_groups], device=device, dtype=torch.float32).view(B, 1, 1)
+                bias_c1 = (1.0 - (expert_beta1 ** step_vals)).to(dtype=dtype)
+                bias_c2 = (1.0 - (expert_beta2 ** step_vals)).clamp_min(1e-7).to(dtype=dtype)
                 batch_m_hat = batch_mom / bias_c1
                 batch_v_hat = batch_var / bias_c2
                 batch_delta_lr = (batch_m_hat / (batch_v_hat.sqrt() + 1e-8)).to(dtype=batch_recons.dtype)
