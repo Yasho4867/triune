@@ -112,24 +112,14 @@ def fast_triangular_adamw(
     bias_c2 = (1.0 - (beta2 ** step_view)).clamp_min(1e-7).to(torch.float32)
 
     grid = (N,)
-    try:
-        _fused_triangular_adamw_kernel[grid](
-            R_batch, batch_mom, batch_var, batch_delta, bias_c1, bias_c2,
-            beta1, beta2, eps,
-            R_batch.stride(0), R_batch.stride(1), R_batch.stride(2),
-            batch_mom.stride(0), batch_mom.stride(1), batch_mom.stride(2),
-            batch_var.stride(0), batch_var.stride(1), batch_var.stride(2),
-            batch_delta.stride(0), batch_delta.stride(1), batch_delta.stride(2),
-            DR=DR, BLOCK_SIZE=block_size
-        )
-    except Exception:
-        # Fallback to PyTorch vectorized computation if Triton launch encounters an issue
-        batch_mom.mul_(beta1).add_(R_batch, alpha=1.0 - beta1)
-        batch_var.mul_(beta2).addcmul_(R_batch, R_batch, value=1.0 - beta2)
-        b_c1 = bias_c1.view(N, 1, 1).to(dtype=R_batch.dtype)
-        b_c2 = bias_c2.view(N, 1, 1).to(dtype=R_batch.dtype)
-        m_hat = batch_mom / b_c1
-        v_hat = batch_var / b_c2
-        batch_delta.copy_(torch.triu(m_hat / (v_hat.sqrt() + eps)))
+    _fused_triangular_adamw_kernel[grid](
+        R_batch, batch_mom, batch_var, batch_delta, bias_c1, bias_c2,
+        beta1, beta2, eps,
+        R_batch.stride(0), R_batch.stride(1), R_batch.stride(2),
+        batch_mom.stride(0), batch_mom.stride(1), batch_mom.stride(2),
+        batch_var.stride(0), batch_var.stride(1), batch_var.stride(2),
+        batch_delta.stride(0), batch_delta.stride(1), batch_delta.stride(2),
+        DR=DR, BLOCK_SIZE=block_size
+    )
 
     return batch_delta

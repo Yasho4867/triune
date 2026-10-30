@@ -41,6 +41,49 @@ def test_newtonschulz5_orthogonality():
     print("✅ Newton-Schulz orthogonality passed!\n")
 
 
+def test_newtonschulz5_batched_parity():
+    print("=== Testing Batched Newton-Schulz Parity ===")
+    from triune.kernels.fast_muon import fast_zeropower_via_newtonschulz5_batched, fast_zeropower_via_newtonschulz5
+    torch.manual_seed(42)
+
+    # 1. Parity between sequential and batched execution
+    B, M, N = 8, 48, 64
+    G_batch = torch.randn(B, M, N)
+    O_seq = torch.stack([fast_zeropower_via_newtonschulz5(G_batch[i], steps=5) for i in range(B)], dim=0)
+    O_batched = fast_zeropower_via_newtonschulz5_batched(G_batch, steps=5)
+
+    diff = (O_seq - O_batched).abs().max().item()
+    print(f"Max abs difference between sequential and batched: {diff:.6f}")
+    assert diff < 1e-4, f"Batched Newton-Schulz diverged from sequential: {diff}"
+
+    # 2. Transposed batch (M > N)
+    G_tall = torch.randn(B, 64, 48)
+    O_tall_seq = torch.stack([fast_zeropower_via_newtonschulz5(G_tall[i], steps=5) for i in range(B)], dim=0)
+    O_tall_batched = fast_zeropower_via_newtonschulz5_batched(G_tall, steps=5)
+    diff_tall = (O_tall_seq - O_tall_batched).abs().max().item()
+    print(f"Max abs difference tall batch: {diff_tall:.6f}")
+    assert diff_tall < 1e-4, f"Batched tall Newton-Schulz diverged: {diff_tall}"
+
+    # 3. Batched Muon optimizer step across multiple layers
+    layers = [nn.Linear(64, 48, bias=False) for _ in range(4)]
+    all_params = [l.weight for l in layers]
+    opt = Muon(all_params, lr=0.02, momentum=0.95, weight_decay=0.01)
+
+    initial_weights = [p.data.clone() for p in all_params]
+    x = torch.randn(16, 64)
+    loss = sum(l(x).pow(2).mean() for l in layers)
+    loss.backward()
+    opt.step()
+
+    for idx, p in enumerate(all_params):
+        state = opt.state[p]
+        assert state["step"] == 1
+        delta = (p.data - initial_weights[idx]).abs().sum().item()
+        assert delta > 0, f"Layer {idx} weight was not updated in batched step"
+
+    print("✅ Batched Newton-Schulz parity and multi-layer Muon step passed!\n")
+
+
 def test_muon_optimizer_step():
     print("=== Testing Muon Optimizer Step ===")
     torch.manual_seed(42)

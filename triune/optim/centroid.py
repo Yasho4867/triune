@@ -148,93 +148,120 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
         self.layer_groups = []
         seen_param_ids = set()
 
-        # Identify router parameters and token embeddings / vocabulary exit heads (these must stay on AdamW)
-        router_param_ids = set()
-        for name, module in model.named_modules():
-            if isinstance(module, MoE_FFN) and hasattr(module, 'router'):
-                for p in module.router.parameters():
-                    router_param_ids.add(id(p))
-            elif module.__class__.__name__ == 'GumbelSoftmaxRouter' or name == 'router' or name.endswith('.router'):
-                for p in module.parameters():
-                    router_param_ids.add(id(p))
+        if isinstance(model, torch.nn.Module):
+            # Identify router parameters and token embeddings / vocabulary exit heads (these must stay on AdamW)
+            router_param_ids = set()
+            for name, module in model.named_modules():
+                if isinstance(module, MoE_FFN) and hasattr(module, 'router'):
+                    for p in module.router.parameters():
+                        router_param_ids.add(id(p))
+                elif module.__class__.__name__ == 'GumbelSoftmaxRouter' or name == 'router' or name.endswith('.router'):
+                    for p in module.parameters():
+                        router_param_ids.add(id(p))
 
-        embedding_param_ids = set()
-        for name, param in model.named_parameters():
-            name_lower = name.lower()
-            if (
-                'embed' in name_lower
-                or 'wte' in name_lower
-                or 'exit_head' in name_lower
-                or 'final_head' in name_lower
-                or 'lm_head' in name_lower
-            ):
-                embedding_param_ids.add(id(param))
+            embedding_param_ids = set()
+            for name, param in model.named_parameters():
+                name_lower = name.lower()
+                if (
+                    'embed' in name_lower
+                    or 'wte' in name_lower
+                    or 'exit_head' in name_lower
+                    or 'final_head' in name_lower
+                    or 'lm_head' in name_lower
+                ):
+                    embedding_param_ids.add(id(param))
 
-        # 1. Count MoE routed experts
-        num_expert_groups = 0
-        for name, module in model.named_modules():
-            if isinstance(module, MoE_FFN):
-                for expert_idx, expert in enumerate(module.experts):
-                    for subname, submod in expert.named_modules():
-                        if hasattr(submod, 'weight') and isinstance(submod.weight, torch.nn.Parameter):
-                            p = submod.weight
-                            if p.requires_grad and p.dim() >= 2 and id(p) not in seen_param_ids:
-                                seen_param_ids.add(id(p))
-                                num_expert_groups += 1
+            # 1. Count MoE routed experts
+            num_expert_groups = 0
+            for name, module in model.named_modules():
+                if isinstance(module, MoE_FFN):
+                    for expert_idx, expert in enumerate(module.experts):
+                        for subname, submod in expert.named_modules():
+                            if hasattr(submod, 'weight') and isinstance(submod.weight, torch.nn.Parameter):
+                                p = submod.weight
+                                if p.requires_grad and p.dim() >= 2 and id(p) not in seen_param_ids:
+                                    seen_param_ids.add(id(p))
+                                    num_expert_groups += 1
 
-        seen_param_ids.clear()
-        group_idx = 0
+            seen_param_ids.clear()
+            group_idx = 0
 
-        # 1. Populate MoE routed experts (with Centroid Steering)
-        for name, module in model.named_modules():
-            if isinstance(module, MoE_FFN):
-                for expert_idx, expert in enumerate(module.experts):
-                    for subname, submod in expert.named_modules():
-                        if hasattr(submod, 'weight') and isinstance(submod.weight, torch.nn.Parameter):
-                            p = submod.weight
-                            if p.requires_grad and p.dim() >= 2 and id(p) not in seen_param_ids:
-                                seen_param_ids.add(id(p))
-                                stagger = -(group_idx * (update_gap // max(1, num_expert_groups)))
-                                self.layer_groups.append({
-                                    'module': module,
-                                    'expert_idx': expert_idx,
-                                    'param': p,
-                                    'projection': None,
-                                    'projection_side': 'left' if p.shape[0] <= p.shape[1] else 'right',
-                                    'proj_step': stagger,
-                                    'state': {'momentum': None, 'variance': None, 'step': 0}
-                                })
-                                group_idx += 1
+            # 1. Populate MoE routed experts (with Centroid Steering)
+            for name, module in model.named_modules():
+                if isinstance(module, MoE_FFN):
+                    for expert_idx, expert in enumerate(module.experts):
+                        for subname, submod in expert.named_modules():
+                            if hasattr(submod, 'weight') and isinstance(submod.weight, torch.nn.Parameter):
+                                p = submod.weight
+                                if p.requires_grad and p.dim() >= 2 and id(p) not in seen_param_ids:
+                                    seen_param_ids.add(id(p))
+                                    stagger = -(group_idx * (update_gap // max(1, num_expert_groups)))
+                                    self.layer_groups.append({
+                                        'module': module,
+                                        'expert_idx': expert_idx,
+                                        'param': p,
+                                        'projection': None,
+                                        'projection_side': 'left' if p.shape[0] <= p.shape[1] else 'right',
+                                        'proj_step': stagger,
+                                        'state': {'momentum': None, 'variance': None, 'step': 0}
+                                    })
+                                    group_idx += 1
 
-        # 2. Populate remaining 2D parameters
-        for name, param in model.named_parameters():
-            if param.requires_grad and param.dim() >= 2 and id(param) not in seen_param_ids:
-                seen_param_ids.add(id(param))
-                if self.use_muon and id(param) not in router_param_ids and id(param) not in embedding_param_ids:
-                    # Hidden 2D linear weight (Attention GLA, Shared Expert, Exit Heads) -> Muon
-                    self.muon_params.append(param)
-                elif not self.use_muon and id(param) not in router_param_ids and id(param) not in embedding_param_ids:
-                    # Standard GaLore fallback
-                    stagger = -(group_idx * (update_gap // max(1, num_expert_groups + 1)))
-                    self.layer_groups.append({
-                        'module': None,
-                        'expert_idx': None,
-                        'param': param,
-                        'projection': None,
-                        'projection_side': 'left' if param.shape[0] <= param.shape[1] else 'right',
-                        'proj_step': stagger,
-                        'state': {'momentum': None, 'variance': None, 'step': 0}
-                    })
-                    group_idx += 1
-                else:
-                    # Router head or token embedding -> Base Optimizer (AdamW)
+            # 2. Populate remaining 2D parameters
+            for name, param in model.named_parameters():
+                if param.requires_grad and param.dim() >= 2 and id(param) not in seen_param_ids:
+                    seen_param_ids.add(id(param))
+                    if self.use_muon and id(param) not in router_param_ids and id(param) not in embedding_param_ids:
+                        # Hidden 2D linear weight (Attention GLA, Shared Expert, Exit Heads) -> Muon
+                        self.muon_params.append(param)
+                    elif not self.use_muon and id(param) not in router_param_ids and id(param) not in embedding_param_ids:
+                        # Standard GaLore fallback
+                        stagger = -(group_idx * (update_gap // max(1, num_expert_groups + 1)))
+                        self.layer_groups.append({
+                            'module': None,
+                            'expert_idx': None,
+                            'param': param,
+                            'projection': None,
+                            'projection_side': 'left' if param.shape[0] <= param.shape[1] else 'right',
+                            'proj_step': stagger,
+                            'state': {'momentum': None, 'variance': None, 'step': 0}
+                        })
+                        group_idx += 1
+                    else:
+                        # Router head or token embedding -> Base Optimizer (AdamW)
+                        self.non_expert_params.append(param)
+
+            # 3. 1D parameters (RMSNorm, biases) -> Base Optimizer (AdamW)
+            for name, param in model.named_parameters():
+                if param.requires_grad and id(param) not in seen_param_ids:
+                    seen_param_ids.add(id(param))
                     self.non_expert_params.append(param)
-
-        # 3. 1D parameters (RMSNorm, biases) -> Base Optimizer (AdamW)
-        for name, param in model.named_parameters():
-            if id(param) not in seen_param_ids:
-                seen_param_ids.add(id(param))
-                self.non_expert_params.append(param)
+        else:
+            # Iterable of parameters or parameter groups
+            for p in model:
+                if isinstance(p, dict) and 'params' in p:
+                    param_candidates = p['params']
+                else:
+                    param_candidates = [p]
+                for param in param_candidates:
+                    if not isinstance(param, (torch.nn.Parameter, torch.Tensor)):
+                        continue
+                    if param.requires_grad and id(param) not in seen_param_ids:
+                        seen_param_ids.add(id(param))
+                        if self.use_muon and param.dim() == 2:
+                            self.muon_params.append(param)
+                        elif param.dim() >= 2:
+                            self.layer_groups.append({
+                                'module': None,
+                                'expert_idx': None,
+                                'param': param,
+                                'projection': None,
+                                'projection_side': 'left' if param.shape[0] <= param.shape[1] else 'right',
+                                'proj_step': 0,
+                                'state': {'momentum': None, 'variance': None, 'step': 0}
+                            })
+                        else:
+                            self.non_expert_params.append(param)
 
         if self.use_muon and len(self.muon_params) > 0:
             self.muon_optimizer = Muon(
@@ -246,13 +273,17 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
         else:
             self.muon_optimizer = None
 
-        if HAS_8BIT and AdamW8bit is not None:
-            self.base_optimizer = AdamW8bit(self.non_expert_params, lr=lr, betas=betas, weight_decay=weight_decay)
+        if len(self.non_expert_params) > 0:
+            if HAS_8BIT and AdamW8bit is not None:
+                self.base_optimizer = AdamW8bit(self.non_expert_params, lr=lr, betas=betas, weight_decay=weight_decay)
+            else:
+                self.base_optimizer = torch.optim.AdamW(self.non_expert_params, lr=lr, betas=betas, weight_decay=weight_decay)
         else:
-            self.base_optimizer = torch.optim.AdamW(self.non_expert_params, lr=lr, betas=betas, weight_decay=weight_decay)
+            self.base_optimizer = None
 
     def zero_grad(self, set_to_none=True):
-        self.base_optimizer.zero_grad(set_to_none=set_to_none)
+        if self.base_optimizer is not None:
+            self.base_optimizer.zero_grad(set_to_none=set_to_none)
         if self.muon_optimizer is not None:
             self.muon_optimizer.zero_grad(set_to_none=set_to_none)
         for group in self.layer_groups:
@@ -265,8 +296,9 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                     p.grad.zero_()
 
     def set_lr(self, lr, expert_lr=None):
-        for pg in self.base_optimizer.param_groups:
-            pg['lr'] = lr
+        if self.base_optimizer is not None:
+            for pg in self.base_optimizer.param_groups:
+                pg['lr'] = lr
         if expert_lr is not None:
             self.expert_lr = expert_lr
         elif hasattr(self, "initial_expert_lr") and self.initial_expert_lr is not None:
@@ -290,20 +322,21 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
             return
 
         # 1. Step matching parameters in base_optimizer (AdamW / 8-bit AdamW)
-        for group in self.base_optimizer.param_groups:
-            matching = [p for p in group['params'] if id(p) in param_ids]
-            if matching:
-                orig_params = group['params']
-                group['params'] = matching
-                try:
-                    for p in matching:
-                        if p in self.base_optimizer.state:
-                            st = self.base_optimizer.state[p]
-                            if "exp_avg" not in st or "exp_avg_sq" not in st:
-                                st.clear()
-                    self.base_optimizer.step()
-                finally:
-                    group['params'] = orig_params
+        if self.base_optimizer is not None:
+            for group in self.base_optimizer.param_groups:
+                matching = [p for p in group['params'] if id(p) in param_ids]
+                if matching:
+                    orig_params = group['params']
+                    group['params'] = matching
+                    try:
+                        for p in matching:
+                            if p in self.base_optimizer.state:
+                                st = self.base_optimizer.state[p]
+                                if "exp_avg" not in st or "exp_avg_sq" not in st:
+                                    st.clear()
+                        self.base_optimizer.step()
+                    finally:
+                        group['params'] = orig_params
 
         # 2. Step matching parameters in muon_optimizer
         if self.muon_optimizer is not None:
@@ -377,14 +410,16 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                     g['projection_side'] = 'left' if m <= n else 'right'
                     g['proj_step'] = self.step_count
 
-                    # Fix 1 & 3: Allocate persistent states with fixed (self.rank + 1, self.rank + 1)
+                    # Fix 1 & 3: Allocate persistent states with fixed (self.rank + 1, self.rank + 1) in FP32
                     if needs_init:
-                        st['momentum'] = torch.zeros(self.rank + 1, self.rank + 1, device=device, dtype=dtype)
-                        st['variance'] = torch.zeros(self.rank + 1, self.rank + 1, device=device, dtype=dtype)
+                        st['momentum'] = torch.zeros(self.rank + 1, self.rank + 1, device=device, dtype=torch.float32)
+                        st['variance'] = torch.zeros(self.rank + 1, self.rank + 1, device=device, dtype=torch.float32)
+                        st['subspace_step'] = 0
                         st['step'] = 0
                     elif needs_update:
                         st['momentum'].zero_()
                         st['variance'].zero_()
+                        st['subspace_step'] = 0
 
                 # Step 1: Incremental Centroid Steering with dual orthonormal vector (eliminates redundant every-step QR)
                 centroids = g['module'].last_centroids if g['module'] is not None else None
@@ -440,8 +475,8 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
             if buf_key not in self._triangular_buffers:
                 self._triangular_buffers[buf_key] = {
                     'R_batch': torch.zeros(N, self.rank + 1, self.rank + 1, device=device, dtype=dtype),
-                    'batch_mom': torch.zeros(N, self.rank + 1, self.rank + 1, device=device, dtype=dtype),
-                    'batch_var': torch.zeros(N, self.rank + 1, self.rank + 1, device=device, dtype=dtype),
+                    'batch_mom': torch.zeros(N, self.rank + 1, self.rank + 1, device=device, dtype=torch.float32),
+                    'batch_var': torch.zeros(N, self.rank + 1, self.rank + 1, device=device, dtype=torch.float32),
                     'step_vals': torch.zeros(N, 1, 1, device=device, dtype=torch.float32),
                     'batch_delta': torch.zeros(N, self.rank + 1, self.rank + 1, device=device, dtype=dtype),
                 }
@@ -480,7 +515,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                         R_batch[idx, :r+1, :r+1] = torch.triu(S_i)
                         batch_mom[idx].copy_(g['state']['momentum'])
                         batch_var[idx].copy_(g['state']['variance'])
-                        step_vals[idx, 0, 0] = float(g['state']['step'] + 1)
+                        step_vals[idx, 0, 0] = float(g['state'].get('subspace_step', 0) + 1)
                 else:
                     idx, g = bucket[0]
                     p = g['param']
@@ -492,7 +527,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                     R_batch[idx, :r+1, :r+1] = torch.triu(S)
                     batch_mom[idx].copy_(g['state']['momentum'])
                     batch_var[idx].copy_(g['state']['variance'])
-                    step_vals[idx, 0, 0] = float(g['state']['step'] + 1)
+                    step_vals[idx, 0, 0] = float(g['state'].get('subspace_step', 0) + 1)
 
             # Step 4: Unified Fused Triton Triangular AdamW Step with PyTorch Vectorized Fallback
             from triune.kernels.fast_triangular import fast_triangular_adamw
@@ -505,24 +540,39 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
             for idx, g in enumerate(active_groups):
                 g['state']['momentum'].copy_(batch_mom[idx])
                 g['state']['variance'].copy_(batch_var[idx])
+                g['state']['subspace_step'] = g['state'].get('subspace_step', 0) + 1
                 g['state']['step'] += 1
 
-            # 4. Reconstruction and Fused in-place parameter update via addmm_ with Frobenius 1/sqrt(r) scaling
-            for idx, g in enumerate(active_groups):
-                p = g['param']
-                m, n = p.shape
-                r = min(self.rank, min(m, n))
+            # 4. Batched BMM Reconstruction and in-place parameter update with Frobenius 1/sqrt(r) scaling
+            for (m, n, r), bucket in shape_buckets.items():
+                K = len(bucket)
                 scale = 1.0 / (r ** 0.5)
-                active_delta = batch_delta_R[idx, :r+1, :r+1]
                 beta_wd = 1.0 - expert_lr * expert_wd if expert_wd != 0 else 1.0
                 alpha_upd = -expert_lr * scale
+                if K >= 2:
+                    QL_stack = torch.stack([g['Q_L'][:, :r+1] for _, g in bucket], dim=0)
+                    QR_stack = torch.stack([g['Q_R'][:, :r+1] for _, g in bucket], dim=0)
+                    delta_stack = torch.stack([batch_delta_R[idx, :r+1, :r+1] for idx, _ in bucket], dim=0)
+                    if m <= n:
+                        temp = torch.bmm(QL_stack, delta_stack)
+                        delta_W = torch.bmm(temp, QR_stack.transpose(1, 2))
+                    else:
+                        temp = torch.bmm(QR_stack, delta_stack.transpose(1, 2))
+                        delta_W = torch.bmm(temp, QL_stack.transpose(1, 2))
 
-                if m <= n:
-                    temp = g['Q_L'][:, :r+1] @ active_delta
-                    p.data.addmm_(temp, g['Q_R'][:, :r+1].t(), beta=beta_wd, alpha=alpha_upd)
+                    for b_idx, (idx, g) in enumerate(bucket):
+                        p = g['param']
+                        p.data.mul_(beta_wd).add_(delta_W[b_idx], alpha=alpha_upd)
                 else:
-                    temp = g['Q_R'][:, :r+1] @ active_delta.t()
-                    p.data.addmm_(temp, g['Q_L'][:, :r+1].t(), beta=beta_wd, alpha=alpha_upd)
+                    idx, g = bucket[0]
+                    p = g['param']
+                    active_delta = batch_delta_R[idx, :r+1, :r+1]
+                    if m <= n:
+                        temp = g['Q_L'][:, :r+1] @ active_delta
+                        p.data.addmm_(temp, g['Q_R'][:, :r+1].t(), beta=beta_wd, alpha=alpha_upd)
+                    else:
+                        temp = g['Q_R'][:, :r+1] @ active_delta.t()
+                        p.data.addmm_(temp, g['Q_L'][:, :r+1].t(), beta=beta_wd, alpha=alpha_upd)
 
             if is_global_step_end:
                 self.step_count += 1
@@ -798,12 +848,16 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
         if closure is not None:
             with torch.enable_grad():
                 loss = closure()
-        self.step_parameters(self.model.parameters(), is_global_step_end=True)
+        if isinstance(self.model, torch.nn.Module):
+            params_to_step = self.model.parameters()
+        else:
+            params_to_step = self.muon_params + [g['param'] for g in self.layer_groups] + self.non_expert_params
+        self.step_parameters(params_to_step, is_global_step_end=True)
         return loss
 
     def state_dict(self):
         sd = {
-            'base_optimizer': self.base_optimizer.state_dict(),
+            'base_optimizer': self.base_optimizer.state_dict() if self.base_optimizer is not None else None,
             'step_count': self.step_count,
             'layer_groups': [
                 {
@@ -832,7 +886,8 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                     expected_shape = (cols, min(self.rank, rows, cols))
                 assert tuple(saved['projection'].shape) == expected_shape, \
                     f"Projection shape mismatch: saved {saved['projection'].shape}, expected {expected_shape}"
-        self.base_optimizer.load_state_dict(state_dict['base_optimizer'])
+        if self.base_optimizer is not None and state_dict.get('base_optimizer') is not None:
+            self.base_optimizer.load_state_dict(state_dict['base_optimizer'])
         if self.muon_optimizer is not None and 'muon_optimizer' in state_dict:
             self.muon_optimizer.load_state_dict(state_dict['muon_optimizer'])
         self.step_count = state_dict['step_count']
@@ -881,7 +936,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
             "rank": int(self.rank),
             "update_gap": int(self.update_gap),
             "expert_lr": float(self.expert_lr),
-            "base_lr": float(self.base_optimizer.param_groups[0]["lr"]) if self.base_optimizer.param_groups else float(self.initial_base_lr),
+            "base_lr": float(self.base_optimizer.param_groups[0]["lr"]) if (self.base_optimizer and self.base_optimizer.param_groups) else float(self.initial_base_lr),
             "muon_lr": float(self.muon_optimizer.param_groups[0]["lr"]) if (self.muon_optimizer and self.muon_optimizer.param_groups) else float(self.initial_muon_lr),
             "muon_momentum": float(self.muon_optimizer.param_groups[0]["momentum"]) if (self.muon_optimizer and self.muon_optimizer.param_groups) else 0.95,
             "total_params": total_count,

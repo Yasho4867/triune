@@ -120,3 +120,30 @@ def test_moe_batched_parity_bias_none():
 
     x_grad_diff = (x_batched.grad - x_seq.grad).abs().max().item()
     assert x_grad_diff < 1e-4, f"Input gradients differ by {x_grad_diff:.2e} when bias=None"
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for GPU testing")
+def test_moe_mixed_bias_fallback():
+    """Verifies that mixed bias configurations across experts safely fall back to sequential loop."""
+    device = torch.device("cuda:0")
+    torch.manual_seed(42)
+
+    dim = 64
+    num_experts = 4
+    top_k = 2
+    B, T = 2, 8
+
+    # Create MoE where expert 0 has no bias but expert 1-3 have biases
+    moe = MoE_FFN(dim=dim, num_experts=num_experts, top_k=top_k, shared_expert=False).to(device=device, dtype=torch.float32)
+    moe.experts[0][0].bias = None
+
+    x = torch.randn(B, T, dim, device=device, dtype=torch.float32, requires_grad=True)
+    moe.train()
+    out = moe(x, update_stats=False)
+    assert out.shape == (B, T, dim)
+
+    loss = out.sum()
+    loss.backward()
+    assert x.grad is not None
+    assert moe.experts[1][0].bias.grad is not None
+    print("✅ MoE mixed bias fallback handled cleanly!")

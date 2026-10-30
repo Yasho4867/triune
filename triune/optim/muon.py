@@ -120,6 +120,7 @@ class Muon(Optimizer):
             nesterov = group["nesterov"]
             ns_steps = group["ns_steps"]
 
+            buckets = {}
             for p in group["params"]:
                 if p.ndim != 2:
                     raise ValueError(
@@ -153,29 +154,47 @@ class Muon(Optimizer):
                 else:
                     update = momentum.clone()
 
-                # Newton-Schulz orthogonalization with zero-allocation buffer reuse
-                res = zeropower_via_newtonschulz5(
-                    update,
-                    steps=ns_steps,
-                    scratch_buffer=state.get("scratch_buffer"),
-                    return_scratch=True,
-                )
-                if isinstance(res, tuple):
-                    ortho_update, state["scratch_buffer"] = res
-                else:
-                    ortho_update = res
+                key = (p.shape, p.device, p.dtype)
+                if key not in buckets:
+                    buckets[key] = []
+                buckets[key].append((p, update, state))
 
-                # Aspect ratio scaling: max(1, d_out / d_in) ** 0.5
-                d_out = ortho_update.size(0)
-                d_in = ortho_update.size(1) if ortho_update.ndim > 1 else 1
+            for (shape, device, dtype), items in buckets.items():
+                K = len(items)
+                d_out, d_in = shape
                 scale = max(1.0, d_out / d_in) ** 0.5
-                ortho_update.mul_(scale)
+                if K >= 2:
+                    update_stack = torch.stack([u for _, u, _ in items], dim=0)
+                    try:
+                        from triune.kernels.fast_muon import fast_zeropower_via_newtonschulz5_batched
+                        ortho_stack = fast_zeropower_via_newtonschulz5_batched(update_stack, steps=ns_steps)
+                    except Exception:
+                        ortho_stack = torch.stack([
+                            zeropower_via_newtonschulz5(u, steps=ns_steps)
+                            for _, u, _ in items
+                        ], dim=0)
 
-                # Decoupled weight decay
-                if wd != 0.0:
-                    p.data.mul_(1.0 - lr * wd)
+                    for idx, (p, _, state) in enumerate(items):
+                        ortho_u = ortho_stack[idx]
+                        if wd != 0.0:
+                            p.data.mul_(1.0 - lr * wd)
+                        p.data.add_(ortho_u.to(dtype=p.dtype, device=p.device), alpha=-lr * scale)
+                else:
+                    p, update, state = items[0]
+                    res = zeropower_via_newtonschulz5(
+                        update,
+                        steps=ns_steps,
+                        scratch_buffer=state.get("scratch_buffer"),
+                        return_scratch=True,
+                    )
+                    if isinstance(res, tuple):
+                        ortho_update, state["scratch_buffer"] = res
+                    else:
+                        ortho_update = res
 
-                # Update parameter
-                p.data.add_(ortho_update.to(dtype=p.dtype, device=p.device), alpha=-lr)
+                    ortho_update.mul_(scale)
+                    if wd != 0.0:
+                        p.data.mul_(1.0 - lr * wd)
+                    p.data.add_(ortho_update.to(dtype=p.dtype, device=p.device), alpha=-lr)
 
         return loss

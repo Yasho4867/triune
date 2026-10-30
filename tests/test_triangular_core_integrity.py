@@ -120,3 +120,48 @@ def test_triangular_core_mixed_ranks():
 
     # Successful completion without shape error indicates mixed rank robustness
     assert opt.step_count == 3
+
+
+def test_triangular_core_fp32_precision_and_subspace_step_invariants():
+    """Verifies FP32 moment precision and continuous lifetime step vs basis-relative subspace step."""
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = DummyMoEModel(d_model=128, num_experts=2, expert_dim=128).to(device=device, dtype=torch.bfloat16)
+    opt = CentroidSteerOptimizer(model, rank=8, update_gap=2, use_triangular_core=True)
+
+    x = torch.randn(2, 4, 128, device=device, dtype=torch.bfloat16)
+    active_expert_groups = [g for g in opt.layer_groups if g['module'] is not None]
+    assert len(active_expert_groups) > 0
+
+    # Step 1: Initial subspace step 1, global step 1
+    out, _ = model(x)
+    out.sum().backward()
+    opt.step_parameters(model.parameters(), is_global_step_end=True)
+    opt.zero_grad()
+
+    for g in active_expert_groups:
+        assert g['state']['momentum'].dtype == torch.float32, "Moments must be stored in FP32 to prevent BF16 underflow"
+        assert g['state']['variance'].dtype == torch.float32, "Variance must be stored in FP32"
+        assert g['state']['step'] == 1
+        assert g['state']['subspace_step'] == 1
+
+    # Step 2: Global step 2, subspace step 2 (hits update_gap=2)
+    out, _ = model(x)
+    out.sum().backward()
+    opt.step_parameters(model.parameters(), is_global_step_end=True)
+    opt.zero_grad()
+
+    for g in active_expert_groups:
+        assert g['state']['step'] == 2
+        assert g['state']['subspace_step'] == 2
+
+    # Step 3: Projection basis refreshes, subspace_step resets to 1 while lifetime step continues to 3
+    out, _ = model(x)
+    out.sum().backward()
+    opt.step_parameters(model.parameters(), is_global_step_end=True)
+    opt.zero_grad()
+
+    for g in active_expert_groups:
+        assert g['state']['step'] == 3, f"Lifetime step must be continuous (3), got {g['state']['step']}"
+        assert g['state']['subspace_step'] == 1, f"Subspace step must reset to 1 on new basis, got {g['state']['subspace_step']}"
+
+    print("✅ FP32 moment precision and subspace_step invariant verified!")

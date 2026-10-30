@@ -83,8 +83,11 @@ class FastSwiGLU(nn.Module):
         return fast_swiglu(gate, up)
 
 
-class FastGELU(nn.Module):
-    """Drop-in Fast GELU activation layer."""
+class FastGELU(nn.GELU):
+    """Drop-in Fast GELU activation layer with analytical backward gradient."""
+
+    def __init__(self, approximate: str = "tanh"):
+        super().__init__(approximate=approximate)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return fast_gelu(x)

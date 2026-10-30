@@ -94,3 +94,59 @@ def fast_zeropower_via_newtonschulz5(
     if return_scratch:
         return res, (A, A2, B)
     return res
+
+
+def fast_zeropower_via_newtonschulz5_batched(
+    G_batch: torch.Tensor,
+    steps: int = 5,
+    eps: float = 1e-7,
+) -> torch.Tensor:
+    """Batched Newton-Schulz orthogonalization across a batch of matching-shape 2D matrices.
+
+    Args:
+        G_batch: 3D tensor of shape [B, M, N].
+        steps: Number of Newton-Schulz iterations (default: 5).
+        eps: Small constant for vector norm stability.
+
+    Returns:
+        Orthogonalized tensor of shape [B, M, N] in original device and dtype.
+    """
+    if G_batch.ndim != 3:
+        raise ValueError(f"Batched orthogonalization requires 3D tensor [B, M, N], got ndim={G_batch.ndim}")
+
+    orig_device = G_batch.device
+    orig_dtype = G_batch.dtype
+
+    if orig_device.type == "cuda" and torch.cuda.is_bf16_supported():
+        compute_dtype = torch.bfloat16
+    else:
+        compute_dtype = torch.float32
+
+    X = G_batch.to(device=orig_device, dtype=compute_dtype)
+
+    # In-place normalization across rows and cols
+    norm = torch.linalg.vector_norm(X, dim=(-2, -1), keepdim=True)
+    X = X.div_(norm + eps)
+
+    # Ensure rows <= cols for efficiency
+    transposed = False
+    if X.size(1) > X.size(2):
+        X = X.transpose(1, 2)
+        transposed = True
+
+    a, b, c = 3.4445, -4.7750, 2.0315
+    for _ in range(steps):
+        # A = X @ X.T
+        A = torch.bmm(X, X.transpose(1, 2))
+        # A2 = A @ A
+        A2 = torch.bmm(A, A)
+        # B = b * A + c * A2
+        B = (b * A).add_(A2, alpha=c)
+        # X = a * X + B @ X
+        X = torch.baddbmm(X, B, X, beta=a, alpha=1.0)
+
+    if transposed:
+        X = X.transpose(1, 2)
+
+    return X.to(device=orig_device, dtype=orig_dtype)
+

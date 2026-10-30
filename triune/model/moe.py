@@ -135,17 +135,24 @@ class MoE_FFN(nn.Module):
             shared_out = self.shared(flat_x)
             out = out + (self.shared_scale * shared_out).to(out.dtype)
 
+        any_b1 = any(e[0].bias is not None for e in self.experts)
+        all_b1 = all(e[0].bias is not None for e in self.experts)
+        any_b2 = any(e[2].bias is not None for e in self.experts)
+        all_b2 = all(e[2].bias is not None for e in self.experts)
+        mixed_biases = (any_b1 != all_b1) or (any_b2 != all_b2)
+
         can_batch_bmm = (
             not self.use_fp4
             and not self.use_fp8
+            and not mixed_biases
             and all(isinstance(e[0], nn.Linear) and isinstance(e[2], nn.Linear) for e in self.experts)
         )
 
         if can_batch_bmm:
             W1_stack = torch.stack([e[0].weight for e in self.experts], dim=0)
             W2_stack = torch.stack([e[2].weight for e in self.experts], dim=0)
-            has_b1 = all(e[0].bias is not None for e in self.experts)
-            has_b2 = all(e[2].bias is not None for e in self.experts)
+            has_b1 = all_b1
+            has_b2 = all_b2
             b1_stack = torch.stack([e[0].bias for e in self.experts], dim=0).unsqueeze(1) if has_b1 else None
             b2_stack = torch.stack([e[2].bias for e in self.experts], dim=0).unsqueeze(1) if has_b2 else None
 
