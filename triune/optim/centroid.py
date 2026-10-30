@@ -382,6 +382,9 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                         st['momentum'] = torch.zeros(self.rank + 1, self.rank + 1, device=device, dtype=dtype)
                         st['variance'] = torch.zeros(self.rank + 1, self.rank + 1, device=device, dtype=dtype)
                         st['step'] = 0
+                    elif needs_update:
+                        st['momentum'].zero_()
+                        st['variance'].zero_()
 
                 # Step 1: Incremental Centroid Steering with dual orthonormal vector (eliminates redundant every-step QR)
                 centroids = g['module'].last_centroids if g['module'] is not None else None
@@ -492,20 +495,11 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                     step_vals[idx, 0, 0] = float(g['state']['step'] + 1)
 
             # Step 4: Unified Fused Triton Triangular AdamW Step with PyTorch Vectorized Fallback
-            try:
-                from triune.kernels.fast_triangular import fast_triangular_adamw
-                fast_triangular_adamw(
-                    R_batch, batch_mom, batch_var, batch_delta_R, step_vals,
-                    beta1=expert_beta1, beta2=expert_beta2, eps=1e-8
-                )
-            except Exception:
-                batch_mom.mul_(expert_beta1).add_(R_batch, alpha=1.0 - expert_beta1)
-                batch_var.mul_(expert_beta2).addcmul_(R_batch, R_batch, value=1.0 - expert_beta2)
-                bias_c1 = (1.0 - (expert_beta1 ** step_vals)).to(dtype=dtype)
-                bias_c2 = (1.0 - (expert_beta2 ** step_vals)).clamp_min(1e-7).to(dtype=dtype)
-                batch_m_hat = batch_mom / bias_c1
-                batch_v_hat = batch_var / bias_c2
-                batch_delta_R.copy_(torch.triu(batch_m_hat / (batch_v_hat.sqrt() + 1e-8)))
+            from triune.kernels.fast_triangular import fast_triangular_adamw
+            fast_triangular_adamw(
+                R_batch, batch_mom, batch_var, batch_delta_R, step_vals,
+                beta1=expert_beta1, beta2=expert_beta2, eps=1e-8
+            )
 
             # Fix 1: Save updated persistent moments back to each group
             for idx, g in enumerate(active_groups):

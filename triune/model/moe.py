@@ -135,7 +135,19 @@ class MoE_FFN(nn.Module):
             shared_out = self.shared(flat_x)
             out = out + (self.shared_scale * shared_out).to(out.dtype)
 
-        can_batch_bmm = (not self.use_fp4 and not self.use_fp8 and all(isinstance(e[0], nn.Linear) and isinstance(e[2], nn.Linear) for e in self.experts))
+        can_batch_bmm = (
+            not self.use_fp4
+            and not self.use_fp8
+            and all(isinstance(e[0], nn.Linear) and isinstance(e[2], nn.Linear) for e in self.experts)
+        )
+
+        if can_batch_bmm:
+            W1_stack = torch.stack([e[0].weight for e in self.experts], dim=0)
+            W2_stack = torch.stack([e[2].weight for e in self.experts], dim=0)
+            has_b1 = all(e[0].bias is not None for e in self.experts)
+            has_b2 = all(e[2].bias is not None for e in self.experts)
+            b1_stack = torch.stack([e[0].bias for e in self.experts], dim=0).unsqueeze(1) if has_b1 else None
+            b2_stack = torch.stack([e[2].bias for e in self.experts], dim=0).unsqueeze(1) if has_b2 else None
 
         for k in range(self.top_k):
             idx_k = flat_idx[:, k]
@@ -181,11 +193,14 @@ class MoE_FFN(nn.Module):
                         if idx.numel() > 0:
                             padded_input[e, :idx.numel()] = flat_x[idx]
 
-                    W1_stack = torch.stack([e[0].weight for e in self.experts], dim=0)
-                    W2_stack = torch.stack([e[2].weight for e in self.experts], dim=0)
+                    h_pre = torch.bmm(padded_input, W1_stack.transpose(1, 2))
+                    if b1_stack is not None:
+                        h_pre = h_pre + b1_stack
+                    h = self.experts[0][1](h_pre)
 
-                    h = self.experts[0][1](torch.bmm(padded_input, W1_stack.transpose(1, 2)))
                     y = torch.bmm(h, W2_stack.transpose(1, 2))
+                    if b2_stack is not None:
+                        y = y + b2_stack
 
                     for e in range(self.num_experts):
                         idx = expert_token_indices[e]
