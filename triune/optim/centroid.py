@@ -140,6 +140,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                  muon_weight_decay=getattr(defaults, 'MUON_WEIGHT_DECAY', 0.01),
                  svd_device="auto",
                  use_triangular_core=getattr(defaults, 'USE_TRIANGULAR_CORE', True),
+                 use_8bit_base: bool = getattr(defaults, 'USE_8BIT_BASE', False),
                  adaptive_subspace_refresh: bool = True,
                  energy_threshold: float = 0.50,
                  min_subspace_gap: int = 5,
@@ -165,6 +166,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
         self.initial_muon_lr = muon_lr
         self._last_synced_lr = lr
         self.use_triangular_core = use_triangular_core
+        self.use_8bit_base = use_8bit_base
         self.adaptive_subspace_refresh = adaptive_subspace_refresh
         self.energy_threshold = energy_threshold
         self.min_subspace_gap = min_subspace_gap
@@ -302,7 +304,9 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
             self.muon_optimizer = None
 
         if len(self.non_expert_params) > 0:
-            if torch.cuda.is_available() and any(p.is_cuda for p in self.non_expert_params):
+            if self.use_8bit_base and HAS_8BIT and AdamW8bit is not None and torch.cuda.is_available() and any(p.is_cuda for p in self.non_expert_params):
+                self.base_optimizer = AdamW8bit(self.non_expert_params, lr=lr, betas=betas, weight_decay=weight_decay)
+            elif torch.cuda.is_available() and any(p.is_cuda for p in self.non_expert_params):
                 try:
                     self.base_optimizer = torch.optim.AdamW(
                         self.non_expert_params, lr=lr, betas=betas, weight_decay=weight_decay, fused=True
@@ -311,7 +315,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                     self.base_optimizer = torch.optim.AdamW(
                         self.non_expert_params, lr=lr, betas=betas, weight_decay=weight_decay
                     )
-            elif HAS_8BIT and AdamW8bit is not None:
+            elif HAS_8BIT and AdamW8bit is not None and any(p.is_cuda for p in self.non_expert_params):
                 self.base_optimizer = AdamW8bit(self.non_expert_params, lr=lr, betas=betas, weight_decay=weight_decay)
             else:
                 self.base_optimizer = torch.optim.AdamW(self.non_expert_params, lr=lr, betas=betas, weight_decay=weight_decay)

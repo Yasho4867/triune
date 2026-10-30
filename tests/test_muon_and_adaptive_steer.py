@@ -46,11 +46,15 @@ def test_newtonschulz5_batched_parity():
     from triune.kernels.fast_muon import fast_zeropower_via_newtonschulz5_batched, fast_zeropower_via_newtonschulz5
     torch.manual_seed(42)
 
-    # 1. Parity between sequential and batched execution
+    # 1. Parity between sequential and batched execution (with strict input immutability)
     B, M, N = 8, 48, 64
     G_batch = torch.randn(B, M, N)
-    O_seq = torch.stack([fast_zeropower_via_newtonschulz5(G_batch[i], steps=5) for i in range(B)], dim=0)
+    G_batch_orig = G_batch.clone()
+    O_seq = torch.stack([fast_zeropower_via_newtonschulz5(G_batch[i].clone(), steps=5) for i in range(B)], dim=0)
     O_batched = fast_zeropower_via_newtonschulz5_batched(G_batch, steps=5)
+
+    # Assert caller inputs were never mutated in-place
+    assert torch.equal(G_batch, G_batch_orig), "G_batch input tensor was mutated in-place!"
 
     diff = (O_seq - O_batched).abs().max().item()
     print(f"Max abs difference between sequential and batched: {diff:.6f}")
@@ -58,8 +62,10 @@ def test_newtonschulz5_batched_parity():
 
     # 2. Transposed batch (M > N)
     G_tall = torch.randn(B, 64, 48)
-    O_tall_seq = torch.stack([fast_zeropower_via_newtonschulz5(G_tall[i], steps=5) for i in range(B)], dim=0)
+    G_tall_orig = G_tall.clone()
+    O_tall_seq = torch.stack([fast_zeropower_via_newtonschulz5(G_tall[i].clone(), steps=5) for i in range(B)], dim=0)
     O_tall_batched = fast_zeropower_via_newtonschulz5_batched(G_tall, steps=5)
+    assert torch.equal(G_tall, G_tall_orig), "G_tall input tensor was mutated in-place!"
     diff_tall = (O_tall_seq - O_tall_batched).abs().max().item()
     print(f"Max abs difference tall batch: {diff_tall:.6f}")
     assert diff_tall < 1e-4, f"Batched tall Newton-Schulz diverged: {diff_tall}"
