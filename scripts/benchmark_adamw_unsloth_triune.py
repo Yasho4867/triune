@@ -117,7 +117,7 @@ def run_pretrain_benchmark(stack_name: str, model_type: str, device: torch.devic
 
         loss.backward()
         optimizer.step()
-        return loss.item()
+        return loss
 
     # Measure initial untrained loss before warmup
     with torch.no_grad():
@@ -128,34 +128,46 @@ def run_pretrain_benchmark(stack_name: str, model_type: str, device: torch.devic
     # Warmup 5 steps
     for _ in range(5):
         train_step()
-
-    # Timed benchmark runs with CUDA events
     torch.cuda.synchronize()
+
+    # Timed benchmark runs with separated CUDA events and wall-clock perf_counter
     start_events = [torch.cuda.Event(enable_timing=True) for _ in range(steps)]
     end_events = [torch.cuda.Event(enable_timing=True) for _ in range(steps)]
-    losses = []
+    raw_losses = []
+    wall_times_ns = []
 
     torch.cuda.reset_peak_memory_stats()
     for i in range(steps):
+        t0 = time.perf_counter_ns()
         start_events[i].record()
-        loss_val = train_step()
+        loss_tensor = train_step()
         end_events[i].record()
-        losses.append(loss_val)
+        t1 = time.perf_counter_ns()
+        wall_times_ns.append(t1 - t0)
+        raw_losses.append(loss_tensor)
 
     torch.cuda.synchronize()
     peak_vram_mb = torch.cuda.max_memory_allocated() / (1024 * 1024)
+    losses = [l.item() if isinstance(l, torch.Tensor) else float(l) for l in raw_losses]
 
-    times = [start_events[i].elapsed_time(end_events[i]) for i in range(steps)]
-    times.sort()
-    median_ms = times[len(times) // 2]
-    mean_ms = sum(times) / len(times)
-    throughput_tokens_per_sec = (B * T) / (median_ms / 1000.0)
+    gpu_times = [start_events[i].elapsed_time(end_events[i]) for i in range(steps)]
+    gpu_times.sort()
+    gpu_median_ms = gpu_times[len(gpu_times) // 2]
+    gpu_mean_ms = sum(gpu_times) / len(gpu_times)
+
+    wall_times = [w / 1e6 for w in wall_times_ns]
+    wall_times.sort()
+    wall_median_ms = wall_times[len(wall_times) // 2]
+    wall_mean_ms = sum(wall_times) / len(wall_times)
+
+    throughput_tokens_per_sec = (B * T) / (gpu_median_ms / 1000.0)
+    wall_throughput_tokens_per_sec = (B * T) / (wall_median_ms / 1000.0)
 
     loss_initial = losses[0]
     loss_final = losses[-1]
     loss_delta = loss_initial - loss_final
 
-    del model, optimizer, tokens, targets
+    del model, optimizer, tokens, targets, raw_losses
     torch.cuda.empty_cache()
     gc.collect()
 
@@ -163,9 +175,12 @@ def run_pretrain_benchmark(stack_name: str, model_type: str, device: torch.devic
         "stack": stack_name,
         "model_type": model_type,
         "total_params": total_params,
-        "median_latency_ms": round(median_ms, 2),
-        "mean_latency_ms": round(mean_ms, 2),
+        "gpu_median_latency_ms": round(gpu_median_ms, 2),
+        "gpu_mean_latency_ms": round(gpu_mean_ms, 2),
+        "wall_median_latency_ms": round(wall_median_ms, 2),
+        "wall_mean_latency_ms": round(wall_mean_ms, 2),
         "throughput_tokens_sec": round(throughput_tokens_per_sec, 0),
+        "wall_throughput_tokens_sec": round(wall_throughput_tokens_per_sec, 0),
         "peak_vram_mb": round(peak_vram_mb, 1),
         "untrained_loss": round(untrained_loss, 4),
         "initial_loss": round(loss_initial, 4),
@@ -244,7 +259,7 @@ def run_lora_finetune_benchmark(stack_name: str, device: torch.device, steps: in
 
         loss.backward()
         optimizer.step()
-        return loss.item()
+        return loss
 
     # Measure untrained initial loss
     with torch.no_grad():
@@ -255,48 +270,123 @@ def run_lora_finetune_benchmark(stack_name: str, device: torch.device, steps: in
     # Warmup 5 steps
     for _ in range(5):
         finetune_step()
-
     torch.cuda.synchronize()
+
     start_events = [torch.cuda.Event(enable_timing=True) for _ in range(steps)]
     end_events = [torch.cuda.Event(enable_timing=True) for _ in range(steps)]
-    lora_losses = []
+    raw_lora_losses = []
+    wall_times_ns = []
 
     torch.cuda.reset_peak_memory_stats()
     for i in range(steps):
+        t0 = time.perf_counter_ns()
         start_events[i].record()
-        l_val = finetune_step()
+        l_tensor = finetune_step()
         end_events[i].record()
-        lora_losses.append(l_val)
+        t1 = time.perf_counter_ns()
+        wall_times_ns.append(t1 - t0)
+        raw_lora_losses.append(l_tensor)
 
     torch.cuda.synchronize()
     peak_vram_mb = torch.cuda.max_memory_allocated() / (1024 * 1024)
+    lora_losses = [l.item() if isinstance(l, torch.Tensor) else float(l) for l in raw_lora_losses]
 
-    times = [start_events[i].elapsed_time(end_events[i]) for i in range(steps)]
-    times.sort()
-    median_ms = times[len(times) // 2]
-    mean_ms = sum(times) / len(times)
-    throughput_tokens_per_sec = (B * T) / (median_ms / 1000.0)
+    gpu_times = [start_events[i].elapsed_time(end_events[i]) for i in range(steps)]
+    gpu_times.sort()
+    gpu_median_ms = gpu_times[len(gpu_times) // 2]
+    gpu_mean_ms = sum(gpu_times) / len(gpu_times)
+
+    wall_times = [w / 1e6 for w in wall_times_ns]
+    wall_times.sort()
+    wall_median_ms = wall_times[len(wall_times) // 2]
+    wall_mean_ms = sum(wall_times) / len(wall_times)
+
+    throughput_tokens_per_sec = (B * T) / (gpu_median_ms / 1000.0)
+    wall_throughput_tokens_per_sec = (B * T) / (wall_median_ms / 1000.0)
 
     loss_initial = lora_losses[0]
     loss_final = lora_losses[-1]
     loss_delta = loss_initial - loss_final
 
-    del model, optimizer, tokens, targets, trainable_params
+    del model, optimizer, tokens, targets, trainable_params, raw_lora_losses
     torch.cuda.empty_cache()
     gc.collect()
 
     return {
         "stack": stack_name,
         "task": "LoRA Fine-Tuning",
-        "median_latency_ms": round(median_ms, 2),
-        "mean_latency_ms": round(mean_ms, 2),
+        "gpu_median_latency_ms": round(gpu_median_ms, 2),
+        "gpu_mean_latency_ms": round(gpu_mean_ms, 2),
+        "wall_median_latency_ms": round(wall_median_ms, 2),
+        "wall_mean_latency_ms": round(wall_mean_ms, 2),
         "throughput_tokens_sec": round(throughput_tokens_per_sec, 0),
+        "wall_throughput_tokens_sec": round(wall_throughput_tokens_per_sec, 0),
         "peak_vram_mb": round(peak_vram_mb, 1),
         "untrained_loss": round(untrained_lora_loss, 4),
         "initial_loss": round(loss_initial, 4),
         "final_loss": round(loss_final, 4),
         "loss_delta": round(loss_delta, 4),
     }
+
+
+def get_exact_state_tensor_bytes(optimizer) -> int:
+    """Recursively walks optimizer state structures and sums exact allocated tensor bytes on CUDA."""
+    visited_ids = set()
+    total_bytes = 0
+
+    # Ensure model parameters themselves are NEVER counted as optimizer state
+    if hasattr(optimizer, 'param_groups'):
+        for pg in optimizer.param_groups:
+            for p in pg.get('params', []):
+                visited_ids.add(id(p))
+
+    def visit(obj):
+        nonlocal total_bytes
+        if obj is None:
+            return
+        if isinstance(obj, torch.Tensor):
+            if obj.is_cuda and id(obj) not in visited_ids:
+                visited_ids.add(id(obj))
+                total_bytes += obj.numel() * obj.element_size()
+        elif isinstance(obj, dict):
+            for v in obj.values():
+                visit(v)
+        elif isinstance(obj, (list, tuple, set)):
+            for item in obj:
+                visit(item)
+        elif hasattr(obj, '__dict__'):
+            for k, v in obj.__dict__.items():
+                if k not in ('model', 'param_groups', '_optimizer'):
+                    visit(v)
+
+    if hasattr(optimizer, 'state'):
+        for p, p_state in optimizer.state.items():
+            visited_ids.add(id(p))
+            visit(p_state)
+    if hasattr(optimizer, 'base_optimizer') and optimizer.base_optimizer is not None:
+        if hasattr(optimizer.base_optimizer, 'state'):
+            for p, p_state in optimizer.base_optimizer.state.items():
+                visited_ids.add(id(p))
+                visit(p_state)
+    if hasattr(optimizer, 'muon_optimizer') and optimizer.muon_optimizer is not None:
+        if hasattr(optimizer.muon_optimizer, 'state'):
+            for p, p_state in optimizer.muon_optimizer.state.items():
+                visited_ids.add(id(p))
+                visit(p_state)
+    if hasattr(optimizer, 'layer_groups'):
+        for g in optimizer.layer_groups:
+            if 'param' in g:
+                visited_ids.add(id(g['param']))
+            visit(g.get('projection'))
+            visit(g.get('Q_L'))
+            visit(g.get('Q_R'))
+            visit(g.get('proj_basis'))
+            visit(g.get('last_c_orth'))
+            visit(g.get('state'))
+    if hasattr(optimizer, '_triangular_buffers'):
+        visit(optimizer._triangular_buffers)
+
+    return total_bytes
 
 
 def run_pure_optimizer_benchmark(device: torch.device) -> Tuple[List[Dict[str, Any]], str]:
@@ -338,37 +428,53 @@ def run_pure_optimizer_benchmark(device: torch.device) -> Tuple[List[Dict[str, A
         loss = bank(x)
         loss.backward()
 
-        torch.cuda.reset_peak_memory_stats()
-        mem_before = torch.cuda.memory_allocated() / (1024 * 1024)
         opt = opt_fn(bank)
         opt.step()
-        mem_after = torch.cuda.memory_allocated() / (1024 * 1024)
-        state_ram = max(0.0, mem_after - mem_before)
+
+        # Exact allocated persistent state memory on GPU
+        exact_bytes = get_exact_state_tensor_bytes(opt)
+        exact_mb = exact_bytes / (1024 * 1024)
 
         # Warmup
         for _ in range(5):
             opt.step()
-
-        # Measure 30 steps pure optimizer
-        steps = 30
         torch.cuda.synchronize()
+
+        # Measure 30 steps pure optimizer with peak tracking
+        steps = 30
         starts = [torch.cuda.Event(enable_timing=True) for _ in range(steps)]
         ends = [torch.cuda.Event(enable_timing=True) for _ in range(steps)]
+        wall_times_ns = []
+
+        torch.cuda.reset_peak_memory_stats()
+        mem_before_loop = torch.cuda.memory_allocated() / (1024 * 1024)
 
         for i in range(steps):
+            t0 = time.perf_counter_ns()
             starts[i].record()
             opt.step()
             ends[i].record()
+            t1 = time.perf_counter_ns()
+            wall_times_ns.append(t1 - t0)
 
         torch.cuda.synchronize()
-        times = [starts[i].elapsed_time(ends[i]) for i in range(steps)]
-        times.sort()
-        median_ms = times[len(times) // 2]
+        peak_during_step = torch.cuda.max_memory_allocated() / (1024 * 1024)
+        peak_step_delta = max(0.0, peak_during_step - mem_before_loop)
+
+        gpu_times = [starts[i].elapsed_time(ends[i]) for i in range(steps)]
+        gpu_times.sort()
+        gpu_median_ms = gpu_times[len(gpu_times) // 2]
+
+        wall_times = [w / 1e6 for w in wall_times_ns]
+        wall_times.sort()
+        wall_median_ms = wall_times[len(wall_times) // 2]
 
         results.append({
             "optimizer": name,
-            "step_latency_ms": round(median_ms, 2),
-            "state_vram_mb": round(state_ram, 2),
+            "gpu_latency_ms": round(gpu_median_ms, 2),
+            "wall_latency_ms": round(wall_median_ms, 2),
+            "state_vram_mb": round(exact_mb, 2),
+            "peak_step_vram_mb": round(peak_step_delta, 2),
         })
 
         del opt
@@ -397,7 +503,7 @@ def main():
     for stack in ["AdamW", "Unsloth", "Triune"]:
         res = run_pretrain_benchmark(stack, "moe", device, steps=25)
         moe_results.append(res)
-        print(f"  [{stack:7s}] Step Latency: {res['median_latency_ms']:6.2f} ms | Throughput: {res['throughput_tokens_sec']:5.0f} tok/s | Peak VRAM: {res['peak_vram_mb']:5.1f} MB | Loss (Untrained: {res['untrained_loss']:.4f}): {res['initial_loss']:.4f} -> {res['final_loss']:.4f}", flush=True)
+        print(f"  [{stack:7s}] GPU Latency: {res['gpu_median_latency_ms']:6.2f} ms | Wall-Clock: {res['wall_median_latency_ms']:6.2f} ms | GPU Throughput: {res['throughput_tokens_sec']:5.0f} tok/s | Peak VRAM: {res['peak_vram_mb']:5.1f} MB | Loss (Untrained: {res['untrained_loss']:.4f}): {res['initial_loss']:.4f} -> {res['final_loss']:.4f}", flush=True)
 
     # 2. Dense Pre-Training
     print("\n--- 2. Dense Pre-Training Benchmark (25 Steps, Batch 4, Seq 128) ---")
@@ -405,7 +511,7 @@ def main():
     for stack in ["AdamW", "Unsloth", "Triune"]:
         res = run_pretrain_benchmark(stack, "dense", device, steps=25)
         dense_results.append(res)
-        print(f"  [{stack:7s}] Step Latency: {res['median_latency_ms']:6.2f} ms | Throughput: {res['throughput_tokens_sec']:5.0f} tok/s | Peak VRAM: {res['peak_vram_mb']:5.1f} MB | Loss (Untrained: {res['untrained_loss']:.4f}): {res['initial_loss']:.4f} -> {res['final_loss']:.4f}", flush=True)
+        print(f"  [{stack:7s}] GPU Latency: {res['gpu_median_latency_ms']:6.2f} ms | Wall-Clock: {res['wall_median_latency_ms']:6.2f} ms | GPU Throughput: {res['throughput_tokens_sec']:5.0f} tok/s | Peak VRAM: {res['peak_vram_mb']:5.1f} MB | Loss (Untrained: {res['untrained_loss']:.4f}): {res['initial_loss']:.4f} -> {res['final_loss']:.4f}", flush=True)
 
     # 3. LoRA Fine-Tuning
     print("\n--- 3. LoRA Fine-Tuning Benchmark (25 Steps, Batch 4, Seq 128) ---")
@@ -413,13 +519,13 @@ def main():
     for stack in ["AdamW", "Unsloth", "Triune"]:
         res = run_lora_finetune_benchmark(stack, device, steps=25)
         lora_results.append(res)
-        print(f"  [{stack:7s}] Step Latency: {res['median_latency_ms']:6.2f} ms | Throughput: {res['throughput_tokens_sec']:5.0f} tok/s | Peak VRAM: {res['peak_vram_mb']:5.1f} MB | Loss (Untrained: {res['untrained_loss']:.4f}): {res['initial_loss']:.4f} -> {res['final_loss']:.4f}", flush=True)
+        print(f"  [{stack:7s}] GPU Latency: {res['gpu_median_latency_ms']:6.2f} ms | Wall-Clock: {res['wall_median_latency_ms']:6.2f} ms | GPU Throughput: {res['throughput_tokens_sec']:5.0f} tok/s | Peak VRAM: {res['peak_vram_mb']:5.1f} MB | Loss (Untrained: {res['untrained_loss']:.4f}): {res['initial_loss']:.4f} -> {res['final_loss']:.4f}", flush=True)
 
     # 4. Pure Optimizer Benchmark
     opt_results, shape_desc = run_pure_optimizer_benchmark(device)
     print(f"\n--- 4. Pure Optimizer Microbenchmark ({shape_desc}) ---", flush=True)
     for r in opt_results:
-        print(f"  {r['optimizer']:42s} | Latency: {r['step_latency_ms']:6.2f} ms | State RAM: {r['state_vram_mb']:5.2f} MB", flush=True)
+        print(f"  {r['optimizer']:42s} | GPU Latency: {r['gpu_latency_ms']:6.2f} ms | Wall Latency: {r['wall_latency_ms']:6.2f} ms | Persistent State RAM: {r['state_vram_mb']:5.2f} MB | Peak Step Scratch: {r['peak_step_vram_mb']:5.2f} MB", flush=True)
 
     # Save to Markdown Report
     report_file = os.path.join(ROOT, "benchmarks", "RIGOROUS_ADAMW_UNSLOTH_TRIUNE_REPORT.md")
@@ -430,33 +536,33 @@ def main():
         f.write(f"- **Unsloth**: {meta['unsloth_version']} | **BitsAndBytes**: {meta['bitsandbytes_version']}\n\n")
 
         f.write("## 1. MoE Pre-Training from Scratch\n\n")
-        f.write("| Stack | Optimizer Details | Step Latency (ms) | Throughput (tok/s) | Peak VRAM (MB) | Loss Trajectory (Untrained -> 25 steps) |\n")
-        f.write("| :--- | :--- | :---: | :---: | :---: | :---: |\n")
+        f.write("| Stack | Optimizer Details | GPU Step Latency (ms) | Wall-Clock Latency (ms) | GPU Throughput (tok/s) | Peak VRAM (MB) | Loss Trajectory (Untrained -> 25 steps) |\n")
+        f.write("| :--- | :--- | :---: | :---: | :---: | :---: | :---: |\n")
         for r in moe_results:
             opt_detail = "Triune CentroidSteer (Triangular Core + Batched Muon)" if r['stack'] == "Triune" else ("bitsandbytes 8-bit AdamW" if r['stack'] == "Unsloth" else "PyTorch Standard AdamW")
-            f.write(f"| **{r['stack']}** | {opt_detail} | **{r['median_latency_ms']} ms** | **{r['throughput_tokens_sec']}** | **{r['peak_vram_mb']} MB** | Untrained {r['untrained_loss']} -> {r['initial_loss']} -> {r['final_loss']} (Δ {r['loss_delta']:+.4f}) |\n")
+            f.write(f"| **{r['stack']}** | {opt_detail} | **{r['gpu_median_latency_ms']} ms** | **{r['wall_median_latency_ms']} ms** | **{r['throughput_tokens_sec']}** | **{r['peak_vram_mb']} MB** | Untrained {r['untrained_loss']} -> {r['initial_loss']} -> {r['final_loss']} (Δ {r['loss_delta']:+.4f}) |\n")
 
         f.write("\n## 2. Dense Pre-Training\n\n")
-        f.write("| Stack | Optimizer Details | Step Latency (ms) | Throughput (tok/s) | Peak VRAM (MB) | Loss Trajectory (Untrained -> 25 steps) |\n")
-        f.write("| :--- | :--- | :---: | :---: | :---: | :---: |\n")
+        f.write("| Stack | Optimizer Details | GPU Step Latency (ms) | Wall-Clock Latency (ms) | GPU Throughput (tok/s) | Peak VRAM (MB) | Loss Trajectory (Untrained -> 25 steps) |\n")
+        f.write("| :--- | :--- | :---: | :---: | :---: | :---: | :---: |\n")
         for r in dense_results:
             opt_detail = "Triune CentroidSteer (Triangular Core + Batched Muon)" if r['stack'] == "Triune" else ("bitsandbytes 8-bit AdamW" if r['stack'] == "Unsloth" else "PyTorch Standard AdamW")
-            f.write(f"| **{r['stack']}** | {opt_detail} | **{r['median_latency_ms']} ms** | **{r['throughput_tokens_sec']}** | **{r['peak_vram_mb']} MB** | Untrained {r['untrained_loss']} -> {r['initial_loss']} -> {r['final_loss']} (Δ {r['loss_delta']:+.4f}) |\n")
+            f.write(f"| **{r['stack']}** | {opt_detail} | **{r['gpu_median_latency_ms']} ms** | **{r['wall_median_latency_ms']} ms** | **{r['throughput_tokens_sec']}** | **{r['peak_vram_mb']} MB** | Untrained {r['untrained_loss']} -> {r['initial_loss']} -> {r['final_loss']} (Δ {r['loss_delta']:+.4f}) |\n")
 
         f.write("\n## 3. LoRA Fine-Tuning\n\n")
-        f.write("| Stack | Optimizer Details | Step Latency (ms) | Throughput (tok/s) | Peak VRAM (MB) | Loss Trajectory (Untrained -> 25 steps) |\n")
-        f.write("| :--- | :--- | :---: | :---: | :---: | :---: |\n")
+        f.write("| Stack | Optimizer Details | GPU Step Latency (ms) | Wall-Clock Latency (ms) | GPU Throughput (tok/s) | Peak VRAM (MB) | Loss Trajectory (Untrained -> 25 steps) |\n")
+        f.write("| :--- | :--- | :---: | :---: | :---: | :---: | :---: |\n")
         for r in lora_results:
             opt_detail = "CentroidSteerOptimizer (Batched Muon Newton-Schulz)" if r['stack'] == "Triune" else ("bitsandbytes 8-bit AdamW" if r['stack'] == "Unsloth" else "PyTorch Standard AdamW")
-            f.write(f"| **{r['stack']}** | {opt_detail} | **{r['median_latency_ms']} ms** | **{r['throughput_tokens_sec']}** | **{r['peak_vram_mb']} MB** | Untrained {r['untrained_loss']} -> {r['initial_loss']} -> {r['final_loss']} (Δ {r['loss_delta']:+.4f}) |\n")
+            f.write(f"| **{r['stack']}** | {opt_detail} | **{r['gpu_median_latency_ms']} ms** | **{r['wall_median_latency_ms']} ms** | **{r['throughput_tokens_sec']}** | **{r['peak_vram_mb']} MB** | Untrained {r['untrained_loss']} -> {r['initial_loss']} -> {r['final_loss']} (Δ {r['loss_delta']:+.4f}) |\n")
 
         f.write(f"\n## 4. Pure Optimizer Microbenchmark ({shape_desc})\n\n")
-        f.write("| Optimizer | Step Latency (ms) | State VRAM Footprint (MB) | VRAM Reduction vs AdamW |\n")
-        f.write("| :--- | :---: | :---: | :---: |\n")
+        f.write("| Optimizer | GPU Latency (ms) | Wall-Clock Latency (ms) | Persistent State VRAM (MB) | Peak Step Scratch (MB) | State Reduction vs AdamW |\n")
+        f.write("| :--- | :---: | :---: | :---: | :---: | :---: |\n")
         base_ram = opt_results[0]['state_vram_mb']
         for r in opt_results:
             reduc = f"-{round((1.0 - r['state_vram_mb'] / base_ram) * 100, 1)}%" if r['state_vram_mb'] < base_ram else "Baseline"
-            f.write(f"| **{r['optimizer']}** | **{r['step_latency_ms']} ms** | **{r['state_vram_mb']} MB** | **{reduc}** |\n")
+            f.write(f"| **{r['optimizer']}** | **{r['gpu_latency_ms']} ms** | **{r['wall_latency_ms']} ms** | **{r['state_vram_mb']} MB** | **{r['peak_step_vram_mb']} MB** | **{reduc}** |\n")
 
     print(f"\n[SUCCESS] Extensive Benchmark Report saved to: {report_file}")
 

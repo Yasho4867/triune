@@ -77,6 +77,8 @@ class TestLiveApiStreaming(unittest.TestCase):
 
     def test_04_training_step_uses_streamed_tokens(self):
         """Verify POST /v1/training/step consumes from the streaming buffer and updates batch preview."""
+        pytorch_state.is_streaming_hf = True
+        pytorch_state.dataset_name = "roneneldan/TinyStories"
         pytorch_state.lazy_init_model()
         initial_tokens = pytorch_state.tokens_trained
         step_res = self.client.post("/v1/training/step")

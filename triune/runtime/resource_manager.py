@@ -163,6 +163,8 @@ class DynamicResourceManager:
             )
 
         dev = device if device is not None else torch.device("cuda:0")
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         props = torch.cuda.get_device_properties(dev)
         free_bytes, total_bytes = torch.cuda.mem_get_info(dev)
 

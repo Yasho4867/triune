@@ -37,6 +37,7 @@ class StreamingConfig:
     instant_optimizer: bool = True
     layers_path: Optional[str] = None
     resident_gpu_layers: int = 0
+    capture_forward_snapshots: bool = True  # Mode 1 (True: with snapshots) vs Mode 2 (False: deferred zero-snapshot)
 
 
 def _offload_grad_hook(param: nn.Parameter) -> None:
@@ -374,6 +375,7 @@ class LayerStreamingEngine:
             prefetch_stream=self.prefetch_stream,
             d2h_stream=self.d2h_stream,
             use_fp8=self.config.fp8_weights,
+            capture_forward_snapshots=getattr(self.config, "capture_forward_snapshots", True),
         )
         for layer in self.layers:
             self.stager.register_module(layer, register_backward_hooks=False)
@@ -831,6 +833,7 @@ def enable_layer_streaming(
     pin_memory: Optional[bool] = None,
     async_prefetch: bool = True,
     fp8_weights: bool = False,
+    capture_forward_snapshots: bool = True,
     optimizer: Optional[Any] = None,
 ) -> LayerStreamingEngine:
     """Enable layer streaming on any PyTorch model (Triune, Llama, Mistral, Qwen, etc.)."""
@@ -847,6 +850,7 @@ def enable_layer_streaming(
         pin_memory=pin_memory,
         async_prefetch=async_prefetch,
         fp8_weights=fp8_weights,
+        capture_forward_snapshots=capture_forward_snapshots,
     )
     engine = LayerStreamingEngine(model, device=target_device, config=cfg, optimizer=optimizer)
     engine.attach(optimizer=optimizer)
@@ -871,6 +875,7 @@ def apply_layer_streaming_if_requested(
         fp8_weights=config.get("streaming_fp8_weights", False),
         grad_clip=config.get("grad_clip", 1.0),
         instant_optimizer=True,
+        capture_forward_snapshots=config.get("streaming_capture_forward_snapshots", True),
     )
     engine = LayerStreamingEngine(model, device=device, config=streaming_cfg, optimizer=optimizer)
     engine.attach()

@@ -110,6 +110,23 @@ def batched_fast_subspace_projection(grads: torch.Tensor, rank: int, niter: int 
     return proj, side
 
 
+class _SyncedParamGroup(dict):
+    """Dictionary subclass wrapping outer param_groups so that lr_scheduler updates
+    immediately cascade to all internal optimizer tiers (Base AdamW, Muon, Expert Centroid)."""
+    def __init__(self, optimizer, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._optimizer = optimizer
+
+    def __setitem__(self, key, value):
+        old_val = self.get(key, None)
+        super().__setitem__(key, value)
+        if key == 'lr' and getattr(self, '_optimizer', None) is not None:
+            if getattr(self._optimizer, '_in_set_lr', False):
+                return
+            if hasattr(self._optimizer, 'base_optimizer') and old_val != value:
+                self._optimizer.set_lr(value)
+
+
 class CentroidSteerOptimizer(torch.optim.Optimizer):
     def __init__(self, model, lr=defaults.LR, betas=defaults.BETAS, weight_decay=defaults.WEIGHT_DECAY,
                  rank=defaults.GALORE_RANK, update_gap=defaults.GALORE_UPDATE_GAP,
@@ -122,10 +139,16 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                  muon_momentum=getattr(defaults, 'MUON_MOMENTUM', 0.95),
                  muon_weight_decay=getattr(defaults, 'MUON_WEIGHT_DECAY', 0.01),
                  svd_device="auto",
-                 use_triangular_core=getattr(defaults, 'USE_TRIANGULAR_CORE', True)):
+                 use_triangular_core=getattr(defaults, 'USE_TRIANGULAR_CORE', True),
+                 adaptive_subspace_refresh: bool = True,
+                 energy_threshold: float = 0.50,
+                 min_subspace_gap: int = 5,
+                 max_subspace_gap: int = 50):
         defaults_dict = dict(lr=lr, betas=betas, weight_decay=weight_decay)
         dummy_param = torch.nn.Parameter(torch.zeros(1))
-        super().__init__([{'params': [dummy_param]}], defaults_dict)
+        initial_group = _SyncedParamGroup(self, {'params': [dummy_param], 'lr': lr, 'betas': betas, 'weight_decay': weight_decay})
+        super().__init__([initial_group], defaults_dict)
+        self.param_groups = [initial_group]
         self.model = model
         self.rank = rank
         self.update_gap = update_gap
@@ -140,7 +163,12 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
         self.svd_device = svd_device
         self.initial_base_lr = lr
         self.initial_muon_lr = muon_lr
+        self._last_synced_lr = lr
         self.use_triangular_core = use_triangular_core
+        self.adaptive_subspace_refresh = adaptive_subspace_refresh
+        self.energy_threshold = energy_threshold
+        self.min_subspace_gap = min_subspace_gap
+        self.max_subspace_gap = max_subspace_gap
         self._triangular_buffers = {}
 
         self.non_expert_params = []
@@ -274,7 +302,16 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
             self.muon_optimizer = None
 
         if len(self.non_expert_params) > 0:
-            if HAS_8BIT and AdamW8bit is not None:
+            if torch.cuda.is_available() and any(p.is_cuda for p in self.non_expert_params):
+                try:
+                    self.base_optimizer = torch.optim.AdamW(
+                        self.non_expert_params, lr=lr, betas=betas, weight_decay=weight_decay, fused=True
+                    )
+                except Exception:
+                    self.base_optimizer = torch.optim.AdamW(
+                        self.non_expert_params, lr=lr, betas=betas, weight_decay=weight_decay
+                    )
+            elif HAS_8BIT and AdamW8bit is not None:
                 self.base_optimizer = AdamW8bit(self.non_expert_params, lr=lr, betas=betas, weight_decay=weight_decay)
             else:
                 self.base_optimizer = torch.optim.AdamW(self.non_expert_params, lr=lr, betas=betas, weight_decay=weight_decay)
@@ -296,24 +333,41 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                     p.grad.zero_()
 
     def set_lr(self, lr, expert_lr=None):
-        if self.base_optimizer is not None:
-            for pg in self.base_optimizer.param_groups:
-                pg['lr'] = lr
-        if expert_lr is not None:
-            self.expert_lr = expert_lr
-        elif hasattr(self, "initial_expert_lr") and self.initial_expert_lr is not None:
-            ratio = lr / max(1e-12, self.initial_base_lr)
-            self.expert_lr = self.initial_expert_lr * ratio
-        else:
-            self.expert_lr = lr
-        if self.muon_optimizer is not None:
-            ratio = lr / max(1e-12, self.initial_base_lr)
-            for pg in self.muon_optimizer.param_groups:
-                pg['lr'] = self.initial_muon_lr * ratio
+        if getattr(self, '_in_set_lr', False):
+            return
+        self._in_set_lr = True
+        try:
+            self._last_synced_lr = lr
+            if hasattr(self, 'param_groups') and self.param_groups:
+                self.param_groups[0]['lr'] = lr
+            if self.base_optimizer is not None:
+                for pg in self.base_optimizer.param_groups:
+                    pg['lr'] = lr
+            if expert_lr is not None:
+                self.expert_lr = expert_lr
+            elif hasattr(self, "initial_expert_lr") and self.initial_expert_lr is not None:
+                ratio = lr / max(1e-12, self.initial_base_lr)
+                self.expert_lr = self.initial_expert_lr * ratio
+            else:
+                self.expert_lr = lr
+            if self.muon_optimizer is not None:
+                ratio = lr / max(1e-12, self.initial_base_lr)
+                for pg in self.muon_optimizer.param_groups:
+                    pg['lr'] = self.initial_muon_lr * ratio
+        finally:
+            self._in_set_lr = False
+
+    def sync_lr_from_param_groups(self):
+        """Automatically synchronizes learning rate changes from outer PyTorch lr_schedulers to internal tiers."""
+        if hasattr(self, 'param_groups') and self.param_groups:
+            current_outer_lr = self.param_groups[0].get('lr', self.initial_base_lr)
+            if getattr(self, '_last_synced_lr', None) != current_outer_lr:
+                self.set_lr(current_outer_lr)
 
     @torch.no_grad()
     def step_parameters(self, params: Any, is_global_step_end: bool = False):
         """Executes optimizer step on a specific subset of parameters (e.g. single layer or root components)."""
+        self.sync_lr_from_param_groups()
         param_list = list(params) if not isinstance(params, list) else params
         param_ids = {id(p) for p in param_list if p.grad is not None}
         if not param_ids:
@@ -329,11 +383,6 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                     orig_params = group['params']
                     group['params'] = matching
                     try:
-                        for p in matching:
-                            if p in self.base_optimizer.state:
-                                st = self.base_optimizer.state[p]
-                                if "exp_avg" not in st or "exp_avg_sq" not in st:
-                                    st.clear()
                         self.base_optimizer.step()
                     finally:
                         group['params'] = orig_params
@@ -384,7 +433,23 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                 st = g['state']
 
                 needs_init = g.get('Q_L') is None
-                needs_update = (self.step_count - g.get('proj_step', 0)) >= self.update_gap
+                if needs_init:
+                    needs_update = False
+                elif self.adaptive_subspace_refresh:
+                    effective_min_gap = min(self.min_subspace_gap, self.update_gap)
+                    elapsed = self.step_count - g.get('proj_step', 0)
+                    if elapsed < effective_min_gap:
+                        needs_update = False
+                    elif elapsed >= min(self.max_subspace_gap, self.update_gap):
+                        needs_update = True
+                    else:
+                        last_energy = g.get('last_energy_ratio', 1.0)
+                        if isinstance(last_energy, torch.Tensor):
+                            needs_update = bool((last_energy < self.energy_threshold).item())
+                        else:
+                            needs_update = (last_energy < self.energy_threshold)
+                else:
+                    needs_update = (self.step_count - g.get('proj_step', 0)) >= self.update_gap
                 if needs_init or needs_update:
                     G_canon = grad if m <= n else grad.t()
                     Omega = torch.randn(d_large, r, device=device, dtype=dtype)
@@ -409,6 +474,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                     g['projection'] = Q_L_basis[:, :r]
                     g['projection_side'] = 'left' if m <= n else 'right'
                     g['proj_step'] = self.step_count
+                    g['_basis_dirty'] = True
 
                     # Fix 1 & 3: Allocate persistent states with fixed (self.rank + 1, self.rank + 1) in FP32
                     if needs_init:
@@ -461,6 +527,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                                 g['Q_R'][:, r].zero_()
                                 steer_applied = False
                             g['last_steer_step'] = self.step_count
+                            g['_basis_dirty'] = True
                 else:
                     g['Q_L'][:, r].zero_()
                     g['Q_R'][:, r].zero_()
@@ -487,7 +554,10 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
             step_vals = buf['step_vals']
             batch_delta_R = buf['batch_delta']
 
-            # Step 2: Layer-Level Batched Projections using torch.bmm for matching matrix dimensions
+            # Step 2: Layer-Level Batched Projections using torch.bmm with persistent zero-allocation buffers
+            if not hasattr(self, '_bucket_buffers'):
+                self._bucket_buffers = {}
+
             shape_buckets = {}
             for idx, g in enumerate(active_groups):
                 m, n = g['param'].shape
@@ -500,16 +570,48 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
             for (m, n, r), bucket in shape_buckets.items():
                 K = len(bucket)
                 if K >= 2:
-                    G_canon_list = [g['param'].grad.data if m <= n else g['param'].grad.data.t() for _, g in bucket]
-                    G_stack = torch.stack(G_canon_list, dim=0)
-                    QL_stack = torch.stack([g['Q_L'][:, :r+1] for _, g in bucket], dim=0)
-                    QR_stack = torch.stack([g['Q_R'][:, :r+1] for _, g in bucket], dim=0)
+                    d_small = min(m, n)
+                    d_large = max(m, n)
+                    canon_m, canon_n = (m, n) if m <= n else (n, m)
+                    bkey = (K, m, n, r, device, dtype)
+                    if bkey not in self._bucket_buffers:
+                        self._bucket_buffers[bkey] = {
+                            'G_stack': torch.empty(K, canon_m, canon_n, device=device, dtype=dtype),
+                            'QL_stack': torch.empty(K, d_small, r + 1, device=device, dtype=dtype),
+                            'QR_stack': torch.empty(K, d_large, r + 1, device=device, dtype=dtype),
+                            'temp_proj': torch.empty(K, canon_m, r + 1, device=device, dtype=dtype),
+                            'S_bmm': torch.empty(K, r + 1, r + 1, device=device, dtype=dtype),
+                            'temp_recon': torch.empty(K, m, r + 1, device=device, dtype=dtype),
+                            'delta_stack': torch.empty(K, r + 1, r + 1, device=device, dtype=dtype),
+                            'delta_W': torch.empty(K, m, n, device=device, dtype=dtype),
+                        }
+                    bbuf = self._bucket_buffers[bkey]
+                    G_stack = bbuf['G_stack']
+                    QL_stack = bbuf['QL_stack']
+                    QR_stack = bbuf['QR_stack']
+                    temp_proj = bbuf['temp_proj']
+                    S_bmm = bbuf['S_bmm']
 
-                    temp = torch.bmm(G_stack, QR_stack)
-                    S_bmm = torch.bmm(QL_stack.transpose(1, 2), temp)
+                    for b_idx, (_, g) in enumerate(bucket):
+                        QL_stack[b_idx].copy_(g['Q_L'][:, :r+1])
+                        QR_stack[b_idx].copy_(g['Q_R'][:, :r+1])
+                        p_grad = g['param'].grad.data
+                        G_stack[b_idx].copy_(p_grad if m <= n else p_grad.t())
+                        g['_basis_dirty'] = False
+
+                    torch.bmm(G_stack, QR_stack, out=temp_proj)
+                    torch.bmm(QL_stack.transpose(1, 2), temp_proj, out=S_bmm)
+
+                    # Vectorized energy ratio on GPU (zero host CPU sync)
+                    if self.adaptive_subspace_refresh:
+                        s_energies = (S_bmm[:, :r, :r].float() ** 2).sum(dim=(-2, -1))
+                        g_energies = (G_stack.float() ** 2).sum(dim=(-2, -1)).clamp_min(1e-12)
+                        ratios = s_energies / g_energies
 
                     for b_idx, (idx, g) in enumerate(bucket):
                         S_i = S_bmm[b_idx]
+                        if self.adaptive_subspace_refresh:
+                            g['last_energy_ratio'] = ratios[b_idx]
                         if g.get('steer_applied', False):
                             S_i[r, r] *= (1.0 + self.steer_scale)
                         R_batch[idx, :r+1, :r+1] = torch.triu(S_i)
@@ -522,6 +624,10 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                     grad = p.grad.data
                     G_canon = grad if m <= n else grad.t()
                     S = g['Q_L'][:, :r+1].t() @ G_canon @ g['Q_R'][:, :r+1]
+                    if self.adaptive_subspace_refresh:
+                        s_energy = (S[:r, :r].float() ** 2).sum()
+                        g_energy = (G_canon.float() ** 2).sum().clamp_min(1e-12)
+                        g['last_energy_ratio'] = s_energy / g_energy
                     if g.get('steer_applied', False):
                         S[r, r] *= (1.0 + self.steer_scale)
                     R_batch[idx, :r+1, :r+1] = torch.triu(S)
@@ -543,22 +649,30 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                 g['state']['subspace_step'] = g['state'].get('subspace_step', 0) + 1
                 g['state']['step'] += 1
 
-            # 4. Batched BMM Reconstruction and in-place parameter update with Frobenius 1/sqrt(r) scaling
+            # 4. Batched BMM Reconstruction with persistent zero-allocation buffers
             for (m, n, r), bucket in shape_buckets.items():
                 K = len(bucket)
                 scale = 1.0 / (r ** 0.5)
                 beta_wd = 1.0 - expert_lr * expert_wd if expert_wd != 0 else 1.0
                 alpha_upd = -expert_lr * scale
                 if K >= 2:
-                    QL_stack = torch.stack([g['Q_L'][:, :r+1] for _, g in bucket], dim=0)
-                    QR_stack = torch.stack([g['Q_R'][:, :r+1] for _, g in bucket], dim=0)
-                    delta_stack = torch.stack([batch_delta_R[idx, :r+1, :r+1] for idx, _ in bucket], dim=0)
+                    bkey = (K, m, n, r, device, dtype)
+                    bbuf = self._bucket_buffers[bkey]
+                    QL_stack = bbuf['QL_stack']
+                    QR_stack = bbuf['QR_stack']
+                    temp_recon = bbuf['temp_recon']
+                    delta_stack = bbuf['delta_stack']
+                    delta_W = bbuf['delta_W']
+
+                    for b_idx, (idx, _) in enumerate(bucket):
+                        delta_stack[b_idx].copy_(batch_delta_R[idx, :r+1, :r+1])
+
                     if m <= n:
-                        temp = torch.bmm(QL_stack, delta_stack)
-                        delta_W = torch.bmm(temp, QR_stack.transpose(1, 2))
+                        torch.bmm(QL_stack, delta_stack, out=temp_recon)
+                        torch.bmm(temp_recon, QR_stack.transpose(1, 2), out=delta_W)
                     else:
-                        temp = torch.bmm(QR_stack, delta_stack.transpose(1, 2))
-                        delta_W = torch.bmm(temp, QL_stack.transpose(1, 2))
+                        torch.bmm(QR_stack, delta_stack.transpose(1, 2), out=temp_recon)
+                        torch.bmm(temp_recon, QL_stack.transpose(1, 2), out=delta_W)
 
                     for b_idx, (idx, g) in enumerate(bucket):
                         p = g['param']
@@ -858,19 +972,32 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
     def state_dict(self):
         sd = {
             'base_optimizer': self.base_optimizer.state_dict() if self.base_optimizer is not None else None,
+            'muon_optimizer': self.muon_optimizer.state_dict() if self.muon_optimizer is not None else None,
             'step_count': self.step_count,
+            'expert_lr': float(self.expert_lr),
+            'steer_scale': float(self.steer_scale),
+            'param_groups': [{k: v for k, v in pg.items() if k != '_optimizer'} for pg in self.param_groups],
+            '_last_synced_lr': getattr(self, '_last_synced_lr', self.initial_base_lr),
             'layer_groups': [
                 {
                     'projection': g['projection'],
                     'projection_side': g.get('projection_side', 'left'),
                     'proj_step': g['proj_step'],
-                    'state': g['state']
+                    'Q_L': g.get('Q_L'),
+                    'Q_R': g.get('Q_R'),
+                    'proj_basis': g.get('proj_basis'),
+                    'last_c_orth': g.get('last_c_orth'),
+                    'last_steer_step': g.get('last_steer_step'),
+                    'steer_applied': g.get('steer_applied', False),
+                    'last_energy_ratio': g.get('last_energy_ratio'),
+                    'state': {
+                        k: (v.clone() if isinstance(v, torch.Tensor) else v)
+                        for k, v in g['state'].items()
+                    }
                 }
                 for g in self.layer_groups
             ]
         }
-        if self.muon_optimizer is not None:
-            sd['muon_optimizer'] = self.muon_optimizer.state_dict()
         return sd
 
     def load_state_dict(self, state_dict):
@@ -888,18 +1015,58 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                     f"Projection shape mismatch: saved {saved['projection'].shape}, expected {expected_shape}"
         if self.base_optimizer is not None and state_dict.get('base_optimizer') is not None:
             self.base_optimizer.load_state_dict(state_dict['base_optimizer'])
-        if self.muon_optimizer is not None and 'muon_optimizer' in state_dict:
+        if self.muon_optimizer is not None and state_dict.get('muon_optimizer') is not None:
             self.muon_optimizer.load_state_dict(state_dict['muon_optimizer'])
-        self.step_count = state_dict['step_count']
+        self.step_count = state_dict.get('step_count', 0)
+        if 'expert_lr' in state_dict:
+            self.expert_lr = state_dict['expert_lr']
+        if 'steer_scale' in state_dict:
+            self.steer_scale = state_dict['steer_scale']
+        if '_last_synced_lr' in state_dict:
+            self._last_synced_lr = state_dict['_last_synced_lr']
+        if 'param_groups' in state_dict and len(state_dict['param_groups']) == len(self.param_groups):
+            for cur_pg, saved_pg in zip(self.param_groups, state_dict['param_groups']):
+                for k, v in saved_pg.items():
+                    if k != 'params':
+                        cur_pg[k] = v
+
         for g, sd in zip(self.layer_groups, state_dict['layer_groups']):
             target_device = g['param'].device
-            g['projection'] = sd['projection'].to(target_device) if sd['projection'] is not None else None
+            target_dtype = g['param'].dtype
+            g['projection'] = sd['projection'].to(device=target_device, dtype=target_dtype) if sd.get('projection') is not None else None
             g['projection_side'] = sd.get('projection_side', 'left')
-            g['proj_step'] = sd['proj_step']
+            g['proj_step'] = sd.get('proj_step', 0)
+            g['last_steer_step'] = sd.get('last_steer_step')
+            g['steer_applied'] = sd.get('steer_applied', False)
+            g['last_energy_ratio'] = sd.get('last_energy_ratio')
+
+            # Restore complete isometric bases Q_L and Q_R
+            if sd.get('Q_L') is not None:
+                g['Q_L'] = sd['Q_L'].to(device=target_device, dtype=target_dtype)
+            else:
+                g['Q_L'] = None
+
+            if sd.get('Q_R') is not None:
+                g['Q_R'] = sd['Q_R'].to(device=target_device, dtype=target_dtype)
+            else:
+                g['Q_R'] = None
+
+            if sd.get('proj_basis') is not None:
+                g['proj_basis'] = sd['proj_basis'].to(device=target_device, dtype=target_dtype)
+            else:
+                g['proj_basis'] = None
+
+            if sd.get('last_c_orth') is not None:
+                g['last_c_orth'] = sd['last_c_orth'].to(device=target_device, dtype=target_dtype)
+            else:
+                g['last_c_orth'] = None
+
+            g['_basis_dirty'] = True
+
             restored_state = {}
-            for k, v in sd['state'].items():
+            for k, v in sd.get('state', {}).items():
                 if isinstance(v, torch.Tensor):
-                    restored_state[k] = v.to(target_device)
+                    restored_state[k] = v.to(device=target_device, dtype=torch.float32 if k in ('momentum', 'variance') else v.dtype)
                 else:
                     restored_state[k] = v
             g['state'].update(restored_state)
@@ -971,3 +1138,71 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                 "compression_ratio": round(compression_ratio, 2)
             }
         }
+
+
+def profile_rank_sensitivity(
+    model: torch.nn.Module,
+    target_energy: float = 0.85,
+    max_rank: int = 32,
+    min_rank: int = 4,
+) -> dict[str, Any]:
+    """Offline Rank Sensitivity Profiler.
+
+    Analyzes the singular value spectrum across all 2D weight matrices in the model,
+    calculating the cumulative spectral Frobenius energy:
+        E(k) = sum_{i=1}^k sigma_i^2 / sum_{i=1}^d sigma_i^2
+    Determines the minimal rank k required to capture >= target_energy of the operator energy.
+    """
+    layer_profiles = {}
+    total_uncompressed_bytes = 0
+    total_low_rank_bytes = 0
+
+    with torch.no_grad():
+        for name, param in model.named_parameters():
+            if param.dim() >= 2:
+                m, n = param.shape
+                d_min = min(m, n)
+                w_f32 = param.data.float()
+                
+                # Compute singular value spectrum
+                try:
+                    s = torch.linalg.svdvals(w_f32)
+                    s_sq = s ** 2
+                    total_energy = s_sq.sum().clamp_min(1e-12)
+                    cum_energy = torch.cumsum(s_sq, dim=0) / total_energy
+                    
+                    # Find minimal k satisfying target_energy
+                    idx = (cum_energy >= target_energy).nonzero()
+                    if len(idx) > 0:
+                        rec_k = int(idx[0].item()) + 1
+                    else:
+                        rec_k = min(max_rank, d_min)
+                except Exception:
+                    rec_k = min(max_rank, max(min_rank, d_min // 4))
+                    cum_energy = torch.ones(d_min)
+
+                rec_k = max(min_rank, min(max_rank, min(rec_k, d_min)))
+                actual_energy = float(cum_energy[rec_k - 1].item()) if rec_k <= len(cum_energy) else 1.0
+
+                uncompressed = m * n
+                low_rank = (m + n) * rec_k
+                total_uncompressed_bytes += uncompressed * param.element_size()
+                total_low_rank_bytes += low_rank * param.element_size()
+
+                layer_profiles[name] = {
+                    "shape": [m, n],
+                    "recommended_rank": rec_k,
+                    "captured_energy": round(actual_energy, 4),
+                    "compression_ratio": round(uncompressed / max(1, low_rank), 2),
+                }
+
+    return {
+        "target_energy": target_energy,
+        "max_rank": max_rank,
+        "min_rank": min_rank,
+        "num_profiled_matrices": len(layer_profiles),
+        "total_uncompressed_params": sum(p["shape"][0] * p["shape"][1] for p in layer_profiles.values()),
+        "total_low_rank_params": sum((p["shape"][0] + p["shape"][1]) * p["recommended_rank"] for p in layer_profiles.values()),
+        "overall_compression_ratio": round(total_uncompressed_bytes / max(1, total_low_rank_bytes), 2),
+        "layers": layer_profiles,
+    }

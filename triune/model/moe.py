@@ -76,14 +76,23 @@ class MoE_FFN(nn.Module):
         self.router = nn.Linear(dim, num_experts)
         self.register_buffer("expert_bias", torch.zeros(num_experts))
         self.register_buffer("expert_load_ratio", torch.ones(num_experts))
-        self.last_centroids = None
+        self.register_buffer("last_centroids", torch.zeros(num_experts, dim))
         self.last_counts = None
         self.last_requested_counts = None
         self.last_accepted_counts = None
         self.last_dropped_counts = None
         self.last_target = None
         self.overflow_counter = 0
-        self._global_step = 0
+        self.register_buffer("_global_step", torch.tensor(0, dtype=torch.long))
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name == "_global_step" and not isinstance(value, torch.Tensor):
+            buffers = self.__dict__.get("_buffers")
+            if buffers is not None and "_global_step" in buffers and buffers["_global_step"] is not None:
+                buffers["_global_step"].fill_(int(value))
+                return
+            value = torch.tensor(int(value), dtype=torch.long)
+        super().__setattr__(name, value)
 
     def forward(self, x, update_stats=True):
         """If update_stats=False, skip bias/centroid updates (used during label generation)."""

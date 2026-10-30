@@ -41,9 +41,9 @@ def zeropower_via_newtonschulz5(
     
     # Run in bfloat16 on CUDA Tensor Cores for speedup if supported
     if compute_device.type == "cuda" and torch.cuda.is_bf16_supported():
-        X = G.to(device=compute_device, dtype=torch.bfloat16)
+        X = G.to(device=compute_device, dtype=torch.bfloat16).clone()
     else:
-        X = G.to(device=compute_device, dtype=torch.float32)
+        X = G.to(device=compute_device, dtype=torch.float32).clone()
         
     norm = X.norm()
     X = X / (norm + eps)
@@ -165,9 +165,19 @@ class Muon(Optimizer):
                 scale = max(1.0, d_out / d_in) ** 0.5
                 if K >= 2:
                     update_stack = torch.stack([u for _, u, _ in items], dim=0)
+                    if not hasattr(self, "_batched_scratch_buffers"):
+                        self._batched_scratch_buffers = {}
+                    b_scratch_key = (shape, device, dtype, K)
+                    b_scratch = self._batched_scratch_buffers.get(b_scratch_key)
                     try:
                         from triune.kernels.fast_muon import fast_zeropower_via_newtonschulz5_batched
-                        ortho_stack = fast_zeropower_via_newtonschulz5_batched(update_stack, steps=ns_steps)
+                        res = fast_zeropower_via_newtonschulz5_batched(
+                            update_stack, steps=ns_steps, scratch_buffer=b_scratch, return_scratch=True
+                        )
+                        if isinstance(res, tuple):
+                            ortho_stack, self._batched_scratch_buffers[b_scratch_key] = res
+                        else:
+                            ortho_stack = res
                     except Exception:
                         ortho_stack = torch.stack([
                             zeropower_via_newtonschulz5(u, steps=ns_steps)

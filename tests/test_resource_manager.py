@@ -119,11 +119,15 @@ def test_user_override():
 
 def test_explicit_user_settings_preserved():
     print("=== Testing Explicit User Settings Preservation ===")
+    import gc
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     config = {
         "model_name": "triune-small",
         "vocab_size": 32000,
         "hidden_dim": 1536,
-        "num_layers": 18,
+        "num_layers": 12,
         "num_experts": 4,
         "batch_size": 3,
         "grad_accum_steps": 5,

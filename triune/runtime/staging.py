@@ -24,6 +24,23 @@ class StagingBuffer:
     gpu_tensor: Optional[torch.Tensor] = None
     event: Optional[torch.cuda.Event] = None
     forward_snapshot: Optional[torch.Tensor] = None
+    capture_forward_snapshots: bool = True  # Mode 1 (True: immediate with snapshots) vs Mode 2 (False: deferred zero-snapshot)
+
+    @property
+    def cpu_master_bytes(self) -> int:
+        return self.cpu_master.numel() * self.cpu_master.element_size()
+
+    @property
+    def snapshot_bytes(self) -> int:
+        if self.forward_snapshot is not None:
+            return self.forward_snapshot.numel() * self.forward_snapshot.element_size()
+        return 0
+
+    @property
+    def gpu_bytes(self) -> int:
+        if self.gpu_tensor is not None:
+            return self.gpu_tensor.numel() * self.gpu_tensor.element_size()
+        return 0
 
     def stage_to_gpu(
         self,
@@ -34,12 +51,15 @@ class StagingBuffer:
         is_backward: bool = False,
     ) -> torch.Tensor:
         """Transfers CPU master tensor (or forward-time snapshot during backward) to GPU staging buffer."""
-        if is_backward and self.forward_snapshot is not None:
-            source = self.forward_snapshot
+        if self.capture_forward_snapshots:
+            if is_backward and self.forward_snapshot is not None:
+                source = self.forward_snapshot
+            else:
+                source = self.cpu_master
+                if torch.is_grad_enabled() or self.forward_snapshot is None:
+                    self.forward_snapshot = self.cpu_master.detach().clone()
         else:
             source = self.cpu_master
-            if torch.is_grad_enabled() or self.forward_snapshot is None:
-                self.forward_snapshot = self.cpu_master.detach().clone()
 
         dtype = target_dtype if target_dtype is not None else (
             torch.bfloat16 if source.dtype == torch.float8_e4m3fn else source.dtype
@@ -93,6 +113,18 @@ class FP8StagingBuffer(StagingBuffer):
     amax: Optional[torch.Tensor] = None
     fp8_tensor: Optional[torch.Tensor] = None
 
+    @property
+    def fp8_bytes(self) -> int:
+        if self.fp8_tensor is not None:
+            return self.fp8_tensor.numel() * self.fp8_tensor.element_size()
+        return 0
+
+    @property
+    def saved_vram_bytes(self) -> int:
+        if self.fp8_tensor is not None:
+            return self.cpu_master.numel() * max(0, self.cpu_master.element_size() - 1)
+        return 0
+
     def stage_to_gpu(
         self,
         device: torch.device,
@@ -103,12 +135,15 @@ class FP8StagingBuffer(StagingBuffer):
         is_backward: bool = False,
     ) -> torch.Tensor:
         """Transfers CPU master (or forward snapshot during backward) to GPU as quantized FP8 tensor with scaling metadata."""
-        if is_backward and self.forward_snapshot is not None:
-            source = self.forward_snapshot
+        if self.capture_forward_snapshots:
+            if is_backward and self.forward_snapshot is not None:
+                source = self.forward_snapshot
+            else:
+                source = self.cpu_master
+                if torch.is_grad_enabled() or self.forward_snapshot is None:
+                    self.forward_snapshot = self.cpu_master.detach().clone()
         else:
             source = self.cpu_master
-            if torch.is_grad_enabled() or self.forward_snapshot is None:
-                self.forward_snapshot = self.cpu_master.detach().clone()
 
         compute_dtype = target_dtype if target_dtype is not None else (
             torch.bfloat16 if source.dtype == torch.float8_e4m3fn else source.dtype
@@ -191,13 +226,23 @@ class ParameterStager:
         prefetch_stream: Optional[torch.cuda.Stream] = None,
         d2h_stream: Optional[torch.cuda.Stream] = None,
         use_fp8: bool = False,
+        capture_forward_snapshots: bool = True,
     ):
         self.device = device
         self.prefetch_stream = prefetch_stream
         self.d2h_stream = d2h_stream
         self.use_fp8 = use_fp8
+        self.capture_forward_snapshots = capture_forward_snapshots
         self.buffers: dict[int, StagingBuffer] = {}
         self._hooks: List[Any] = []
+        self.telemetry = {
+            "h2d_sync_transfers": 0,
+            "h2d_async_transfers": 0,
+            "h2d_bytes_transferred": 0,
+            "d2h_sync_transfers": 0,
+            "d2h_async_transfers": 0,
+            "d2h_bytes_transferred": 0,
+        }
 
     def register_module(self, module: nn.Module, register_backward_hooks: bool = True) -> None:
         """Initializes staging buffers for all parameters and buffers in a module.
@@ -217,9 +262,13 @@ class ParameterStager:
                     p._cpu_data = master
                     p._master_dtype = master.dtype
                     if self.use_fp8 and is_fp8_aware and p.dim() >= 2:
-                        self.buffers[p_id] = FP8StagingBuffer(param=p, cpu_master=master)
+                        self.buffers[p_id] = FP8StagingBuffer(
+                            param=p, cpu_master=master, capture_forward_snapshots=self.capture_forward_snapshots
+                        )
                     else:
-                        self.buffers[p_id] = StagingBuffer(param=p, cpu_master=master)
+                        self.buffers[p_id] = StagingBuffer(
+                            param=p, cpu_master=master, capture_forward_snapshots=self.capture_forward_snapshots
+                        )
 
         # Fallback for any unmapped parameters/buffers
         for p in module.parameters():
@@ -228,14 +277,18 @@ class ParameterStager:
                 master = p.data if not hasattr(p, "_cpu_data") else p._cpu_data
                 p._cpu_data = master
                 p._master_dtype = master.dtype
-                self.buffers[p_id] = StagingBuffer(param=p, cpu_master=master)
+                self.buffers[p_id] = StagingBuffer(
+                    param=p, cpu_master=master, capture_forward_snapshots=self.capture_forward_snapshots
+                )
 
         for b in module.buffers():
             b_id = id(b)
             if b_id not in self.buffers:
                 master = b.data if not hasattr(b, "_cpu_data") else b._cpu_data
                 b._cpu_data = master
-                self.buffers[b_id] = StagingBuffer(param=b, cpu_master=master)
+                self.buffers[b_id] = StagingBuffer(
+                    param=b, cpu_master=master, capture_forward_snapshots=self.capture_forward_snapshots
+                )
 
         if register_backward_hooks and not getattr(module, "_stager_hooks_registered", False):
             def _fwd_pre_hook(mod: nn.Module, args: tuple):
@@ -287,6 +340,16 @@ class ParameterStager:
                         non_blocking=True,
                         is_backward=is_backward,
                     )
+                
+                # Telemetry tracking for host-to-device transfers
+                if gpu_tensor is not None:
+                    nbytes = gpu_tensor.numel() * gpu_tensor.element_size()
+                    if stream is not None:
+                        self.telemetry["h2d_async_transfers"] += 1
+                    else:
+                        self.telemetry["h2d_sync_transfers"] += 1
+                    self.telemetry["h2d_bytes_transferred"] += nbytes
+
                 if stream is None:
                     p.data = gpu_tensor
                     if isinstance(buf, FP8StagingBuffer):
@@ -334,6 +397,10 @@ class ParameterStager:
         for p in list(layer.parameters()) + list(layer.buffers()):
             buf = self.buffers.get(id(p))
             if buf is not None:
+                if buf.gpu_tensor is not None:
+                    d2h_bytes = buf.gpu_tensor.numel() * buf.gpu_tensor.element_size()
+                    self.telemetry["d2h_sync_transfers"] += 1
+                    self.telemetry["d2h_bytes_transferred"] += d2h_bytes
                 buf.sync_to_cpu()
                 buf.release_gpu(clear_snapshot=True)
             if hasattr(p, "_fp8_tensor"):
@@ -346,6 +413,28 @@ class ParameterStager:
                 p._fp8_amax = None
             if hasattr(p, "_cpu_data"):
                 p.data = p._cpu_data
+
+    def get_memory_summary(self) -> dict[str, Any]:
+        """Provides complete audit of CPU master RAM, forward snapshots, and staged GPU tensors."""
+        master_bytes = sum(b.cpu_master_bytes for b in self.buffers.values())
+        snapshot_bytes = sum(b.snapshot_bytes for b in self.buffers.values())
+        gpu_bytes = sum(b.gpu_bytes for b in self.buffers.values())
+        fp8_bytes = sum(getattr(b, "fp8_bytes", 0) for b in self.buffers.values())
+        return {
+            "mode": "immediate (snapshot)" if self.capture_forward_snapshots else "deferred (zero-snapshot)",
+            "capture_forward_snapshots": self.capture_forward_snapshots,
+            "total_parameters": len(self.buffers),
+            "cpu_master_mb": round(master_bytes / (1024 * 1024), 2),
+            "forward_snapshot_mb": round(snapshot_bytes / (1024 * 1024), 2),
+            "gpu_staged_mb": round(gpu_bytes / (1024 * 1024), 2),
+            "fp8_staged_mb": round(fp8_bytes / (1024 * 1024), 2),
+            "telemetry": dict(self.telemetry),
+        }
+
+    def reset_telemetry(self) -> None:
+        """Resets all transfer counters."""
+        for k in self.telemetry:
+            self.telemetry[k] = 0
 
     def cleanup_all(self) -> None:
         """Universal exception cleanup: releases all GPU tensors, restores CPU pointers,

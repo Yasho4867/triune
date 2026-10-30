@@ -84,6 +84,44 @@ def test_newtonschulz5_batched_parity():
     print("✅ Batched Newton-Schulz parity and multi-layer Muon step passed!\n")
 
 
+def test_newtonschulz_input_immutability():
+    """Verify that Newton-Schulz kernels never mutate caller input tensors in-place."""
+    from triune.kernels.fast_muon import fast_zeropower_via_newtonschulz5, fast_zeropower_via_newtonschulz5_batched
+    torch.manual_seed(42)
+
+    devices = ["cpu"]
+    if torch.cuda.is_available():
+        devices.append("cuda")
+
+    for dev in devices:
+        dtypes = [torch.float32]
+        if dev == "cuda" and torch.cuda.is_bf16_supported():
+            dtypes.append(torch.bfloat16)
+
+        for dt in dtypes:
+            # 1. Single-matrix immutability across square, tall, and wide
+            for shape in [(64, 64), (96, 32), (32, 96)]:
+                G = torch.randn(*shape, device=dev, dtype=dt)
+                G_clone = G.clone()
+                res1 = fast_zeropower_via_newtonschulz5(G, steps=5)
+                assert torch.equal(G, G_clone), f"Input mutated in-place on {dev} {dt} shape {shape}!"
+                
+                # Verify determinism on repeated call
+                res2 = fast_zeropower_via_newtonschulz5(G, steps=5)
+                assert torch.equal(res1, res2), "Repeated call produced different results!"
+
+            # 2. Batched matrix immutability
+            for b_shape in [(4, 48, 48), (4, 80, 24), (4, 24, 80)]:
+                G_b = torch.randn(*b_shape, device=dev, dtype=dt)
+                G_b_clone = G_b.clone()
+                res_b1 = fast_zeropower_via_newtonschulz5_batched(G_b, steps=5)
+                assert torch.equal(G_b, G_b_clone), f"Batched input mutated in-place on {dev} {dt} shape {b_shape}!"
+                res_b2 = fast_zeropower_via_newtonschulz5_batched(G_b, steps=5)
+                assert torch.equal(res_b1, res_b2), "Repeated batched call produced different results!"
+
+    print("✅ Newton-Schulz caller input immutability verified across all devices and dtypes!\n")
+
+
 def test_muon_optimizer_step():
     print("=== Testing Muon Optimizer Step ===")
     torch.manual_seed(42)
@@ -350,6 +388,44 @@ def test_centroid_steer_mathematical_invariants():
     print("✅ CentroidSteer mathematical invariants passed!\n")
 
 
+def test_adaptive_subspace_refresh_and_rank_profiler():
+    """Verify adaptive subspace refresh tracking and offline rank sensitivity profiler."""
+    print("=== Testing Adaptive Subspace Refresh & Rank Sensitivity Profiler ===")
+    from triune.optim.centroid import profile_rank_sensitivity
+    torch.manual_seed(42)
+
+    dim = 64
+    moe = MoE_FFN(dim=dim, num_experts=2, top_k=2, shared_expert=False)
+    opt = CentroidSteerOptimizer(
+        moe, lr=1e-3, rank=8, adaptive_subspace_refresh=True,
+        energy_threshold=0.50, min_subspace_gap=2, max_subspace_gap=10
+    )
+
+    x = torch.randn(2, 8, dim)
+    for step in range(5):
+        opt.zero_grad()
+        out = moe(x, update_stats=True)
+        out.sum().backward()
+        opt.step()
+
+    # Verify energy ratios were tracked for active groups
+    for g in opt.layer_groups:
+        self_energy = g.get('last_energy_ratio')
+        assert self_energy is not None, "Group must record last_energy_ratio"
+        assert 0.0 <= self_energy <= 1.5, f"Energy ratio out of bounds: {self_energy}"
+
+    # Verify offline rank sensitivity profiler
+    profile = profile_rank_sensitivity(moe, target_energy=0.85, max_rank=16, min_rank=4)
+    assert "layers" in profile
+    assert profile["num_profiled_matrices"] > 0
+    assert profile["overall_compression_ratio"] >= 1.0
+    for name, p_info in profile["layers"].items():
+        assert 4 <= p_info["recommended_rank"] <= 16
+        assert p_info["captured_energy"] > 0.0
+
+    print("✅ Adaptive Subspace Refresh & Rank Sensitivity Profiler verified successfully!\n")
+
+
 if __name__ == "__main__":
     test_newtonschulz5_orthogonality()
     test_muon_optimizer_step()
@@ -357,4 +433,5 @@ if __name__ == "__main__":
     test_adaptive_steer_scale_and_load_ratio()
     test_full_triune_3tier_optimizer()
     test_centroid_steer_mathematical_invariants()
+    test_adaptive_subspace_refresh_and_rank_profiler()
     print("🎉 ALL TESTS PASSED SUCCESSFULLY!")

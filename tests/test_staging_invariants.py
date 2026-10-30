@@ -226,6 +226,80 @@ class TestStagingInvariants(unittest.TestCase):
             force_depth=2, use_checkpointing=False, use_fp8=True
         )
 
+    def test_deferred_mode_zero_snapshot_memory_savings(self):
+        """Verify Mode 2 (capture_forward_snapshots=False) eliminates forward snapshot memory and matches gradients."""
+        torch.manual_seed(42)
+        dev = torch.device("cpu")
+
+        layer1 = DummyLayer(64, 64)
+        layer2 = DummyLayer(64, 64)
+        layer2.load_state_dict(layer1.state_dict())
+
+        # Mode 1: Immediate with forward snapshots
+        stager1 = ParameterStager(device=dev, use_fp8=False, capture_forward_snapshots=True)
+        stager1.register_module(layer1)
+        stager1.stage_layer(layer1)
+        stager1.apply_staged_tensors(layer1)
+
+        x1 = torch.randn(8, 64, requires_grad=True)
+        out1 = layer1(x1)
+        sum1 = stager1.get_memory_summary()
+        self.assertGreater(sum1["forward_snapshot_mb"], 0.0, "Mode 1 should allocate forward snapshots")
+
+        out1.sum().backward()
+        stager1.release_layer(layer1)
+
+        # Mode 2: Deferred zero-snapshot streaming
+        stager2 = ParameterStager(device=dev, use_fp8=False, capture_forward_snapshots=False)
+        stager2.register_module(layer2)
+        stager2.stage_layer(layer2)
+        stager2.apply_staged_tensors(layer2)
+
+        x2 = x1.detach().clone().requires_grad_(True)
+        out2 = layer2(x2)
+        sum2 = stager2.get_memory_summary()
+        self.assertEqual(sum2["forward_snapshot_mb"], 0.0, "Mode 2 must have zero forward snapshot allocation")
+
+        out2.sum().backward()
+        stager2.release_layer(layer2)
+
+        # Gradients must be numerically identical
+        self.assertTrue(torch.allclose(x1.grad, x2.grad, atol=1e-6))
+        self.assertTrue(torch.allclose(layer1.linear.weight.grad, layer2.linear.weight.grad, atol=1e-6))
+        self.assertTrue(torch.allclose(layer1.linear.bias.grad, layer2.linear.bias.grad, atol=1e-6))
+        stager1.clear()
+        stager2.clear()
+
+    def test_transfer_telemetry_tracking(self):
+        """Verify that H2D and D2H transfer telemetry counts and byte counters are accurately maintained."""
+        dev = torch.device("cpu")
+        layer = DummyLayer(32, 32)
+        stager = ParameterStager(device=dev, use_fp8=False)
+        stager.register_module(layer)
+
+        self.assertEqual(stager.telemetry["h2d_sync_transfers"], 0)
+        self.assertEqual(stager.telemetry["h2d_bytes_transferred"], 0)
+
+        # Stage layer (H2D)
+        stager.stage_layer(layer)
+        self.assertGreater(stager.telemetry["h2d_sync_transfers"], 0)
+        self.assertGreater(stager.telemetry["h2d_bytes_transferred"], 0)
+
+        # Sync layer back to CPU (D2H)
+        stager.sync_layer_to_cpu(layer)
+        self.assertGreater(stager.telemetry["d2h_sync_transfers"], 0)
+        self.assertGreater(stager.telemetry["d2h_bytes_transferred"], 0)
+
+        summary = stager.get_memory_summary()
+        self.assertIn("telemetry", summary)
+        self.assertEqual(summary["total_parameters"], 2)
+
+        # Reset telemetry
+        stager.reset_telemetry()
+        self.assertEqual(stager.telemetry["h2d_sync_transfers"], 0)
+        self.assertEqual(stager.telemetry["h2d_bytes_transferred"], 0)
+        stager.clear()
+
 
 if __name__ == "__main__":
     unittest.main()

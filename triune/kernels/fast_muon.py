@@ -36,9 +36,9 @@ def fast_zeropower_via_newtonschulz5(
     else:
         compute_dtype = torch.float32
 
-    X = G.to(device=orig_device, dtype=compute_dtype)
+    X = G.to(device=orig_device, dtype=compute_dtype).clone()
 
-    # In-place normalization
+    # In-place normalization on owned scratch tensor
     norm = torch.linalg.vector_norm(X)
     X = X.div_(norm + eps)
 
@@ -100,13 +100,17 @@ def fast_zeropower_via_newtonschulz5_batched(
     G_batch: torch.Tensor,
     steps: int = 5,
     eps: float = 1e-7,
-) -> torch.Tensor:
+    scratch_buffer: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None = None,
+    return_scratch: bool = False,
+) -> torch.Tensor | tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
     """Batched Newton-Schulz orthogonalization across a batch of matching-shape 2D matrices.
 
     Args:
         G_batch: 3D tensor of shape [B, M, N].
         steps: Number of Newton-Schulz iterations (default: 5).
         eps: Small constant for vector norm stability.
+        scratch_buffer: Optional tuple of (A, A2, B) preallocated scratch tensors.
+        return_scratch: Whether to return scratch buffer for zero-allocation reuse.
 
     Returns:
         Orthogonalized tensor of shape [B, M, N] in original device and dtype.
@@ -122,9 +126,9 @@ def fast_zeropower_via_newtonschulz5_batched(
     else:
         compute_dtype = torch.float32
 
-    X = G_batch.to(device=orig_device, dtype=compute_dtype)
+    X = G_batch.to(device=orig_device, dtype=compute_dtype).clone()
 
-    # In-place normalization across rows and cols
+    # In-place normalization across rows and cols on owned scratch batch
     norm = torch.linalg.vector_norm(X, dim=(-2, -1), keepdim=True)
     X = X.div_(norm + eps)
 
@@ -134,19 +138,34 @@ def fast_zeropower_via_newtonschulz5_batched(
         X = X.transpose(1, 2)
         transposed = True
 
+    B_sz, M, N = X.shape
     a, b, c = 3.4445, -4.7750, 2.0315
+
+    if (
+        isinstance(scratch_buffer, (tuple, list))
+        and len(scratch_buffer) == 3
+        and scratch_buffer[0].shape == (B_sz, M, M)
+        and scratch_buffer[0].device == orig_device
+        and scratch_buffer[0].dtype == compute_dtype
+    ):
+        A, A2, B = scratch_buffer
+    else:
+        A = torch.empty((B_sz, M, M), device=orig_device, dtype=compute_dtype)
+        A2 = torch.empty((B_sz, M, M), device=orig_device, dtype=compute_dtype)
+        B = torch.empty((B_sz, M, M), device=orig_device, dtype=compute_dtype)
+
     for _ in range(steps):
-        # A = X @ X.T
-        A = torch.bmm(X, X.transpose(1, 2))
-        # A2 = A @ A
-        A2 = torch.bmm(A, A)
-        # B = b * A + c * A2
-        B = (b * A).add_(A2, alpha=c)
-        # X = a * X + B @ X
+        # In-place GEMM and polynomial evaluation with zero allocations
+        torch.bmm(X, X.transpose(1, 2), out=A)
+        torch.bmm(A, A, out=A2)
+        B.copy_(A).mul_(b).add_(A2, alpha=c)
         X = torch.baddbmm(X, B, X, beta=a, alpha=1.0)
 
     if transposed:
         X = X.transpose(1, 2)
 
-    return X.to(device=orig_device, dtype=orig_dtype)
+    res = X.to(device=orig_device, dtype=orig_dtype)
+    if return_scratch:
+        return res, (A, A2, B)
+    return res
 

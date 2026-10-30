@@ -44,7 +44,9 @@ class _FusedLinearCrossEntropy(torch.autograd.Function):
         flat_h = hidden.reshape(-1, hidden.size(-1))
         flat_y = targets.reshape(-1)
         n_tokens = flat_h.size(0)
-        n_valid = int((flat_y != ignore_index).sum().item())
+        # Device-side valid count without host synchronization
+        n_valid = (flat_y != ignore_index).sum().clamp_min(1)
+        inv_n = (1.0 / n_valid.to(torch.float32))
         acc = torch.promote_types(weight.dtype, torch.float32)
 
         need_h, need_w, need_b = ctx.needs_input_grad[0], ctx.needs_input_grad[1], (
@@ -55,26 +57,22 @@ class _FusedLinearCrossEntropy(torch.autograd.Function):
         grad_b = torch.zeros(bias.shape, device=bias.device, dtype=acc) if need_b else None
 
         total = torch.zeros((), device=hidden.device, dtype=acc)
-        if n_valid > 0:
-            inv_n = 1.0 / n_valid
-            for i in range(0, n_tokens, chunk_size):
-                h = flat_h[i : i + chunk_size]
-                y = flat_y[i : i + chunk_size]
-                if not bool((y != ignore_index).any()):
-                    continue
-                logits = F.linear(h, weight, bias).to(acc)
-                loss_sum, g = _chunk_ce_grad(logits, y, ignore_index)
-                total += loss_sum
-                del logits
-                g.mul_(inv_n)
-                if need_h:
-                    grad_h[i : i + chunk_size] = (g.to(weight.dtype) @ weight).to(grad_h.dtype)
-                if need_w:
-                    grad_w.addmm_(g.t(), h.to(acc))
-                if need_b:
-                    grad_b += g.sum(0)
-                del g
-            total = total * inv_n
+        for i in range(0, n_tokens, chunk_size):
+            h = flat_h[i : i + chunk_size]
+            y = flat_y[i : i + chunk_size]
+            logits = F.linear(h, weight, bias).to(acc)
+            loss_sum, g = _chunk_ce_grad(logits, y, ignore_index)
+            total = total + loss_sum
+            del logits
+            g.mul_(inv_n)
+            if need_h:
+                grad_h[i : i + chunk_size] = (g.to(weight.dtype) @ weight).to(grad_h.dtype)
+            if need_w:
+                grad_w.addmm_(g.t(), h.to(acc))
+            if need_b:
+                grad_b = grad_b + g.sum(0)
+            del g
+        total = total * inv_n
 
         ctx.save_for_backward(
             grad_h.reshape(hidden.shape) if grad_h is not None else None,
@@ -102,36 +100,33 @@ class _ChunkedCrossEntropy(torch.autograd.Function):
     def forward(ctx, logits, targets, chunk_size: int, ignore_index: int):
         flat_l = logits.reshape(-1, logits.size(-1))
         flat_y = targets.reshape(-1)
-        n_valid = int((flat_y != ignore_index).sum().item())
+        # Device-side valid count without host synchronization
+        n_valid = (flat_y != ignore_index).sum().clamp_min(1)
         acc = torch.promote_types(logits.dtype, torch.float32)
         total = torch.zeros((), device=logits.device, dtype=acc)
-        if n_valid > 0:
-            with torch.no_grad():
-                for i in range(0, flat_l.size(0), chunk_size):
-                    y = flat_y[i : i + chunk_size]
-                    total += F.cross_entropy(
-                        flat_l[i : i + chunk_size].to(acc), y, ignore_index=ignore_index, reduction="sum"
-                    )
-            total = total / n_valid
-        ctx.save_for_backward(logits, targets)
+        with torch.no_grad():
+            for i in range(0, flat_l.size(0), chunk_size):
+                y = flat_y[i : i + chunk_size]
+                total = total + F.cross_entropy(
+                    flat_l[i : i + chunk_size].to(acc), y, ignore_index=ignore_index, reduction="sum"
+                )
+        total = total / n_valid.to(acc)
+        ctx.save_for_backward(logits, targets, n_valid)
         ctx.chunk_size = chunk_size
         ctx.ignore_index = ignore_index
-        ctx.n_valid = n_valid
         return total
 
     @staticmethod
     def backward(ctx, grad_out):
-        logits, targets = ctx.saved_tensors
+        logits, targets, n_valid = ctx.saved_tensors
         if not ctx.needs_input_grad[0]:
             return None, None, None, None
         grad = torch.zeros_like(logits)
-        if ctx.n_valid == 0:
-            return grad, None, None, None
         flat_l = logits.reshape(-1, logits.size(-1))
         flat_g = grad.view(-1, logits.size(-1))
         flat_y = targets.reshape(-1)
         acc = torch.promote_types(logits.dtype, torch.float32)
-        scale = grad_out.to(acc) / ctx.n_valid
+        scale = grad_out.to(acc) / n_valid.to(acc)
         for i in range(0, flat_l.size(0), ctx.chunk_size):
             _, g = _chunk_ce_grad(flat_l[i : i + ctx.chunk_size].to(acc), flat_y[i : i + ctx.chunk_size], ctx.ignore_index)
             flat_g[i : i + ctx.chunk_size] = (g * scale).to(grad.dtype)

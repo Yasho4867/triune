@@ -5342,6 +5342,22 @@ SYSTEM \"\"\"You are Triune AI, a high-efficiency cognitive language model train
                 "status": "error",
                 "message": "GGUF export is not implemented for Triune's architecture; use Ollama or SafeTensors format.",
             }
+        if export_format in {"hf", "huggingface"}:
+            pytorch_state.lazy_init_model()
+            hf_dir = out_dir / req.model_id
+            try:
+                from triune.export.hf_compat import export_to_huggingface
+                res_path = await asyncio.to_thread(export_to_huggingface, pytorch_state.model, hf_dir)
+                total_bytes = sum(f.stat().st_size for f in res_path.glob("**/*") if f.is_file())
+                return {
+                    "status": "success",
+                    "format": "huggingface",
+                    "path": str(res_path),
+                    "size_bytes": total_bytes,
+                    "message": f"Successfully exported {req.model_id} to Hugging Face format at {res_path} ({round(total_bytes / (1024*1024), 2)} MB)"
+                }
+            except Exception as e:
+                return {"status": "error", "message": str(e)}
         if export_format not in {"safetensors", "onnx"}:
             return {"status": "error", "message": f"Unsupported export format: {req.format}"}
 

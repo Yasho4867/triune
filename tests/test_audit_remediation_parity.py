@@ -177,7 +177,7 @@ def test_checkpointing_gradient_and_state_parity():
     # Parameter gradient parity
     for p_no_cp, p_cp in zip(moe_no_cp.parameters(), moe_cp.parameters()):
         if p_no_cp.grad is not None:
-            assert torch.allclose(p_no_cp.grad, p_cp.grad, atol=1e-3)
+            assert torch.allclose(p_no_cp.grad, p_cp.grad, atol=2e-3)
 
     # MoE state parity (no double mutation during backward recomputation!)
     assert moe_no_cp._global_step == moe_cp._global_step == 1

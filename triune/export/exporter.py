@@ -136,5 +136,8 @@ def export_model(model: torch.nn.Module, output_path: str | Path, fmt: str = "sa
         return export_gguf(model, output_path)
     elif fmt_lower == "onnx":
         return export_onnx(model, output_path)
+    elif fmt_lower in ("hf", "huggingface"):
+        from .hf_compat import export_to_huggingface
+        return export_to_huggingface(model, output_path)
     else:
         return export_safetensors(model, output_path)
