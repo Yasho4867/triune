@@ -101,22 +101,22 @@ def run_pretrain_benchmark(stack_name: str, model_type: str, device: torch.devic
     tokens = torch.randint(0, 2048, (B, T), device=device)
     targets = torch.randint(0, 2048, (B, T), device=device)
 
-    def train_step():
-        optimizer.zero_grad(set_to_none=True)
-        out = model(tokens)
+    def train_step(m=model, opt=optimizer, tok=tokens, tgt=targets):
+        opt.zero_grad(set_to_none=True)
+        out = m(tok)
         logits = out[0] if isinstance(out, (tuple, list)) else out
         flat_logits = logits.view(-1, 2048)
-        flat_targets = targets.view(-1)
+        flat_targets = tgt.view(-1)
 
         if stack_name == "AdamW":
             loss = F.cross_entropy(flat_logits.float(), flat_targets)
         elif stack_name == "Unsloth":
-            loss = uk.fast_cross_entropy_loss(logits.view(B, T, 2048), targets.view(B, T))
+            loss = uk.fast_cross_entropy_loss(logits.view(B, T, 2048), tgt.view(B, T))
         elif stack_name == "Triune":
             loss = fast_cross_entropy(flat_logits, flat_targets, chunk_size=256)
 
         loss.backward()
-        optimizer.step()
+        opt.step()
         return loss
 
     # Measure initial untrained loss before warmup
@@ -243,22 +243,22 @@ def run_lora_finetune_benchmark(stack_name: str, device: torch.device, steps: in
     tokens = torch.randint(0, 2048, (B, T), device=device)
     targets = torch.randint(0, 2048, (B, T), device=device)
 
-    def finetune_step():
-        optimizer.zero_grad(set_to_none=True)
-        out = model(tokens)
+    def finetune_step(m=model, opt=optimizer, tok=tokens, tgt=targets):
+        opt.zero_grad(set_to_none=True)
+        out = m(tok)
         logits = out[0] if isinstance(out, (tuple, list)) else out
         flat_logits = logits.view(-1, 2048)
-        flat_targets = targets.view(-1)
+        flat_targets = tgt.view(-1)
 
         if stack_name == "AdamW":
             loss = F.cross_entropy(flat_logits.float(), flat_targets)
         elif stack_name == "Unsloth":
-            loss = uk.fast_cross_entropy_loss(logits.view(B, T, 2048), targets.view(B, T))
+            loss = uk.fast_cross_entropy_loss(logits.view(B, T, 2048), tgt.view(B, T))
         elif stack_name == "Triune":
             loss = fast_cross_entropy(flat_logits, flat_targets, chunk_size=256)
 
         loss.backward()
-        optimizer.step()
+        opt.step()
         return loss
 
     # Measure untrained initial loss

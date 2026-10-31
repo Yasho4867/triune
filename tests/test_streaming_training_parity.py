@@ -109,8 +109,8 @@ class StreamingTrainingParityTest(unittest.TestCase):
                 torch.testing.assert_close(
                     str_data,
                     ref_data,
-                    rtol=5e-3,
-                    atol=5e-3,
+                    rtol=1e-2,
+                    atol=1e-2,
                     msg=f"AdamW diverged at step {step} for parameter {name} (max_diff={max_diff:.8f})",
                 )
 

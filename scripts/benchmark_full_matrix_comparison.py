@@ -154,12 +154,12 @@ def run_benchmark_cell(
     ]
 
     # Execution Step Function
-    def execute_step(x, y):
-        optimizer.zero_grad(set_to_none=True)
+    def execute_step(x, y, active_model, active_opt):
+        active_opt.zero_grad(set_to_none=True)
         if model_type == "moe":
-            logits, _ = model(x, force_depth=2)
+            logits, _ = active_model(x, force_depth=2)
         else:
-            out = model(x)
+            out = active_model(x)
             logits = out[0] if isinstance(out, tuple) else out
 
         # Loss calculation according to stack
@@ -174,13 +174,13 @@ def run_benchmark_cell(
             loss = fast_cross_entropy(logits.reshape(-1, vocab_size), y.reshape(-1), chunk_size=512)
 
         loss.backward()
-        optimizer.step()
+        active_opt.step()
         return loss.item()
 
     # Warmup
     for i in range(3):
         x, y = batches[i]
-        execute_step(x, y)
+        execute_step(x, y, model, optimizer)
 
     if device.type == "cuda":
         torch.cuda.synchronize(device)
@@ -191,7 +191,7 @@ def run_benchmark_cell(
     t0 = time.perf_counter()
     for i in range(3, 3 + steps):
         x, y = batches[i]
-        loss_val = execute_step(x, y)
+        loss_val = execute_step(x, y, model, optimizer)
         losses.append(loss_val)
 
     if device.type == "cuda":
