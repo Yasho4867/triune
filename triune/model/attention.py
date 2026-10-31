@@ -60,22 +60,25 @@ def _pytorch_chunk_gla(q, k, v, g, initial_state=None, chunk_size: int = 64):
         g_c = g[:, :T_chunk].reshape(B, num_chunks, C, H, HD).permute(0, 3, 1, 2, 4)
 
         g_cumsum = torch.cumsum(g_c, dim=-2)
-        causal_mask = torch.tril(torch.ones(C, C, device=q.device, dtype=torch.bool)).view(1, 1, 1, C, C)
+        causal_mask = torch.tril(torch.ones(C, C, device=q.device, dtype=torch.bool)).view(1, 1, 1, C, C, 1)
 
-        # High-performance intra-chunk attention via factored Tensor Core BMM
-        q_exp = q_c * torch.exp(g_cumsum)
-        k_exp = k_c * torch.exp(-g_cumsum)
-        attn_weights = torch.matmul(q_exp, k_exp.transpose(-1, -2)).masked_fill(~causal_mask, 0.0)
+        # Stable intra-chunk attention:
+        # Avoid factoring exp(g_i - g_j) into exp(g_i) * exp(-g_j), which overflows exp(-g_cumsum) to infinity
+        # when g is negative log-sigmoid. Computing g_diff <= 0 directly is bounded in (0, 1] and strictly NaN-safe.
+        g_diff = torch.clamp(g_cumsum.unsqueeze(-2) - g_cumsum.unsqueeze(-3), max=0.0)
+        decay_intra = torch.exp(g_diff).masked_fill(~causal_mask, 0.0)
+        attn_weights = ((q_c.unsqueeze(-2) * k_c.unsqueeze(-3)) * decay_intra).sum(dim=-1)
         out_intra = torch.matmul(attn_weights, v_c)
 
         # Inter-chunk recurrent state propagation with batched KV GEMM
         g_last = g_cumsum[:, :, :, -1:, :]
-        k_decayed_all = k_c * torch.exp(g_last - g_cumsum)
+        k_decayed_all = k_c * torch.exp(torch.clamp(g_last - g_cumsum, max=0.0))
         chunk_decay = torch.exp(g_last)
 
         # Batch all chunk KV state projections into a single fused Tensor Core GEMM
         kv_all = torch.matmul(k_decayed_all.transpose(-1, -2), v_c)
 
+        q_exp = q_c * torch.exp(g_cumsum)
         out_inter = []
         for i in range(num_chunks):
             q_i = q_exp[:, :, i]
