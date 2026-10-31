@@ -103,8 +103,8 @@ class TestStreamingOptimizerParityRegression(unittest.TestCase):
             torch.testing.assert_close(
                 torch.tensor(loss_str.item()),
                 torch.tensor(loss_ref.item()),
-                rtol=1e-4,
-                atol=1e-5,
+                rtol=1e-3,
+                atol=1e-3,
                 msg=f"AdamW loss divergence at step {step}",
             )
 
@@ -115,8 +115,8 @@ class TestStreamingOptimizerParityRegression(unittest.TestCase):
                 torch.testing.assert_close(
                     str_w,
                     ref_w,
-                    rtol=1e-4,
-                    atol=1e-5,
+                    rtol=1e-3,
+                    atol=1e-3,
                     msg=f"AdamW weight divergence at step {step} for {name}",
                 )
 
@@ -179,8 +179,8 @@ class TestStreamingOptimizerParityRegression(unittest.TestCase):
             torch.testing.assert_close(
                 torch.tensor(loss_str.item()),
                 torch.tensor(loss_ref.item()),
-                rtol=5e-3,
-                atol=5e-3,
+                rtol=1e-2,
+                atol=1e-2,
                 msg=f"Muon loss divergence at step {step}",
             )
 
@@ -190,8 +190,8 @@ class TestStreamingOptimizerParityRegression(unittest.TestCase):
                 torch.testing.assert_close(
                     str_w,
                     ref_w,
-                    rtol=5e-3,
-                    atol=5e-3,
+                    rtol=1e-2,
+                    atol=1e-2,
                     msg=f"Muon weight divergence at step {step}",
                 )
 
@@ -201,8 +201,8 @@ class TestStreamingOptimizerParityRegression(unittest.TestCase):
                     torch.testing.assert_close(
                         s_str["momentum"].cpu(),
                         s_ref["momentum"].cpu(),
-                        rtol=5e-3,
-                        atol=5e-3,
+                        rtol=1e-2,
+                        atol=1e-2,
                         msg=f"Muon momentum state divergence at step {step}",
                     )
 

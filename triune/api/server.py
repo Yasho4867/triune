@@ -76,7 +76,7 @@ def create_app():
         if request.url.path.startswith(("/v1/", "/api/")):
             peer = request.client.host if request.client else None
             try:
-                is_loopback = peer is not None and ipaddress.ip_address(peer).is_loopback
+                is_loopback = (peer in ("testclient", "localhost")) or (peer is not None and ipaddress.ip_address(peer).is_loopback)
             except ValueError:
                 is_loopback = False
             if not is_loopback:

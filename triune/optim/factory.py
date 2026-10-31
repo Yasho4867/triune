@@ -29,6 +29,8 @@ def build_optimizer(model, config: dict):
             muon_lr=config.get("muon_lr", defaults.MUON_LR),
             muon_momentum=config.get("muon_momentum", defaults.MUON_MOMENTUM),
             muon_weight_decay=config.get("muon_weight_decay", defaults.MUON_WEIGHT_DECAY),
+            use_triangular_core=config.get("use_triangular_core", defaults.USE_TRIANGULAR_CORE),
+            use_8bit_base=config.get("use_8bit_base", defaults.USE_8BIT_BASE),
         )
     if HAS_8BIT and AdamW8bit is not None:
         return AdamW8bit(model.parameters(), lr=config["lr"], betas=config["betas"], weight_decay=config["weight_decay"])

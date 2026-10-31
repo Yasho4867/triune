@@ -66,6 +66,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--use_fp4", "--use_nvfp4", dest="use_fp4", action="store_true")
     parser.add_argument("--use_fp8", action="store_true", help="Enable native FP8 (E4M3) precision context")
     parser.add_argument("--use_muon", action=argparse.BooleanOptionalAction, default=True, help="Enable Muon for non-expert 2D hidden weights")
+    parser.add_argument("--use_triangular_core", action=argparse.BooleanOptionalAction, default=True, help="Enable fused triangular block update kernel for CentroidSteer")
+    parser.add_argument("--use_8bit_base", action=argparse.BooleanOptionalAction, default=False, help="Use 8-bit AdamW base optimizer if bitsandbytes is available")
     parser.add_argument("--muon_lr", type=float, help="Muon learning rate (default: 0.02)")
     parser.add_argument("--galore", action=argparse.BooleanOptionalAction, default=None, help="Enable GaLore low-rank gradient projection for expert weights")
     parser.add_argument("--galore_rank", type=int, help="GaLore projection subspace rank (default: 256)")
@@ -134,7 +136,7 @@ def main(argv: list[str] | None = None) -> dict:
             "checkpoint_dir", "seq_len", "lr", "warmup_steps", "total_steps", "batch_size", "grad_accum_steps",
             "depth_mode", "save_every", "log_every", "eval_every", "eval_batches", "target_depth_dist",
             "usage_ema_decay", "bias_strength",
-            "balance_coef", "exploration", "exploration_steps", "steer_scale", "use_muon", "muon_lr",
+            "balance_coef", "exploration", "exploration_steps", "steer_scale", "use_muon", "muon_lr", "use_triangular_core", "use_8bit_base",
             "galore", "galore_rank", "galore_update_gap", "galore_lr", "galore_weight_decay",
             "dataset_name",
             "dataset_config", "num_workers", "num_layers", "num_experts", "shuffle_buffer",

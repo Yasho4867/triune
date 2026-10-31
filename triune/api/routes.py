@@ -686,6 +686,10 @@ if HAS_FASTAPI:
             self.router_temp = 1.0
             self.steer_scale = 0.20
             self.muon_lr = 0.02
+            self.use_triangular_core = True
+            self.use_8bit_base = False
+            self.centroid_rank = 64
+            self.centroid_update_gap = 100
             self.centroid_lr = 5e-4
             self.momentum = 0.95
             self.lr_peak = 5e-4
@@ -1059,8 +1063,8 @@ if HAS_FASTAPI:
                     "betas": (0.9, 0.95),
                     "weight_decay": 0.01,
                     "galore": True,
-                    "galore_rank": 64,
-                    "galore_update_gap": 100,
+                    "galore_rank": getattr(self, "centroid_rank", 64),
+                    "galore_update_gap": getattr(self, "centroid_update_gap", 100),
                     "steer_scale": getattr(self, "steer_scale", 0.20),
                     "galore_lr": getattr(self, "centroid_lr", self.current_lr),
                     "galore_betas": (0.9, 0.999),
@@ -1069,6 +1073,8 @@ if HAS_FASTAPI:
                     "muon_lr": getattr(self, "muon_lr", 0.02),
                     "muon_momentum": getattr(self, "momentum", 0.95),
                     "muon_weight_decay": 0.01,
+                    "use_triangular_core": getattr(self, "use_triangular_core", True),
+                    "use_8bit_base": getattr(self, "use_8bit_base", False),
                 }
                 try:
                     self.optimizer = build_optimizer(self.model, optim_cfg)
@@ -1864,7 +1870,7 @@ if HAS_FASTAPI:
             self.logs.insert(0, log_msg)
             print(f"[Triune Engine] {log_msg}")
 
-        def generate_text(self, prompt: str, max_new_tokens: int = 64, temperature: float = 0.7, force_depth: Optional[int] = None, cancel_event: Optional[threading.Event] = None, prompt_is_formatted: bool = False, on_text=None) -> Dict[str, Any]:
+        def generate_text(self, prompt: str, max_new_tokens: int = 64, temperature: float = 0.7, force_depth: Optional[int] = None, cancel_event: Optional[threading.Event] = None, prompt_is_formatted: bool = False, on_text=None, speculative: bool = False, k_draft: int = 3) -> Dict[str, Any]:
             if not HAS_TORCH or TriuneTransformer is None:
                 return {
                     "text": "[Host UI Mode] PyTorch is not available in current process. Run in WSL2 for full GPU acceleration.",
@@ -1904,6 +1910,52 @@ if HAS_FASTAPI:
             pad_id = self.tokenizer.token_to_id("[PAD]")
             if pad_id is None:
                 pad_id = self.pad_token_id
+
+            if speculative:
+                from triune.model.speculative import SelfSpeculativeGenerator
+                t_spec_start = time.perf_counter()
+                spec_gen = SelfSpeculativeGenerator(
+                    self.model,
+                    self.tokenizer,
+                    k_draft=max(1, int(k_draft)),
+                    temperature=temperature,
+                    pad_token_id=pad_id,
+                    eos_token_id=eos_id,
+                )
+                accumulated_tokens: List[str] = []
+                def _spec_on_tok(t_id: int, t_str: str) -> None:
+                    accumulated_tokens.append(t_str)
+                    if on_text:
+                        on_text("".join(accumulated_tokens))
+
+                with self.model_autocast():
+                    spec_out = spec_gen.generate(
+                        prompt,
+                        max_new_tokens=max_new_tokens,
+                        on_token=_spec_on_tok if on_text else None,
+                    )
+                spec_dt_ms = round((time.perf_counter() - t_spec_start) * 1000, 1)
+                spec_text = sanitize_text(str(spec_out["text"]))
+                if not self.weights_loaded:
+                    banner = "[Notice: Model is running with initialized weights without trained checkpoint. Train this model or load weights in Checkpoints & Weights.]\n\n"
+                    spec_text = f"{banner}{spec_text}"
+                vram_stats = VRAMProfiler.get_vram_stats(self.device)
+                return {
+                    "text": spec_text,
+                    "route": f"SPECULATIVE (K={k_draft}, acc={spec_out['acceptance_rate']:.1%})",
+                    "tokens_count": spec_out["tokens_count"],
+                    "tokens_per_sec": int(spec_out["tokens_per_second"]),
+                    "latency_ms": spec_dt_ms,
+                    "ttft_ms": None,
+                    "decode_tokens_per_sec": spec_out["tokens_per_second"],
+                    "vram_gb": vram_stats.get("allocated_gb", 0.0),
+                    "checkpoint": self.active_checkpoint,
+                    "weights_loaded": self.weights_loaded,
+                    "cancelled": False,
+                    "speculative_telemetry": spec_out.get("telemetry", {}),
+                    "acceptance_rate": spec_out.get("acceptance_rate", 0.0),
+                }
+
             with self.model_autocast():
                 result = generate_response(
                     self.model,
@@ -2283,6 +2335,8 @@ if HAS_FASTAPI:
         stream: bool = False
         route: Optional[str] = None
         force_depth: Optional[int] = None
+        speculative: bool = False
+        k_draft: int = Field(default=3, ge=1, le=16)
 
     class DAGExecuteRequest(BaseModel):
         nodes: List[Dict[str, Any]]
@@ -2518,6 +2572,8 @@ if HAS_FASTAPI:
                         cancel_event=cancel_event,
                         prompt_is_formatted=len(chat_messages) > 1,
                         on_text=on_text,
+                        speculative=bool(getattr(req, "speculative", False)),
+                        k_draft=int(getattr(req, "k_draft", 3)),
                     )
                 finally:
                     if pytorch_state.active_generation_cancel is cancel_event:
@@ -3351,6 +3407,24 @@ if HAS_FASTAPI:
             "recommended_checkpointing": estimate.recommended_checkpointing,
             "recommended_precision": estimate.recommended_precision,
         }
+
+    @router.post("/v1/resource/assess")
+    async def assess_resource_feasibility(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Evaluate VRAM feasibility, safe headroom, and auto-fit recommendations via DynamicResourceManager."""
+        from triune.runtime.resource_manager import DynamicResourceManager
+        import dataclasses
+        cfg = config or {}
+        dev = pytorch_state.device if (HAS_TORCH and getattr(pytorch_state, "device", None) is not None) else None
+        mdl = pytorch_state.model if (HAS_TORCH and getattr(pytorch_state, "model", None) is not None) else None
+        assessment = DynamicResourceManager.assess_feasibility(
+            cfg,
+            device=dev,
+            model=mdl,
+        )
+        report = DynamicResourceManager.format_assessment_report(assessment)
+        data = dataclasses.asdict(assessment)
+        data["report"] = report
+        return data
 
     class HardwareTuneRequest(BaseModel):
         preset: Optional[str] = None
@@ -4323,6 +4397,10 @@ if HAS_FASTAPI:
         centroid_lr: Optional[float] = None
         steer_scale: Optional[float] = None
         momentum: Optional[float] = None
+        use_triangular_core: Optional[bool] = None
+        use_8bit_base: Optional[bool] = None
+        rank: Optional[int] = None
+        update_gap: Optional[int] = None
 
     @router.get("/v1/training/optimizer")
     async def get_optimizer_telemetry() -> Dict[str, Any]:
@@ -4437,6 +4515,26 @@ if HAS_FASTAPI:
                     for g in pytorch_state.optimizer.muon_optimizer.param_groups:
                         g["momentum"] = req.momentum
 
+        if req.use_triangular_core is not None:
+            pytorch_state.use_triangular_core = req.use_triangular_core
+            if pytorch_state.optimizer is not None and hasattr(pytorch_state.optimizer, "use_triangular_core"):
+                pytorch_state.optimizer.use_triangular_core = req.use_triangular_core
+
+        if req.use_8bit_base is not None:
+            pytorch_state.use_8bit_base = req.use_8bit_base
+            if pytorch_state.optimizer is not None and hasattr(pytorch_state.optimizer, "use_8bit_base"):
+                pytorch_state.optimizer.use_8bit_base = req.use_8bit_base
+
+        if req.rank is not None and req.rank > 0:
+            pytorch_state.centroid_rank = req.rank
+            if pytorch_state.optimizer is not None and hasattr(pytorch_state.optimizer, "rank"):
+                pytorch_state.optimizer.rank = req.rank
+
+        if req.update_gap is not None and req.update_gap > 0:
+            pytorch_state.centroid_update_gap = req.update_gap
+            if pytorch_state.optimizer is not None and hasattr(pytorch_state.optimizer, "update_gap"):
+                pytorch_state.optimizer.update_gap = req.update_gap
+
         return {
             "status": "success",
             "lr": pytorch_state.current_lr,
@@ -4444,6 +4542,10 @@ if HAS_FASTAPI:
             "steer_scale": getattr(pytorch_state.optimizer, "steer_scale", getattr(pytorch_state, "steer_scale", 0.2)),
             "muon_lr": getattr(getattr(pytorch_state.optimizer, "muon_optimizer", None), "lr", getattr(pytorch_state, "muon_lr", 0.02)),
             "momentum": getattr(getattr(pytorch_state.optimizer, "muon_optimizer", None), "momentum", getattr(pytorch_state, "momentum", 0.95)),
+            "use_triangular_core": getattr(pytorch_state.optimizer, "use_triangular_core", getattr(pytorch_state, "use_triangular_core", True)),
+            "use_8bit_base": getattr(pytorch_state.optimizer, "use_8bit_base", getattr(pytorch_state, "use_8bit_base", False)),
+            "rank": getattr(pytorch_state.optimizer, "rank", getattr(pytorch_state, "centroid_rank", 64)),
+            "update_gap": getattr(pytorch_state.optimizer, "update_gap", getattr(pytorch_state, "centroid_update_gap", 100)),
             "message": "Optimizer hyperparameters updated."
         }
 
@@ -4791,12 +4893,15 @@ if HAS_FASTAPI:
                 tensors[key] = tensor
             if not tensors:
                 raise ValueError("Checkpoint contains no model tensors to export.")
-            from safetensors.torch import save_file
-
             out_dir = Path("exports")
             out_dir.mkdir(parents=True, exist_ok=True)
             out_file = out_dir / f"{checkpoint.stem}.safetensors"
-            await asyncio.to_thread(save_file, tensors, str(out_file))
+            try:
+                from safetensors.torch import save_file
+                await asyncio.to_thread(save_file, tensors, str(out_file))
+            except ImportError:
+                from triune.export.exporter import _save_safetensors_fallback
+                await asyncio.to_thread(_save_safetensors_fallback, tensors, out_file)
             size_bytes = out_file.stat().st_size
             return {
                 "status": "success",

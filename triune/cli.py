@@ -40,6 +40,8 @@ def main() -> None:
     chat_parser.add_argument("--temperature", type=float, default=0.7, help="Sampling temperature")
     chat_parser.add_argument("--repetition-penalty", type=float, default=1.1, help="Repetition penalty")
     chat_parser.add_argument("--max-tokens", type=int, default=100, help="Maximum generated tokens")
+    chat_parser.add_argument("--speculative", action="store_true", help="Enable Reflex-to-Cortex self-speculative decoding")
+    chat_parser.add_argument("--k-draft", type=int, default=3, help="Draft tokens per cycle for speculative decoding (default: 3)")
 
     # 4. Fine-Tuning command
     finetune_parser = subparsers.add_parser("finetune", help="Fine-tune Triune models with LoRA or QLoRA parameter-efficient adaptation")
@@ -80,7 +82,7 @@ def main() -> None:
     ckpt_export_parser = ckpt_sub.add_parser("export", help="Export checkpoint to SafeTensors, GGUF, or ONNX")
     ckpt_export_parser.add_argument("--checkpoint", required=True, help="Source checkpoint path")
     ckpt_export_parser.add_argument("--output", default=None, help="Destination file path")
-    ckpt_export_parser.add_argument("--format", default="safetensors", choices=("safetensors", "gguf", "onnx"), help="Target format")
+    ckpt_export_parser.add_argument("--format", default="safetensors", choices=("safetensors", "gguf", "onnx", "hf"), help="Target format")
 
     # 7. Model Zoo command
     subparsers.add_parser("models", help="Display architecture presets from the Triune Model Zoo")
@@ -161,6 +163,10 @@ def main() -> None:
         ]
         if args.adapter:
             chat_args.extend(["--adapter", args.adapter])
+        if getattr(args, "speculative", False):
+            chat_args.append("--speculative")
+        if getattr(args, "k_draft", None):
+            chat_args.extend(["--k-draft", str(args.k_draft)])
         chat_main(chat_args)
 
     elif args.command == "finetune":
@@ -251,10 +257,16 @@ def main() -> None:
                 print()
         elif args.ckpt_action == "export":
             print(f"[Triune CLI] Loading checkpoint: {args.checkpoint}")
-            model, _, _, _, _, _ = load_checkpoint_model(args.checkpoint)
-            out = args.output or f"exports/{Path(args.checkpoint).stem}.{args.format}"
-            out_p = export_model(model, out, fmt=args.format)
-            print(f"[Triune CLI] Successfully exported to: {out_p}\n")
+            model, tokenizer, _, _, _, _ = load_checkpoint_model(args.checkpoint)
+            if args.format == "hf":
+                from triune.export.hf_compat import export_to_huggingface
+                out = args.output or f"exports/{Path(args.checkpoint).stem}_hf"
+                out_p = export_to_huggingface(model, out, tokenizer=tokenizer)
+                print(f"[Triune CLI] Successfully exported Hugging Face bundle to: {out_p}\n")
+            else:
+                out = args.output or f"exports/{Path(args.checkpoint).stem}.{args.format}"
+                out_p = export_model(model, out, fmt=args.format)
+                print(f"[Triune CLI] Successfully exported to: {out_p}\n")
         else:
             ckpt_parser.print_help()
 

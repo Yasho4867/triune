@@ -20,6 +20,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--repetition_penalty", type=float, default=1.1)
     parser.add_argument("--max_new_tokens", type=int, default=100)
+    parser.add_argument("--speculative", action="store_true", help="Enable Reflex-to-Cortex self-speculative decoding")
+    parser.add_argument("--k-draft", type=int, default=3, help="Number of draft tokens per speculative cycle")
     return parser
 
 
@@ -43,12 +45,25 @@ def main(argv: list[str] | None = None) -> None:
                 break
         if prompt.lower().startswith("auto "):
             prompt = prompt[5:]
-        response = generate_response(
-            model, tokenizer, prompt, device=device, pad_token_id=pad_id, eos_token_id=eos_id,
-            force_depth=force_depth, temperature=args.temperature,
-            repetition_penalty=args.repetition_penalty, max_new_tokens=args.max_new_tokens,
-        )
-        print(f"Assistant: {response}")
+        if args.speculative:
+            from triune.model.speculative import SelfSpeculativeGenerator
+            spec_gen = SelfSpeculativeGenerator(
+                model,
+                tokenizer,
+                k_draft=args.k_draft,
+                temperature=args.temperature,
+                pad_token_id=pad_id,
+                eos_token_id=eos_id,
+            )
+            spec_res = spec_gen.generate(prompt, max_new_tokens=args.max_new_tokens)
+            print(f"Assistant [Speculative K={args.k_draft}, acc={spec_res['acceptance_rate']:.1%}, speed={spec_res['tokens_per_second']} tok/s]: {spec_res['text']}")
+        else:
+            response = generate_response(
+                model, tokenizer, prompt, device=device, pad_token_id=pad_id, eos_token_id=eos_id,
+                force_depth=force_depth, temperature=args.temperature,
+                repetition_penalty=args.repetition_penalty, max_new_tokens=args.max_new_tokens,
+            )
+            print(f"Assistant: {response}")
 
 
 if __name__ == "__main__":
