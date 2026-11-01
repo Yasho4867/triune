@@ -4092,6 +4092,7 @@
               step: 1,
               value: gpuLayers,
               onChange: ev => {
+                lastManualConfigEditRef.current = Date.now();
                 const l = parseInt(ev.target.value);
                 const pct = Math.round((l / numLayers) * 100);
                 setGpuLayers(l);
@@ -4115,10 +4116,11 @@
               type: 'range',
               className: 'hw-slider-input',
               min: 64,
-              max: 512,
+              max: 1024,
               step: 64,
               value: trainSeqLen,
               onChange: ev => {
+                lastManualConfigEditRef.current = Date.now();
                 setTrainSeqLen(parseInt(ev.target.value));
                 setSelectedHwPreset('custom');
               }
@@ -4139,10 +4141,11 @@
               type: 'range',
               className: 'hw-slider-input',
               min: 1,
-              max: 16,
+              max: 32,
               step: 1,
               value: trainBatchSize,
               onChange: ev => {
+                lastManualConfigEditRef.current = Date.now();
                 setTrainBatchSize(parseInt(ev.target.value));
                 setSelectedHwPreset('custom');
               }
@@ -4167,6 +4170,7 @@
               step: 1,
               value: trainGradAccum,
               onChange: ev => {
+                lastManualConfigEditRef.current = Date.now();
                 setTrainGradAccum(parseInt(ev.target.value));
                 setSelectedHwPreset('custom');
               }
@@ -7214,7 +7218,53 @@
                   e('span', { className: 'model-spec-chip' }, `${datasetInfo.hidden_dim || 256} Dim`),
                   e('span', { className: 'model-spec-chip' }, `${datasetInfo.num_heads || 4} Heads`),
                   e('span', { className: 'model-spec-chip' }, `${datasetInfo.num_experts || 4} Experts`),
-                  e('span', { className: 'model-spec-chip' }, `Depth: ${(datasetInfo.depth_mode || trainDepthMode).toUpperCase()}`)
+                  e('label', { style: { display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)' } },
+                    'Batch:',
+                    e('select', {
+                      value: trainBatchSize || datasetInfo.batch_size || 4,
+                      onChange: ev => {
+                        const b = parseInt(ev.target.value);
+                        lastManualConfigEditRef.current = Date.now();
+                        setTrainBatchSize(b);
+                        handleApplyHardwareTune({ batch_size: b });
+                      },
+                      style: { fontFamily: 'var(--font-mono)', fontSize: '11.5px', padding: '2px 6px', borderRadius: '4px', background: 'var(--bg-surface)', border: '1px solid var(--border-color)', color: 'var(--text-main)', cursor: 'pointer' }
+                    },
+                      [1, 2, 4, 8, 16, 24, 32].map(v => e('option', { key: v, value: v }, `${v} seqs`))
+                    )
+                  ),
+                  e('label', { style: { display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)' } },
+                    'Seq:',
+                    e('select', {
+                      value: trainSeqLen || datasetInfo.seq_len || 128,
+                      onChange: ev => {
+                        const s = parseInt(ev.target.value);
+                        lastManualConfigEditRef.current = Date.now();
+                        setTrainSeqLen(s);
+                        handleApplyHardwareTune({ seq_len: s });
+                      },
+                      style: { fontFamily: 'var(--font-mono)', fontSize: '11.5px', padding: '2px 6px', borderRadius: '4px', background: 'var(--bg-surface)', border: '1px solid var(--border-color)', color: 'var(--text-main)', cursor: 'pointer' }
+                    },
+                      [64, 128, 256, 512, 1024].map(v => e('option', { key: v, value: v }, `${v} ctx`))
+                    )
+                  ),
+                  e('label', { style: { display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)' } },
+                    'Depth:',
+                    e('select', {
+                      value: trainDepthMode || datasetInfo.depth_mode || 'dynamic',
+                      onChange: ev => {
+                        const d = ev.target.value;
+                        lastManualConfigEditRef.current = Date.now();
+                        setTrainDepthMode(d);
+                        handleApplyHardwareTune({ depth_mode: d });
+                      },
+                      style: { fontFamily: 'var(--font-mono)', fontSize: '11.5px', padding: '2px 6px', borderRadius: '4px', background: 'var(--bg-surface)', border: '1px solid var(--border-color)', color: 'var(--text-main)', cursor: 'pointer' }
+                    },
+                      e('option', { value: 'cortex' }, 'CORTEX (Steady)'),
+                      e('option', { value: 'joint' }, 'JOINT (3 Exits)'),
+                      e('option', { value: 'dynamic' }, 'DYNAMIC (Adaptive)')
+                    )
+                  )
                 )
               ),
               e('div', { style: { display: 'flex', gap: '8px', alignItems: 'center' } },
