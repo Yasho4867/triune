@@ -70,6 +70,31 @@ def default_config() -> dict[str, Any]:
 def build_config(overrides: Mapping[str, Any] | None = None) -> dict[str, Any]:
     config = default_config()
     if overrides:
+        model_name = overrides.get("model_name")
+        if model_name:
+            try:
+                from triune.model.base import CANONICAL_MODEL_SPECS, _LEGACY_PRESET_ALIASES, get_model_spec
+                model_name_str = str(model_name).strip().lower()
+                if model_name_str in CANONICAL_MODEL_SPECS or model_name_str in _LEGACY_PRESET_ALIASES:
+                    spec = get_model_spec(model_name_str)
+                    for k in (
+                        "num_layers",
+                        "hidden_dim",
+                        "num_heads",
+                        "head_dim",
+                        "num_experts",
+                        "router_prefix_layers",
+                        "reflex_exit_layer",
+                        "limbic_exit_layer",
+                        "balance_coef",
+                        "depth_mode",
+                    ):
+                        if hasattr(spec, k) and getattr(spec, k) is not None:
+                            config[k] = getattr(spec, k)
+                    if hasattr(spec, "target_depth_dist") and spec.target_depth_dist:
+                        config["target_depth_dist"] = list(spec.target_depth_dist)
+            except Exception:
+                pass
         config.update({key: value for key, value in overrides.items() if value is not None})
     validate_config(config)
     return config
