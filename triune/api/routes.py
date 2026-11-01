@@ -658,7 +658,7 @@ if HAS_FASTAPI:
             self.seq_len = 64
             self.grad_accum_steps = 4
             self.gpu_offload_pct = 100
-            self.gpu_layers = 6
+            self.gpu_layers = 8
             self.precision = "bf16"
             self.active_model_id = "triune-small"
             self.architecture_spec: Dict[str, Any] = {
@@ -1022,16 +1022,14 @@ if HAS_FASTAPI:
                     requested_gpu_layers = num_layers
                     pct = 100
                     self.gpu_offload_pct = 100
+                    self.gpu_layers = num_layers
                 else:
                     requested_gpu_layers = max(0, min(num_layers, int(round((pct / 100.0) * num_layers))))
 
                 if self.device.type == "cuda":
                     if hasattr(self.model, "enable_gradient_checkpointing"):
                         self.model.enable_gradient_checkpointing()
-                    try:
-                        torch.cuda.set_per_process_memory_fraction(0.90, self.device)
-                    except Exception:
-                        pass
+                    # Per-process memory fraction unconstrained to prevent virtual memory handle desync
                     target_dtype = torch.bfloat16 if (getattr(self, "precision", "bf16") == "bf16" and torch.cuda.is_bf16_supported()) else torch.float32
 
                     if total_p > 150_000_000 or requested_gpu_layers < num_layers or getattr(spec, "use_layer_streaming", False):
@@ -1223,10 +1221,7 @@ if HAS_FASTAPI:
                     self.model = self.model.to(device=self.device, dtype=target_dtype)
                     if hasattr(self.model, "enable_gradient_checkpointing"):
                         self.model.enable_gradient_checkpointing()
-                    try:
-                        torch.cuda.set_per_process_memory_fraction(0.90, self.device)
-                    except Exception:
-                        pass
+                    # Per-process memory fraction unconstrained to prevent virtual memory handle desync
                 else:
                     self.model = self.model.to(self.device)
 
@@ -2283,8 +2278,6 @@ if HAS_FASTAPI:
                 finally:
                     import gc
                     gc.collect()
-                    if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
 
             # Periodically generate a sample every 100 steps
             if self.step > 0 and self.step % 100 == 0:
@@ -2299,8 +2292,6 @@ if HAS_FASTAPI:
                     self.model.train()
                     import gc
                     gc.collect()
-                    if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
 
             log_line = f"[STEP {self.step}] Loss: {payload['loss']:.4f} | LR: {self.current_lr:.2e} | {tok_per_sec} tok/s | Ingesting [{self.dataset_name}]: \"{self.current_batch_preview[:36]}...\""
             self.logs.insert(0, log_line)
@@ -3319,7 +3310,7 @@ if HAS_FASTAPI:
                 "lr_peak": pytorch_state.lr_peak,
                 "warmup_steps": pytorch_state.warmup_steps,
                 "precision": getattr(pytorch_state, "precision", "bf16"),
-                "gpu_layers": getattr(pytorch_state, "gpu_layers", 6),
+                "gpu_layers": getattr(pytorch_state, "gpu_layers", getattr(pytorch_state, "architecture_spec", {}).get("num_layers", 8)),
                 "gpu_offload_pct": getattr(pytorch_state, "gpu_offload_pct", 100),
             },
             "current_engine_state": {
@@ -4116,7 +4107,11 @@ if HAS_FASTAPI:
                 "depth_mode": pytorch_state.depth_mode,
                 "precision": getattr(pytorch_state, "precision", "bf16"),
                 "gpu_offload_pct": getattr(pytorch_state, "gpu_offload_pct", 100),
-                "gpu_layers": getattr(pytorch_state, "gpu_layers", 6),
+                "gpu_layers": getattr(pytorch_state, "gpu_layers", getattr(pytorch_state, "architecture_spec", {}).get("num_layers", 8)),
+                "num_layers": getattr(pytorch_state, "architecture_spec", {}).get("num_layers", getattr(pytorch_state, "gpu_layers", 8)),
+                "hidden_dim": getattr(pytorch_state, "architecture_spec", {}).get("hidden_dim", 384),
+                "num_heads": getattr(pytorch_state, "architecture_spec", {}).get("num_heads", 6),
+                "num_experts": getattr(pytorch_state, "architecture_spec", {}).get("num_experts", 4),
                 "lr_peak": pytorch_state.lr_peak,
                 "warmup_steps": pytorch_state.warmup_steps,
                 "current_lr": pytorch_state.current_lr,

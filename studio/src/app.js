@@ -2244,10 +2244,10 @@
             setDatasetInfo(prev => ({
               ...prev,
               ...statusData.dataset,
-              num_layers: arch.num_layers || prev.num_layers || 6,
-              hidden_dim: arch.hidden_dim || prev.hidden_dim || 256,
-              num_heads: arch.num_heads || prev.num_heads || 4,
-              num_experts: arch.num_experts || prev.num_experts || 4
+              num_layers: arch.num_layers || (statusData.dataset && statusData.dataset.num_layers) || prev.num_layers || 8,
+              hidden_dim: arch.hidden_dim || (statusData.dataset && statusData.dataset.hidden_dim) || prev.hidden_dim || 384,
+              num_heads: arch.num_heads || (statusData.dataset && statusData.dataset.num_heads) || prev.num_heads || 6,
+              num_experts: arch.num_experts || (statusData.dataset && statusData.dataset.num_experts) || prev.num_experts || 4
             }));
             if (statusData.dataset.name) setActiveDataset(statusData.dataset.name);
             if (Date.now() - lastManualConfigEditRef.current > 4000) {
@@ -7213,11 +7213,20 @@
                     MODEL_PRESETS.map(p => e('option', { key: p.id, value: p.id }, p.name))
                   )
                 ),
+                (() => {
+                  const activePreset = MODEL_PRESETS.find(p => p.id === activeModel) || MODEL_PRESETS.find(p => p.id === 'triune-base') || MODEL_PRESETS[1];
+                  const archLayers = (activePreset && activePreset.layers) || datasetInfo.num_layers || 8;
+                  const archDim = (activePreset && activePreset.hidden_dim) || datasetInfo.hidden_dim || 384;
+                  const archHeads = (activePreset && activePreset.heads) || datasetInfo.num_heads || 6;
+                  const archExperts = (activePreset && activePreset.experts_routed) || datasetInfo.num_experts || 4;
+                  return e('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' } },
+                    e('span', { className: 'model-spec-chip' }, `${archLayers} Layers`),
+                    e('span', { className: 'model-spec-chip' }, `${archDim} Dim`),
+                    e('span', { className: 'model-spec-chip' }, `${archHeads} Heads`),
+                    e('span', { className: 'model-spec-chip' }, `${archExperts} Experts`)
+                  );
+                })(),
                 e('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' } },
-                  e('span', { className: 'model-spec-chip' }, `${datasetInfo.num_layers || 6} Layers`),
-                  e('span', { className: 'model-spec-chip' }, `${datasetInfo.hidden_dim || 256} Dim`),
-                  e('span', { className: 'model-spec-chip' }, `${datasetInfo.num_heads || 4} Heads`),
-                  e('span', { className: 'model-spec-chip' }, `${datasetInfo.num_experts || 4} Experts`),
                   e('label', { style: { display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)' } },
                     'Batch:',
                     e('select', {
