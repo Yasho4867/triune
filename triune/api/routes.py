@@ -1029,7 +1029,7 @@ if HAS_FASTAPI:
                     if hasattr(self.model, "enable_gradient_checkpointing"):
                         self.model.enable_gradient_checkpointing()
                     try:
-                        torch.cuda.set_per_process_memory_fraction(0.24, self.device)
+                        torch.cuda.set_per_process_memory_fraction(0.90, self.device)
                     except Exception:
                         pass
                     target_dtype = torch.bfloat16 if (getattr(self, "precision", "bf16") == "bf16" and torch.cuda.is_bf16_supported()) else torch.float32
@@ -1224,7 +1224,7 @@ if HAS_FASTAPI:
                     if hasattr(self.model, "enable_gradient_checkpointing"):
                         self.model.enable_gradient_checkpointing()
                     try:
-                        torch.cuda.set_per_process_memory_fraction(0.24, self.device)
+                        torch.cuda.set_per_process_memory_fraction(0.90, self.device)
                     except Exception:
                         pass
                 else:
@@ -1664,7 +1664,14 @@ if HAS_FASTAPI:
             if not self.hf_stream_iter or not self.tokenizer:
                 return
 
-            chunk_size = self.seq_len + 1
+            if not hasattr(self, "_stream_refill_lock"):
+                import threading
+                self._stream_refill_lock = threading.Lock()
+
+            with self._stream_refill_lock:
+                if len(self.hf_stream_buffer) >= target_chunks:
+                    return
+                chunk_size = self.seq_len + 1
             sep_id = self.tokenizer.token_to_id("[SEP]") or self.tokenizer.token_to_id("[EOS]") or 2
             attempts = 0
 
@@ -2058,6 +2065,11 @@ if HAS_FASTAPI:
                 if len(self.hf_stream_buffer) >= needed:
                     for _ in range(needed):
                         micro_chunks.append(self.hf_stream_buffer.popleft())
+                elif len(self.hf_stream_buffer) > 0:
+                    avail = list(self.hf_stream_buffer)
+                    for i in range(needed):
+                        micro_chunks.append(avail[i % len(avail)])
+                    self._refill_stream_buffer(target_chunks=max(60, needed * self.grad_accum_steps * 2))
                 elif self.data_chunks:
                     for _ in range(needed):
                         chunk = self.data_chunks[self.data_idx % len(self.data_chunks)]
