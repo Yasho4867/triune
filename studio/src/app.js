@@ -1516,7 +1516,7 @@
     const [trainGradAccum, setTrainGradAccum] = useState(4);
     const [trainLR, setTrainLR] = useState('0.0005');
     const [trainWarmup, setTrainWarmup] = useState(500);
-    const [trainDepthMode, setTrainDepthMode] = useState('dynamic');
+    const [trainDepthMode, setTrainDepthMode] = useState('cortex');
     const [trainPrecision, setTrainPrecision] = useState('bf16');
     const [isUpdatingTrainConfig, setIsUpdatingTrainConfig] = useState(false);
     const lastManualConfigEditRef = useRef(0);

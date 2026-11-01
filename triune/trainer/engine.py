@@ -55,13 +55,10 @@ class TrainingEngine:
 
     def _compute_lm_loss(self, logits: torch.Tensor, y_flat: torch.Tensor, vocab_size: int) -> torch.Tensor:
         """Compute mean language modeling loss normalized strictly by valid non-padding tokens."""
-        raw_loss = self.trainer.loss_fn(logits.reshape(-1, vocab_size), y_flat)
-        if raw_loss.dim() == 0:
-            return raw_loss
         pad_id = getattr(self.trainer, "pad_token_id", -100)
-        valid_mask = y_flat != pad_id
-        valid_count = valid_mask.sum().clamp_min(1)
-        return (raw_loss * valid_mask.float()).sum() / valid_count
+        if pad_id is None:
+            pad_id = -100
+        return F.cross_entropy(logits.reshape(-1, vocab_size), y_flat, ignore_index=pad_id, reduction="mean")
 
     def _router_labels_from_logits(self, reflex, limbic, cortex, x, y):
         with torch.no_grad():
@@ -69,8 +66,9 @@ class TrainingEngine:
             valid_mask = y_flat != self.trainer.pad_token_id
             valid_per_sample = valid_mask.reshape(x.size(0), -1).sum(dim=1).clamp_min(1)
             losses = []
+            pad_id = getattr(self.trainer, "pad_token_id", -100) or -100
             for logits in (reflex, limbic, cortex):
-                token_loss = self.trainer.loss_fn(logits.float().reshape(-1, self.trainer.vocab_size), y_flat)
+                token_loss = F.cross_entropy(logits.reshape(-1, self.trainer.vocab_size), y_flat, ignore_index=pad_id, reduction="none")
                 losses.append((token_loss * valid_mask.float()).reshape(x.size(0), -1).sum(dim=1) / valid_per_sample)
             all_losses = torch.stack(losses, dim=1)
             if self.target_depth_dist.device != all_losses.device:
@@ -97,10 +95,19 @@ class TrainingEngine:
 
     def _router_labels(self, x, y):
         with torch.no_grad():
-            reflex, limbic, cortex, _ = self.model.forward_all_exits(x, update_stats=False)
-            labels = self._router_labels_from_logits(reflex, limbic, cortex, x, y)
-            del reflex, limbic, cortex
-        return labels
+            if x.size(0) > 4:
+                chunk_labels = []
+                for chunk_x, chunk_y in zip(x.split(4), y.split(4)):
+                    reflex, limbic, cortex, _ = self.model.forward_all_exits(chunk_x, update_stats=False)
+                    lbls = self._router_labels_from_logits(reflex, limbic, cortex, chunk_x, chunk_y)
+                    chunk_labels.append(lbls)
+                    del reflex, limbic, cortex
+                return torch.cat(chunk_labels, dim=0)
+            else:
+                reflex, limbic, cortex, _ = self.model.forward_all_exits(x, update_stats=False)
+                labels = self._router_labels_from_logits(reflex, limbic, cortex, x, y)
+                del reflex, limbic, cortex
+                return labels
 
     def _log_training(self, *, loss, lm_loss, router_loss, balance_loss, lr, exploration_rate, overflow, labels, route_logits):
         if self.step % self.config["log_every"]:
@@ -189,9 +196,8 @@ class TrainingEngine:
                         if isinstance(res, tuple) and len(res) > 1
                         else torch.zeros((x.size(0), 3), device=self.trainer.device)
                     )
-                logits_f = logits.float()
                 route_f = route_logits.float()
-                lm_loss = self._compute_lm_loss(logits_f, y_flat, vocab_size)
+                lm_loss = self._compute_lm_loss(logits, y_flat, vocab_size)
                 router_loss = torch.tensor(0.0, device=self.trainer.device)
                 z_loss = torch.tensor(0.0, device=self.trainer.device)
                 balance_loss = torch.tensor(0.0, device=self.trainer.device)

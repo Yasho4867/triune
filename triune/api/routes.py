@@ -675,11 +675,11 @@ if HAS_FASTAPI:
                 "router_prefix_layers": 1,
                 "reflex_exit_layer": 2,
                 "limbic_exit_layer": 4,
-                "depth_mode": "dynamic",
+                "depth_mode": "cortex",
                 "balance_loss_weight": 0.3,
             }
             self._token_accumulator: List[int] = []
-            self.depth_mode = "dynamic"  # "cortex" (full backbone) | "joint" (all 3 exits) | "dynamic" (router) — user-selected, persisted
+            self.depth_mode = "cortex"  # "cortex" (full backbone) | "joint" (all 3 exits) | "dynamic" (router) — user-selected, persisted
             self.streaming_engine = None
             self.placement_info: Dict[str, Any] = {}
             self.balance_loss_weight = 0.3
