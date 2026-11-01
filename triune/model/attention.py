@@ -62,13 +62,20 @@ def _pytorch_chunk_gla(q, k, v, g, initial_state=None, chunk_size: int = 64):
         g_cumsum = torch.cumsum(g_c, dim=-2)
         causal_mask = torch.tril(torch.ones(C, C, device=q.device, dtype=torch.bool)).view(1, 1, 1, C, C, 1)
 
-        # Stable intra-chunk attention:
-        # Avoid factoring exp(g_i - g_j) into exp(g_i) * exp(-g_j), which overflows exp(-g_cumsum) to infinity
-        # when g is negative log-sigmoid. Computing g_diff <= 0 directly is bounded in (0, 1] and strictly NaN-safe.
-        g_diff = torch.clamp(g_cumsum.unsqueeze(-2) - g_cumsum.unsqueeze(-3), max=0.0)
-        decay_intra = torch.exp(g_diff).masked_fill(~causal_mask, 0.0)
-        attn_weights = ((q_c.unsqueeze(-2) * k_c.unsqueeze(-3)) * decay_intra).sum(dim=-1)
-        out_intra = torch.matmul(attn_weights, v_c)
+        # Chunk-by-chunk intra-chunk attention:
+        causal_mask_chunk = torch.tril(torch.ones(C, C, device=q.device, dtype=torch.bool)).view(1, 1, C, C, 1)
+        out_intra_list = []
+        for i in range(num_chunks):
+            q_i = q_c[:, :, i]
+            k_i = k_c[:, :, i]
+            v_i = v_c[:, :, i]
+            g_cum_i = g_cumsum[:, :, i]
+            g_diff_i = torch.clamp(g_cum_i.unsqueeze(-2) - g_cum_i.unsqueeze(-3), max=0.0)
+            decay_i = torch.exp(g_diff_i).masked_fill(~causal_mask_chunk, 0.0)
+            attn_i = ((q_i.unsqueeze(-2) * k_i.unsqueeze(-3)) * decay_i).sum(dim=-1)
+            out_i = torch.matmul(attn_i, v_i)
+            out_intra_list.append(out_i)
+        out_intra = torch.stack(out_intra_list, dim=2)
 
         # Inter-chunk recurrent state propagation with batched KV GEMM
         g_last = g_cumsum[:, :, :, -1:, :]
