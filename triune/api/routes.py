@@ -3705,8 +3705,9 @@ if HAS_FASTAPI:
                 old_engine.cleanup_resident_layers()
                 old_engine.detach()
                 model._streaming_engine = None
-            target_dtype = torch.bfloat16 if (getattr(state, "precision", "bf16") == "bf16" and torch.cuda.is_bf16_supported()) else torch.float32
-            model.to(device=device, dtype=target_dtype)
+            if torch.cuda.is_available():
+                target_dtype = torch.bfloat16 if (getattr(state, "precision", "bf16") == "bf16" and torch.cuda.is_bf16_supported()) else torch.float32
+                model.to(device=device, dtype=target_dtype)
             optimizer = getattr(state, "optimizer", None)
             optimizer_state = getattr(optimizer, "state", None)
             if isinstance(optimizer_state, dict):
@@ -3714,7 +3715,7 @@ if HAS_FASTAPI:
                     if not isinstance(state_dict, dict):
                         continue
                     for k, v in list(state_dict.items()):
-                        if torch.is_tensor(v):
+                        if torch.is_tensor(v) and torch.cuda.is_available():
                             state_dict[k] = v.to(device=device)
             return len(all_layers)
 
