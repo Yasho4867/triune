@@ -9,7 +9,12 @@ from pathlib import Path
 
 os.environ.setdefault("PYTHONUTF8", "1")
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
-os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+if sys.platform == "win32":
+    # On Windows WDDM, expandable_segments:True triggers internal assertion failures
+    # in CUDACachingAllocator.cpp:487 (!handles_.at(i)) when allocations expand or page to host memory.
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:128")
+else:
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 if sys.platform == "win32":
     for _stream in (sys.stdout, sys.stderr):
         try:

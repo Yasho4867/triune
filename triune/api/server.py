@@ -68,7 +68,11 @@ def create_app():
     @app.get("/healthz", include_in_schema=False)
     async def health_check():
         """Cheap process/liveness check for desktop supervisors and startup probes."""
-        return {"status": "ok"}
+        # Keep this route deliberately independent of PyTorch, CUDA, model
+        # residency, and configuration I/O.  The desktop client uses it to
+        # decide whether a localhost process is Triune before issuing richer
+        # diagnostics requests.
+        return {"status": "ok", "service": "triune-studio"}
 
     @app.middleware("http")
     async def restrict_remote_api(request, call_next):

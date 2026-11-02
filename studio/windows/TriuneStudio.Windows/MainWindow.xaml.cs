@@ -267,7 +267,7 @@ public partial class MainWindow : Window
         };
         start.Environment["PYTHONUTF8"] = "1";
         start.Environment["PYTHONIOENCODING"] = "utf-8";
-        start.Environment["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True";
+        start.Environment["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128";
         if (Path.GetFileNameWithoutExtension(python).Equals("py", StringComparison.OrdinalIgnoreCase))
             start.ArgumentList.Add("-3");
         start.ArgumentList.Add(Path.Combine(root, "scripts", "launch_studio.py"));

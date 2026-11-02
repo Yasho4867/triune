@@ -856,6 +856,8 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
   margin-bottom: 16px;
   padding-bottom: 14px;
   border-bottom: 1px solid var(--border-color);
@@ -864,6 +866,7 @@ body {
 .canvas-toolbar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
 }
 
@@ -2501,11 +2504,18 @@ body {
 
 .node-canvas-viewport {
   position: absolute;
-  top: 0;
-  left: 0;
-  width: 12000px;
-  height: 12000px;
+  /* Keep a real negative-coordinate world around the visible origin. The
+     camera compensates for this offset in app.js, so existing workflows keep
+     their positions while wires/nodes no longer vanish at x/y < 0. */
+  top: -12000px;
+  left: -12000px;
+  width: 24000px;
+  height: 24000px;
   transform-origin: 0 0;
+  /* Nodes and SVG wires are positioned in world coordinates and may extend
+     outside this nominal 12k workspace while panning.  Let the grid own the
+     visible clipping boundary instead of silently clipping individual wires. */
+  overflow: visible;
 }
 
 .canvas-nav-overlay {

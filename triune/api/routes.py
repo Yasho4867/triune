@@ -95,8 +95,11 @@ except ImportError:
 
 try:
     from triune.modules.manager import ModuleManager
-except ImportError:
+except ImportError as module_manager_import_error:
     ModuleManager = None
+    MODULE_MANAGER_IMPORT_ERROR = str(module_manager_import_error)
+else:
+    MODULE_MANAGER_IMPORT_ERROR = ""
 
 HAS_TRIUNE_MODULES = all(x is not None for x in [ExecutionEngine, node_registry, ModuleManager])
 
@@ -280,7 +283,11 @@ if HAS_FASTAPI:
     else:
         class FallbackModuleManager:
             def get_config(self): return {"byok_keys": {}, "theme": "retro"}
-            def save_config(self, c, **kwargs): pass
+            def save_config(self, c, **kwargs):
+                raise RuntimeError(
+                    "Secure Studio configuration is unavailable because ModuleManager could not load"
+                    + (f": {MODULE_MANAGER_IMPORT_ERROR}" if MODULE_MANAGER_IMPORT_ERROR else ".")
+                )
             def search_marketplace(self, q="", mod_type="all", source="all"): return {"results": []}
             def search_modules(self, q, t): return []
             def get_installed_modules(self): return []
@@ -761,12 +768,15 @@ if HAS_FASTAPI:
             }
 
             if HAS_TORCH:
+                is_test_runtime = os.environ.get("TRIUNE_TESTING", "").strip().lower() in {"1", "true", "yes"}
                 self.cuda_init_error: Optional[str] = None
                 self.cuda_runtime_version = getattr(torch.version, "cuda", None)
                 self.cuda_available = False
                 self.device = torch.device("cpu")
                 self.device_name = f"CPU ({platform.processor() or 'x86_64'})"
-                if torch.cuda.is_available():
+                # Unit tests must not contend with a live Studio/training
+                # process for CUDA merely by importing the API module.
+                if not is_test_runtime and torch.cuda.is_available():
                     try:
                         torch.cuda.init()
                         torch.cuda.set_device(0)
@@ -814,6 +824,7 @@ if HAS_FASTAPI:
 
         def _restore_persisted_session_state(self):
             """Restore cumulative tokens trained, step, and active checkpoint across sessions and reboots."""
+            is_test_runtime = os.environ.get("TRIUNE_TESTING", "").strip().lower() in {"1", "true", "yes"}
             session_file = Path("checkpoints/session_state.json")
             restored = 0
             if session_file.is_file():
@@ -833,7 +844,7 @@ if HAS_FASTAPI:
                             self.hf_dataset_name = data["hf_dataset_name"]
                         if "hf_stream_offset" in data and data["hf_stream_offset"] is not None:
                             self.hf_stream_offset = max(0, int(data["hf_stream_offset"]))
-                        if os.environ.get("TRIUNE_TESTING") != "1" and self.dataset_name and "/" in self.dataset_name:
+                        if not is_test_runtime and self.dataset_name and "/" in self.dataset_name:
                             self.dataset_path = self.dataset_name
                         if "batch_size" in data and data["batch_size"] > 0:
                             self.batch_size = data["batch_size"]
@@ -867,6 +878,14 @@ if HAS_FASTAPI:
                         self.current_lr = float(self.lr_schedule(self.config, self.step))
                 except Exception:
                     pass
+
+            # Test imports must not hydrate user checkpoints or contend for a
+            # live GPU. Tests construct the fixture they need explicitly.
+            if is_test_runtime:
+                self.total_tokens_trained = restored
+                self.tokens_trained = restored
+                self.current_lr = float(self.lr_schedule(self.config, self.step))
+                return
 
             # Cross-check against latest checkpoint on disk
             ckpt_dir = Path("checkpoints")
@@ -1680,11 +1699,35 @@ if HAS_FASTAPI:
                 self._stream_refill_lock = threading.Lock()
 
             with self._stream_refill_lock:
+                chunk_size = self.seq_len + 1
+
+                # Step 1: Drain any accumulated tokens in _token_accumulator first to prevent RAM bloat
+                while len(self._token_accumulator) >= chunk_size and len(self.hf_stream_buffer) < target_chunks:
+                    split_idx = chunk_size
+                    if split_idx < len(self._token_accumulator) and not self._is_word_boundary(self._token_accumulator[split_idx]):
+                        bt = split_idx
+                        while bt > split_idx - 16 and bt > 0 and not self._is_word_boundary(self._token_accumulator[bt]):
+                            bt -= 1
+                        if bt > 0:
+                            split_idx = bt
+
+                    chunk = self._token_accumulator[:split_idx]
+                    del self._token_accumulator[:split_idx]
+
+                    if len(chunk) < chunk_size:
+                        chunk.extend([self.pad_token_id] * (chunk_size - len(chunk)))
+
+                    self.hf_stream_buffer.append(chunk)
+
                 if len(self.hf_stream_buffer) >= target_chunks:
                     return
-                chunk_size = self.seq_len + 1
-            sep_id = self.tokenizer.token_to_id("[SEP]") or self.tokenizer.token_to_id("[EOS]") or 2
-            attempts = 0
+
+                # Cap accumulator size to prevent unbounded RAM growth
+                if len(self._token_accumulator) > 20000:
+                    del self._token_accumulator[20000:]
+
+                sep_id = self.tokenizer.token_to_id("[SEP]") or self.tokenizer.token_to_id("[EOS]") or 2
+                attempts = 0
 
             while len(self.hf_stream_buffer) < target_chunks and attempts < 1000:
                 attempts += 1
@@ -2032,7 +2075,10 @@ if HAS_FASTAPI:
 
         def schedule_cuda_inference_warmup(self) -> None:
             """Queue one background warmup, also usable after a checkpoint is loaded later."""
-            if os.environ.get("TRIUNE_DISABLE_CUDA_PREWARM", "").strip().lower() in {"1", "true", "yes"}:
+            if (
+                os.environ.get("TRIUNE_TESTING", "").strip().lower() in {"1", "true", "yes"}
+                or os.environ.get("TRIUNE_DISABLE_CUDA_PREWARM", "").strip().lower() in {"1", "true", "yes"}
+            ):
                 self.inference_warmup_status = "disabled"
                 return
             if getattr(self.device, "type", None) != "cuda" or not self.weights_loaded:
@@ -2248,6 +2294,9 @@ if HAS_FASTAPI:
             self.tokens_trained = self.total_tokens_trained
             if self.step % 10 == 0:
                 self._save_persisted_session_state()
+            if self.step % 50 == 0:
+                import gc
+                gc.collect()
 
             vram_stats = VRAMProfiler.get_vram_stats(self.device)
             ema = step_stats["depth_usage_ema"].tolist()
@@ -2468,8 +2517,12 @@ if HAS_FASTAPI:
         cuda_avail = bool(getattr(pytorch_state, "cuda_available", False))
         runtime_device = str(getattr(pytorch_state, "device", "cpu"))
         model = getattr(pytorch_state, "model", None)
-        model_devices = sorted({str(parameter.device) for parameter in model.parameters()}) if model is not None else []
-        model_dtypes = sorted({str(parameter.dtype).replace("torch.", "") for parameter in model.parameters()}) if model is not None else []
+        # This is used as a frequent liveness/discovery probe by Studio.  Do
+        # not walk every parameter here: a large or layer-streamed model can
+        # make that apparently cheap request exceed the UI deadline.
+        first_parameter = next(model.parameters(), None) if model is not None else None
+        model_devices = [str(first_parameter.device)] if first_parameter is not None else []
+        model_dtypes = [str(first_parameter.dtype).replace("torch.", "")] if first_parameter is not None else []
         allocated_gb = reserved_gb = 0.0
         if HAS_TORCH and cuda_avail:
             try:
@@ -2629,7 +2682,17 @@ if HAS_FASTAPI:
         pytorch_state.active_generation_cancel = cancel_event
 
         def _locked_generate(on_text=None) -> Dict[str, Any]:
-            with pytorch_state.worker_lock:
+            # Do not leave HTTP streaming workers blocked indefinitely behind
+            # training or an earlier generation.  A clear busy response is
+            # recoverable; an unbounded Lock.acquire makes the desktop look
+            # offline and prevents shutdown from completing.
+            lock_timeout = max(0.1, float(os.environ.get("TRIUNE_GENERATION_LOCK_TIMEOUT_SECONDS", "5")))
+            if not pytorch_state.worker_lock.acquire(timeout=lock_timeout):
+                raise RuntimeError(
+                    f"The model engine is busy and did not become available within {lock_timeout:g} seconds. "
+                    "Pause training or wait for the current generation to finish."
+                )
+            try:
                 try:
                     if pytorch_state.is_training:
                         raise RuntimeError("Training started while inference was being prepared; pause it and retry.")
@@ -2647,6 +2710,8 @@ if HAS_FASTAPI:
                 finally:
                     if pytorch_state.active_generation_cancel is cancel_event:
                         pytorch_state.active_generation_cancel = None
+            finally:
+                pytorch_state.worker_lock.release()
 
         if req.stream:
             # Keep the model call on its worker thread, but forward decoded text
@@ -2691,7 +2756,17 @@ if HAS_FASTAPI:
                     _publish({"type": "error", "message": str(exc)})
 
             async def _stream_events():
-                worker = asyncio.create_task(asyncio.to_thread(_stream_worker))
+                # A daemon thread is intentional here. asyncio.to_thread uses
+                # the event loop's default executor, which asyncio.run waits
+                # to shut down; a cancelled client could therefore stall the
+                # entire test/server lifetime behind a CUDA worker. Generation
+                # remains cooperatively cancellable through cancel_event.
+                worker = threading.Thread(
+                    target=_stream_worker,
+                    name="triune-stream-generation",
+                    daemon=True,
+                )
+                worker.start()
                 previous_text = ""
                 try:
                     # Flush an initial comment so clients and local proxies know
@@ -2766,7 +2841,7 @@ if HAS_FASTAPI:
                             yield "data: [DONE]\n\n"
                             break
                 finally:
-                    if not worker.done():
+                    if worker.is_alive():
                         cancel_event.set()
 
             return StreamingResponse(
@@ -3625,7 +3700,25 @@ if HAS_FASTAPI:
             # instead of attempting an unbounded allocation.
             target = min(requested, currently_resident)
 
-        if target == currently_resident:
+        if target >= len(all_layers):
+            if old_engine is not None:
+                old_engine.cleanup_resident_layers()
+                old_engine.detach()
+                model._streaming_engine = None
+            target_dtype = torch.bfloat16 if (getattr(state, "precision", "bf16") == "bf16" and torch.cuda.is_bf16_supported()) else torch.float32
+            model.to(device=device, dtype=target_dtype)
+            optimizer = getattr(state, "optimizer", None)
+            optimizer_state = getattr(optimizer, "state", None)
+            if isinstance(optimizer_state, dict):
+                for state_dict in optimizer_state.values():
+                    if not isinstance(state_dict, dict):
+                        continue
+                    for k, v in list(state_dict.items()):
+                        if torch.is_tensor(v):
+                            state_dict[k] = v.to(device=device)
+            return len(all_layers)
+
+        if target == currently_resident and old_engine is not None:
             return target
 
         from triune.runtime.streaming import LayerStreamingEngine, StreamingConfig

@@ -39,7 +39,7 @@ class _FakeStreamingEngine:
 
 
 class TestHardwareTuning(unittest.TestCase):
-    def test_gpu_layer_change_rebuilds_live_streaming_wrapper(self):
+    def test_all_gpu_layers_remove_streaming_wrapper_without_requiring_optimizer_state(self):
         model = nn.Module()
         model.layers = nn.ModuleList([nn.Linear(2, 2) for _ in range(4)])
         old = _FakeStreamingEngine(
@@ -62,8 +62,11 @@ class TestHardwareTuning(unittest.TestCase):
 
         self.assertTrue(old.detached)
         self.assertEqual(applied, 4)
-        self.assertEqual(len(model._streaming_engine.resident_layers), 4)
-        self.assertEqual(model._streaming_engine.optimizer, state.optimizer)
+        # A fully resident model must run natively rather than retain a
+        # redundant streaming wrapper.  Minimal external optimizer objects are
+        # allowed because layer residency itself does not require optimizer
+        # state migration.
+        self.assertIsNone(model._streaming_engine)
 
     def test_cpu_runtime_never_claims_gpu_resident_layers(self):
         state = SimpleNamespace(model=nn.Linear(2, 2), device=torch.device("cpu"))

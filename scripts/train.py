@@ -178,7 +178,10 @@ def main(argv: list[str] | None = None) -> dict:
         device = torch.device("cuda")
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
-        os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+        if sys.platform == "win32":
+            os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:128")
+        else:
+            os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     else:
         device = torch.device("cpu")
         print("⚠️ [Hardware] CUDA not detected. Training on CPU.", flush=True)

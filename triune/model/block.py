@@ -49,7 +49,7 @@ class TransformerBlock(nn.Module):
         self._use_gradient_checkpointing = False
 
     def forward(self, x: torch.Tensor, return_exit: bool = False, cache=None, update_stats: bool = True):
-        if self._use_gradient_checkpointing and self.training:
+        if self._use_gradient_checkpointing and self.training and torch.is_grad_enabled():
             attn_out, new_cache = torch.utils.checkpoint.checkpoint(
                 lambda n: self.attn(n, cache=cache),
                 self.norm1(x),

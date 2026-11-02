@@ -174,8 +174,8 @@ class TriuneTransformer(nn.Module):
 
         x_prefix, new_cache = self._run_layers(x, 0, self.router_prefix_layers, cache=cache)
         route_logits, y_route, depth_choice, balance_loss = self._route(x_prefix, force_depth, B, device, temperature=temperature)
-        self.last_route_logits = route_logits
-        self.last_depth_choice = depth_choice
+        self.last_route_logits = route_logits.detach()
+        self.last_depth_choice = depth_choice.detach()
         self.last_balance_loss = balance_loss
 
         if force_depth is not None:
@@ -274,8 +274,8 @@ class TriuneTransformer(nn.Module):
         x = self.token_embed(input_ids)
         x_prefix, _ = self._run_layers(x, 0, self.router_prefix_layers)
         route_logits, _, depth_choice, balance_loss = self._route(x_prefix, None, B, device)
-        self.last_route_logits = route_logits
-        self.last_depth_choice = depth_choice
+        self.last_route_logits = route_logits.detach()
+        self.last_depth_choice = depth_choice.detach()
         self.last_balance_loss = balance_loss
 
         # Run every MoE block with the same update_stats value.  Label generation

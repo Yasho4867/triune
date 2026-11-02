@@ -373,6 +373,9 @@ class TrainingEngine:
         for module in self.model.modules():
             if isinstance(module, MoE_FFN) and hasattr(module, "step_bias"):
                 module.step_bias()
+        self.model.last_route_logits = None
+        self.model.last_depth_choice = None
+        self.model.last_balance_loss = None
         # overflow is a cumulative count, not an average
         for key in ("loss", "lm", "router", "balance", "z_loss"):
             totals[key] /= grad_accum

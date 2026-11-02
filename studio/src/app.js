@@ -654,6 +654,10 @@
     }
   };
 
+  // The canvas world is deliberately centered around (0, 0), not constrained
+  // to a positive-only page. Keep this in sync with .node-canvas-viewport.
+  const CANVAS_WORLD_ORIGIN = 12000;
+
   const readSavedWorkflow = () => {
     try {
       const raw = window.localStorage.getItem('triune.studio.workflow.v1');
@@ -1110,17 +1114,10 @@
     // A remotely served Studio should use its own origin; local port discovery
     // could otherwise attach it to an unrelated API on the viewer's machine.
     if ((window.location.protocol === 'http:' || window.location.protocol === 'https:') && !isLocalStudioHost(window.location.hostname)) return '';
-    if (activeApiBase) {
-      const controller = new AbortController();
-      const tid = setTimeout(() => controller.abort(), 800);
-      try {
-        const res = await fetch(activeApiBase + '/v1/system/diagnostics', { signal: controller.signal });
-        if (res.ok) return activeApiBase;
-      } catch (e) {
-      } finally {
-        clearTimeout(tid);
-      }
-    }
+    // Keep the selected local API until the dedicated health poll says it has
+    // failed. Re-discovering through full diagnostics before *every* action
+    // made a healthy backend appear offline when a loaded model was busy.
+    if (activeApiBase) return activeApiBase;
     if (apiDiscoveryPromise) return apiDiscoveryPromise;
     apiDiscoveryPromise = (async () => {
       const candidates = await Promise.all(Array.from({ length: 21 }, async (_, index) => {
@@ -1128,10 +1125,10 @@
         const controller = new AbortController();
         const tid = setTimeout(() => controller.abort(), 700);
         try {
-          const res = await fetch(candidate + '/v1/system/diagnostics', { signal: controller.signal });
+          const res = await fetch(candidate + '/healthz', { signal: controller.signal });
           if (!res.ok) return null;
           const data = await res.json();
-          return data.pytorch_version || data.cuda_available !== undefined || data.platform ? candidate : null;
+          return data && data.status === 'ok' && data.service === 'triune-studio' ? candidate : null;
         } catch (e) {
           return null;
         } finally {
@@ -1168,6 +1165,10 @@
     try {
       response = await send(apiAuthToken);
     } catch (err) {
+      // The process may have restarted on another Studio-owned port.  Clear
+      // only after a real request failure; normal model work must not cause a
+      // rediscovery sweep.
+      if (!isRemoteOrigin) activeApiBase = '';
       throw new Error(`Could not reach ${url}: ${err.message || 'connection failed'}. Check that the Studio backend is still running.`);
     }
     if (response.status !== 401) return response;
@@ -1557,6 +1558,10 @@
     const [canvasPan, setCanvasPan] = useState({ x: 0, y: 0 });
     const [canvasZoom, setCanvasZoom] = useState(1.0);
     const [socketPositions, setSocketPositions] = useState({});
+    // Card dimensions change when the window, sidebar, font metrics, or a
+    // node's live output changes.  Keep a layout epoch so wire endpoints are
+    // always derived from actual pins rather than stale screen coordinates.
+    const [canvasLayoutEpoch, setCanvasLayoutEpoch] = useState(0);
     const [isPanning, setIsPanning] = useState(false);
     const [panStart, setPanStart] = useState({ x: 0, y: 0 });
     const [connectingWire, setConnectingWire] = useState(null);
@@ -1641,7 +1646,26 @@
         });
       });
       return () => window.cancelAnimationFrame(frame);
-    }, [activeTab, nodes, edges, canvasPan, canvasZoom, nodeExecOutputs, studioTheme]);
+    }, [activeTab, nodes, edges, canvasPan, canvasZoom, nodeExecOutputs, studioTheme, canvasLayoutEpoch]);
+
+    // The canvas used to measure sockets only after graph-state changes. A
+    // resize then left wires offset from their pins until the user moved a
+    // node. Observe the actual canvas box so responsive layouts stay correct.
+    useEffect(() => {
+      const grid = gridRef.current;
+      if (activeTab !== 'nodegraph' || !grid || typeof ResizeObserver === 'undefined') return undefined;
+      let queued = false;
+      const observer = new ResizeObserver(() => {
+        if (queued) return;
+        queued = true;
+        window.requestAnimationFrame(() => {
+          queued = false;
+          setCanvasLayoutEpoch(epoch => epoch + 1);
+        });
+      });
+      observer.observe(grid);
+      return () => observer.disconnect();
+    }, [activeTab]);
     const workflowImportRef = useRef(null);
 
     // Global Key Listener for Blender / Unreal Controls: Shift+A (Quick Add), M (Mute), Ctrl+J (Frame), Escape (Close)
@@ -2188,7 +2212,10 @@
           const healthRes = await apiFetch('/healthz');
           if (!healthRes.ok) {
             backendHealthFailures += 1;
-            if (backendHealthFailures >= 3) setBackendStatus('offline');
+            if (backendHealthFailures >= 3) {
+              activeApiBase = '';
+              setBackendStatus('offline');
+            }
             return;
           }
           healthCheckSucceeded = true;
@@ -3926,9 +3953,10 @@
           showToast(`Notice: ${data.detail || data.message || `Config update failed (${res.status})`}`);
         }
       } catch (err) {
-        showToast('Network error: Could not reach hardware tune endpoint');
+        showToast(`Hardware settings were not applied: ${err.message || String(err)}`);
+      } finally {
+        setIsUpdatingTrainConfig(false);
       }
-      setIsUpdatingTrainConfig(false);
     };
 
     const handleAutoTuneHardware = async () => {
@@ -4209,7 +4237,6 @@
                 lastManualConfigEditRef.current = Date.now();
                 setTrainDepthMode(newMode);
                 setSelectedHwPreset('custom');
-                handleApplyHardwareTune({ preset: 'custom', depth_mode: newMode });
               }
             },
               e('option', { value: 'cortex' }, 'Full Cortex (100% Backbone Grad - Fastest)'),
@@ -4227,7 +4254,6 @@
                 setTrainPrecision(newPrec);
                 setPrecision(newPrec);
                 setSelectedHwPreset('custom');
-                handleApplyHardwareTune({ preset: 'custom', precision: newPrec });
               }
             },
               e('option', { value: 'bf16' }, 'BF16 (Native Tensor Cores)'),
@@ -4245,7 +4271,6 @@
                 lastManualConfigEditRef.current = Date.now();
                 setTrainLR(newLR);
                 setSelectedHwPreset('custom');
-                handleApplyHardwareTune({ preset: 'custom', lr: parseFloat(newLR) });
               }
             },
               e('option', { value: '0.0001' }, '1e-4 (Gentle)'),
@@ -4279,10 +4304,13 @@
               renderIcon('bolt', 11, { marginRight: '4px' }),
               `Effective: ${effTokens.toLocaleString()} tokens/step`
             ),
-            e('span', { className: 'badge-eff-tokens', style: { background: 'rgba(154, 52, 18, 0.08)', color: 'var(--accent-terracotta)', borderColor: 'rgba(154, 52, 18, 0.25)' } },
+            e('span', {
+              className: 'badge-eff-tokens',
+              title: 'Observed from recent training telemetry. This is not a benchmark for the selected preset or for local inference.'
+            },
               speedEstimate > 0
-                ? `Recent training rate: ~${Math.round(speedEstimate).toLocaleString()} tok/s`
-                : 'Throughput: not benchmarked'
+                ? `Observed training: ~${Math.round(speedEstimate).toLocaleString()} tok/s (not a benchmark)`
+                : 'Training throughput: not benchmarked'
             ),
             e('span', { className: 'badge-eff-tokens', style: { background: 'rgba(43, 76, 63, 0.08)', color: 'var(--accent-olive, #2b4c3f)', borderColor: 'rgba(43, 76, 63, 0.25)' } },
               totalVram > 0
@@ -4294,6 +4322,7 @@
             className: 'btn-action-apply',
             disabled: isUpdatingTrainConfig,
             onClick: () => handleApplyHardwareTune(),
+            title: 'Apply every value currently shown in this tuner to the live engine',
             style: { display: 'inline-flex', alignItems: 'center', gap: '6px' }
           }, isUpdatingTrainConfig ? 'Applying...' : [renderIcon('bolt', 12), 'Apply Hardware Settings'])
         )
@@ -7693,7 +7722,7 @@
                 e('div', {
                   className: 'node-canvas-viewport',
                   style: {
-                    transform: `translate(${canvasPan.x}px, ${canvasPan.y}px) scale(${canvasZoom})`,
+                    transform: `translate(${canvasPan.x + CANVAS_WORLD_ORIGIN}px, ${canvasPan.y + CANVAS_WORLD_ORIGIN}px) scale(${canvasZoom})`,
                     transformOrigin: '0 0'
                   }
                 },
