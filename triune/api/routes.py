@@ -1972,6 +1972,11 @@ if HAS_FASTAPI:
             if pad_id is None:
                 pad_id = self.pad_token_id
 
+            from triune.runtime.neuron_scope import NeuronScope
+            if getattr(self, "neuron_scope", None) is None:
+                self.neuron_scope = NeuronScope(self.model)
+            self.neuron_scope.attach(self.model)
+
             if speculative:
                 from triune.model.speculative import SelfSpeculativeGenerator
                 t_spec_start = time.perf_counter()
@@ -2040,6 +2045,10 @@ if HAS_FASTAPI:
                 banner = "[Notice: Model is running with initialized weights without trained checkpoint. Train this model or load weights in Checkpoints & Weights.]\n\n"
                 generated_text = f"{banner}{generated_text}"
             vram_stats = VRAMProfiler.get_vram_stats(self.device)
+            route_str = str(result.get("route", "Cortex")).upper()
+            tier_idx = 0 if "REFLEX" in route_str else (1 if "LIMBIC" in route_str else 2)
+            if getattr(self, "neuron_scope", None) is not None:
+                self.neuron_scope.record_routing(tier_idx)
             return {
                 "text": generated_text,
                 "route": result["route"],
@@ -2052,6 +2061,7 @@ if HAS_FASTAPI:
                 "checkpoint": self.active_checkpoint,
                 "weights_loaded": self.weights_loaded,
                 "cancelled": result["cancelled"],
+                "neuron_scope": self.neuron_scope.get_snapshot() if getattr(self, "neuron_scope", None) is not None else None,
             }
 
         def warmup_inference_kernels(self) -> None:
@@ -6140,15 +6150,24 @@ SYSTEM \"\"\"You are Triune AI, a high-efficiency cognitive language model train
     @router.get("/v1/playground/neurons")
     async def get_playground_neurons() -> Dict[str, Any]:
         """Return real-time NeuronScope activation heatmaps and router tier telemetry."""
+        from triune.ops._c_bridge import get_native_c_info
         from triune.runtime.neuron_scope import NeuronScope
         scope = getattr(pytorch_state, "neuron_scope", None)
         if scope is None and getattr(pytorch_state, "model", None) is not None:
-            scope = NeuronScope()
+            scope = NeuronScope(pytorch_state.model)
             scope.attach(pytorch_state.model)
             pytorch_state.neuron_scope = scope
         if scope is not None:
             return scope.get_snapshot()
-        return {"layers": {}, "router_history": []}
+        return {
+            "layers": {},
+            "layer_bins": {},
+            "num_layers": 8,
+            "router_history": [],
+            "active_tier": 0,
+            "active_tier_name": "Reflex",
+            "native_c_engine": get_native_c_info(),
+        }
 
     @router.websocket("/ws/telemetry")
     async def websocket_telemetry(websocket: WebSocket) -> None:

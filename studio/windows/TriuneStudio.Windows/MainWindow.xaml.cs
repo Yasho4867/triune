@@ -40,6 +40,9 @@ public partial class MainWindow : Window
         try
         {
             _workspaceRoot ??= FindWorkspaceRoot();
+            var nativeEngineTag = NativeCoreInterop.TryGetEngineStatus(_workspaceRoot);
+            if (!string.IsNullOrEmpty(nativeEngineTag))
+                StatusText.Text = $"Starting the local model engine ({nativeEngineTag})…";
             _pythonPath ??= FindPython(_workspaceRoot);
             _port = await FindStudioPortAsync();
             StartBackend(_workspaceRoot, _pythonPath, _port);
@@ -530,6 +533,45 @@ internal static class JobTracker
                 AssignProcessToJobObject(_jobHandle, process.Handle);
             }
             catch { }
+        }
+    }
+}
+
+internal static class NativeCoreInterop
+{
+    [DllImport("triune_core.dll", CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr triune_engine_version();
+
+    [DllImport("triune_core.dll", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int triune_has_cuda_runtime();
+
+    [DllImport("triune_core.dll", CallingConvention = CallingConvention.Cdecl)]
+    public static extern void triune_compute_neuron_heatmap_f32(
+        IntPtr activations,
+        IntPtr binsOut,
+        IntPtr rgbaOut,
+        int numElements,
+        int numBins);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool SetDllDirectory(string lpPathName);
+
+    public static string? TryGetEngineStatus(string workspaceRoot)
+    {
+        try
+        {
+            var opsDir = Path.Combine(workspaceRoot, "triune", "ops");
+            if (Directory.Exists(opsDir))
+                SetDllDirectory(opsDir);
+
+            var versionPtr = triune_engine_version();
+            var version = versionPtr != IntPtr.Zero ? Marshal.PtrToStringAnsi(versionPtr) : "2.1.0";
+            var cudaReady = triune_has_cuda_runtime() != 0;
+            return cudaReady ? $"C/CUDA {version}" : $"Native C {version}";
+        }
+        catch
+        {
+            return null;
         }
     }
 }

@@ -1,0 +1,10 @@
+LIBRARY kernel32.dll
+EXPORTS
+    GetModuleHandleA
+    LoadLibraryA
+    GetProcAddress
+    GetProcessHeap
+    HeapAlloc
+    HeapFree
+    QueryPerformanceCounter
+    QueryPerformanceFrequency

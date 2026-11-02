@@ -96,7 +96,10 @@ def triangular_steer_update(
     steer_scale: float = 1.0,
     momentum: float = 0.9,
 ) -> torch.Tensor:
-    """Fused triangular CentroidSteer projection update."""
+    """Fused triangular CentroidSteer projection update (dispatches to native C/AVX2 on CPU f32)."""
+    from ._c_bridge import c_centroid_steer_update_f32
+    if c_centroid_steer_update_f32(P, Grad_proj, steer_scale, momentum):
+        return P
     delta = (Grad_proj - P) * steer_scale
     P.mul_(momentum).add_(delta)
     return P

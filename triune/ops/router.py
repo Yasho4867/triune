@@ -30,6 +30,11 @@ def route_tiers(
     Returns:
         (probs, selected_tiers)
     """
+    from ._c_bridge import c_route_tiers_f32
+    c_res = c_route_tiers_f32(logits, reflex_threshold=reflex_threshold)
+    if c_res is not None:
+        return c_res
+
     probs = F.softmax(logits, dim=-1)
     p_reflex = probs[..., 0]
     p_limbic = probs[..., 1]

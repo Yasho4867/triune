@@ -1506,6 +1506,24 @@
     const [maxTokens, setMaxTokens] = useState(256);
     const chatBottomRef = useRef(null);
     const chatAbortControllerRef = useRef(null);
+    const [neuronScopeData, setNeuronScopeData] = useState(null);
+    const [showNeuronScope, setShowNeuronScope] = useState(true);
+
+    const refreshNeuronScope = async () => {
+      try {
+        const res = await apiFetch('/v1/playground/neurons');
+        if (res.ok) {
+          const payload = await res.json();
+          setNeuronScopeData(payload);
+        }
+      } catch (_) {}
+    };
+
+    useEffect(() => {
+      if (activeTab === 'chat') {
+        refreshNeuronScope();
+      }
+    }, [activeTab]);
 
     // Real Training & Telemetry State
     const [isTraining, setIsTraining] = useState(false);
@@ -6147,6 +6165,9 @@
         } else {
           setMessages(prev => [...prev, assistantMessage]);
         }
+        if (!isExternal) {
+          refreshNeuronScope();
+        }
       } catch (err) {
         if (err.name === 'AbortError') {
           if (streamedMessageId && streamedText) {
@@ -7086,10 +7107,92 @@
                     )
                   ),
                   e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+                    activeModel.startsWith('triune') && e('button', {
+                      className: `btn-clear-chat ${showNeuronScope ? 'active' : ''}`,
+                      style: showNeuronScope ? { borderColor: 'var(--accent-bronze, #d97706)', color: 'var(--accent-bronze, #d97706)' } : {},
+                      onClick: () => { setShowNeuronScope(!showNeuronScope); if (!showNeuronScope) refreshNeuronScope(); },
+                      title: 'Toggle live Native C/CUDA Neuron & 3-Tier Router Scope'
+                    }, [renderIcon('bolt', 12, { marginRight: '4px' }), 'Neuron Scope']),
                     e('button', { className: 'btn-clear-chat', onClick: handleNewChat, title: 'Start fresh conversation' }, [renderIcon('plus', 12, { marginRight: '4px' }), 'New Chat']),
                     e('button', { className: 'btn-clear-chat', onClick: handleClearChat, title: 'Clear current conversation messages' }, [renderIcon('trash', 12, { marginRight: '4px' }), 'Clear'])
                   )
                 ),
+                activeModel.startsWith('triune') && showNeuronScope && (() => {
+                  const cInfo = (neuronScopeData && neuronScopeData.native_c_engine) || {};
+                  const activeTierIdx = neuronScopeData && typeof neuronScopeData.active_tier === 'number' ? neuronScopeData.active_tier : (route === 'reflex' ? 0 : (route === 'limbic' ? 1 : 2));
+                  const tierLabels = [
+                    { id: 0, name: 'Tier 0 · Reflex (Shallow Exit)', color: '#16a34a' },
+                    { id: 1, name: 'Tier 1 · Limbic (Mid-Depth MoE)', color: '#d97706' },
+                    { id: 2, name: 'Tier 2 · Cortex (Full Reasoning)', color: '#dc2626' }
+                  ];
+                  const layerBins = (neuronScopeData && neuronScopeData.layer_bins) || {};
+                  const layerKeys = Object.keys(layerBins);
+                  return e('div', {
+                    className: 'neuron-scope-strip',
+                    style: {
+                      padding: '8px 14px',
+                      borderBottom: '1px solid var(--border-color, #ded9cd)',
+                      background: 'var(--bg-surface, #ede9df)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '6px',
+                      fontSize: '11px'
+                    }
+                  },
+                    e('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' } },
+                      e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
+                        e('span', { style: { fontWeight: 700, fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.04em' } }, '3-Tier Router & Neuron Scope:'),
+                        tierLabels.map(t => e('span', {
+                          key: t.id,
+                          style: {
+                            padding: '2px 7px',
+                            borderRadius: '3px',
+                            fontFamily: 'var(--font-mono)',
+                            fontSize: '10.5px',
+                            fontWeight: activeTierIdx === t.id ? 700 : 500,
+                            background: activeTierIdx === t.id ? t.color : 'rgba(0,0,0,0.05)',
+                            color: activeTierIdx === t.id ? '#fff' : 'var(--text-muted)'
+                          }
+                        }, t.name))
+                      ),
+                      e('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--font-mono)', fontSize: '10.5px', color: 'var(--text-muted)' } },
+                        e('span', {
+                          className: `pill ${cInfo.available ? 'online' : ''}`,
+                          style: { fontSize: '10px', padding: '1px 6px' }
+                        }, cInfo.available ? `Native C/AVX2: ${cInfo.version || 'active'}${cInfo.cuda_runtime_bound ? ' · CUDA Bound' : ''}` : 'PyTorch/Triton Kernel Path')
+                      )
+                    ),
+                    layerKeys.length > 0 && e('div', {
+                      style: { display: 'grid', gridTemplateColumns: `repeat(${Math.min(layerKeys.length, 8)}, 1fr)`, gap: '6px', paddingTop: '2px' }
+                    },
+                      layerKeys.slice(0, 8).map(lKey => {
+                        const bins = layerBins[lKey] || [];
+                        return e('div', {
+                          key: lKey,
+                          style: {
+                            background: 'var(--bg-input, #f2eee5)',
+                            border: '1px solid var(--border-color, #ded9cd)',
+                            borderRadius: '3px',
+                            padding: '3px 5px'
+                          }
+                        },
+                          e('div', { style: { fontSize: '9.5px', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)', marginBottom: '2px' } }, `L${lKey}`),
+                          e('div', { style: { display: 'flex', alignItems: 'flex-end', height: '16px', gap: '1px' } },
+                            bins.slice(0, 24).map((val, bIdx) => e('div', {
+                              key: bIdx,
+                              style: {
+                                flex: 1,
+                                height: `${Math.max(15, Math.round(val * 100))}%`,
+                                background: val > 0.75 ? '#dc2626' : (val > 0.4 ? '#d97706' : '#78716c'),
+                                borderRadius: '1px'
+                              }
+                            }))
+                          )
+                        );
+                      })
+                    )
+                  );
+                })(),
                 e('div', { className: 'chat-scroll-area' },
                   messages.map((m, idx) =>
                     e('div', { key: idx, className: `chat-bubble ${m.isAssistant ? 'assistant' : 'user'}` },

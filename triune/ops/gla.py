@@ -27,6 +27,19 @@ def gla(
     Returns:
         (output, final_state)
     """
+    if q.shape[1] == 1 and initial_state is not None and q.device.type == "cpu" and q.dtype == torch.float32:
+        from ._c_bridge import c_gla_recurrent_step_f32
+        c_res = c_gla_recurrent_step_f32(
+            q.squeeze(1).contiguous(),
+            k.squeeze(1).contiguous(),
+            v.squeeze(1).contiguous(),
+            g.squeeze(1).contiguous(),
+            initial_state,
+        )
+        if c_res is not None:
+            out_step, next_state = c_res
+            return out_step.unsqueeze(1), next_state
+
     return fast_chunk_gla(
         q, k, v, g,
         initial_state=initial_state,

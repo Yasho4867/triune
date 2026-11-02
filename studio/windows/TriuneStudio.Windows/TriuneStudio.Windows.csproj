@@ -17,6 +17,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Resource Include="..\triune.ico" Link="triune.ico" />
+    <Content Include="triune_core.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('triune_core.dll')" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4258.31" />

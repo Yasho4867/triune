@@ -2,6 +2,15 @@
 
 from __future__ import annotations
 
+from ._c_bridge import (
+    NativeTriuneEngine,
+    c_centroid_steer_update_f32,
+    c_compute_neuron_heatmap_f32,
+    c_gla_recurrent_step_f32,
+    c_route_tiers_f32,
+    get_native_c_info,
+    is_native_c_available,
+)
 from .centroid_steer import (
     batched_subspace_projection,
     cholesky_qr,
@@ -15,6 +24,13 @@ from .router import TIER_CORTEX, TIER_LIMBIC, TIER_NAMES, TIER_REFLEX, route_tie
 from .swiglu import swiglu
 
 __all__ = [
+    "NativeTriuneEngine",
+    "is_native_c_available",
+    "get_native_c_info",
+    "c_centroid_steer_update_f32",
+    "c_route_tiers_f32",
+    "c_compute_neuron_heatmap_f32",
+    "c_gla_recurrent_step_f32",
     "cholesky_qr",
     "subspace_projection",
     "batched_subspace_projection",
