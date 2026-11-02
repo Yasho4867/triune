@@ -31,6 +31,20 @@ def benchmark_cli(args: argparse.Namespace) -> dict[str, object]:
         device=args.device,
     )
     load_seconds = time.perf_counter() - load_started
+    warmup = generate_response(
+        model,
+        tokenizer,
+        args.prompt,
+        device=device,
+        pad_token_id=pad_id,
+        eos_token_id=eos_id,
+        force_depth=_depth(args.depth),
+        temperature=args.temperature,
+        top_k=50,
+        repetition_penalty=1.2,
+        max_new_tokens=min(args.warmup_tokens, args.max_tokens),
+        return_info=True,
+    )
     result = generate_response(
         model,
         tokenizer,
@@ -50,6 +64,11 @@ def benchmark_cli(args: argparse.Namespace) -> dict[str, object]:
         "checkpoint": str(Path(args.checkpoint).resolve()),
         "device": str(device),
         "model_load_seconds": round(load_seconds, 3),
+        "warmup": {
+            "tokens_count": warmup["tokens_count"],
+            "latency_ms": warmup["latency_ms"],
+            "ttft_ms": warmup.get("ttft_ms"),
+        },
         **result,
         "cuda_allocated_gb": round(torch.cuda.memory_allocated(device) / 1024**3, 3)
         if device.type == "cuda" else 0.0,
@@ -61,22 +80,12 @@ def _read_json(url: str) -> dict[str, object]:
         return json.loads(response.read().decode("utf-8"))
 
 
-def benchmark_studio(args: argparse.Namespace) -> dict[str, object]:
-    base = args.studio_url.rstrip("/")
-    status = _read_json(f"{base}/v1/training/status")
-    active = status.get("active_checkpoint")
-    expected = Path(args.checkpoint).name
-    if not status.get("weights_loaded") or not active or Path(str(active)).name != expected:
-        raise RuntimeError(
-            f"Studio must have the same checkpoint loaded first. Expected {expected!r}; "
-            f"Studio reports {active!r} (weights_loaded={status.get('weights_loaded')})."
-        )
-
+def _studio_generation(args: argparse.Namespace, base: str, max_tokens: int) -> dict[str, object]:
     payload = {
         "model": "local",
         "messages": [{"role": "user", "content": args.prompt}],
         "temperature": args.temperature,
-        "max_tokens": args.max_tokens,
+        "max_tokens": max_tokens,
         "route": args.depth,
         "stream": True,
     }
@@ -120,9 +129,6 @@ def benchmark_studio(args: argparse.Namespace) -> dict[str, object]:
         raise RuntimeError(f"Studio returned HTTP {exc.code}: {detail[:1000]}") from exc
 
     return {
-        "mode": "studio",
-        "checkpoint": str(active),
-        "device": telemetry.get("device"),
         "client_ttft_ms": first_token_ms,
         "client_total_ms": round((time.perf_counter() - started) * 1000, 1),
         "backend_ttft_ms": telemetry.get("ttft_ms"),
@@ -131,7 +137,33 @@ def benchmark_studio(args: argparse.Namespace) -> dict[str, object]:
         "tokens_count": telemetry.get("tokens_count"),
         "vram_gb": telemetry.get("vram_gb"),
         "route": telemetry.get("route"),
+        "device": telemetry.get("device"),
         "sample": "".join(text_parts)[:240],
+    }
+
+
+def benchmark_studio(args: argparse.Namespace) -> dict[str, object]:
+    base = args.studio_url.rstrip("/")
+    status = _read_json(f"{base}/v1/training/status")
+    active = status.get("active_checkpoint")
+    expected = Path(args.checkpoint).name
+    if not status.get("weights_loaded") or not active or Path(str(active)).name != expected:
+        raise RuntimeError(
+            f"Studio must have the same checkpoint loaded first. Expected {expected!r}; "
+            f"Studio reports {active!r} (weights_loaded={status.get('weights_loaded')})."
+        )
+
+    warmup = _studio_generation(args, base, min(args.warmup_tokens, args.max_tokens))
+    result = _studio_generation(args, base, args.max_tokens)
+    return {
+        "mode": "studio",
+        "checkpoint": str(active),
+        "warmup": {
+            "tokens_count": warmup["tokens_count"],
+            "client_ttft_ms": warmup["client_ttft_ms"],
+            "backend_ttft_ms": warmup["backend_ttft_ms"],
+        },
+        **result,
     }
 
 
@@ -142,6 +174,7 @@ def main() -> None:
     parser.add_argument("--tokenizer", default="triune_tokenizer.json")
     parser.add_argument("--prompt", required=True)
     parser.add_argument("--max-tokens", type=int, default=128)
+    parser.add_argument("--warmup-tokens", type=int, default=4, help="Short unscored generation to warm kernels before measurement")
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--depth", choices=("auto", "reflex", "limbic", "cortex"), default="auto")
     parser.add_argument("--device", default=None, help="CLI device; defaults to CUDA when available")
@@ -149,6 +182,8 @@ def main() -> None:
     args = parser.parse_args()
     if args.max_tokens < 1 or args.max_tokens > 8192:
         parser.error("--max-tokens must be between 1 and 8192")
+    if args.warmup_tokens < 1 or args.warmup_tokens > 32:
+        parser.error("--warmup-tokens must be between 1 and 32")
     if args.mode == "studio" and args.device is not None:
         parser.error("--device applies only to --mode cli; Studio reports its actual runtime device")
     result = benchmark_cli(args) if args.mode == "cli" else benchmark_studio(args)

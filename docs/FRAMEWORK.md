@@ -102,6 +102,8 @@ Load **CLI Training Graph** in Studio for the canonical shared-engine training s
 
 The DAG is an acyclic, single-pass computation graph: each node executes once in topological order. It is suited to model/data preparation, tensor operations, one-step optimization, evaluation, export, and orchestration. It is not itself a recurrent training scheduler; use the shared `TrainingStep` node for an actual CLI-equivalent update, or put iteration/scheduling in a higher-level trainer/runtime. Graph **Execute** runs operators; **Compile to Training** applies supported configuration to the active Studio trainer and does not translate arbitrary graph topology into a training loop.
 
+Studio serializes full-graph and single-node execution against the shared engine so concurrent tabs cannot mutate the same runtime at once. Full-graph requests accept an optional `run_id`; `run_queued`, `run_started`, per-node, and `run_finished` events include it, and `GET /v1/dag/queue` reports the active run and waiting count.
+
 Plugins become composable operators by declaring typed ports and returning those output names. Function argument names should match port names; configuration belongs in ordinary keyword parameters. For example:
 
 ```python

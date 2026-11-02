@@ -611,6 +611,25 @@ class TestStudioApiEndpoints(unittest.TestCase):
         self.assertEqual(response.json()["status"], "unavailable")
         self.assertIn("SDK is not installed", response.json()["message"])
 
+    def test_byok_can_verify_a_saved_key_without_echoing_it_to_the_ui(self) -> None:
+        from triune.api import routes
+
+        saved_key = "saved-wandb-api-key-40-hex-characters-long"
+
+        class ConfigStub:
+            def get_config(self):
+                return {"byok_keys": {"wandb": saved_key}}
+
+        with patch.object(routes, "module_manager", ConfigStub()), patch("wandb.login", return_value=True, create=True):
+            response = self.client.post(
+                "/v1/byok/test",
+                json={"provider": "wandb", "key": ""},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "valid")
+        self.assertNotIn(saved_key, response.text)
+
     def test_word_boundary_chunking_pads_and_preserves_words(self) -> None:
         from triune.api import routes
         engine = routes.pytorch_state

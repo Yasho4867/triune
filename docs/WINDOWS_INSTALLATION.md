@@ -47,7 +47,10 @@ python scripts/benchmark_inference.py --mode cli --checkpoint checkpoints\triune
 python scripts/benchmark_inference.py --mode studio --checkpoint checkpoints\triune_studio_step_25500.pt --prompt "Explain the model's routing hierarchy." --max-tokens 128
 ```
 
-The report includes first-token latency, decode tokens/second, total latency,
-device, and checkpoint. Studio mode refuses to run if a different checkpoint is
-active. The tokenizer, prompt, depth, temperature, and output budget should
-match for a useful comparison.
+The report includes the short kernel-warmup cost, first-token latency, decode
+tokens/second, total latency, device, and checkpoint. Studio mode refuses to
+run if a different checkpoint is active. The tokenizer, prompt, depth,
+temperature, and output budget should match for a useful comparison. Studio
+also warms the active CUDA inference path in the background at startup, so the
+first interactive request does not normally pay the one-time FLA/Triton kernel
+compilation cost.

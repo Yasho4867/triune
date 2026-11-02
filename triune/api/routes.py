@@ -16,6 +16,7 @@ import time
 import math
 import sys
 import threading
+import uuid
 from collections import deque
 import traceback
 import platform
@@ -269,6 +270,9 @@ def _checkpoint_architecture(checkpoint: Dict[str, Any], fallback: Dict[str, Any
 if HAS_FASTAPI:
     router = APIRouter()
     dag_engine = ExecutionEngine() if ExecutionEngine is not None else None
+    dag_execution_lock = asyncio.Lock()
+    dag_queue_guard = threading.Lock()
+    dag_queue_state: Dict[str, Any] = {"active_run_id": None, "waiting": 0}
     sandbox = PythonSandbox() if PythonSandbox is not None else None
     
     if ModuleManager is not None:
@@ -707,6 +711,9 @@ if HAS_FASTAPI:
             self.current_batch_preview = ""
             self.active_checkpoint: Optional[str] = None
             self.weights_loaded = False
+            self.inference_warmup_status = "pending"
+            self.inference_warmup_error: Optional[str] = None
+            self._inference_warmup_lock = threading.Lock()
             self.active_adapter: Optional[Dict[str, Any]] = None
             self.last_sample_decode = ""
             self._prefetch_thread: Optional[threading.Thread] = None
@@ -1247,6 +1254,8 @@ if HAS_FASTAPI:
             self.tokens_trained = self.total_tokens_trained
             self.active_checkpoint = p.name
             self.weights_loaded = True
+            self.inference_warmup_status = "pending"
+            self.inference_warmup_error = None
             self.current_lr = float(self.lr_schedule(self.config, self.step))
             if self.optimizer is not None:
                 self.set_optimizer_lr(self.optimizer, self.current_lr)
@@ -1630,7 +1639,14 @@ if HAS_FASTAPI:
                 return None
             try:
                 import wandb
-                wandb.login(key=api_key, relogin=False)
+                login = getattr(wandb, "login", None)
+                if not callable(login):
+                    origin = getattr(wandb, "__file__", None) or "namespace package"
+                    raise RuntimeError(
+                        "The W&B SDK is unavailable in this Python environment "
+                        f"(import resolved to {origin}). Run Studio setup/repair and restart the backend."
+                    )
+                login(key=api_key, relogin=False)
                 proj = project or self.wandb_project or "triune-transformer"
                 rname = run_name or f"triune-{getattr(self, 'active_model_id', 'studio')}-step{self.step}"
                 self.wandb_run = wandb.init(
@@ -1995,6 +2011,43 @@ if HAS_FASTAPI:
                 "cancelled": result["cancelled"],
             }
 
+        def warmup_inference_kernels(self) -> None:
+            """Compile/cache the normal CUDA prefill and recurrent decode kernels once per backend start."""
+            if not HAS_TORCH or self.device.type != "cuda" or not self.weights_loaded:
+                self.inference_warmup_status = "skipped"
+                return
+            self.inference_warmup_status = "warming"
+            try:
+                # Use the exact production generation path, but keep the warmup
+                # short and deterministic. This avoids charging Triton/FLA's
+                # first-use compilation cost to the first interactive prompt.
+                with self.worker_lock:
+                    self.generate_text("Hi", max_new_tokens=2, temperature=0.0)
+                self.inference_warmup_status = "ready"
+                self.logs.insert(0, "[Inference] CUDA kernels warmed; first-token startup is ready.")
+            except Exception as exc:
+                self.inference_warmup_error = str(exc)
+                self.inference_warmup_status = "failed"
+                self.logs.insert(0, f"[Inference] CUDA warmup failed; first request may compile kernels ({exc}).")
+
+        def schedule_cuda_inference_warmup(self) -> None:
+            """Queue one background warmup, also usable after a checkpoint is loaded later."""
+            if os.environ.get("TRIUNE_DISABLE_CUDA_PREWARM", "").strip().lower() in {"1", "true", "yes"}:
+                self.inference_warmup_status = "disabled"
+                return
+            if getattr(self.device, "type", None) != "cuda" or not self.weights_loaded:
+                self.inference_warmup_status = "skipped"
+                return
+            with self._inference_warmup_lock:
+                if self.inference_warmup_status in {"queued", "warming", "ready", "disabled"}:
+                    return
+                self.inference_warmup_status = "queued"
+                threading.Thread(
+                    target=self.warmup_inference_kernels,
+                    name="triune-cuda-inference-warmup",
+                    daemon=True,
+                ).start()
+
         @property
         def config(self) -> Dict[str, Any]:
             target_dist = [0.50, 0.30, 0.20]
@@ -2227,6 +2280,13 @@ if HAS_FASTAPI:
                 "tokens_in_step": accum_tokens,
                 "wandb_url": self.wandb_url,
                 "wandb_active": bool(self.wandb_run),
+                "active_model": getattr(self, "active_model_id", "triune-base"),
+                "architecture": {
+                    "num_layers": getattr(self, "architecture_spec", {}).get("num_layers", getattr(self, "gpu_layers", 8)),
+                    "hidden_dim": getattr(self, "architecture_spec", {}).get("hidden_dim", 384),
+                    "num_heads": getattr(self, "architecture_spec", {}).get("num_heads", 6),
+                    "num_experts": getattr(self, "architecture_spec", {}).get("num_experts", 4),
+                },
             }
 
             # Log to Weights & Biases if configured
@@ -2330,6 +2390,11 @@ if HAS_FASTAPI:
     import atexit
     atexit.register(pytorch_state.stop_prefetch_worker)
 
+    @router.on_event("startup")
+    async def schedule_cuda_inference_warmup() -> None:
+        """Warm the active checkpoint in the background without delaying API health."""
+        pytorch_state.schedule_cuda_inference_warmup()
+
     class ChatCompletionRequest(BaseModel):
         model: str = "triune-base"
         messages: List[Dict[str, str]]
@@ -2344,6 +2409,7 @@ if HAS_FASTAPI:
     class DAGExecuteRequest(BaseModel):
         nodes: List[Dict[str, Any]]
         edges: List[Dict[str, Any]]
+        run_id: Optional[str] = None
 
     class FineTuneRequest(BaseModel):
         dataset_path: str = "data/fineweb_sample.jsonl"
@@ -3002,48 +3068,101 @@ if HAS_FASTAPI:
 
     @router.post("/v1/dag/execute")
     async def execute_dag(req: DAGExecuteRequest) -> Dict[str, Any]:
-        """Ingest raw JSON DAG graph and execute pipeline using ExecutionEngine."""
+        """Queue and execute one graph at a time against the shared model/training state."""
         if dag_engine is None:
             return {"status": "needs_torch", "message": "DAG execution engine requires PyTorch. Run install.bat or launch with WSL2."}
+        run_id = (req.run_id or uuid.uuid4().hex).strip()[:80]
+        queue_started = time.perf_counter()
+        with dag_queue_guard:
+            dag_queue_state["waiting"] += 1
+            queue_position = dag_queue_state["waiting"] + (1 if dag_queue_state["active_run_id"] else 0)
+        await telemetry_manager.broadcast({
+            "type": "dag_event",
+            "data": {"event": "run_queued", "run_id": run_id, "queue_position": queue_position, "timestamp": time.time()},
+        })
+        acquired = False
         try:
             graph_json = {"nodes": req.nodes, "edges": req.edges}
             loop = asyncio.get_running_loop()
+            async with dag_execution_lock:
+                acquired = True
+                queue_wait_ms = round((time.perf_counter() - queue_started) * 1000, 1)
+                with dag_queue_guard:
+                    dag_queue_state["waiting"] = max(0, dag_queue_state["waiting"] - 1)
+                    dag_queue_state["active_run_id"] = run_id
 
-            def _on_dag_event(event_data: Dict[str, Any]):
+                await telemetry_manager.broadcast({
+                    "type": "dag_event",
+                    "data": {"event": "run_started", "run_id": run_id, "queue_wait_ms": queue_wait_ms, "timestamp": time.time()},
+                })
+
+                def _on_dag_event(event_data: Dict[str, Any]):
+                    try:
+                        asyncio.run_coroutine_threadsafe(
+                            telemetry_manager.broadcast({
+                                "type": "dag_event",
+                                "data": {**event_data, "run_id": run_id},
+                            }),
+                            loop
+                        )
+                    except Exception:
+                        pass
+
+                dag_engine.register_event_callback(_on_dag_event)
                 try:
-                    asyncio.run_coroutine_threadsafe(
-                        telemetry_manager.broadcast({
-                            "type": "dag_event",
-                            "data": event_data
-                        }),
-                        loop
-                    )
-                except Exception:
-                    pass
+                    execution_task = asyncio.create_task(asyncio.to_thread(
+                        dag_engine.execute_graph,
+                        graph_json,
+                        initial_context={"_runtime_training_state": pytorch_state},
+                    ))
+                    try:
+                        # Cancelling an HTTP request cannot stop a Python worker
+                        # thread. Keep the queue lock until that work really ends.
+                        res = await asyncio.shield(execution_task)
+                    except asyncio.CancelledError:
+                        await asyncio.shield(execution_task)
+                        raise
+                finally:
+                    dag_engine.unregister_event_callback(_on_dag_event)
 
-            dag_engine.register_event_callback(_on_dag_event)
-            try:
-                res = await asyncio.to_thread(
-                    dag_engine.execute_graph,
-                    graph_json,
-                    initial_context={"_runtime_training_state": pytorch_state},
-                )
-            finally:
-                dag_engine.unregister_event_callback(_on_dag_event)
-
-            return {
-                "status": res.get("status", "success"),
-                "results": res.get("results", {}),
-                "context": res.get("context", {}),
-                "error": res.get("error"),
-                "failed_node": res.get("failed_node"),
-                "specification_nodes": res.get("specification_nodes", []),
-            }
+                result = {
+                    "status": res.get("status", "success"),
+                    "results": res.get("results", {}),
+                    "context": res.get("context", {}),
+                    "error": res.get("error"),
+                    "failed_node": res.get("failed_node"),
+                    "specification_nodes": res.get("specification_nodes", []),
+                    "run_id": run_id,
+                    "queue_wait_ms": queue_wait_ms,
+                }
+                await telemetry_manager.broadcast({
+                    "type": "dag_event",
+                    "data": {"event": "run_finished", "run_id": run_id, "status": result["status"], "timestamp": time.time()},
+                })
+                return result
         except Exception as e:
             return {
                 "status": "error",
                 "error": str(e),
-                "results": {}
+                "results": {},
+                "run_id": run_id,
+            }
+        finally:
+            with dag_queue_guard:
+                if acquired:
+                    if dag_queue_state["active_run_id"] == run_id:
+                        dag_queue_state["active_run_id"] = None
+                else:
+                    dag_queue_state["waiting"] = max(0, dag_queue_state["waiting"] - 1)
+
+    @router.get("/v1/dag/queue")
+    async def get_dag_queue() -> Dict[str, Any]:
+        """Expose current graph execution and queue counts for Studio status UI/API clients."""
+        with dag_queue_guard:
+            return {
+                "active_run_id": dag_queue_state["active_run_id"],
+                "waiting": dag_queue_state["waiting"],
+                "capacity": 1,
             }
 
     @router.post("/v1/dag/compile_to_training")
@@ -3337,6 +3456,7 @@ if HAS_FASTAPI:
         """Execute a single DAG node in isolation with immediate response."""
         if dag_engine is None:
             return {"status": "needs_torch", "message": "DAG execution engine requires PyTorch."}
+        run_id = str(req.get("run_id") or uuid.uuid4().hex)[:80]
         try:
             node = req.get("node", req)
             context = req.get("context", {})
@@ -3350,19 +3470,25 @@ if HAS_FASTAPI:
                     asyncio.run_coroutine_threadsafe(
                         telemetry_manager.broadcast({
                             "type": "dag_event",
-                            "data": event_data
+                            "data": {**event_data, "run_id": run_id}
                         }),
                         loop
                     )
                 except Exception:
                     pass
 
-            dag_engine.register_event_callback(_on_dag_event)
-            try:
-                res = await asyncio.to_thread(dag_engine.execute_single_node, node, context)
-            finally:
-                dag_engine.unregister_event_callback(_on_dag_event)
-            return res
+            async with dag_execution_lock:
+                dag_engine.register_event_callback(_on_dag_event)
+                try:
+                    execution_task = asyncio.create_task(asyncio.to_thread(dag_engine.execute_single_node, node, context))
+                    try:
+                        res = await asyncio.shield(execution_task)
+                    except asyncio.CancelledError:
+                        await asyncio.shield(execution_task)
+                        raise
+                finally:
+                    dag_engine.unregister_event_callback(_on_dag_event)
+                return {**res, "run_id": run_id}
         except Exception as e:
             return {"status": "failed", "error": str(e)}
 
@@ -3598,9 +3724,9 @@ if HAS_FASTAPI:
 
         if total_vram_gb >= 6.0:
             recommended_preset = "turbo"
-            turbo_batch, turbo_seq, turbo_accum = 8, 256, 2
-            balanced_batch, balanced_seq, balanced_accum = 4, 128, 4
-            eco_batch, eco_seq, eco_accum = 2, 64, 8
+            turbo_batch, turbo_seq, turbo_accum = 16, 256, 2
+            balanced_batch, balanced_seq, balanced_accum = 8, 256, 2
+            eco_batch, eco_seq, eco_accum = 4, 128, 4
         elif total_vram_gb >= 3.5:
             recommended_preset = "balanced"
             turbo_batch, turbo_seq, turbo_accum = 4, 128, 4
@@ -3647,7 +3773,7 @@ if HAS_FASTAPI:
         recent_tok_s = [h["throughput"] for h in pytorch_state.history if h.get("throughput") and h["throughput"] > 0]
         empirical_tok_s = int(sum(recent_tok_s[-5:]) / len(recent_tok_s[-5:])) if recent_tok_s else 0
 
-        active_depth = getattr(pytorch_state, "depth_mode", "dynamic") or "dynamic"
+        active_depth = getattr(pytorch_state, "depth_mode", "cortex") or "cortex"
         active_prec = getattr(pytorch_state, "precision", "bf16") or "bf16"
 
         presets = {
@@ -4093,6 +4219,8 @@ if HAS_FASTAPI:
             "history": pytorch_state.history,
             "logs": pytorch_state.logs,
             "device": pytorch_state.device_name,
+            "inference_warmup": getattr(pytorch_state, "inference_warmup_status", "unknown"),
+            "inference_warmup_error": getattr(pytorch_state, "inference_warmup_error", None),
             "last_sample": pytorch_state.last_sample_decode,
             "dataset": {
                 "name": pytorch_state.hf_dataset_name if pytorch_state.is_streaming_hf else pytorch_state.dataset_name,
@@ -4657,6 +4785,7 @@ if HAS_FASTAPI:
             # Checkpoint files can be hundreds of megabytes or larger. Keep disk and
             # model hydration off the asyncio event loop so Studio health/UI calls stay responsive.
             restored = await asyncio.to_thread(_load_checkpoint_safely)
+            pytorch_state.schedule_cuda_inference_warmup()
             restored_tokens = restored["tokens_trained"]
             tokens_fmt = _format_tokens(restored_tokens)
             log_msg = f"[CHECKPOINT] Loaded {p.name} into {restored['active_model']} (step {restored['step']}, {tokens_fmt})."
@@ -5769,10 +5898,32 @@ SYSTEM \"\"\"You are Triune AI, a high-efficiency cognitive language model train
         """Verify provider credentials with a lightweight authenticated API request."""
         provider = req.provider.lower()
         key = req.key.strip()
-        if not key:
-            return {"provider": provider, "status": "empty", "message": "Key is empty"}
         if provider not in {"openai", "anthropic", "gemini", "huggingface", "wandb"}:
             raise HTTPException(status_code=400, detail=f"Unsupported credential provider: {provider}")
+        if not key or _is_masked(key):
+            # Saved secrets are deliberately never echoed back to the UI. Let a
+            # user verify an existing credential without retyping it into the
+            # blank replacement field on a later session.
+            try:
+                cfg = await asyncio.to_thread(module_manager.get_config)
+                saved_keys = cfg.get("byok_keys", {}) if isinstance(cfg, dict) else {}
+                if isinstance(saved_keys, dict):
+                    key = str(saved_keys.get(provider, "") or "").strip()
+                    if _is_masked(key):
+                        key = ""
+            except Exception:
+                key = ""
+            if not key:
+                env_names = {
+                    "openai": ("OPENAI_API_KEY",),
+                    "anthropic": ("ANTHROPIC_API_KEY",),
+                    "gemini": ("GEMINI_API_KEY",),
+                    "huggingface": ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"),
+                    "wandb": ("WANDB_API_KEY",),
+                }
+                key = next((os.environ.get(name, "").strip() for name in env_names[provider] if os.environ.get(name, "").strip()), "")
+        if not key:
+            return {"provider": provider, "status": "empty", "message": "No saved key is configured. Enter a key and save it first."}
 
         if provider == "wandb":
             if len(key) < 20:
@@ -5795,10 +5946,19 @@ SYSTEM \"\"\"You are Triune AI, a high-efficiency cognitive language model train
                     "message": "✓ Weights & Biases authenticated successfully. Live metrics will sync to your W&B dashboard."
                 }
             except Exception as w_err:
+                if isinstance(w_err, (ImportError, AttributeError, ModuleNotFoundError)):
+                    return {
+                        "provider": provider,
+                        "status": "unavailable",
+                        "message": (
+                            "The W&B SDK is unavailable in this backend environment; "
+                            "the key remains saved. Run Studio setup/repair, then restart the backend."
+                        ),
+                    }
                 return {
                     "provider": provider,
-                    "status": "invalid",
-                    "message": f"W&B authentication failed: {w_err}"
+                    "status": "error",
+                    "message": f"W&B verification could not complete: {w_err}. Check network access and the key, then retry."
                 }
         if provider == "huggingface":
             if not (key.startswith("hf_") or len(key) >= 15):

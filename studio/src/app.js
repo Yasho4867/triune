@@ -1497,6 +1497,8 @@
     ]);
     const [chatInput, setChatInput] = useState('');
     const [isGenerating, setIsGenerating] = useState(false);
+    const [inferenceWarmupStatus, setInferenceWarmupStatus] = useState('unknown');
+    const [inferenceWarmupError, setInferenceWarmupError] = useState('');
     const [route, setRoute] = useState('auto');
     const [systemPrompt, setSystemPrompt] = useState(SYSTEM_PROMPT_PRESETS[0].prompt);
     const [temperature, setTemperature] = useState(0.7);
@@ -1584,6 +1586,8 @@
     const [connectingFromId, setConnectingFromId] = useState(null);
     const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
     const [dagExecutionStatus, setDagExecutionStatus] = useState(null);
+    const dagRunIdRef = useRef(null);
+    const [isDagRunSubmitting, setIsDagRunSubmitting] = useState(false);
     const [nodeExecOutputs, setNodeExecOutputs] = useState({});
     const [activeRunningNodeId, setActiveRunningNodeId] = useState(null);
     const [showCustomNodeModal, setShowCustomNodeModal] = useState(false);
@@ -2053,6 +2057,18 @@
               const msg = JSON.parse(event.data);
               if (msg.type === 'dag_event' && msg.data) {
                 const d = msg.data;
+                if (d.run_id && d.run_id !== dagRunIdRef.current) return;
+                if (d.event === 'run_queued') {
+                  setDagExecutionStatus(d.queue_position > 1
+                    ? `Queued behind ${d.queue_position - 1} graph run(s)…`
+                    : 'Graph queued; waiting for the engine…');
+                } else if (d.event === 'run_started') {
+                  setDagExecutionStatus(d.queue_wait_ms > 0
+                    ? `Graph running (waited ${(d.queue_wait_ms / 1000).toFixed(1)}s in queue)…`
+                    : 'Graph running…');
+                } else if (d.event === 'run_finished') {
+                  setActiveRunningNodeId(null);
+                }
                 if (d.event === 'node_started') {
                   setActiveRunningNodeId(d.node_id);
                   setDagExecutionStatus(`Executing Node: ${d.node_name}...`);
@@ -2227,6 +2243,8 @@
             });
           }
           setWeightsLoaded(Boolean(statusData.weights_loaded));
+          if (statusData.inference_warmup) setInferenceWarmupStatus(statusData.inference_warmup);
+          setInferenceWarmupError(statusData.inference_warmup_error || '');
           if (statusData.precision) {
             setTrainPrecision(statusData.precision);
             setPrecision(statusData.precision);
@@ -5362,6 +5380,8 @@
       if (!node) return;
 
       setIsExecutingSingleNode(true);
+      const runId = `studio-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+      dagRunIdRef.current = runId;
       showToast(`Executing [${node.title}] in isolation...`);
       try {
         const res = await apiFetch('/v1/dag/execute_node', {
@@ -5371,7 +5391,8 @@
             node: {
               ...node,
               params: targetId === selectedNodeId ? selectedNodeParams : (node.params || {})
-            }
+            },
+            run_id: runId
           })
         });
         const data = await res.json();
@@ -5822,9 +5843,13 @@
     };
 
     const handleExecuteDAG = async () => {
+      if (isDagRunSubmitting) return;
+      setIsDagRunSubmitting(true);
       setDagExecutionStatus('Initiating ExecutionEngine on PyTorch backend...');
       setNodeExecOutputs({});
       setActiveRunningNodeId(null);
+      const runId = `studio-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+      dagRunIdRef.current = runId;
 
       try {
         const activeNodes = nodes.filter(n => !n.muted);
@@ -5836,7 +5861,7 @@
         const res = await apiFetch('/v1/dag/execute', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ nodes: activeNodes, edges: activeEdges })
+          body: JSON.stringify({ nodes: activeNodes, edges: activeEdges, run_id: runId })
         });
         if (!res.ok) {
           const errText = await res.text();
@@ -5917,7 +5942,7 @@
         const failedNote = failedCount > 0
           ? ` First failure: ${failureName}${failureError ? ` — ${failureError}` : ''}.`
           : '';
-        setDagExecutionStatus(`ExecutionEngine finished ${executedCount} node(s); ${specificationCount} specification-only node(s); ${failedCount} failed.${summary}${specNote}${failedNote}`);
+        setDagExecutionStatus(`ExecutionEngine finished ${executedCount} node(s); ${specificationCount} specification-only node(s); ${failedCount} failed.${summary}${specNote}${failedNote} Run ${data.run_id || runId.slice(-6)}; queue wait ${data.queue_wait_ms ?? 0} ms.`);
         showToast(failedCount > 0 ? `DAG stopped after ${failedCount} node failure(s)` : (specificationCount > 0
           ? `DAG finished with ${specificationCount} specification-only node(s)`
           : 'DAG Engine Pipeline Completed!'));
@@ -5925,6 +5950,8 @@
         setActiveRunningNodeId(null);
         setDagExecutionStatus('Execution error: ' + err.message);
         showToast('DAG Execution Failed');
+      } finally {
+        setIsDagRunSubmitting(false);
       }
     };
 
@@ -7072,7 +7099,11 @@
                           ? 'Loading and validating trained weights, then generating locally. First load can take a while.'
                           : (!systemDiagnostics.cuda_available
                             ? 'Generating locally on CPU. This is functional but much slower than GPU inference.'
-                          : 'Generating locally on GPU. Tokens will appear as they are produced.'))
+                          : (inferenceWarmupStatus === 'queued' || inferenceWarmupStatus === 'warming'
+                            ? 'Preparing CUDA attention kernels in the background. This is a one-time startup cost; your response will stream as soon as the GPU is ready.'
+                            : (inferenceWarmupStatus === 'failed'
+                              ? `Generating locally on GPU. Startup warmup failed, so this request may take longer while kernels initialize. ${inferenceWarmupError ? `Diagnostic: ${String(inferenceWarmupError).slice(0, 180)}` : ''}`
+                              : 'Generating locally on GPU. Tokens will appear as they are produced.'))))
                         : 'Waiting for the selected provider. The response appears when this request finishes.'
                     )
                   ),
@@ -7604,8 +7635,9 @@
                     className: 'btn-action start',
                     style: { padding: '5px 12px', fontSize: '12px' },
                     onClick: handleExecuteDAG,
+                    disabled: isDagRunSubmitting,
                     title: 'Run one forward-and-optimizer pass for this graph (not a long-running training job)'
-                  }, [renderIcon('play', 13, { marginRight: '6px' }), 'Run One Pass']),
+                  }, [renderIcon('play', 13, { marginRight: '6px' }), isDagRunSubmitting ? 'Queued / Running…' : 'Run One Pass']),
                   e('button', {
                     className: 'btn-icon-tool',
                     onClick: () => setShowWireList(prev => !prev),
