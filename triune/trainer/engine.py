@@ -9,6 +9,7 @@ import torch
 import torch.nn.functional as F
 
 from triune.model import MoE_FFN
+from triune.runtime.cuda_graph import CUDAGraphEngine
 from triune.runtime.resource_manager import LiveVRAMMonitor
 
 
@@ -22,6 +23,11 @@ class TrainingEngine:
         )
         self.depth_usage_ema = self.target_depth_dist.clone()
         self.vram_monitor = LiveVRAMMonitor(trainer.device)
+        self.cuda_graph = (
+            CUDAGraphEngine(trainer.device)
+            if trainer.config.get("cuda_graph", False)
+            else None
+        )
         self.sync_streaming_engine()
 
     def sync_streaming_engine(self) -> None:

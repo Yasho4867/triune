@@ -2,14 +2,23 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from .config import DEPTH_BALANCE_COEF, TARGET_DEPTH_DIST
 from .transformer import TriuneTransformer
 
 
-def build_model(config: dict | None = None) -> TriuneTransformer:
-    """Build the established Triune model from a per-run config dictionary."""
-    if config is None:
+def build_model(config: dict[str, Any] | str | None = None, **kwargs: Any) -> TriuneTransformer:
+    """Build the established Triune model from a preset string, config dictionary, or keyword arguments."""
+    if isinstance(config, str):
+        from triune.configs.config import build_config
+        config = build_config(config, **kwargs)
+    elif config is None and kwargs:
+        from triune.configs.config import build_config
+        config = build_config(kwargs)
+    elif config is None:
         return TriuneTransformer()
+
     return TriuneTransformer(
         vocab_size=config.get("vocab_size", 32000),
         hidden_dim=config.get("hidden_dim", 1536),

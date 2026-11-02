@@ -48,7 +48,7 @@ try:
     from . import ops
 
     # Minimalist Public API
-    Model = TriuneModel
+    Model = build_model
     Config = build_config
     CentroidSteer = CentroidSteerOptimizer
 except ImportError:

@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from .centroid_steer import cholesky_qr, subspace_projection, triangular_steer_update
+from .centroid_steer import (
+    batched_subspace_projection,
+    cholesky_qr,
+    subspace_projection,
+    triangular_steer_update,
+)
 from .gla import gla
 from .muon import muon_orthogonalize
 from .norm import norm
@@ -12,6 +17,7 @@ from .swiglu import swiglu
 __all__ = [
     "cholesky_qr",
     "subspace_projection",
+    "batched_subspace_projection",
     "triangular_steer_update",
     "gla",
     "muon_orthogonalize",

@@ -50,7 +50,7 @@ class GumbelSoftmaxRouter(nn.Module):
 
         if force_depth is not None:
             y_route = F.one_hot(torch.full((B,), force_depth, device=x.device, dtype=torch.long), num_classes=3).float()
-            balance_loss = torch.tensor(0.0, device=x.device, dtype=x.dtype)
+            balance_loss = torch.zeros((), device=x.device, dtype=x.dtype)
             return raw_logits, y_route, balance_loss
 
         if self.training:

@@ -27,8 +27,8 @@ def _pytorch_chunk_gla(q, k, v, g, initial_state=None, chunk_size: int = 64):
     when FLA native triton kernels are not installed.
     """
     try:
-        from triune.kernels.fast_gla import fast_chunk_gla
-        return fast_chunk_gla(q, k, v, g, initial_state=initial_state, chunk_size=chunk_size)
+        from triune.ops.gla import gla
+        return gla(q, k, v, g, initial_state=initial_state, chunk_size=chunk_size)
     except Exception:
         pass
 

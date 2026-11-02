@@ -6137,6 +6137,19 @@ SYSTEM \"\"\"You are Triune AI, a high-efficiency cognitive language model train
             return node_registry.list_nodes()
         return []
 
+    @router.get("/v1/playground/neurons")
+    async def get_playground_neurons() -> Dict[str, Any]:
+        """Return real-time NeuronScope activation heatmaps and router tier telemetry."""
+        from triune.runtime.neuron_scope import NeuronScope
+        scope = getattr(pytorch_state, "neuron_scope", None)
+        if scope is None and getattr(pytorch_state, "model", None) is not None:
+            scope = NeuronScope()
+            scope.attach(pytorch_state.model)
+            pytorch_state.neuron_scope = scope
+        if scope is not None:
+            return scope.get_snapshot()
+        return {"layers": {}, "router_history": []}
+
     @router.websocket("/ws/telemetry")
     async def websocket_telemetry(websocket: WebSocket) -> None:
         """Real-time training telemetry stream."""

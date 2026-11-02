@@ -67,8 +67,14 @@ def default_config() -> dict[str, Any]:
     }
 
 
-def build_config(overrides: Mapping[str, Any] | None = None) -> dict[str, Any]:
+def build_config(overrides: Mapping[str, Any] | str | None = None, **kwargs: Any) -> dict[str, Any]:
     config = default_config()
+    if isinstance(overrides, str):
+        overrides = {"model_name": overrides, **kwargs}
+    elif overrides is not None:
+        overrides = {**overrides, **kwargs}
+    elif kwargs:
+        overrides = kwargs
     if overrides:
         model_name = overrides.get("model_name")
         if model_name:

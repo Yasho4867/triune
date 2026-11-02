@@ -40,6 +40,11 @@ class CUDAGraphEngine:
         self.static_target = sample_target.clone().to(self.device)
 
         # Warmup steps to stabilize CUDA caching allocator and dynamic dispatch
+        if hasattr(torch.autograd.graph, "set_override_stale_capture_stream"):
+            torch.autograd.graph.set_override_stale_capture_stream(True)
+        if hasattr(torch.autograd.graph, "set_warn_on_accumulate_grad_stream_mismatch"):
+            torch.autograd.graph.set_warn_on_accumulate_grad_stream_mismatch(False)
+
         stream = torch.cuda.Stream(device=self.device)
         stream.wait_stream(torch.cuda.current_stream())
         with torch.cuda.stream(stream):
@@ -49,6 +54,7 @@ class CUDAGraphEngine:
                 loss = loss_fn(out, self.static_target)
                 loss.backward()
                 optimizer.step()
+                del out, loss
 
         torch.cuda.current_stream().wait_stream(stream)
 

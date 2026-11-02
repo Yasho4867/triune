@@ -15,98 +15,22 @@ except ImportError:
     AdamW8bit = None
 
 
-def _cholesky_qr(Y_f: torch.Tensor) -> torch.Tensor:
-    """Robust Cholesky-QR orthogonalization with column pre-conditioning and QR fallback."""
-    col_norms = torch.linalg.norm(Y_f, dim=0, keepdim=True).clamp_min(1e-12)
-    Y_norm = Y_f / col_norms
-    Gram = torch.mm(Y_norm.t(), Y_norm)
-    Gram.diagonal().add_(1e-7)
-    try:
-        L = torch.linalg.cholesky(Gram)
-        return torch.linalg.solve_triangular(L, Y_norm.t(), upper=False).t()
-    except torch.linalg.LinAlgError:
-        Q, _ = torch.linalg.qr(Y_f)
-        return Q
+from triune.ops.centroid_steer import (
+    batched_subspace_projection as batched_fast_subspace_projection,
+    cholesky_qr as _cholesky_qr,
+    subspace_projection,
+)
 
 
 def fast_subspace_projection(grad: torch.Tensor, rank: int, niter: int = 2) -> tuple[torch.Tensor, str]:
     """High-performance CUDA/CPU Subspace Iteration via Cholesky-QR.
-    
+
     Replaces slow cuSOLVER svd_lowrank with direct Tensor Core GEMM + Cholesky Gram
     orthogonalization. 6.8x faster (5.2ms vs 35.7ms) and consumes 3.1x less transient VRAM.
     """
     m, n = grad.shape
-    q = min(rank + 10, m, n)
     side = 'left' if m <= n else 'right'
-    if side == 'left':
-        Omega = torch.randn(n, q, device=grad.device, dtype=grad.dtype)
-        Y = torch.mm(grad, Omega)
-        Q = _cholesky_qr(Y.float())
-        for _ in range(niter):
-            Z = torch.mm(grad.t(), Q.to(grad.dtype))
-            Q_z = _cholesky_qr(Z.float())
-            Y = torch.mm(grad, Q_z.to(grad.dtype))
-            Q = _cholesky_qr(Y.float())
-        proj = Q[:, :rank].to(device=grad.device, dtype=grad.dtype)
-    else:
-        Omega = torch.randn(m, q, device=grad.device, dtype=grad.dtype)
-        Y = torch.mm(grad.t(), Omega)
-        Q = _cholesky_qr(Y.float())
-        for _ in range(niter):
-            Z = torch.mm(grad, Q.to(grad.dtype))
-            Q_z = _cholesky_qr(Z.float())
-            Y = torch.mm(grad.t(), Q_z.to(grad.dtype))
-            Q = _cholesky_qr(Y.float())
-        proj = Q[:, :rank].to(device=grad.device, dtype=grad.dtype)
-    return proj, side
-
-
-def batched_fast_subspace_projection(grads: torch.Tensor, rank: int, niter: int = 2) -> tuple[torch.Tensor, str]:
-    """High-performance CUDA Batched Tensor Core Subspace Iteration via Cholesky-QR.
-    
-    Processes all N expert weight matrices simultaneously in batched Tensor Core GEMMs (BMM),
-    delivering 11x faster orthogonalization (285ms vs 3148ms for 40 matrices) with zero loop stalls.
-    """
-    N, m, n = grads.shape
-    q = min(rank + 10, m, n)
-    side = 'left' if m <= n else 'right'
-    device, dtype = grads.device, grads.dtype
-    
-    def _batched_cholesky_qr(Y_mat: torch.Tensor) -> torch.Tensor:
-        Y_f = Y_mat.float()
-        col_norms = torch.linalg.norm(Y_f, dim=1, keepdim=True).clamp_min(1e-12)
-        Y_norm = Y_f / col_norms
-        Gram = torch.bmm(Y_norm.transpose(1, 2), Y_norm)
-        for i in range(N):
-            Gram[i].diagonal().add_(1e-7)
-        try:
-            L = torch.linalg.cholesky(Gram)
-            Q = torch.linalg.solve_triangular(L, Y_norm.transpose(1, 2), upper=False).transpose(1, 2)
-            return Q.to(dtype=dtype)
-        except torch.linalg.LinAlgError:
-            Q, _ = torch.linalg.qr(Y_f)
-            return Q.to(dtype=dtype)
-
-    if side == 'left':
-        Omega = torch.randn(N, n, q, device=device, dtype=dtype)
-        Y = torch.bmm(grads, Omega)
-        Q = _batched_cholesky_qr(Y)
-        for _ in range(niter):
-            Z = torch.bmm(grads.transpose(1, 2), Q)
-            Q_z = _batched_cholesky_qr(Z)
-            Y = torch.bmm(grads, Q_z)
-            Q = _batched_cholesky_qr(Y)
-        proj = Q[:, :, :rank]
-    else:
-        Omega = torch.randn(N, m, q, device=device, dtype=dtype)
-        Y = torch.bmm(grads.transpose(1, 2), Omega)
-        Q = _batched_cholesky_qr(Y)
-        for _ in range(niter):
-            Z = torch.bmm(grads, Q)
-            Q_z = _batched_cholesky_qr(Z)
-            Y = torch.bmm(grads.transpose(1, 2), Q_z)
-            Q = _batched_cholesky_qr(Y)
-        proj = Q[:, :, :rank]
+    proj = subspace_projection(grad, rank, niter=niter)
     return proj, side
 
 

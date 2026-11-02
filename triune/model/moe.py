@@ -104,7 +104,7 @@ class MoE_FFN(nn.Module):
         biased_logits = bias_free_logits + self.expert_bias
 
         if self.training:
-            temp = max(0.1, 1.0 - self._global_step / 5000)
+            temp = (1.0 - self._global_step.float() / 5000.0).clamp(min=0.1)
             gate_weights = F.softmax(bias_free_logits / temp, dim=-1)
         else:
             gate_weights = F.softmax(bias_free_logits, dim=-1)
@@ -165,6 +165,20 @@ class MoE_FFN(nn.Module):
             has_b2 = all_b2
             b1_stack = torch.stack([e[0].bias for e in self.experts], dim=0).unsqueeze(1) if has_b1 else None
             b2_stack = torch.stack([e[2].bias for e in self.experts], dim=0).unsqueeze(1) if has_b2 else None
+
+            if x.is_cuda and torch.cuda.is_current_stream_capturing():
+                x_exp = flat_x.unsqueeze(0).expand(self.num_experts, -1, -1)
+                h_pre = torch.bmm(x_exp, W1_stack.transpose(1, 2))
+                if b1_stack is not None:
+                    h_pre = h_pre + b1_stack
+                h = self.experts[0][1](h_pre)
+                y_all = torch.bmm(h, W2_stack.transpose(1, 2))
+                if b2_stack is not None:
+                    y_all = y_all + b2_stack
+                routing_weights = torch.zeros(B * T, self.num_experts, device=x.device, dtype=y_all.dtype)
+                routing_weights.scatter_add_(1, flat_idx, flat_vals.to(y_all.dtype))
+                out = out + (y_all * routing_weights.t().unsqueeze(-1)).sum(dim=0).to(out.dtype)
+                return out.view(B, T, D)
 
         for k in range(self.top_k):
             idx_k = flat_idx[:, k]
@@ -329,7 +343,7 @@ class MoE_FFN(nn.Module):
         biased_logits = bias_free_logits + self.expert_bias
 
         if self.training:
-            temp = max(0.1, 1.0 - self._global_step / 5000)
+            temp = (1.0 - self._global_step.float() / 5000.0).clamp(min=0.1)
             gate_weights = F.softmax(bias_free_logits / temp, dim=-1)
         else:
             gate_weights = F.softmax(bias_free_logits, dim=-1)
