@@ -163,7 +163,17 @@ public partial class MainWindow : Window
     private async Task ShowStudioAsync(Uri baseUri)
     {
         StatusText.Text = "Opening Studio…";
-        await StudioView.EnsureCoreWebView2Async();
+        var userDataFolder = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Triune", "WebView2");
+        Directory.CreateDirectory(userDataFolder);
+
+        var options = new CoreWebView2EnvironmentOptions
+        {
+            AdditionalBrowserArguments = "--renderer-process-limit=1 --disable-background-networking --disable-features=AudioServiceOutOfProcess,TranslateUI,MediaEngagementBypassAutoplayPolicies --disable-gpu-shader-disk-cache --disable-extensions --disable-component-update --enable-low-end-device-mode"
+        };
+        var env = await CoreWebView2Environment.CreateAsync(null, userDataFolder, options);
+        await StudioView.EnsureCoreWebView2Async(env);
         try
         {
             await StudioView.CoreWebView2.Profile.ClearBrowsingDataAsync(
