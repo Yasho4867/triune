@@ -4,6 +4,8 @@ using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
+using System.Threading;
 using System.Windows;
 
 namespace TriuneStudio.Windows;
@@ -225,6 +227,23 @@ public partial class MainWindow : Window
         throw new FileNotFoundException("Python was not found. Install Studio from the project environment first.");
     }
 
+        private static void TryKillOrphanedStudioProcesses()
+    {
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "powershell.exe",
+                Arguments = "-NoProfile -Command \"$p = (Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue).OwningProcess; if ($p) { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue }\"",
+                CreateNoWindow = true,
+                UseShellExecute = false
+            };
+            using var p = Process.Start(startInfo);
+            p?.WaitForExit(1000);
+        }
+        catch { }
+    }
+
     private Task<int> FindStudioPortAsync()
     {
         for (var port = 8000; port <= 8019; port++)
@@ -239,7 +258,22 @@ public partial class MainWindow : Window
                 listener.Start();
                 return Task.FromResult(port);
             }
-            catch (SocketException) { }
+            catch (SocketException)
+            {
+                if (port == 8000)
+                {
+                    TryKillOrphanedStudioProcesses();
+                    Thread.Sleep(250);
+                    try
+                    {
+                        var retryListener = new TcpListener(IPAddress.Loopback, 8000);
+                        retryListener.Start();
+                        retryListener.Stop();
+                        return Task.FromResult(8000);
+                    }
+                    catch (SocketException) { }
+                }
+            }
             finally { listener.Stop(); }
         }
 
@@ -281,6 +315,7 @@ public partial class MainWindow : Window
         _backendProcess.ErrorDataReceived += (_, e) => { if (e.Data is not null && _backendLog is { } log) lock (log) log.WriteLine(e.Data); };
         if (!_backendProcess.Start())
             throw new InvalidOperationException("Could not start the Python backend process.");
+        JobTracker.TrackProcess(_backendProcess);
         _backendProcess.BeginOutputReadLine();
         _backendProcess.BeginErrorReadLine();
     }
@@ -396,4 +431,97 @@ public partial class MainWindow : Window
         _backendLog?.Dispose();
         _backendLog = null;
     }
+
+internal static class JobTracker
+{
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    private static extern IntPtr CreateJobObject(IntPtr lpJobAttributes, string? lpName);
+
+    [DllImport("kernel32.dll")]
+    private static extern bool SetInformationJobObject(IntPtr hJob, int infoType, IntPtr lpJobObjectInfo, uint cbJobObjectInfoLength);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool AssignProcessToJobObject(IntPtr hJob, IntPtr hProcess);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JOBOBJECT_BASIC_LIMIT_INFORMATION
+    {
+        public long PerProcessUserTimeLimit;
+        public long PerJobUserTimeLimit;
+        public uint LimitFlags;
+        public UIntPtr MinimumWorkingSetSize;
+        public UIntPtr MaximumWorkingSetSize;
+        public uint ActiveProcessLimit;
+        public UIntPtr Affinity;
+        public uint PriorityClass;
+        public uint SchedulingClass;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct IO_COUNTERS
+    {
+        public ulong ReadOperationCount;
+        public ulong WriteOperationCount;
+        public ulong OtherOperationCount;
+        public ulong ReadTransferCount;
+        public ulong WriteTransferCount;
+        public ulong OtherTransferCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+    {
+        public JOBOBJECT_BASIC_LIMIT_INFORMATION BasicLimitInformation;
+        public IO_COUNTERS IoInfo;
+        public UIntPtr ProcessMemoryLimit;
+        public UIntPtr JobMemoryLimit;
+        public UIntPtr PeakProcessMemoryLimit;
+        public UIntPtr PeakJobMemoryLimit;
+    }
+
+    private const int JobObjectExtendedLimitInformation = 9;
+    private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000;
+
+    private static readonly IntPtr _jobHandle;
+
+    static JobTracker()
+    {
+        try
+        {
+            _jobHandle = CreateJobObject(IntPtr.Zero, null);
+            var info = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+            {
+                BasicLimitInformation = new JOBOBJECT_BASIC_LIMIT_INFORMATION
+                {
+                    LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+                }
+            };
+            int length = Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION));
+            IntPtr ptr = Marshal.AllocHGlobal(length);
+            try
+            {
+                Marshal.StructureToPtr(info, ptr, false);
+                SetInformationJobObject(_jobHandle, JobObjectExtendedLimitInformation, ptr, (uint)length);
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(ptr);
+            }
+        }
+        catch { }
+    }
+
+    public static void TrackProcess(Process process)
+    {
+        if (_jobHandle != IntPtr.Zero && !process.HasExited)
+        {
+            try
+            {
+                AssignProcessToJobObject(_jobHandle, process.Handle);
+            }
+            catch { }
+        }
+    }
+}
+
 }
