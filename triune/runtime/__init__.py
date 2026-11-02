@@ -16,7 +16,11 @@ try:
     from .capabilities import PrecisionCapabilities
     from .staging import FP8StagingBuffer, ParameterStager, StagingBuffer
     from .vram import AutoOffloader, VRAMProfiler
+    from .cuda_graph import CUDAGraphEngine
+    from .neuron_scope import NeuronScope
 except ImportError:
+    CUDAGraphEngine = None
+    NeuronScope = None
     MemoryEstimate = None
     MemoryPlan = None
     MemoryPlanner = None
@@ -59,5 +63,7 @@ __all__ = [
     "SandboxResult",
     "VRAMProfiler",
     "AutoOffloader",
+    "CUDAGraphEngine",
+    "NeuronScope",
 ]
 
