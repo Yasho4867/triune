@@ -288,7 +288,6 @@ def main() -> None:
     elif args.command in ("benchmark", "bench"):
         if getattr(args, "suite", None):
             from scripts.run_all_benchmarks import run_category, REPO_ROOT
-            import sys
             suite_map = {
                 "all": ["a", "b", "c", "d", "e", "f"],
                 "kernels": ["a"],
