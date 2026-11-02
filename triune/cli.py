@@ -92,7 +92,8 @@ def main() -> None:
     train_parser.add_argument("train_args", nargs=argparse.REMAINDER, help="Arguments passed to training script")
 
     # 9. Benchmark command
-    bench_parser = subparsers.add_parser("benchmark", help="Measure steady-state inference decode speed and latency")
+    bench_parser = subparsers.add_parser("benchmark", aliases=["bench"], help="Run inference or comprehensive optimization benchmarks")
+    bench_parser.add_argument("--suite", default=None, choices=("all", "kernels", "optimizers", "streaming", "context", "routing", "matrix"), help="Optimization benchmark suite")
     bench_parser.add_argument("--checkpoint", default="checkpoints_full/best.pt", help="Checkpoint path")
     bench_parser.add_argument("--tokenizer", default="triune_tokenizer.json", help="Tokenizer path")
     bench_parser.add_argument("--prompt", default="The meaning of life is", help="Prompt text")
@@ -284,7 +285,24 @@ def main() -> None:
         sys.argv = [sys.argv[0]] + (args.train_args or [])
         train_main()
 
-    elif args.command == "benchmark":
+    elif args.command in ("benchmark", "bench"):
+        if getattr(args, "suite", None):
+            from scripts.run_all_benchmarks import run_category, REPO_ROOT
+            import sys
+            suite_map = {
+                "all": ["a", "b", "c", "d", "e", "f"],
+                "kernels": ["a"],
+                "optimizers": ["b"],
+                "streaming": ["c"],
+                "context": ["d"],
+                "routing": ["e"],
+                "matrix": ["f"],
+            }
+            cats = suite_map.get(args.suite, ["a"])
+            for cat in cats:
+                run_category(cat, sys.executable)
+            return
+
         from scripts.benchmark_inference import benchmark_cli
         b_args = argparse.Namespace(
             checkpoint=args.checkpoint,

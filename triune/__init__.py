@@ -45,6 +45,12 @@ try:
         register_model,
     )
     from .optim import CentroidSteerOptimizer, Muon, build_optimizer
+    from . import ops
+
+    # Minimalist Public API
+    Model = TriuneModel
+    Config = build_config
+    CentroidSteer = CentroidSteerOptimizer
 except ImportError:
     # Allows lightweight tooling and desktop launchers to initialize without direct torch installation
     pass
@@ -100,6 +106,12 @@ _LAZY_IMPORTS = {
 }
 
 __all__ = [
+    # Minimalist Public API
+    "Model",
+    "Config",
+    "CentroidSteer",
+    "Muon",
+    "ops",
     # Core (eager)
     "build_config",
     "default_config",
