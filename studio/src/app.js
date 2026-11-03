@@ -6665,8 +6665,8 @@
         e('div', { className: 'react-brand' },
           e('div', { className: 'brand-logo-icon' }, renderTriuneLogo(34)),
           !sidebarCollapsed && e('div', { className: 'brand-title-wrap' },
-            e('span', { className: 'brand-title' }, 'Triune Studio'),
-            e('span', { className: 'brand-sub' }, 'Model workspace')
+            e('span', { className: 'brand-title' }, 'Triune AI Studio'),
+            e('span', { className: 'brand-sub' }, 'Triune AI Workspace')
           )
         ),
         e('nav', { className: 'react-nav', 'aria-label': 'Studio sections' },

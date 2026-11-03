@@ -16,9 +16,9 @@ The Triune `LayerStreamingEngine` decouples model parameter capacity from physic
 
 | Model Scale | Total Parameters | Standard GPU Peak VRAM | LayerStreaming Peak VRAM | VRAM Reduction | Standard Latency | Streaming Latency | Throughput (tok/s) |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **76M** | 101.97M | 1385.93 MB | 905.28 MB | 34.68% | 142.8 ms | 690.72 ms | 1482.5 tok/s |
-| **150M** | 270.56M | 3163.88 MB | 1824.25 MB | 42.34% | 141.75 ms | 1538.27 ms | 665.7 tok/s |
-| **350M** | 694.85M | 7023.08 MB | 3661.73 MB | 47.86% | 1850.0 ms | 4531.24 ms | 226.0 tok/s |
+| **76M** | 101.97M | 1315.9 MB | 877.78 MB | 33.29% | 87.52 ms | 657.17 ms | 1558.2 tok/s |
+| **150M** | 270.56M | 3022.64 MB | 1780.13 MB | 41.11% | 149.24 ms | 1576.66 ms | 649.5 tok/s |
+| **350M** | 694.85M | 6795.0 MB | 3585.74 MB | 47.23% | 2938.85 ms | 4012.4 ms | 255.2 tok/s |
 
 ## 3. Analysis: Memory Footprint vs. PCIe Bandwidth Trade-off
 

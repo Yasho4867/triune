@@ -25,17 +25,18 @@ from .dispatcher import is_triton_available  # noqa: F401  (re-exported for back
 
 
 def _chunk_ce_grad(chunk_logits_fp32: torch.Tensor, chunk_y: torch.Tensor, ignore_index: int):
-    """Returns (sum_loss, grad_logits_unscaled) for one chunk in-place on chunk_logits_fp32."""
+    """Returns (sum_loss, grad_logits_unscaled) for one chunk in-place on chunk_logits_fp32 (zero CPU sync)."""
+    row_idx = torch.arange(chunk_y.size(0), device=chunk_y.device)
     valid = chunk_y != ignore_index
-    safe_y = torch.where(valid, chunk_y, torch.zeros_like(chunk_y))
+    safe_y = torch.where(valid, chunk_y, torch.zeros_like(chunk_y)) if ignore_index >= 0 else chunk_y.clamp_min(0)
     lse = torch.logsumexp(chunk_logits_fp32, dim=-1, keepdim=True)
-    target_logit = chunk_logits_fp32.gather(1, safe_y.unsqueeze(1))
-    loss_sum = ((lse - target_logit) * valid.unsqueeze(1)).sum()
+    target_logit = chunk_logits_fp32[row_idx, safe_y].unsqueeze(1)
+    valid_col = valid.unsqueeze(1)
+    loss_sum = ((lse - target_logit) * valid_col).sum()
 
     grad = chunk_logits_fp32.sub_(lse).exp_()
-    grad.scatter_add_(1, safe_y.unsqueeze(1), -torch.ones_like(target_logit))
-    if not bool(valid.all()):
-        grad.mul_(valid.unsqueeze(1).to(grad.dtype))
+    grad[row_idx, safe_y] -= 1.0
+    grad.mul_(valid_col)
     return loss_sum, grad
 
 
@@ -45,9 +46,12 @@ class _FusedLinearCrossEntropy(torch.autograd.Function):
         flat_h = hidden.reshape(-1, hidden.size(-1))
         flat_y = targets.reshape(-1)
         n_tokens = flat_h.size(0)
+        # Adaptive chunk size: saturate Tensor Cores when vocab <= 32768 while capping transient memory
+        eff_chunk = max(int(chunk_size), 1024) if weight.size(0) <= 32768 else int(chunk_size)
+
         # Device-side valid count without host synchronization
         n_valid = (flat_y != ignore_index).sum().clamp_min(1)
-        inv_n = (1.0 / n_valid.to(torch.float32))
+        inv_n = 1.0 / n_valid.to(torch.float32)
         acc = torch.promote_types(weight.dtype, torch.float32)
 
         need_h, need_w, need_b = ctx.needs_input_grad[0], ctx.needs_input_grad[1], (
@@ -58,9 +62,9 @@ class _FusedLinearCrossEntropy(torch.autograd.Function):
         grad_b = torch.zeros(bias.shape, device=bias.device, dtype=acc) if need_b else None
 
         total = torch.zeros((), device=hidden.device, dtype=acc)
-        for i in range(0, n_tokens, chunk_size):
-            h = flat_h[i : i + chunk_size]
-            y = flat_y[i : i + chunk_size]
+        for i in range(0, n_tokens, eff_chunk):
+            h = flat_h[i : i + eff_chunk]
+            y = flat_y[i : i + eff_chunk]
             logits = F.linear(h, weight, bias).to(acc)
             loss_sum, g = _chunk_ce_grad(logits, y, ignore_index)
             total = total + loss_sum
@@ -71,7 +75,7 @@ class _FusedLinearCrossEntropy(torch.autograd.Function):
             g_w = g.to(weight.dtype)
             del g
             if need_h:
-                torch.matmul(g_w, weight, out=grad_h[i : i + chunk_size])
+                torch.matmul(g_w, weight, out=grad_h[i : i + eff_chunk])
             if need_w:
                 grad_w.addmm_(g_w.t(), h.to(weight.dtype))
             del g_w
@@ -124,7 +128,7 @@ class _ChunkedCrossEntropy(torch.autograd.Function):
         logits, targets, n_valid = ctx.saved_tensors
         if not ctx.needs_input_grad[0]:
             return None, None, None, None
-        grad = torch.zeros_like(logits)
+        grad = torch.empty_like(logits)
         flat_l = logits.reshape(-1, logits.size(-1))
         flat_g = grad.view(-1, logits.size(-1))
         flat_y = targets.reshape(-1)
@@ -162,6 +166,32 @@ def fast_cross_entropy(
     """Computes cross-entropy loss in chunks to minimize intermediate activation memory."""
     flat_logits = logits.reshape(-1, logits.size(-1))
     flat_targets = targets.reshape(-1)
-    if flat_logits.size(0) <= chunk_size:
-        return F.cross_entropy(flat_logits, flat_targets, ignore_index=ignore_index)
-    return _ChunkedCrossEntropy.apply(logits, targets, int(chunk_size), int(ignore_index))
+    eff_chunk = max(int(chunk_size), 1024) if flat_logits.size(-1) <= 32768 else int(chunk_size)
+    if flat_logits.size(0) <= eff_chunk:
+        acc = torch.promote_types(flat_logits.dtype, torch.float32)
+        valid_count = (flat_targets != ignore_index).sum().clamp_min(1)
+        return F.cross_entropy(flat_logits.to(acc), flat_targets, ignore_index=ignore_index, reduction="sum") / valid_count
+    return _ChunkedCrossEntropy.apply(logits, targets, eff_chunk, int(ignore_index))
+
+
+class FastChunkedCrossEntropyLoss(nn.Module):
+    """Drop-in nn.Module wrapper for chunked cross-entropy (accepts either logits or (hidden, lm_head))."""
+
+    def __init__(self, chunk_size: int = 1024, ignore_index: int = -100):
+        super().__init__()
+        self.chunk_size = chunk_size
+        self.ignore_index = ignore_index
+
+    def forward(
+        self,
+        logits_or_hidden: torch.Tensor,
+        targets: torch.Tensor,
+        lm_head: nn.Linear | torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        if lm_head is not None:
+            return chunked_cross_entropy_from_hidden(
+                logits_or_hidden, lm_head, targets, chunk_size=self.chunk_size, ignore_index=self.ignore_index
+            )
+        return fast_cross_entropy(
+            logits_or_hidden, targets, chunk_size=self.chunk_size, ignore_index=self.ignore_index
+        )

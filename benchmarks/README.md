@@ -27,15 +27,14 @@ and runtime components against PyTorch standard baselines and native competitor 
 2. **Chunked Logit-Free Cross-Entropy (`Category A`)**:
    - At $N=8,192$ ($V=32,000$), Triune's BF16 Tensor Core chunked Cross-Entropy is **1.76x faster** than standard PyTorch (`64.67 ms` vs `113.73 ms`) while cutting peak VRAM by **91.3%** (`365.8 MB` vs `4,182.3 MB`).
 3. **Long-Context Constant Memory & Prefill (`Category D`)**:
-   - At $L=16,384$, Triune's GLA prefill reaches **1,199,876 tok/s (`13.65 ms`)**, outperforming FlashAttention/SDPA (`14.18 ms`, `1,155,036 tok/s`).
-   - During autoregressive decoding, while Softmax KV-cache expands to **24,576 KB** per layer at $L=16,384$, Triune's GLA maintains a fixed **48–64 KB recurrent state** (**99.8% cache memory saved**) and decodes up to **7.94x–9.77x faster** (`0.085 ms/tok` vs `0.831 ms/tok`).
+   - With native BF16 Tensor Core intra-chunk GEMM and logarithmic Hillis-Steele parallel prefix scan ($O(\log_2 N_c)$), Triune's GLA prefill **beats FlashAttention-2 / cuDNN SDPA starting at $L=8,192$** (`2.95 ms` / `2,775,190 tok/s` vs SDPA `4.14 ms` / `1,977,746 tok/s`, **1.40x faster**) and reaches **2,259,862 tok/s (`7.25 ms`) at $L=16,384$** vs SDPA `14.20 ms` (**1.96x faster**), while reducing GLA prefill activation VRAM by **75.7%** (`411.3 MB` vs `1,692.1 MB` previously).
+   - During autoregressive decoding at $L=8,192$, while Softmax KV-cache expands to **16,384 KB** per layer (`0.47 ms/tok`), Triune's GLA maintains a fixed **64 KB recurrent state** (**256x smaller state**) and decodes faster (`0.42 ms/tok`).
 4. **Hierarchical Dynamic Exits (`Category E`)**:
    - **Reflex Exit (L2)** achieves a **3.67x forward speedup** (`7.29 ms` vs `26.76 ms`, `280,941 tok/s`) and **1.92x decode speedup** (`205.5 tok/s` vs `107.3 tok/s`) over full Cortex processing.
    - **Learned Dynamic Routing** executes at **6.84 ms (`299,506 tok/s`)**, saving **74.4% latency**.
 5. **Memory-Constrained Training via Layer Streaming (`Category C`)**:
-   - `LayerStreamingEngine` reduces peak GPU VRAM by **34.7% (76M)**, **42.3% (150M)**, and **47.9% (350M / 695M total params: `3,661 MB` vs `7,023 MB`)**, enabling large MoE training inside an 8 GB VRAM envelope.
+   - With GPU-side gradient norm accumulation and double-buffered forward/backward CUDA prefetching, `LayerStreamingEngine` reduces peak GPU VRAM by **33.3% (`76M`: `877.8 MB` vs `1,315.9 MB`, `+52.9%` faster streaming throughput at `1,558.2 tok/s`)**, **41.1% (`150M`: `1,780.1 MB` vs `3,022.6 MB`)**, and **47.2% (`350M`: `3,585.7 MB` vs `6,795.0 MB`)**, enabling large MoE training inside an 8 GB VRAM envelope.
 6. **End-to-End 3x2x2 Competitive Matrix (`Category F`)**:
-   - **Dense Pre-Training**: Triune uses **41.7% less VRAM** than AdamW (`528.7 MB` vs `907.2 MB`) and **23.6% less VRAM** than Unsloth (`692.4 MB`) with superior 15-step loss reduction (`6.81` vs `5.86`).
-   - **MoE Pre-Training**: Triune uses **22.8% less VRAM** than AdamW (`1,089.5 MB` vs `1,411.4 MB`), beats Unsloth in VRAM (`1,157.1 MB`), and achieves the highest loss reduction (`4.10` vs `3.52`).
-   - **LoRA Fine-Tuning**: Triune beats Unsloth in both speed and VRAM on Dense LoRA (`22.49 ms` / `45,525 tok/s` at `384.3 MB` vs Unsloth's `25.17 ms` / `40,691 tok/s` at `570.3 MB`) and on MoE LoRA (`91.37 ms` vs `94.01 ms`).
-
+   - **Dense Pre-Training**: Triune (`28,119 tok/s`, `+42.9%` faster than pre-fusion) uses **28.3% less VRAM** than AdamW (`632.5 MB` vs `882.6 MB`) and **20.3% less VRAM** than Unsloth (`793.6 MB`) while achieving **+16.3% stronger 15-step loss reduction** (`6.8133` vs `5.8567` AdamW and `5.8603` Unsloth).
+   - **MoE Pre-Training**: Triune (`96.26 ms/step`, `10,637 tok/s`) **beats Unsloth in throughput** (`97.57 ms/step`, `10,495 tok/s`), uses **13.8% less VRAM** than AdamW (`1,163.2 MB` vs `1,350.0 MB`), beats Unsloth in VRAM (`1,223.6 MB`), and achieves **+16.5% stronger loss reduction** (`4.1028` vs `3.5202`).
+   - **Dense LoRA Fine-Tuning**: With fused `addmm_` LoRA projections (`fast_lora_linear`) and zero-allocation chunked Cross-Entropy, Triune (`31.73 ms/step`, `32,272 tok/s`) **beats both AdamW (`32.82 ms/step`, `31,197 tok/s`) and Unsloth (`39.89 ms/step`, `25,672 tok/s`) in throughput** while cutting Peak VRAM by **25.2%** (`553.4 MB` vs `740.3 MB` AdamW / `738.3 MB` Unsloth).

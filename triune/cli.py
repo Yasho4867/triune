@@ -117,8 +117,8 @@ def main() -> None:
     install_parser.add_argument("--no-launch", action="store_true", help="Do not launch Studio after installation")
     install_parser.add_argument("-y", "--yes", action="store_true", help="Run unattended without GUI prompt")
 
-    # 13. Doctor command
-    subparsers.add_parser("doctor", help="Run comprehensive end-to-end diagnostics on GPU, optimizer, router, and Studio backend")
+    # 13. Doctor / Info command
+    subparsers.add_parser("doctor", aliases=["info"], help="Run comprehensive end-to-end diagnostics on GPU, C/AVX2 engine, optimizers, and Studio backend")
 
     # 14. Build Native Apps command
     native_parser = subparsers.add_parser("build-native", help="Build native desktop apps & installers for Windows (.exe), Linux (AppDir), and macOS (.app)")
@@ -363,20 +363,28 @@ def main() -> None:
                 cmd.append("--yes")
             raise SystemExit(subprocess.call(cmd, cwd=str(workspace)))
 
-    elif args.command == "doctor":
+    elif args.command in ("doctor", "info"):
         import torch
         from triune.utils.device import device_diagnostic
-        from triune.api.server import HAS_FASTAPI
+        import importlib.util
+        has_fastapi = importlib.util.find_spec("fastapi") is not None
+        from triune.ops import get_native_c_info
+        from triune.model.base import CANONICAL_MODEL_SPECS
 
         diag = device_diagnostic()
-        print("\n=== Triune System & Engine Doctor ===")
+        c_info = get_native_c_info()
+        print("\n=== Triune AI System & Engine Doctor ===")
         print(f"  Python Runtime   : {diag['python']}")
         print(f"  PyTorch Version  : {diag['torch']}")
         print(f"  CUDA Available   : {diag['cuda_available']}")
         for idx, gpu in enumerate(diag.get("gpus", [])):
             maj, min_v = gpu["capability"]
             print(f"  GPU [{idx}]          : {gpu['name']} ({gpu['memory_gib']:.2f} GiB, SM{maj}.{min_v})")
-        print(f"  Studio FastAPI   : {'Operational' if HAS_FASTAPI else 'Missing'}")
+        print(f"  Native C Engine  : {'Loaded' if c_info.get('available') else 'Fallback'} (v{c_info.get('version', '2.0')}, CUDA-Bound={c_info.get('cuda_runtime_bound', False)}, SIMD=AVX2)")
+        print(f"  Optimizers       : CentroidSteer (Triangular Core), Muon (5th-Order NS), AdamW / 8-bit")
+        print(f"  Fused Operators  : GLA, Chunked CE, RMSNorm, RoPE, SwiGLU, Fused LoRA, Universal Upgrade")
+        print(f"  Model Zoo        : {len(CANONICAL_MODEL_SPECS)} Verified Architecture Presets")
+        print(f"  Studio FastAPI   : {'Operational' if has_fastapi else 'Missing'}")
         session_p = Path("checkpoints/session_state.json")
         if session_p.is_file():
             import json

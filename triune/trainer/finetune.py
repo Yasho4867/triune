@@ -12,6 +12,8 @@ import torch.nn as nn
 
 from triune.callbacks import global_emitter
 from triune.export import export_model
+from triune.kernels.fast_cross_entropy import fast_cross_entropy
+from triune.kernels.fast_lora import fast_lora_forward, fast_lora_linear
 
 
 class LoRALayer(nn.Module):
@@ -45,10 +47,23 @@ class LoRALayer(nn.Module):
             p.requires_grad = False
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if (
+            type(self.original_layer) is nn.Linear
+            and (isinstance(self.dropout, nn.Identity) or not self.training)
+            and x.dtype == self.original_layer.weight.dtype
+            and x.dtype == self.lora_A.dtype
+        ):
+            return fast_lora_linear(
+                x,
+                self.original_layer.weight,
+                self.original_layer.bias,
+                self.lora_A,
+                self.lora_B,
+                self.scaling,
+            )
         orig_out = self.original_layer(x)
         drop_x = self.dropout(x)
         try:
-            from triune.kernels.fast_lora import fast_lora_forward
             lora_out = fast_lora_forward(drop_x, self.lora_A, self.lora_B, self.scaling)
         except Exception:
             lora_out = ((drop_x @ self.lora_A.T) @ self.lora_B.T) * self.scaling
@@ -217,12 +232,11 @@ class TriuneFineTuner:
         trainable_params = [p for p in self.model.parameters() if p.requires_grad]
         if not trainable_params:
             raise RuntimeError("No trainable LoRA parameters found on model.")
-        optimizer = torch.optim.AdamW(trainable_params, lr=lr)
-
         # Detect device & target vocab size
         p_first = next(self.model.parameters())
         device = p_first.device
         dtype = p_first.dtype if p_first.is_floating_point() else torch.float32
+        optimizer = torch.optim.AdamW(trainable_params, lr=lr, fused=(device.type == "cuda"))
 
         # Prepare tokens
         token_batches: List[torch.Tensor] = []
@@ -313,7 +327,6 @@ class TriuneFineTuner:
 
         print(f"[LoRA Fine-Tuning] Starting: {len(token_batches)} batches -> {output_dir}")
         self.model.train()
-        loss_fn = nn.CrossEntropyLoss()
 
         total_steps = max_steps or (epochs * len(token_batches) // max(1, batch_size))
         total_steps = max(1, total_steps)
@@ -326,7 +339,7 @@ class TriuneFineTuner:
             if cancel_event is not None and getattr(cancel_event, "is_set", lambda: False)():
                 print(f"[LoRA Fine-Tuning] Cancellation requested at step {step}/{total_steps}.")
                 break
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)
             # Assemble batch
             batch_tensors = []
             for _ in range(batch_size):
@@ -348,7 +361,7 @@ class TriuneFineTuner:
             else:
                 logits = res
 
-            lm_loss = loss_fn(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
+            lm_loss = fast_cross_entropy(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
             total_loss = lm_loss
 
             total_loss.backward()

@@ -15,20 +15,20 @@ and sub-millisecond per-token latency even at context lengths exceeding 16,384 t
 
 | Context Length ($L$) | Standard SDPA Latency | GLA Latency | SDPA Peak VRAM | GLA Peak VRAM | VRAM Reduction | Speedup |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **512** | 0.39 ms | 1.28 ms | 40.5 MB | 54.09 MB | -33.6% | **0.3x** |
-| **1024** | 0.18 ms | 1.5 ms | 45.5 MB | 68.61 MB | -50.8% | **0.12x** |
-| **2048** | 0.47 ms | 4.95 ms | 51.5 MB | 97.66 MB | -89.6% | **0.09x** |
-| **4096** | 1.26 ms | 7.59 ms | 63.5 MB | 155.75 MB | -145.3% | **0.17x** |
-| **8192** | 4.03 ms | 6.75 ms | 87.5 MB | 272.94 MB | -211.9% | **0.6x** |
-| **16384** | 14.18 ms | 13.65 ms | 136.5 MB | 507.32 MB | -271.7% | **1.04x** |
+| **512** | 0.39 ms | 2.81 ms | 40.5 MB | 51.09 MB | -26.1% | **0.14x** |
+| **1024** | 0.4 ms | 1.36 ms | 45.5 MB | 62.61 MB | -37.6% | **0.29x** |
+| **2048** | 0.44 ms | 2.96 ms | 51.5 MB | 85.66 MB | -66.3% | **0.15x** |
+| **4096** | 1.27 ms | 3.03 ms | 63.5 MB | 131.75 MB | -107.5% | **0.42x** |
+| **8192** | 4.14 ms | 2.95 ms | 87.5 MB | 224.94 MB | -157.1% | **1.4x** |
+| **16384** | 14.2 ms | 7.25 ms | 136.5 MB | 411.32 MB | -201.3% | **1.96x** |
 
 ## 3. Autoregressive Decode Scaling ($O(1)$ vs $O(L)$)
 
 | Prompt Context Length | SDPA KV-Cache Memory | GLA Recurrent State Memory | SDPA Decode Latency | GLA Decode Latency | Decode Latency Advantage |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **512** | 1024.0 KB | **64.0 KB (Fixed)** | 0.496 ms/tok | **0.959 ms/tok** | **0.52x faster** |
-| **2048** | 4096.0 KB | **64.0 KB (Fixed)** | 0.167 ms/tok | **0.413 ms/tok** | **0.4x faster** |
-| **8192** | 16384.0 KB | **64.0 KB (Fixed)** | 0.464 ms/tok | **0.415 ms/tok** | **1.12x faster** |
+| **512** | 1024.0 KB | **64.0 KB (Fixed)** | 0.467 ms/tok | **0.486 ms/tok** | **0.96x faster** |
+| **2048** | 4096.0 KB | **64.0 KB (Fixed)** | 0.351 ms/tok | **0.954 ms/tok** | **0.37x faster** |
+| **8192** | 16384.0 KB | **64.0 KB (Fixed)** | 0.469 ms/tok | **0.416 ms/tok** | **1.13x faster** |
 
 ## 4. Key Takeaways
 

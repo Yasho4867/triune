@@ -147,7 +147,7 @@ def run_benchmark_cell(
                 use_8bit_base=True,
             )
         else:
-            optimizer = get_unsloth_optimizer(trainable_params, lr=1e-3, weight_decay=0.01)
+            optimizer = torch.optim.AdamW(trainable_params, lr=1e-3, weight_decay=0.01, fused=(device.type == "cuda"))
 
     # Shared cyclic synthetic batches for fair convergence comparison
     torch.manual_seed(100)

@@ -15,9 +15,9 @@ from .dispatcher import (
     is_turbo_mode_enabled,
     set_turbo_mode,
 )
-from .fast_cross_entropy import chunked_cross_entropy_from_hidden, fast_cross_entropy
+from .fast_cross_entropy import FastChunkedCrossEntropyLoss, chunked_cross_entropy_from_hidden, fast_cross_entropy
 from .fast_gla import fast_chunk_gla
-from .fast_lora import fast_lora_forward
+from .fast_lora import fast_lora_forward, fast_lora_linear
 from .fast_muon import fast_zeropower_via_newtonschulz5
 from .fast_rmsnorm import FastRMSNorm, fast_rmsnorm
 from .fast_rope import fast_rope
@@ -43,8 +43,10 @@ __all__ = [
     # Loss & Attention
     "fast_cross_entropy",
     "chunked_cross_entropy_from_hidden",
+    "FastChunkedCrossEntropyLoss",
     "fast_chunk_gla",
     # Optimizers & Adapters
     "fast_zeropower_via_newtonschulz5",
     "fast_lora_forward",
+    "fast_lora_linear",
 ]

@@ -604,6 +604,18 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                     torch._foreach_mul_(params_b, beta_wd)
                 torch._foreach_add_(params_b, list(delta_W.unbind(0)), alpha=alpha_upd)
 
+                if N < len(self.layer_groups):
+                    # Subset / Layer-Streaming mode: isolate per-group state tensors before CPU offload
+                    QL_full = self._bucket_buffers[(K, m, n, r, device, dtype)]['QL_stack']
+                    QR_full = self._bucket_buffers[(K, m, n, r, device, dtype)]['QR_stack']
+                    for b_idx, g in enumerate(g_list):
+                        idx = start + b_idx
+                        g['Q_L'] = QL_full[b_idx].clone()
+                        g['Q_R'] = QR_full[b_idx].clone()
+                        g['projection'] = g['Q_L'][:, :r]
+                        g['state']['momentum'] = batch_mom[idx].clone()
+                        g['state']['variance'] = batch_var[idx].clone()
+
             if is_global_step_end:
                 self.step_count += 1
             return

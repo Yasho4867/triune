@@ -60,8 +60,8 @@ def create_app():
     from fastapi.responses import FileResponse, JSONResponse
 
     app = fastapi.FastAPI(
-        title="Triune Framework Server",
-        description="Embedded API & Telemetry Server powering Triune Studio",
+        title="Triune AI Server",
+        description="Embedded API & Telemetry Server powering Triune AI Studio",
         version="2.0.0",
     )
 

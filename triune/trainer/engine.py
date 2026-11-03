@@ -8,6 +8,7 @@ import random
 import torch
 import torch.nn.functional as F
 
+from triune.kernels.fast_cross_entropy import fast_cross_entropy
 from triune.model import MoE_FFN
 from triune.runtime.cuda_graph import CUDAGraphEngine
 from triune.runtime.resource_manager import LiveVRAMMonitor
@@ -64,8 +65,7 @@ class TrainingEngine:
         pad_id = getattr(self.trainer, "pad_token_id", -100)
         if pad_id is None:
             pad_id = -100
-        valid_count = (y_flat != pad_id).sum().clamp_min(1)
-        return F.cross_entropy(logits.reshape(-1, vocab_size), y_flat, ignore_index=pad_id, reduction="sum") / valid_count
+        return fast_cross_entropy(logits.reshape(-1, vocab_size), y_flat, ignore_index=int(pad_id))
 
     def _router_labels_from_logits(self, reflex, limbic, cortex, x, y):
         with torch.no_grad():

@@ -4,7 +4,7 @@
 
 ## Key Capabilities & Pillars
 
-- **Gated Linear Attention (GLA)**: $O(N)$ linear-time prefill and $O(1)$ constant-memory (`48–64 KB`) recurrent decoding with fused QKVG projections, factored intra-chunk GEMMs, and batched inter-chunk Tensor Core GEMMs (`1.20M+ tok/s` prefill and `9.77x` faster decode than Softmax KV-cache at $L=16,384$).
+- **Gated Linear Attention (GLA)**: $O(N)$ linear-time prefill and $O(1)$ constant-memory (`48–64 KB`) recurrent decoding with native BF16 Tensor Core intra-chunk GEMM, logarithmic Hillis-Steele parallel prefix scan ($O(\log_2 N_c)$), and batched inter-chunk Tensor Core GEMMs (**`2.26M+ tok/s` prefill at $L=16,384$ (`1.96x` faster than FlashAttention/SDPA)** and **`256x` smaller recurrent state**).
 - **Sparse Mixture of Experts (MoE)**: Batched 3D BMM top-$k$ expert routing with an always-active shared expert, zero-sync GPU overflow counters, and activation centroid tracking.
 - **Hierarchical Dynamic Exits**: Calibrated intermediate exit heads (**Reflex**, **Limbic**) and full-depth exit (**Cortex**), variance-matched via parameter-free `RMSNorm`, delivering a **3.6x–4.3x inference speedup** (`299,506 tok/s` forward throughput) on low-entropy tokens.
 - **3-Tier Partitioned Optimizer (`CentroidSteerOptimizer`)**:
@@ -45,16 +45,16 @@ TriuneTransformer/
 
 ## 5 Ways to Use Triune AI in Your Workflows
 
-1. **Minimalist Python SDK (`import triune`)**:
+1. **1-Line Universal Booster (`triune.upgrade`)**:
+   Wrap *any* PyTorch or Hugging Face model with `engine = triune.upgrade(model, lora_rank=16)` to automatically replace `RMSNorm`/`LayerNorm` with `FastRMSNorm`, inject fused `addmm_` LoRA adapters (`fast_lora_linear`), attach `CentroidSteerOptimizer`, and run zero-allocation chunked Cross-Entropy (`chunked_cross_entropy`).
+2. **Minimalist Python SDK (`import triune`)**:
    Build dense or MoE transformers with `triune.Model(triune.Config(...))` or `triune.load_model("triune-2.5b")`, and train with `triune.CentroidSteer` or `triune.Muon`.
-2. **Drop-In Low-VRAM Optimizers (`triune.CentroidSteer` & `triune.Muon`)**:
+3. **Drop-In Low-VRAM Optimizers (`triune.CentroidSteer` & `triune.Muon`)**:
    Plug `CentroidSteerOptimizer` or `Muon` directly into any existing PyTorch or Hugging Face training loop to cut optimizer state VRAM by **56%–95%** while accelerating convergence.
-3. **Standalone Fused Operators (`triune.ops`)**:
-   Call `triune.ops.cross_entropy` (chunked logit-free CE saving up to **90.7% VRAM**), `triune.ops.gla`, `triune.ops.rmsnorm`, `triune.ops.rope`, or `triune.ops.speculative_decode` inside custom PyTorch models.
-4. **Native Desktop IDE (`TriuneStudio.exe` / `triune studio`)**:
-   Launch the self-contained Windows desktop application to design models visually in the DAG Node Editor, monitor live 3-tier optimizer & Neuron Scope telemetry, run 1-click LoRA/QLoRA fine-tuning, and chat with Reflex/Limbic/Cortex exit routing.
-5. **Unified CLI & OpenAI-Compatible Server (`triune serve` / `triune train` / `triune finetune`)**:
-   Serve models locally at `http://127.0.0.1:8000/v1/chat/completions` for drop-in integration with Cursor, Continue, LangChain, or OpenAI SDK clients.
+4. **Standalone Fused Operators (`triune.ops`)**:
+   Call `triune.ops.cross_entropy`, `triune.ops.chunked_cross_entropy` (saving up to **91.3% VRAM**), `triune.ops.gla`, `triune.ops.rmsnorm`, `triune.ops.rope`, `triune.ops.swiglu`, or `triune.ops.lora_linear` inside custom PyTorch models.
+5. **Native Desktop IDE & Unified CLI (`TriuneStudio.exe` / `triune studio` / `triune serve` / `triune doctor`)**:
+   Launch the self-contained Windows desktop application (`TriuneStudio.exe`) or serve models locally at `http://127.0.0.1:8000/v1/chat/completions` for drop-in integration with Cursor, Continue, LangChain, or OpenAI SDK clients.
 
 ## 🚀 1-Click Installation (Recommended)
 

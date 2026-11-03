@@ -17,16 +17,34 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from triune.kernels import (
+    FastChunkedCrossEntropyLoss,
+    FastGELU,
+    FastSwiGLU,
     chunked_cross_entropy_from_hidden,
-    fast_cross_entropy,
     fast_chunk_gla,
-    fast_rmsnorm,
-    fast_swiglu,
+    fast_cross_entropy,
     fast_gelu,
     fast_lora_forward,
+    fast_lora_linear,
+    fast_rmsnorm,
+    fast_swiglu,
 )
 from triune.optim.centroid import CentroidSteerOptimizer
 from triune.trainer.finetune import LoRAConfig, LoRALayer, TriuneFineTuner
+
+
+def _linear_or_lora(mod: nn.Module, x: torch.Tensor) -> torch.Tensor:
+    """Dispatches fused addmm LoRA when lora_A/lora_B are attached to an nn.Linear, else standard forward."""
+    if (
+        type(mod) is nn.Linear
+        and hasattr(mod, "lora_A")
+        and hasattr(mod, "lora_B")
+        and mod.lora_A is not None
+        and mod.lora_B is not None
+    ):
+        scaling = getattr(mod, "lora_scaling", 2.0)
+        return fast_lora_linear(x, mod.weight, mod.bias, mod.lora_A, mod.lora_B, scaling)
+    return mod(x)
 
 
 # =========================================================================
@@ -41,7 +59,7 @@ class DenseAttention(nn.Module):
         self.num_heads = num_heads
         self.head_dim = head_dim or (dim // num_heads)
         self.use_gla = use_gla
-        
+
         self.q_proj = nn.Linear(dim, num_heads * self.head_dim, bias=False)
         self.k_proj = nn.Linear(dim, num_heads * self.head_dim, bias=False)
         self.v_proj = nn.Linear(dim, num_heads * self.head_dim, bias=False)
@@ -56,8 +74,9 @@ class DenseAttention(nn.Module):
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         B, T, D = x.shape
         hd_total = self.num_heads * self.head_dim
-        can_fuse = (
-            type(self.q_proj) is nn.Linear
+        can_fuse_eval = (
+            not torch.is_grad_enabled()
+            and type(self.q_proj) is nn.Linear
             and type(self.k_proj) is nn.Linear
             and type(self.v_proj) is nn.Linear
             and not hasattr(self.q_proj, "lora_A")
@@ -65,7 +84,7 @@ class DenseAttention(nn.Module):
             and not hasattr(self.v_proj, "lora_A")
         )
         if self.use_gla:
-            if can_fuse and type(self.gate_proj) is nn.Linear and not hasattr(self.gate_proj, "lora_A"):
+            if can_fuse_eval and type(self.gate_proj) is nn.Linear and not hasattr(self.gate_proj, "lora_A"):
                 qkvg = F.linear(
                     x,
                     torch.cat(
@@ -78,15 +97,15 @@ class DenseAttention(nn.Module):
                 v = qkvg[..., 2 * hd_total:3 * hd_total].reshape(B, T, self.num_heads, self.head_dim)
                 g = -F.softplus(qkvg[..., 3 * hd_total:].reshape(B, T, self.num_heads, self.head_dim))
             else:
-                q = self.q_proj(x).reshape(B, T, self.num_heads, self.head_dim)
-                k = self.k_proj(x).reshape(B, T, self.num_heads, self.head_dim)
-                v = self.v_proj(x).reshape(B, T, self.num_heads, self.head_dim)
-                g = -F.softplus(self.gate_proj(x).reshape(B, T, self.num_heads, self.head_dim))
+                q = _linear_or_lora(self.q_proj, x).reshape(B, T, self.num_heads, self.head_dim)
+                k = _linear_or_lora(self.k_proj, x).reshape(B, T, self.num_heads, self.head_dim)
+                v = _linear_or_lora(self.v_proj, x).reshape(B, T, self.num_heads, self.head_dim)
+                g = -F.softplus(_linear_or_lora(self.gate_proj, x).reshape(B, T, self.num_heads, self.head_dim))
             out, new_state = fast_chunk_gla(q, k, v, g, initial_state=state)
             out = out.reshape(B, T, -1)
-            return self.o_proj(out), new_state
+            return _linear_or_lora(self.o_proj, out), new_state
         else:
-            if can_fuse:
+            if can_fuse_eval:
                 qkv = F.linear(
                     x,
                     torch.cat((self.q_proj.weight, self.k_proj.weight, self.v_proj.weight), dim=0),
@@ -95,15 +114,15 @@ class DenseAttention(nn.Module):
                 k = qkv[..., hd_total:2 * hd_total].reshape(B, T, self.num_heads, self.head_dim)
                 v = qkv[..., 2 * hd_total:].reshape(B, T, self.num_heads, self.head_dim)
             else:
-                q = self.q_proj(x).reshape(B, T, self.num_heads, self.head_dim)
-                k = self.k_proj(x).reshape(B, T, self.num_heads, self.head_dim)
-                v = self.v_proj(x).reshape(B, T, self.num_heads, self.head_dim)
+                q = _linear_or_lora(self.q_proj, x).reshape(B, T, self.num_heads, self.head_dim)
+                k = _linear_or_lora(self.k_proj, x).reshape(B, T, self.num_heads, self.head_dim)
+                v = _linear_or_lora(self.v_proj, x).reshape(B, T, self.num_heads, self.head_dim)
             q_sdpa = q.transpose(1, 2)
             k_sdpa = k.transpose(1, 2)
             v_sdpa = v.transpose(1, 2)
             out = F.scaled_dot_product_attention(q_sdpa, k_sdpa, v_sdpa, is_causal=True)
             out = out.transpose(1, 2).reshape(B, T, -1)
-            return self.o_proj(out), None
+            return _linear_or_lora(self.o_proj, out), None
 
 
 class DenseMLP(nn.Module):
@@ -119,13 +138,14 @@ class DenseMLP(nn.Module):
             self.down_proj = nn.Linear(hidden, dim, bias=False)
         else:
             self.linear1 = nn.Linear(dim, hidden, bias=False)
-            self.act = nn.GELU()
+            self.act = FastGELU()
             self.linear2 = nn.Linear(hidden, dim, bias=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.act_type == "swiglu":
             if (
-                type(self.gate_proj) is nn.Linear
+                not torch.is_grad_enabled()
+                and type(self.gate_proj) is nn.Linear
                 and type(self.up_proj) is nn.Linear
                 and not hasattr(self.gate_proj, "lora_A")
                 and not hasattr(self.up_proj, "lora_A")
@@ -133,9 +153,12 @@ class DenseMLP(nn.Module):
                 gate, up = F.linear(
                     x, torch.cat((self.gate_proj.weight, self.up_proj.weight), dim=0)
                 ).chunk(2, dim=-1)
-                return self.down_proj(fast_swiglu(gate, up))
-            return self.down_proj(fast_swiglu(self.gate_proj(x), self.up_proj(x)))
-        return self.linear2(self.act(self.linear1(x)))
+                return _linear_or_lora(self.down_proj, fast_swiglu(gate, up))
+            return _linear_or_lora(
+                self.down_proj,
+                fast_swiglu(_linear_or_lora(self.gate_proj, x), _linear_or_lora(self.up_proj, x)),
+            )
+        return _linear_or_lora(self.linear2, self.act(_linear_or_lora(self.linear1, x)))
 
 
 class DenseTransformerBlock(nn.Module):
@@ -290,24 +313,26 @@ class TriuneUniversalEngine:
             return None
 
         trainable_params = [p for p in self.model.parameters() if p.requires_grad]
-        
-        if self.is_moe and self.use_centroid_steer and self.mode == "pretrain":
-            # For MoE pre-training, use 3-Tier Partitioned CentroidSteer + Muon
+
+        if self.use_centroid_steer and self.mode == "pretrain":
+            # Use 3-Tier Partitioned CentroidSteer + Muon + 8-bit AdamW across both MoE and Dense
             try:
+                target_mod = self.model.core if hasattr(self.model, "core") else self.model
                 return CentroidSteerOptimizer(
-                    self.model,
+                    target_mod,
                     lr=self.lr,
                     rank=self.rank,
-                    steer_scale=0.1,
+                    steer_scale=0.1 if self.is_moe else 0.0,
                     use_muon=True,
+                    use_8bit_base=True,
                 )
             except Exception:
                 pass
 
-        # Standard AdamW or 8-bit AdamW fallback
+        # Standard AdamW fallback
         return torch.optim.AdamW(trainable_params, lr=self.lr, weight_decay=0.01)
 
-    def train_step(self, input_ids: torch.Tensor, targets: torch.Tensor, chunk_size: int = 512) -> Dict[str, float]:
+    def train_step(self, input_ids: torch.Tensor, targets: torch.Tensor, chunk_size: int = 1024) -> Dict[str, float]:
         """Execute a single accelerated training step with zero-allocation cross-entropy."""
         self.model.train()
         self.optimizer.zero_grad(set_to_none=True)
@@ -318,14 +343,17 @@ class TriuneUniversalEngine:
         # Forward pass
         if self.is_moe and hasattr(self.model, "core"):
             logits, _ = self.model(input_ids, force_depth=2)
+            vocab_size = logits.size(-1)
+            loss = fast_cross_entropy(logits.reshape(-1, vocab_size), targets.reshape(-1), chunk_size=chunk_size)
         elif hasattr(self.model, "layers") and isinstance(self.model, UniversalDenseTransformer):
-            logits, _ = self.model(input_ids)
+            hidden, _ = self.model(input_ids, return_hidden=True)
+            loss = chunked_cross_entropy_from_hidden(hidden, self.model.lm_head, targets, chunk_size=chunk_size)
         else:
             out = self.model(input_ids)
-            logits = out[0] if isinstance(out, tuple) else out
+            logits = out.logits if hasattr(out, "logits") else (out[0] if isinstance(out, tuple) else out)
+            vocab_size = logits.size(-1)
+            loss = fast_cross_entropy(logits.reshape(-1, vocab_size), targets.reshape(-1), chunk_size=chunk_size)
 
-        vocab_size = logits.size(-1)
-        loss = fast_cross_entropy(logits.reshape(-1, vocab_size), targets.reshape(-1), chunk_size=chunk_size)
         loss.backward()
 
         self.optimizer.step()
@@ -362,3 +390,92 @@ class TriuneUniversalEngine:
             curr_ids = torch.cat([curr_ids, next_token], dim=1)
 
         return curr_ids
+
+
+def upgrade_model(
+    model: nn.Module,
+    *,
+    lora_rank: Optional[int] = None,
+    lora_alpha: float = 32.0,
+    streaming: bool = False,
+    resident_gpu_layers: int = 0,
+    return_optimizer: bool = False,
+    lr: float = 1e-3,
+    rank: int = 16,
+) -> Union[nn.Module, Tuple[nn.Module, torch.optim.Optimizer]]:
+    """Universal 1-line Triune AI drop-in accelerator for any PyTorch or Hugging Face model.
+
+    Automatically patches:
+    - RMSNorm modules (LlamaRMSNorm, Qwen2RMSNorm, MistralRMSNorm, GemmaRMSNorm, nn.RMSNorm) -> fast_rmsnorm
+    - SwiGLU MLP modules (with gate_proj, up_proj, down_proj) -> fast_swiglu
+    - GELU activations -> FastGELU
+    - Optional LoRA adapters (when lora_rank is specified) -> fused addmm LoRALayer
+    - Optional LayerStreamingEngine (when streaming=True)
+    - Optional 3-Tier CentroidSteer + Muon optimizer (when return_optimizer=True)
+    """
+    import types
+
+    for name, mod in list(model.named_modules()):
+        cls_name = mod.__class__.__name__
+        # 1. Patch any RMSNorm variant
+        if "rmsnorm" in cls_name.lower() and hasattr(mod, "weight") and mod.weight is not None:
+            eps = float(getattr(mod, "variance_epsilon", getattr(mod, "eps", 1e-6)) or 1e-6)
+
+            def _fast_rmsnorm_fwd(self_mod, hidden_states: torch.Tensor, _eps: float = eps) -> torch.Tensor:
+                return fast_rmsnorm(hidden_states, self_mod.weight, eps=_eps)
+
+            mod.forward = types.MethodType(_fast_rmsnorm_fwd, mod)
+            mod._triune_upgraded_rmsnorm = True
+
+        # 2. Patch standard HuggingFace SwiGLU MLPs (gate_proj, up_proj, down_proj)
+        elif (
+            hasattr(mod, "gate_proj")
+            and hasattr(mod, "up_proj")
+            and hasattr(mod, "down_proj")
+            and not isinstance(mod, DenseMLP)
+            and not getattr(mod, "_triune_upgraded_swiglu", False)
+        ):
+            def _fast_swiglu_mlp_fwd(self_mod, x: torch.Tensor) -> torch.Tensor:
+                return _linear_or_lora(
+                    self_mod.down_proj,
+                    fast_swiglu(_linear_or_lora(self_mod.gate_proj, x), _linear_or_lora(self_mod.up_proj, x)),
+                )
+
+            mod.forward = types.MethodType(_fast_swiglu_mlp_fwd, mod)
+            mod._triune_upgraded_swiglu = True
+
+    if lora_rank is not None and lora_rank > 0:
+        tuner = TriuneFineTuner(model, LoRAConfig(rank=lora_rank, alpha=lora_alpha))
+        model._triune_finetuner = tuner
+
+    if streaming:
+        from triune.runtime.streaming import LayerStreamingEngine, StreamingConfig
+        dev = next((p.device for p in model.parameters()), torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+        if dev.type == "cpu" and torch.cuda.is_available():
+            dev = torch.device("cuda:0")
+        engine = LayerStreamingEngine(
+            model,
+            device=dev,
+            config=StreamingConfig(enabled=True, async_prefetch=True, resident_gpu_layers=resident_gpu_layers),
+        )
+        engine.attach()
+
+    if return_optimizer:
+        is_moe = any("expert" in n.lower() for n, _ in model.named_modules())
+        target_mod = model.core if hasattr(model, "core") else model
+        opt = CentroidSteerOptimizer(
+            target_mod,
+            lr=lr,
+            rank=rank,
+            steer_scale=0.1 if is_moe else 0.0,
+            use_muon=True,
+            use_8bit_base=True,
+        )
+        if getattr(model, "_streaming_engine", None) is not None:
+            model._streaming_engine.set_optimizer(opt)
+        return model, opt
+
+    return model
+
+
+upgrade = upgrade_model

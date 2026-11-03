@@ -16,67 +16,67 @@
       "scale": "76M",
       "params_m": 101.97,
       "gpu_resident": {
-        "median_latency_ms": 142.8,
-        "mean_latency_ms": 141.6,
-        "peak_allocated_mb": 1385.93,
-        "peak_reserved_mb": 1568.0,
-        "tokens_per_sec": 7171.0,
+        "median_latency_ms": 87.52,
+        "mean_latency_ms": 95.7,
+        "peak_allocated_mb": 1315.9,
+        "peak_reserved_mb": 1404.0,
+        "tokens_per_sec": 11700.6,
         "last_loss": 7.5938
       },
       "layer_streaming": {
-        "median_latency_ms": 690.72,
-        "mean_latency_ms": 758.65,
-        "peak_allocated_mb": 905.28,
-        "peak_reserved_mb": 1182.0,
-        "tokens_per_sec": 1482.5,
+        "median_latency_ms": 657.17,
+        "mean_latency_ms": 716.12,
+        "peak_allocated_mb": 877.78,
+        "peak_reserved_mb": 1016.0,
+        "tokens_per_sec": 1558.2,
         "last_loss": 7.5938
       },
-      "vram_reduction_pct": 34.68,
-      "pcie_latency_overhead_pct": 383.7
+      "vram_reduction_pct": 33.29,
+      "pcie_latency_overhead_pct": 650.88
     },
     {
       "scale": "150M",
       "params_m": 270.56,
       "gpu_resident": {
-        "median_latency_ms": 141.75,
-        "mean_latency_ms": 143.66,
-        "peak_allocated_mb": 3163.88,
-        "peak_reserved_mb": 3634.0,
-        "tokens_per_sec": 7223.8,
+        "median_latency_ms": 149.24,
+        "mean_latency_ms": 141.67,
+        "peak_allocated_mb": 3022.64,
+        "peak_reserved_mb": 3754.0,
+        "tokens_per_sec": 6861.3,
         "last_loss": 7.0
       },
       "layer_streaming": {
-        "median_latency_ms": 1538.27,
-        "mean_latency_ms": 1580.91,
-        "peak_allocated_mb": 1824.25,
-        "peak_reserved_mb": 2388.0,
-        "tokens_per_sec": 665.7,
+        "median_latency_ms": 1576.66,
+        "mean_latency_ms": 1680.87,
+        "peak_allocated_mb": 1780.13,
+        "peak_reserved_mb": 2310.0,
+        "tokens_per_sec": 649.5,
         "last_loss": 7.0
       },
-      "vram_reduction_pct": 42.34,
-      "pcie_latency_overhead_pct": 985.2
+      "vram_reduction_pct": 41.11,
+      "pcie_latency_overhead_pct": 956.46
     },
     {
       "scale": "350M",
       "params_m": 694.85,
       "gpu_resident": {
-        "median_latency_ms": 1850.0,
-        "mean_latency_ms": 1424.75,
-        "peak_allocated_mb": 7023.08,
-        "peak_reserved_mb": 7970.0,
-        "tokens_per_sec": 553.5,
+        "median_latency_ms": 2938.85,
+        "mean_latency_ms": 2633.79,
+        "peak_allocated_mb": 6795.0,
+        "peak_reserved_mb": 8224.0,
+        "tokens_per_sec": 348.4,
         "last_loss": 6.0938
       },
       "layer_streaming": {
-        "median_latency_ms": 4531.24,
-        "mean_latency_ms": 4152.52,
-        "peak_allocated_mb": 3661.73,
-        "peak_reserved_mb": 4300.0,
-        "tokens_per_sec": 226.0,
+        "median_latency_ms": 4012.4,
+        "mean_latency_ms": 3888.53,
+        "peak_allocated_mb": 3585.74,
+        "peak_reserved_mb": 4154.0,
+        "tokens_per_sec": 255.2,
         "last_loss": 6.0938
       },
-      "vram_reduction_pct": 47.86,
-      "pcie_latency_overhead_pct": 144.93
+      "vram_reduction_pct": 47.23,
+      "pcie_latency_overhead_pct": 36.53
     }
   ]
 }

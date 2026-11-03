@@ -103,6 +103,8 @@ _LAZY_IMPORTS = {
     "UniversalDenseTransformer": ".universal",
     "UniversalMoETransformer": ".universal",
     "TriuneUniversalEngine": ".universal",
+    "upgrade_model": ".universal",
+    "upgrade": ".universal",
 }
 
 __all__ = [

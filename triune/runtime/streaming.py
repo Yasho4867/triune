@@ -80,9 +80,10 @@ def _move_param_states_to_device(opt: Any, params: list[nn.Parameter], device: t
                 for k, v in st.items():
                     if isinstance(v, torch.Tensor) and v.device != device:
                         st[k] = v.to(device, non_blocking=True)
-                proj = g.get("projection")
-                if proj is not None and isinstance(proj, torch.Tensor) and proj.device != device:
-                    g["projection"] = proj.to(device, non_blocking=True)
+                for key_name in ("projection", "Q_L", "Q_R", "proj_basis", "last_c_orth"):
+                    t_val = g.get(key_name)
+                    if t_val is not None and isinstance(t_val, torch.Tensor) and t_val.device != device:
+                        g[key_name] = t_val.to(device, non_blocking=True)
 
 
 def _move_param_states_to_cpu(opt: Any, params: list[nn.Parameter]) -> None:
@@ -113,9 +114,10 @@ def _move_param_states_to_cpu(opt: Any, params: list[nn.Parameter]) -> None:
                 for k, v in st.items():
                     if isinstance(v, torch.Tensor) and v.device.type != "cpu":
                         st[k] = v.cpu()
-                proj = g.get("projection")
-                if proj is not None and isinstance(proj, torch.Tensor) and proj.device.type != "cpu":
-                    g["projection"] = proj.cpu()
+                for key_name in ("projection", "Q_L", "Q_R", "proj_basis", "last_c_orth"):
+                    t_val = g.get(key_name)
+                    if t_val is not None and isinstance(t_val, torch.Tensor) and t_val.device.type != "cpu":
+                        g[key_name] = t_val.cpu()
 
 
 def _step_optimizer_parameters(opt: Any, params: list[nn.Parameter], is_global_step_end: bool = False) -> None:
@@ -386,6 +388,13 @@ class LayerStreamingEngine:
                 if p.grad is None:
                     return
 
+                # Compute L2 norm squared on GPU while p.grad is hot in GPU L2 cache
+                is_first_accum = not hasattr(p, "_cpu_grad") or p._cpu_grad is None
+                if is_first_accum:
+                    p._grad_norm_sq = (p.grad.detach().float() ** 2).sum()
+                else:
+                    p._grad_norm_sq = None
+
                 use_async_d2h = bool(dev.type == "cuda" and d2h_stream is not None and getattr(self, "is_pinned", False))
                 if use_async_d2h:
                     try:
@@ -402,7 +411,7 @@ class LayerStreamingEngine:
                             d2h_event.record(d2h_stream)
                             p._d2h_event = d2h_event
 
-                        if not hasattr(p, "_cpu_grad") or p._cpu_grad is None:
+                        if is_first_accum:
                             p._cpu_grad = grad_cpu
                         else:
                             d2h_event.synchronize()
@@ -412,7 +421,7 @@ class LayerStreamingEngine:
 
                 if not use_async_d2h:
                     grad_cpu = p.grad.detach().to("cpu", non_blocking=False)
-                    if not hasattr(p, "_cpu_grad") or p._cpu_grad is None:
+                    if is_first_accum:
                         p._cpu_grad = grad_cpu
                     else:
                         p._cpu_grad.add_(grad_cpu)
@@ -452,20 +461,38 @@ class LayerStreamingEngine:
                             return legacy_hook
                         self._hooks.append(p.register_hook(make_legacy_hook(p)))
 
-            def make_bwd_pre_hook(l: nn.Module):
+            def make_bwd_pre_hook(l: nn.Module, b_idx: int):
                 def bwd_pre_hook(module, grad_output):
                     try:
                         l._in_backward = True
                         target_dtype = None
                         use_hw_fp8 = self.caps.native_scaled_mm and self.config.fp8_weights
-                        self.stager.stage_layer(l, stream=None, target_dtype=target_dtype, use_hardware_fp8=use_hw_fp8, _from_backward=True)
-                        self.stager.apply_staged_tensors(l)
+                        if getattr(l, "_is_bwd_prefetched", False):
+                            if prefetch_stream is not None and dev.type == "cuda":
+                                torch.cuda.current_stream().wait_stream(prefetch_stream)
+                            self.stager.apply_staged_tensors(l)
+                            l._is_bwd_prefetched = False
+                        else:
+                            self.stager.stage_layer(l, stream=None, target_dtype=target_dtype, use_hardware_fp8=use_hw_fp8, _from_backward=True)
+                            self.stager.apply_staged_tensors(l)
+
+                        if prefetch_stream is not None and b_idx > 0:
+                            prev_layer = self.layers[b_idx - 1]
+                            if not getattr(prev_layer, "_is_bwd_prefetched", False):
+                                self.stager.stage_layer(
+                                    prev_layer,
+                                    stream=prefetch_stream,
+                                    target_dtype=target_dtype,
+                                    use_hardware_fp8=use_hw_fp8,
+                                    _from_backward=True,
+                                )
+                                prev_layer._is_bwd_prefetched = True
                     except Exception:
                         l._in_backward = False
                         self.cleanup_resident_layers()
                         raise
                 return bwd_pre_hook
-            self._hooks.append(layer.register_full_backward_pre_hook(make_bwd_pre_hook(layer)))
+            self._hooks.append(layer.register_full_backward_pre_hook(make_bwd_pre_hook(layer, idx)))
 
             def make_bwd_post_hook(l: nn.Module):
                 def bwd_post_hook(module, grad_input, grad_output):
@@ -589,6 +616,8 @@ class LayerStreamingEngine:
         for layer in self.layers:
             if hasattr(layer, "_is_prefetched"):
                 layer._is_prefetched = False
+            if hasattr(layer, "_is_bwd_prefetched"):
+                layer._is_bwd_prefetched = False
             for p in list(layer.parameters()) + list(layer.buffers()):
                 if hasattr(p, "_cpu_data"):
                     p.data = p._cpu_data
@@ -600,6 +629,8 @@ class LayerStreamingEngine:
                     p._fp8_inv_scale = None
                 if hasattr(p, "_fp8_amax"):
                     p._fp8_amax = None
+                if hasattr(p, "_grad_norm_sq"):
+                    p._grad_norm_sq = None
                 if hasattr(p, "_d2h_event") and p._d2h_event is not None:
                     try:
                         p._d2h_event.synchronize()
@@ -648,10 +679,14 @@ class LayerStreamingEngine:
                     delattr(t, "_d2h_event")
                 if hasattr(t, "_cpu_grad"):
                     delattr(t, "_cpu_grad")
+                if hasattr(t, "_grad_norm_sq"):
+                    delattr(t, "_grad_norm_sq")
 
         for layer in self.layers:
             if hasattr(layer, "_is_prefetched"):
                 delattr(layer, "_is_prefetched")
+            if hasattr(layer, "_is_bwd_prefetched"):
+                delattr(layer, "_is_bwd_prefetched")
             if hasattr(layer, "_prefetched_cuda_params"):
                 delattr(layer, "_prefetched_cuda_params")
             if hasattr(layer, "_prefetched_cuda_buffers"):
@@ -663,6 +698,8 @@ class LayerStreamingEngine:
                     delattr(t, "_d2h_event")
                 if hasattr(t, "_cpu_grad"):
                     delattr(t, "_cpu_grad")
+                if hasattr(t, "_grad_norm_sq"):
+                    delattr(t, "_grad_norm_sq")
 
         self.model._streaming_engine = None
         self.model._layer_streaming_active = False
@@ -685,9 +722,10 @@ class LayerStreamingEngine:
                     p._d2h_event.synchronize()
                     p._d2h_event = None
         for layer in self.layers:
-            if getattr(layer, "_is_prefetched", False):
+            if getattr(layer, "_is_prefetched", False) or getattr(layer, "_is_bwd_prefetched", False):
                 self.stager.release_layer(layer)
                 layer._is_prefetched = False
+                layer._is_bwd_prefetched = False
             for p in layer.parameters():
                 if hasattr(p, "_d2h_event") and p._d2h_event is not None:
                     p._d2h_event.synchronize()
@@ -698,17 +736,26 @@ class LayerStreamingEngine:
         clip_coef = 1.0
         if clip_val and clip_val > 0:
             global_norm_sq = torch.zeros((), dtype=torch.float64)
+            gpu_norm_sqs = []
             for p in root_params:
                 if p.grad is not None:
-                    global_norm_sq += p.grad.float().pow(2).sum().cpu().double()
+                    gpu_norm_sqs.append((p.grad.detach().float() ** 2).sum())
             for layer in resident_layers:
                 for p in layer.parameters():
                     if hasattr(p, "_cpu_grad") and p._cpu_grad is not None:
-                        global_norm_sq += p._cpu_grad.float().pow(2).sum().cpu().double()
+                        if getattr(p, "_grad_norm_sq", None) is not None:
+                            gpu_norm_sqs.append(p._grad_norm_sq)
+                        else:
+                            global_norm_sq += p._cpu_grad.float().pow(2).sum().cpu().double()
             for layer in self.layers:
                 for p in layer.parameters():
                     if hasattr(p, "_cpu_grad") and p._cpu_grad is not None:
-                        global_norm_sq += p._cpu_grad.float().pow(2).sum().cpu().double()
+                        if getattr(p, "_grad_norm_sq", None) is not None:
+                            gpu_norm_sqs.append(p._grad_norm_sq)
+                        else:
+                            global_norm_sq += p._cpu_grad.float().pow(2).sum().cpu().double()
+            if gpu_norm_sqs:
+                global_norm_sq += torch.stack([t.to(dev) for t in gpu_norm_sqs]).double().sum().cpu()
             global_norm = global_norm_sq.sqrt().item()
             clip_coef = min(1.0, float(clip_val) / (global_norm + 1e-6))
 
@@ -739,6 +786,7 @@ class LayerStreamingEngine:
                         g.mul_(clip_coef)
                     p.grad = g
                     p._cpu_grad = None
+                    p._grad_norm_sq = None
             _move_param_states_to_device(opt, layer_params, dev)
             try:
                 is_last = (total_stream == 0 and res_idx == total_res - 1)
@@ -763,6 +811,7 @@ class LayerStreamingEngine:
                             g.mul_(clip_coef)
                         p.grad = g
                         p._cpu_grad = None  # Instantly free CPU gradient tensor
+                        p._grad_norm_sq = None
 
                 # Move any existing optimizer states for this layer's parameters to GPU
                 _move_param_states_to_device(opt, layer_params, dev)
@@ -801,9 +850,13 @@ class LayerStreamingEngine:
                     p._d2h_event = None
                 if hasattr(p, "_cpu_grad"):
                     p._cpu_grad = None
+                if hasattr(p, "_grad_norm_sq"):
+                    p._grad_norm_sq = None
         for p in self.get_root_parameters():
             if hasattr(p, "_cpu_grad"):
                 p._cpu_grad = None
+            if hasattr(p, "_grad_norm_sq"):
+                p._grad_norm_sq = None
 
     def step_optimizer(self, optimizer: torch.optim.Optimizer) -> None:
         """Applies optimizer step on offloaded CPU gradients and cleans up buffers."""

@@ -9,6 +9,95 @@ from __future__ import annotations
 
 import torch
 
+_CAUSAL_MASK_INV_CACHE: dict[tuple[torch.device, int], torch.Tensor] = {}
+
+
+def _get_causal_mask_inv(device: torch.device, size: int) -> torch.Tensor:
+    key = (device, size)
+    mask = _CAUSAL_MASK_INV_CACHE.get(key)
+    if mask is None:
+        mask = (~torch.tril(torch.ones(size, size, device=device, dtype=torch.bool))).view(1, 1, 1, size, size)
+        _CAUSAL_MASK_INV_CACHE[key] = mask
+    return mask
+
+
+def _run_gla_chunks(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    g: torch.Tensor,
+    state: torch.Tensor,
+    C: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Vectorized chunked GLA over [B, num_chunks * C, H, HD]."""
+    B, T_chunk, H, HD = q.shape
+    device = q.device
+    dtype = q.dtype
+    num_chunks = T_chunk // C
+
+    q_c = q.reshape(B, num_chunks, C, H, HD).permute(0, 3, 1, 2, 4)
+    k_c = k.reshape(B, num_chunks, C, H, HD).permute(0, 3, 1, 2, 4)
+    v_c = v.reshape(B, num_chunks, C, H, HD).permute(0, 3, 1, 2, 4)
+    g_c = torch.clamp(g.reshape(B, num_chunks, C, H, HD).permute(0, 3, 1, 2, 4), max=0.0)
+
+    g_cumsum = torch.cumsum(g_c, dim=-2)
+    causal_mask_inv = _get_causal_mask_inv(device, C)
+
+    # Factored Tensor Core GEMM intra-chunk attention:
+    # bfloat16 and float32 share an 8-bit exponent (max ~3.4e38), so exp(35) never overflows
+    # and we can execute the intra-chunk matmul directly on BF16 Tensor Cores.
+    if dtype == torch.float16:
+        g_cum_f = g_cumsum.float()
+        g_mid = 0.5 * (g_cum_f[..., :1, :] + g_cum_f[..., -1:, :])
+        g_rel = torch.clamp(g_cum_f - g_mid, min=-35.0, max=35.0)
+        q_intra = q_c.float() * torch.exp(g_rel)
+        k_intra = k_c.float() * torch.exp(-g_rel)
+        attn_all = torch.matmul(q_intra, k_intra.transpose(-1, -2)).masked_fill_(causal_mask_inv, 0.0).to(dtype)
+    else:
+        g_mid = 0.5 * (g_cumsum[..., :1, :] + g_cumsum[..., -1:, :])
+        g_rel = torch.clamp(g_cumsum - g_mid, min=-35.0, max=35.0)
+        q_intra = q_c * torch.exp(g_rel)
+        k_intra = k_c * torch.exp(-g_rel)
+        attn_all = torch.matmul(q_intra, k_intra.transpose(-1, -2)).masked_fill_(causal_mask_inv, 0.0)
+    out_intra = torch.matmul(attn_all, v_c)
+
+    # Inter-chunk recurrent state propagation
+    g_last = g_cumsum[:, :, :, -1:, :]
+    k_decayed_all = k_c * torch.exp(torch.clamp(g_last - g_cumsum, max=0.0))
+    chunk_decay = torch.exp(g_last).squeeze(-2).unsqueeze(-1)  # [B, H, num_chunks, HD, 1]
+
+    q_exp = q_c * torch.exp(g_cumsum)
+
+    if num_chunks == 1:
+        out_inter = torch.matmul(q_exp, state.unsqueeze(2))
+        kv_0 = torch.matmul(k_decayed_all[:, :, 0].transpose(-1, -2), v_c[:, :, 0])
+        state = torch.addcmul(kv_0, state, chunk_decay[:, :, 0])
+    elif not torch.is_grad_enabled() and num_chunks >= 8:
+        # Logarithmic Hillis-Steele parallel prefix scan in O(log2(num_chunks)) steps
+        kv_all = torch.matmul(k_decayed_all.transpose(-1, -2), v_c)  # [B, H, num_chunks, HD, HD]
+        kv_all[:, :, 0].addcmul_(state, chunk_decay[:, :, 0])
+        a_scan = chunk_decay.clone()
+        s = 1
+        while s < num_chunks:
+            kv_all[:, :, s:].add_(a_scan[:, :, s:] * kv_all[:, :, :-s])
+            if (s << 1) < num_chunks:
+                a_scan[:, :, s:].mul_(a_scan[:, :, :-s].clone())
+            s <<= 1
+        S_all = torch.cat([state.unsqueeze(2), kv_all[:, :, :-1]], dim=2)
+        state = kv_all[:, :, -1]
+        out_inter = torch.matmul(q_exp, S_all)
+    else:
+        kv_all = torch.matmul(k_decayed_all.transpose(-1, -2), v_c)
+        states_prev = []
+        for i in range(num_chunks):
+            states_prev.append(state)
+            state = torch.addcmul(kv_all[:, :, i], state, chunk_decay[:, :, i])
+        S_all = torch.stack(states_prev, dim=2)
+        out_inter = torch.matmul(q_exp, S_all)
+
+    out_chunks = (out_intra + out_inter).permute(0, 2, 3, 1, 4).reshape(B, T_chunk, H, HD)
+    return out_chunks, state
+
 
 def fast_chunk_gla(
     q: torch.Tensor,
@@ -53,67 +142,25 @@ def fast_chunk_gla(
 
     C = chunk_size
 
+    # Short sequence (1 < T < C): execute as a single chunk of size T (zero Python loop)
+    if T < C:
+        return _run_gla_chunks(q, k, v, g, state, T)
+
     # Chunked parallel path for training and long sequences
-    if T >= C:
-        num_chunks = T // C
-        T_chunk = num_chunks * C
-        q_c = q[:, :T_chunk].reshape(B, num_chunks, C, H, HD).permute(0, 3, 1, 2, 4)
-        k_c = k[:, :T_chunk].reshape(B, num_chunks, C, H, HD).permute(0, 3, 1, 2, 4)
-        v_c = v[:, :T_chunk].reshape(B, num_chunks, C, H, HD).permute(0, 3, 1, 2, 4)
-        g_c = torch.clamp(g[:, :T_chunk].reshape(B, num_chunks, C, H, HD).permute(0, 3, 1, 2, 4), max=0.0)
+    num_chunks = T // C
+    T_chunk = num_chunks * C
+    out_chunks, state = _run_gla_chunks(q[:, :T_chunk], k[:, :T_chunk], v[:, :T_chunk], g[:, :T_chunk], state, C)
+    if T == T_chunk:
+        return out_chunks, state
 
-        g_cumsum = torch.cumsum(g_c, dim=-2)
-        causal_mask_2d = torch.tril(torch.ones(C, C, device=device, dtype=torch.bool)).view(1, 1, 1, C, C)
-
-        # Factored Tensor Core GEMM intra-chunk attention:
-        # For causal pairs (t >= s): exp(g_cum[t] - g_cum[s]) = exp(g_cum[t] - g_mid) * exp(g_mid - g_cum[s]).
-        # Clamping g_rel to [-35, 35] guarantees exp(35)*exp(35) = exp(70) << FP32_MAX (zero Inf/NaN overflow).
-        g_cum_f = g_cumsum.float()
-        g_mid = 0.5 * (g_cum_f[..., :1, :] + g_cum_f[..., -1:, :])
-        g_rel = torch.clamp(g_cum_f - g_mid, min=-35.0, max=35.0)
-        q_intra = q_c.float() * torch.exp(g_rel)
-        k_intra = k_c.float() * torch.exp(-g_rel)
-        attn_all = torch.matmul(q_intra, k_intra.transpose(-1, -2)).masked_fill(~causal_mask_2d, 0.0).to(dtype)
-        out_intra = torch.matmul(attn_all, v_c)
-
-        # Inter-chunk recurrent state propagation with batched KV GEMM & batched query-state GEMM
-        g_last = g_cumsum[:, :, :, -1:, :]
-        k_decayed_all = k_c * torch.exp(torch.clamp(g_last - g_cumsum, max=0.0))
-        chunk_decay = torch.exp(g_last).squeeze(-2).unsqueeze(-1)
-
-        # Batch all chunk KV state projections into a single fused Tensor Core GEMM
-        kv_all = torch.matmul(k_decayed_all.transpose(-1, -2), v_c)
-
-        q_exp = q_c * torch.exp(g_cumsum)
-        states_prev = []
-        for i in range(num_chunks):
-            states_prev.append(state)
-            state = state * chunk_decay[:, :, i] + kv_all[:, :, i]
-
-        S_all = torch.stack(states_prev, dim=2)
-        out_inter = torch.matmul(q_exp, S_all)
-        out_chunks = (out_intra + out_inter).permute(0, 2, 3, 1, 4).reshape(B, T_chunk, H, HD)
-        if T == T_chunk:
-            return out_chunks, state
-
-        outputs = [out_chunks]
-        for timestep in range(T_chunk, T):
-            decay = torch.exp(g[:, timestep]).unsqueeze(-1)
-            key = k[:, timestep].unsqueeze(-1)
-            value = v[:, timestep].unsqueeze(-2)
-            state = state * decay + torch.matmul(key, value)
-            query = q[:, timestep].unsqueeze(-2)
-            outputs.append(torch.matmul(query, state).squeeze(-2).unsqueeze(1))
-        return torch.cat(outputs, dim=1), state
-
-    # General recurrent fallback for short sequences (T < C)
-    outputs = []
-    for timestep in range(T):
-        decay = torch.exp(g[:, timestep]).unsqueeze(-1)
-        key = k[:, timestep].unsqueeze(-1)
-        value = v[:, timestep].unsqueeze(-2)
-        state = state * decay + torch.matmul(key, value)
-        query = q[:, timestep].unsqueeze(-2)
-        outputs.append(torch.matmul(query, state).squeeze(-2).unsqueeze(1))
-
-    return torch.cat(outputs, dim=1), state
+    T_rem = T - T_chunk
+    if T_rem == 1:
+        decay = torch.exp(g[:, T_chunk]).unsqueeze(-1)
+        key = k[:, T_chunk].unsqueeze(-1)
+        value = v[:, T_chunk].unsqueeze(-2)
+        state = torch.addcmul(state * decay, key, value)
+        query = q[:, T_chunk].unsqueeze(-2)
+        out_rem = torch.matmul(query, state).squeeze(-2).unsqueeze(1)
+    else:
+        out_rem, state = _run_gla_chunks(q[:, T_chunk:], k[:, T_chunk:], v[:, T_chunk:], g[:, T_chunk:], state, T_rem)
+    return torch.cat([out_chunks, out_rem], dim=1), state
