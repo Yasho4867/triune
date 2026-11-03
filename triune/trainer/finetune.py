@@ -69,6 +69,14 @@ class LoRALayer(nn.Module):
             lora_out = ((drop_x @ self.lora_A.T) @ self.lora_B.T) * self.scaling
         return orig_out + lora_out.to(orig_out.dtype)
 
+    @property
+    def weight(self):
+        return getattr(self.original_layer, "weight", None)
+
+    @property
+    def bias(self):
+        return getattr(self.original_layer, "bias", None)
+
     def merge(self) -> None:
         """Merge adapter weights directly into the original linear layer."""
         if hasattr(self.original_layer, "weight") and self.original_layer.weight is not None:

@@ -47,7 +47,7 @@ class _FusedLinearCrossEntropy(torch.autograd.Function):
         flat_y = targets.reshape(-1)
         n_tokens = flat_h.size(0)
         # Adaptive chunk size: saturate Tensor Cores when vocab <= 32768 while capping transient memory
-        eff_chunk = max(int(chunk_size), 1024) if weight.size(0) <= 32768 else int(chunk_size)
+        eff_chunk = int(chunk_size)
 
         # Device-side valid count without host synchronization
         n_valid = (flat_y != ignore_index).sum().clamp_min(1)
@@ -166,7 +166,7 @@ def fast_cross_entropy(
     """Computes cross-entropy loss in chunks to minimize intermediate activation memory."""
     flat_logits = logits.reshape(-1, logits.size(-1))
     flat_targets = targets.reshape(-1)
-    eff_chunk = max(int(chunk_size), 1024) if flat_logits.size(-1) <= 32768 else int(chunk_size)
+    eff_chunk = int(chunk_size)
     if flat_logits.size(0) <= eff_chunk:
         acc = torch.promote_types(flat_logits.dtype, torch.float32)
         valid_count = (flat_targets != ignore_index).sum().clamp_min(1)

@@ -13,7 +13,7 @@
 | **Standard PEFT / PyTorch LoRA** | 22.69 ms/step | 1270.1 MB | Baseline | 1.00x |
 | **Triune FastLoRA + Fused Chunked CE** | **39.42 ms/step** | **1026.8 MB** | **19.2% SAVED** | **0.58x** |
 
-*Takeaway*: Triune eliminates intermediate adapter activation buffers and materializes zero full-vocab logits during backprop, slashing LoRA fine-tuning memory by **19.2%** while matching or exceeding Unsloth throughput.
+*Takeaway*: In this historical experiment, Triune eliminated intermediate adapter activation buffers and materialized zero full-vocab logits during backprop, slashing LoRA fine-tuning peak memory by **19.2%** while trading off step throughput (39.42 ms vs 22.69 ms). (Note: Newer fused implementations benchmarked in the Master Matrix evaluate unified `addmm_` execution with higher throughput).
 
 ---
 

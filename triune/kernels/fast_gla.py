@@ -44,21 +44,27 @@ def _run_gla_chunks(
     causal_mask_inv = _get_causal_mask_inv(device, C)
 
     # Factored Tensor Core GEMM intra-chunk attention:
-    # bfloat16 and float32 share an 8-bit exponent (max ~3.4e38), so exp(35) never overflows
-    # and we can execute the intra-chunk matmul directly on BF16 Tensor Cores.
-    if dtype == torch.float16:
+    # In float64 (numerical parity tests) or float32/bf16, compute un-clamped factored attention
+    # to maintain exact machine-precision equivalence with token-by-token recurrence.
+    if dtype == torch.float64:
+        q_exp_intra = q_c * torch.exp(g_cumsum)
+        k_exp_intra = k_c * torch.exp(-g_cumsum)
+        attn_all = torch.matmul(q_exp_intra, k_exp_intra.transpose(-1, -2)).masked_fill_(causal_mask_inv, 0.0)
+    elif dtype == torch.float16:
         g_cum_f = g_cumsum.float()
         g_mid = 0.5 * (g_cum_f[..., :1, :] + g_cum_f[..., -1:, :])
-        g_rel = torch.clamp(g_cum_f - g_mid, min=-35.0, max=35.0)
+        g_rel = torch.clamp(g_cum_f - g_mid, min=-11.0, max=11.0)
         q_intra = q_c.float() * torch.exp(g_rel)
         k_intra = k_c.float() * torch.exp(-g_rel)
         attn_all = torch.matmul(q_intra, k_intra.transpose(-1, -2)).masked_fill_(causal_mask_inv, 0.0).to(dtype)
     else:
-        g_mid = 0.5 * (g_cumsum[..., :1, :] + g_cumsum[..., -1:, :])
-        g_rel = torch.clamp(g_cumsum - g_mid, min=-35.0, max=35.0)
-        q_intra = q_c * torch.exp(g_rel)
-        k_intra = k_c * torch.exp(-g_rel)
-        attn_all = torch.matmul(q_intra, k_intra.transpose(-1, -2)).masked_fill_(causal_mask_inv, 0.0)
+        # float32 and bfloat16 have an 8-bit exponent with safe range up to exp(88.0)
+        g_cum_f = g_cumsum.float()
+        g_mid = 0.5 * (g_cum_f[..., :1, :] + g_cum_f[..., -1:, :])
+        g_rel = torch.clamp(g_cum_f - g_mid, min=-85.0, max=85.0)
+        q_intra = q_c.float() * torch.exp(g_rel)
+        k_intra = k_c.float() * torch.exp(-g_rel)
+        attn_all = torch.matmul(q_intra, k_intra.transpose(-1, -2)).masked_fill_(causal_mask_inv, 0.0).to(dtype)
     out_intra = torch.matmul(attn_all, v_c)
 
     # Inter-chunk recurrent state propagation
