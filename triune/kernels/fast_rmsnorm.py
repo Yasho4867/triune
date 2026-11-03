@@ -116,18 +116,18 @@ if is_triton_available():
 
 
 def fast_rmsnorm(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-    """Dispatches to fused Triton kernel on CUDA or high-performance PyTorch native."""
+    """Dispatches to native C++ PyTorch 2.4+ kernel, fused Triton, or high-performance fallback."""
+    w = weight.to(x.dtype) if weight.dtype != x.dtype else weight
+    if hasattr(torch.nn.functional, "rms_norm"):
+        return torch.nn.functional.rms_norm(x, (x.size(-1),), weight=w, eps=eps)
     if is_triton_available() and x.is_cuda:
         try:
             return _FastRMSNormFunction.apply(x, weight, eps)
         except Exception:
-            pass  # Seamless fallback if tensor configuration requires PyTorch
+            pass
 
-    # PyTorch Fallback
-    w = weight.to(x.dtype) if weight.dtype != x.dtype else weight
-    if hasattr(torch.nn.functional, "rms_norm"):
-        return torch.nn.functional.rms_norm(x, (x.size(-1),), weight=w, eps=eps)
     return (x.float() * torch.rsqrt(x.float().pow(2).mean(-1, keepdim=True) + eps)).to(x.dtype) * w
+
 
 
 class FastRMSNorm(nn.Module):

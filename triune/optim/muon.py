@@ -89,7 +89,7 @@ class Muon(Optimizer):
         momentum: float = 0.95,
         weight_decay: float = 0.01,
         nesterov: bool = True,
-        ns_steps: int = 5,
+        ns_steps: int = 3,
     ):
         defaults = dict(
             lr=lr,

@@ -68,19 +68,27 @@ def _linear_or_lora(mod: nn.Module, x: torch.Tensor) -> torch.Tensor:
 class DenseAttention(nn.Module):
     """Standard Multi-Head / Grouped-Query Attention with optional Fast GLA."""
 
-    def __init__(self, dim: int, num_heads: int, head_dim: Optional[int] = None, use_gla: bool = False):
+    def __init__(
+        self,
+        dim: int,
+        num_heads: int,
+        head_dim: Optional[int] = None,
+        num_kv_heads: Optional[int] = None,
+        use_gla: bool = False,
+    ):
         super().__init__()
         self.dim = dim
         self.num_heads = num_heads
+        self.num_kv_heads = num_kv_heads or num_heads
         self.head_dim = head_dim or (dim // num_heads)
         self.use_gla = use_gla
 
-        self.q_proj = nn.Linear(dim, num_heads * self.head_dim, bias=False)
-        self.k_proj = nn.Linear(dim, num_heads * self.head_dim, bias=False)
-        self.v_proj = nn.Linear(dim, num_heads * self.head_dim, bias=False)
-        self.o_proj = nn.Linear(num_heads * self.head_dim, dim, bias=False)
+        self.q_proj = nn.Linear(dim, self.num_heads * self.head_dim, bias=False)
+        self.k_proj = nn.Linear(dim, self.num_kv_heads * self.head_dim, bias=False)
+        self.v_proj = nn.Linear(dim, self.num_kv_heads * self.head_dim, bias=False)
+        self.o_proj = nn.Linear(self.num_heads * self.head_dim, dim, bias=False)
         if use_gla:
-            self.gate_proj = nn.Linear(dim, num_heads * self.head_dim, bias=False)
+            self.gate_proj = nn.Linear(dim, self.num_heads * self.head_dim, bias=False)
 
     def forward(
         self,
@@ -88,7 +96,8 @@ class DenseAttention(nn.Module):
         state: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         B, T, D = x.shape
-        hd_total = self.num_heads * self.head_dim
+        q_dim = self.num_heads * self.head_dim
+        kv_dim = self.num_kv_heads * self.head_dim
 
         can_fuse_base = (
             type(self.q_proj) is nn.Linear
@@ -110,6 +119,7 @@ class DenseAttention(nn.Module):
         )
 
         if self.use_gla:
+            hd_total = q_dim
             if can_fuse_base and type(self.gate_proj) is nn.Linear and not hasattr(self.gate_proj, "lora_A"):
                 W_qkvg = torch.cat(
                     (self.q_proj.weight, self.k_proj.weight, self.v_proj.weight, self.gate_proj.weight),
@@ -122,14 +132,17 @@ class DenseAttention(nn.Module):
                 )
                 qkvg = F.linear(x, W_qkvg, b_qkvg)
                 q = qkvg[..., :hd_total].reshape(B, T, self.num_heads, self.head_dim)
-                k = qkvg[..., hd_total:2 * hd_total].reshape(B, T, self.num_heads, self.head_dim)
-                v = qkvg[..., 2 * hd_total:3 * hd_total].reshape(B, T, self.num_heads, self.head_dim)
-                g = -F.softplus(qkvg[..., 3 * hd_total:].reshape(B, T, self.num_heads, self.head_dim))
+                k = qkvg[..., hd_total : hd_total + kv_dim].reshape(B, T, self.num_kv_heads, self.head_dim)
+                v = qkvg[..., hd_total + kv_dim : hd_total + 2 * kv_dim].reshape(B, T, self.num_kv_heads, self.head_dim)
+                g = -F.softplus(qkvg[..., hd_total + 2 * kv_dim :].reshape(B, T, self.num_heads, self.head_dim))
             else:
                 q = _linear_or_lora(self.q_proj, x).reshape(B, T, self.num_heads, self.head_dim)
-                k = _linear_or_lora(self.k_proj, x).reshape(B, T, self.num_heads, self.head_dim)
-                v = _linear_or_lora(self.v_proj, x).reshape(B, T, self.num_heads, self.head_dim)
+                k = _linear_or_lora(self.k_proj, x).reshape(B, T, self.num_kv_heads, self.head_dim)
+                v = _linear_or_lora(self.v_proj, x).reshape(B, T, self.num_kv_heads, self.head_dim)
                 g = -F.softplus(_linear_or_lora(self.gate_proj, x).reshape(B, T, self.num_heads, self.head_dim))
+            if self.num_kv_heads < self.num_heads:
+                k = k.repeat_interleave(self.num_heads // self.num_kv_heads, dim=2)
+                v = v.repeat_interleave(self.num_heads // self.num_kv_heads, dim=2)
             out, new_state = fast_chunk_gla(q, k, v, g, initial_state=state)
             out = out.reshape(B, T, -1)
             return _linear_or_lora(self.o_proj, out), new_state
@@ -145,9 +158,12 @@ class DenseAttention(nn.Module):
                     lora_v[2], lora_v[3],
                     scaling=lora_q[4],
                 )
-                q = qkv[..., :hd_total].reshape(B, T, self.num_heads, self.head_dim)
-                k = qkv[..., hd_total:2 * hd_total].reshape(B, T, self.num_heads, self.head_dim)
-                v = qkv[..., 2 * hd_total:].reshape(B, T, self.num_heads, self.head_dim)
+                if self.num_kv_heads == self.num_heads:
+                    q, k, v = qkv.view(B, T, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4).unbind(0)
+                else:
+                    q = qkv[..., :q_dim].view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
+                    k = qkv[..., q_dim : q_dim + kv_dim].view(B, T, self.num_kv_heads, self.head_dim).transpose(1, 2)
+                    v = qkv[..., q_dim + kv_dim :].view(B, T, self.num_kv_heads, self.head_dim).transpose(1, 2)
             elif can_fuse_base:
                 W_qkv = torch.cat((self.q_proj.weight, self.k_proj.weight, self.v_proj.weight), dim=0)
                 b_qkv = (
@@ -156,17 +172,22 @@ class DenseAttention(nn.Module):
                     else None
                 )
                 qkv = F.linear(x, W_qkv, b_qkv)
-                q = qkv[..., :hd_total].reshape(B, T, self.num_heads, self.head_dim)
-                k = qkv[..., hd_total:2 * hd_total].reshape(B, T, self.num_heads, self.head_dim)
-                v = qkv[..., 2 * hd_total:].reshape(B, T, self.num_heads, self.head_dim)
+                if self.num_kv_heads == self.num_heads:
+                    q, k, v = qkv.view(B, T, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4).unbind(0)
+                else:
+                    q = qkv[..., :q_dim].view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
+                    k = qkv[..., q_dim : q_dim + kv_dim].view(B, T, self.num_kv_heads, self.head_dim).transpose(1, 2)
+                    v = qkv[..., q_dim + kv_dim :].view(B, T, self.num_kv_heads, self.head_dim).transpose(1, 2)
             else:
-                q = _linear_or_lora(self.q_proj, x).reshape(B, T, self.num_heads, self.head_dim)
-                k = _linear_or_lora(self.k_proj, x).reshape(B, T, self.num_heads, self.head_dim)
-                v = _linear_or_lora(self.v_proj, x).reshape(B, T, self.num_heads, self.head_dim)
-            q_sdpa = q.transpose(1, 2)
-            k_sdpa = k.transpose(1, 2)
-            v_sdpa = v.transpose(1, 2)
-            out = F.scaled_dot_product_attention(q_sdpa, k_sdpa, v_sdpa, is_causal=True)
+                q = _linear_or_lora(self.q_proj, x).reshape(B, T, self.num_heads, self.head_dim).transpose(1, 2)
+                k = _linear_or_lora(self.k_proj, x).reshape(B, T, self.num_kv_heads, self.head_dim).transpose(1, 2)
+                v = _linear_or_lora(self.v_proj, x).reshape(B, T, self.num_kv_heads, self.head_dim).transpose(1, 2)
+
+            if self.num_kv_heads < self.num_heads:
+                k = k.repeat_interleave(self.num_heads // self.num_kv_heads, dim=1)
+                v = v.repeat_interleave(self.num_heads // self.num_kv_heads, dim=1)
+
+            out = F.scaled_dot_product_attention(q, k, v, is_causal=True)
             out = out.transpose(1, 2).reshape(B, T, -1)
             return _linear_or_lora(self.o_proj, out), None
 
@@ -233,10 +254,17 @@ class DenseMLP(nn.Module):
 class DenseTransformerBlock(nn.Module):
     """A standard dense transformer block featuring in-place RMSNorm."""
 
-    def __init__(self, dim: int, num_heads: int, hidden_dim: Optional[int] = None, use_gla: bool = False):
+    def __init__(
+        self,
+        dim: int,
+        num_heads: int,
+        hidden_dim: Optional[int] = None,
+        num_kv_heads: Optional[int] = None,
+        use_gla: bool = False,
+    ):
         super().__init__()
         self.norm1_w = nn.Parameter(torch.ones(dim))
-        self.attn = DenseAttention(dim, num_heads, use_gla=use_gla)
+        self.attn = DenseAttention(dim, num_heads, num_kv_heads=num_kv_heads, use_gla=use_gla)
         self.norm2_w = nn.Parameter(torch.ones(dim))
         self.mlp = DenseMLP(dim, hidden_dim=hidden_dim)
 
@@ -263,15 +291,24 @@ class UniversalDenseTransformer(nn.Module):
         num_layers: int = 8,
         num_heads: int = 6,
         hidden_dim: Optional[int] = None,
+        num_kv_heads: Optional[int] = None,
         use_gla: bool = False,
     ):
         super().__init__()
         self.vocab_size = vocab_size
         self.dim = dim
         self.num_layers = num_layers
+        self.num_heads = num_heads
+        self.num_kv_heads = num_kv_heads or num_heads
         self.embed = nn.Embedding(vocab_size, dim)
         self.layers = nn.ModuleList([
-            DenseTransformerBlock(dim, num_heads, hidden_dim=hidden_dim, use_gla=use_gla)
+            DenseTransformerBlock(
+                dim,
+                num_heads,
+                hidden_dim=hidden_dim,
+                num_kv_heads=num_kv_heads,
+                use_gla=use_gla,
+            )
             for _ in range(num_layers)
         ])
         self.final_norm_w = nn.Parameter(torch.ones(dim))

@@ -154,7 +154,18 @@ def chunked_cross_entropy_from_hidden(
     """
     weight = lm_head.weight if isinstance(lm_head, nn.Linear) else lm_head
     bias = lm_head.bias if isinstance(lm_head, nn.Linear) else None
+
+    # For tiny CPU tests (e.g. < 500k elements) or CUDA graph capturing, fallback to direct linear
+    total_elements = (hidden_states.numel() // hidden_states.size(-1)) * weight.size(0)
+    is_capturing = bool(hidden_states.is_cuda and torch.cuda.is_current_stream_capturing())
+    if (total_elements <= 524_288 and not hidden_states.is_cuda) or is_capturing:
+        logits = F.linear(hidden_states, weight, bias)
+        return fast_cross_entropy(
+            logits.reshape(-1, weight.size(0)), targets.reshape(-1), chunk_size=chunk_size, ignore_index=ignore_index
+        )
+
     return _FusedLinearCrossEntropy.apply(hidden_states, weight, bias, targets, int(chunk_size), int(ignore_index))
+
 
 
 def fast_cross_entropy(

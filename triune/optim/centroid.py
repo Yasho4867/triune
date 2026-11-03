@@ -62,6 +62,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                  muon_lr=getattr(defaults, 'MUON_LR', 0.02),
                  muon_momentum=getattr(defaults, 'MUON_MOMENTUM', 0.95),
                  muon_weight_decay=getattr(defaults, 'MUON_WEIGHT_DECAY', 0.01),
+                 muon_ns_steps=getattr(defaults, 'MUON_NS_STEPS', 3),
                  svd_device="auto",
                  use_triangular_core=getattr(defaults, 'USE_TRIANGULAR_CORE', True),
                  use_8bit_base: bool = getattr(defaults, 'USE_8BIT_BASE', False),
@@ -225,6 +226,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                 lr=muon_lr,
                 momentum=muon_momentum,
                 weight_decay=muon_weight_decay,
+                ns_steps=muon_ns_steps,
             )
         else:
             self.muon_optimizer = None

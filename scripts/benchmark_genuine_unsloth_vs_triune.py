@@ -172,6 +172,7 @@ def run_cell_worker(
                 dim=384,
                 num_layers=8,
                 num_heads=6,
+                num_kv_heads=2,
                 hidden_dim=1024,
             ).to(device=device, dtype=dtype)
 
@@ -202,7 +203,7 @@ def run_cell_worker(
                 loss = fast_cross_entropy(logits.reshape(-1, vocab_size), by.reshape(-1), chunk_size=1024)
             elif hasattr(model, "layers") and isinstance(model, UniversalDenseTransformer):
                 hidden, _ = model(bx, return_hidden=True)
-                loss = chunked_cross_entropy_from_hidden(hidden, model.lm_head, by, chunk_size=1024)
+                loss = chunked_cross_entropy_from_hidden(hidden, model.lm_head, by, chunk_size=256)
             else:
                 out = model(bx)
                 logits = out[0] if isinstance(out, tuple) else out
@@ -354,7 +355,7 @@ def generate_report(results: List[Dict[str, Any]], output_path: Path, device_nam
 **Precision**: `torch.bfloat16` with native CUDA Tensor Cores  
 **Timestamp**: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}  
 **Git Provenance Commit**: `{git_commit}`  
-**Architecture Scope**: 76M Parameters (8 Layers, 384 Hidden Dim, 1024 MLP / Intermediate, 6 Attention Heads, Vocab 32000, Sequence Length 256, Batch Size 4).
+**Architecture Scope**: 76M Parameters (8 Layers, 384 Hidden Dim, 1024 MLP / Intermediate, 6 Attention Heads, 2 KV Heads (GQA), Vocab 32000, Sequence Length 256, Batch Size 4).
 
 > [!IMPORTANT]
 > **Genuine Full-Stack Unsloth Baseline Guarantee**:
