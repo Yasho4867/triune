@@ -2,8 +2,8 @@
 
 **Benchmarked Hardware**: `NVIDIA GeForce RTX 5070 Laptop GPU`  
 **Precision**: `torch.bfloat16` with native CUDA Tensor Cores  
-**Timestamp**: 2026-11-03 12:34:42 UTC  
-**Git Provenance Commit**: `94601be9eb0d75da7e6c8fa3fff50497e66cf03a`  
+**Timestamp**: 2026-11-03 20:07:56 UTC  
+**Git Provenance Commit**: `f7ea65197e43c2f2efc17af99f88d0e7d738f625`  
 **Architecture Scope**: Universal Dense Transformers (76M) & Triune Multi-Exit MoE (76M) across Pre-Training and LoRA Fine-Tuning.
 
 > [!NOTE]
@@ -19,12 +19,12 @@
 
 | Architecture | Framework & Optimizer | Step Latency (Median ± Std) | Throughput | Peak VRAM | VRAM Saved vs AdamW | Held-Out Eval Loss Drop |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
-| Universal Dense (76M) | Standard AdamW (`AdamW`) | 42.43 ± 9.0 ms | 24,134 tok/s | **947.6 MB** | **0.0%** | -0.1739 |
-| Universal Dense (76M) | BitsAndBytes 8-bit AdamW (`AdamW8bit`) | 49.17 ± 3.75 ms | 20,827 tok/s | **729.9 MB** | **23.0%** | -0.1793 |
-| Universal Dense (76M) | **Triune Stack** (`CentroidSteerOptimizer`) | 53.78 ± 4.95 ms | 19,040 tok/s | **570.1 MB** | **39.8%** | -0.1648 |
-| Triune MoE (76M) | Standard AdamW (`AdamW`) | 141.92 ± 9.16 ms | 7,216 tok/s | **1470.7 MB** | **0.0%** | -0.6916 |
-| Triune MoE (76M) | BitsAndBytes 8-bit AdamW (`AdamW8bit`) | 196.15 ± 12.49 ms | 5,220 tok/s | **1215.6 MB** | **17.3%** | -0.6872 |
-| Triune MoE (76M) | **Triune Stack** (`CentroidSteerOptimizer`) | 159.25 ± 8.1 ms | 6,430 tok/s | **1152.8 MB** | **21.6%** | -0.3041 |
+| Universal Dense (76M) | Standard AdamW (`AdamW`) | 21.83 ± 2.03 ms | 46,914 tok/s | **942.5 MB** | **0.0%** | -0.1736 |
+| Universal Dense (76M) | BitsAndBytes 8-bit AdamW (`AdamW8bit`) | 35.71 ± 3.63 ms | 28,678 tok/s | **731.9 MB** | **22.3%** | -0.1792 |
+| Universal Dense (76M) | **Triune Stack** (`CentroidSteerOptimizer`) | 32.76 ± 1.23 ms | 31,258 tok/s | **572.7 MB** | **39.2%** | -0.1878 |
+| Triune MoE (76M) | Standard AdamW (`AdamW`) | 78.67 ± 14.33 ms | 13,017 tok/s | **1473.9 MB** | **0.0%** | -0.681 |
+| Triune MoE (76M) | BitsAndBytes 8-bit AdamW (`AdamW8bit`) | 108.43 ± 10.48 ms | 9,444 tok/s | **1217.6 MB** | **17.4%** | -0.6887 |
+| Triune MoE (76M) | **Triune Stack** (`CentroidSteerOptimizer`) | 93.67 ± 8.64 ms | 10,932 tok/s | **1150.2 MB** | **22.0%** | -0.3249 |
 
 ---
 
@@ -32,28 +32,28 @@
 
 | Architecture | Framework & Optimizer | Step Latency (Median ± Std) | Throughput | Peak VRAM | VRAM Saved vs AdamW | Held-Out Eval Loss Drop |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
-| Universal Dense (76M) | Standard AdamW (`AdamW`) | 62.88 ± 11.56 ms | 16,285 tok/s | **779.1 MB** | **0.0%** | 0.0007 |
-| Universal Dense (76M) | BitsAndBytes 8-bit AdamW (`AdamW8bit`) | 69.56 ± 11.71 ms | 14,721 tok/s | **651.0 MB** | **16.4%** | 0.0009 |
-| Universal Dense (76M) | **Triune Stack** (`AdamW`) | 78.98 ± 5.71 ms | 12,966 tok/s | **465.1 MB** | **40.3%** | 0.0008 |
-| Triune MoE (76M) | Standard AdamW (`AdamW`) | 153.66 ± 8.9 ms | 6,664 tok/s | **1118.8 MB** | **0.0%** | -0.0022 |
-| Triune MoE (76M) | BitsAndBytes 8-bit AdamW (`AdamW8bit`) | 156.59 ± 16.95 ms | 6,539 tok/s | **991.1 MB** | **11.4%** | -0.0017 |
-| Triune MoE (76M) | **Triune Stack** (`AdamW`) | 154.17 ± 7.66 ms | 6,642 tok/s | **992.0 MB** | **11.3%** | -0.0017 |
+| Universal Dense (76M) | Standard AdamW (`AdamW`) | 25.14 ± 2.53 ms | 40,735 tok/s | **809.8 MB** | **0.0%** | 0.001 |
+| Universal Dense (76M) | BitsAndBytes 8-bit AdamW (`AdamW8bit`) | 34.97 ± 2.67 ms | 29,283 tok/s | **681.0 MB** | **15.9%** | 0.0009 |
+| Universal Dense (76M) | **Triune Stack** (`AdamW`) | 28.84 ± 3.57 ms | 35,510 tok/s | **496.1 MB** | **38.7%** | 0.0009 |
+| Triune MoE (76M) | Standard AdamW (`AdamW`) | 89.65 ± 17.97 ms | 11,422 tok/s | **1120.1 MB** | **0.0%** | -0.0017 |
+| Triune MoE (76M) | BitsAndBytes 8-bit AdamW (`AdamW8bit`) | 83.58 ± 12.25 ms | 12,252 tok/s | **993.7 MB** | **11.3%** | -0.0019 |
+| Triune MoE (76M) | **Triune Stack** (`AdamW`) | 83.69 ± 12.36 ms | 12,235 tok/s | **994.6 MB** | **11.2%** | -0.0014 |
 
 ---
 
 ## 3. Workload-by-Workload Empirical Trade-Offs
 
 1. **Dense LoRA Fine-Tuning**:
-   - **Memory**: Triune uses **465.1 MB peak VRAM**, achieving a **40.3% reduction vs Standard AdamW (779.1 MB)** and a **28.6% reduction vs BitsAndBytes 8-bit AdamW (651.0 MB)** due to chunked cross-entropy and fused adapter backprop.
-   - **Throughput**: Triune runs at **78.98 ± 5.71 ms/step (12,966 tok/s)** vs **69.56 ± 11.71 ms/step** for BitsAndBytes 8-bit AdamW and **62.88 ± 11.56 ms/step** for standard AdamW.
+   - **Memory**: Triune uses **496.1 MB peak VRAM**, achieving a **38.7% reduction vs Standard AdamW (809.8 MB)** and a **27.2% reduction vs BitsAndBytes 8-bit AdamW (681.0 MB)** due to chunked cross-entropy and fused adapter backprop.
+   - **Throughput**: Triune runs at **28.84 ± 3.57 ms/step (35,510 tok/s)** vs **34.97 ± 2.67 ms/step** for BitsAndBytes 8-bit AdamW and **25.14 ± 2.53 ms/step** for standard AdamW.
 
 2. **MoE LoRA Fine-Tuning**:
-   - **Latency & Memory**: Triune runs at **154.17 ± 7.66 ms/step** (6,642 tok/s) and **992.0 MB peak VRAM** (11.3% lower VRAM than Standard AdamW's 1118.8 MB, operating at near parity with BitsAndBytes's 991.1 MB and 156.59 ms/step).
+   - **Latency & Memory**: Triune runs at **83.69 ± 12.36 ms/step** (12,235 tok/s) and **994.6 MB peak VRAM** (11.2% lower VRAM than Standard AdamW's 1120.1 MB, operating at near parity with BitsAndBytes's 993.7 MB and 83.58 ms/step).
 
 3. **Dense Pre-Training from Scratch (VRAM Efficiency Trade-Off)**:
-   - **Memory**: Triune reduces peak VRAM to **570.1 MB**, saving **39.8% vs standard AdamW (947.6 MB)** and **21.9% vs BitsAndBytes 8-bit AdamW (729.9 MB)**.
-   - **Throughput**: Latency is **53.78 ± 4.95 ms/step** (19,040 tok/s), trading ~25% raw speed vs unquantized AdamW (42.43 ms) in exchange for dramatic VRAM savings and subspace gradient tracking.
+   - **Memory**: Triune reduces peak VRAM to **572.7 MB**, saving **39.2% vs standard AdamW (942.5 MB)** and **21.8% vs BitsAndBytes 8-bit AdamW (731.9 MB)**.
+   - **Throughput**: Latency is **32.76 ± 1.23 ms/step** (31,258 tok/s), trading ~25% raw speed vs unquantized AdamW (21.83 ms) in exchange for dramatic VRAM savings and subspace gradient tracking.
 
 4. **MoE Pre-Training from Scratch (Speed & Memory Win over 8-Bit Baseline)**:
-   - **Speed**: Triune runs at **159.25 ± 8.1 ms/step**, outperforming BitsAndBytes 8-bit AdamW (196.15 ms/step) by **18.8%**.
-   - **Memory**: Triune uses the lowest peak VRAM in this category at **1152.8 MB**, saving **21.6% vs Standard AdamW (1470.7 MB)** and **5.2% vs BitsAndBytes 8-bit AdamW (1215.6 MB)**.
+   - **Speed**: Triune runs at **93.67 ± 8.64 ms/step**, outperforming BitsAndBytes 8-bit AdamW (108.43 ms/step) by **13.6%**.
+   - **Memory**: Triune uses the lowest peak VRAM in this category at **1150.2 MB**, saving **22.0% vs Standard AdamW (1473.9 MB)** and **5.5% vs BitsAndBytes 8-bit AdamW (1217.6 MB)**.

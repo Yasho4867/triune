@@ -65,6 +65,84 @@ def _linear_or_lora(mod: nn.Module, x: torch.Tensor) -> torch.Tensor:
 # =========================================================================
 # 1. Canonical Dense Transformer Architecture
 # =========================================================================
+class _FusedBaseQKVFunction(torch.autograd.Function):
+    """Fused base QKV linear projection with analytical backward gradient slicing.
+    Computes [flat_x @ W_qkv.T] in 1 GEMM and [flat_grad.T @ flat_x] in 1 GEMM,
+    eliminating CatBackward autograd overhead and intermediate slice allocations.
+    """
+
+    @staticmethod
+    def forward(ctx, x: torch.Tensor, W_q: torch.Tensor, W_k: torch.Tensor, W_v: torch.Tensor) -> torch.Tensor:
+        orig_shape = x.shape
+        D = orig_shape[-1]
+        flat_x = x.contiguous().reshape(-1, D)
+        D_q, D_k, D_v = W_q.shape[0], W_k.shape[0], W_v.shape[0]
+        W_qkv = torch.cat((W_q, W_k, W_v), dim=0)
+        out = torch.mm(flat_x, W_qkv.t())
+        ctx.save_for_backward(flat_x, W_q, W_k, W_v)
+        ctx.orig_shape = orig_shape
+        ctx.dims = (D_q, D_k, D_v)
+        return out.reshape(*orig_shape[:-1], D_q + D_k + D_v)
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor):
+        flat_x, W_q, W_k, W_v = ctx.saved_tensors
+        D_q, D_k, D_v = ctx.dims
+        flat_grad = grad_output.contiguous().reshape(-1, D_q + D_k + D_v)
+
+        grad_x = None
+        if ctx.needs_input_grad[0]:
+            W_qkv = torch.cat((W_q, W_k, W_v), dim=0)
+            grad_x = torch.mm(flat_grad, W_qkv).reshape(ctx.orig_shape)
+
+        grad_W_q = grad_W_k = grad_W_v = None
+        if ctx.needs_input_grad[1] or ctx.needs_input_grad[2] or ctx.needs_input_grad[3]:
+            grad_W_all = torch.mm(flat_grad.t(), flat_x)
+            grad_W_q = grad_W_all[:D_q].contiguous() if ctx.needs_input_grad[1] else None
+            grad_W_k = grad_W_all[D_q : D_q + D_k].contiguous() if ctx.needs_input_grad[2] else None
+            grad_W_v = grad_W_all[D_q + D_k :].contiguous() if ctx.needs_input_grad[3] else None
+
+        return grad_x, grad_W_q, grad_W_k, grad_W_v
+
+
+class _FusedBaseGateUpFunction(torch.autograd.Function):
+    """Fused base SwiGLU Gate+Up linear projection with analytical backward gradient slicing.
+    Computes [flat_x @ W_gu.T] in 1 GEMM and [flat_grad.T @ flat_x] in 1 GEMM.
+    """
+
+    @staticmethod
+    def forward(ctx, x: torch.Tensor, W_g: torch.Tensor, W_u: torch.Tensor) -> torch.Tensor:
+        orig_shape = x.shape
+        D = orig_shape[-1]
+        flat_x = x.contiguous().reshape(-1, D)
+        D_g, D_u = W_g.shape[0], W_u.shape[0]
+        W_gu = torch.cat((W_g, W_u), dim=0)
+        out = torch.mm(flat_x, W_gu.t())
+        ctx.save_for_backward(flat_x, W_g, W_u)
+        ctx.orig_shape = orig_shape
+        ctx.dims = (D_g, D_u)
+        return out.reshape(*orig_shape[:-1], D_g + D_u)
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor):
+        flat_x, W_g, W_u = ctx.saved_tensors
+        D_g, D_u = ctx.dims
+        flat_grad = grad_output.contiguous().reshape(-1, D_g + D_u)
+
+        grad_x = None
+        if ctx.needs_input_grad[0]:
+            W_gu = torch.cat((W_g, W_u), dim=0)
+            grad_x = torch.mm(flat_grad, W_gu).reshape(ctx.orig_shape)
+
+        grad_W_g = grad_W_u = None
+        if ctx.needs_input_grad[1] or ctx.needs_input_grad[2]:
+            grad_W_all = torch.mm(flat_grad.t(), flat_x)
+            grad_W_g = grad_W_all[:D_g].contiguous() if ctx.needs_input_grad[1] else None
+            grad_W_u = grad_W_all[D_g:].contiguous() if ctx.needs_input_grad[2] else None
+
+        return grad_x, grad_W_g, grad_W_u
+
+
 class DenseAttention(nn.Module):
     """Standard Multi-Head / Grouped-Query Attention with optional Fast GLA."""
 
@@ -165,13 +243,16 @@ class DenseAttention(nn.Module):
                     k = qkv[..., q_dim : q_dim + kv_dim].view(B, T, self.num_kv_heads, self.head_dim).transpose(1, 2)
                     v = qkv[..., q_dim + kv_dim :].view(B, T, self.num_kv_heads, self.head_dim).transpose(1, 2)
             elif can_fuse_base:
-                W_qkv = torch.cat((self.q_proj.weight, self.k_proj.weight, self.v_proj.weight), dim=0)
-                b_qkv = (
-                    torch.cat((self.q_proj.bias, self.k_proj.bias, self.v_proj.bias), dim=0)
-                    if self.q_proj.bias is not None
-                    else None
-                )
-                qkv = F.linear(x, W_qkv, b_qkv)
+                if self.q_proj.bias is None and self.k_proj.bias is None and self.v_proj.bias is None:
+                    qkv = _FusedBaseQKVFunction.apply(x, self.q_proj.weight, self.k_proj.weight, self.v_proj.weight)
+                else:
+                    W_qkv = torch.cat((self.q_proj.weight, self.k_proj.weight, self.v_proj.weight), dim=0)
+                    b_qkv = (
+                        torch.cat((self.q_proj.bias, self.k_proj.bias, self.v_proj.bias), dim=0)
+                        if self.q_proj.bias is not None
+                        else None
+                    )
+                    qkv = F.linear(x, W_qkv, b_qkv)
                 if self.num_kv_heads == self.num_heads:
                     q, k, v = qkv.view(B, T, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4).unbind(0)
                 else:
@@ -236,13 +317,17 @@ class DenseMLP(nn.Module):
                 gate, up = gu.chunk(2, dim=-1)
                 return _linear_or_lora(self.down_proj, fast_swiglu(gate, up))
             elif can_fuse_gu_base:
-                W_gu = torch.cat((self.gate_proj.weight, self.up_proj.weight), dim=0)
-                b_gu = (
-                    torch.cat((self.gate_proj.bias, self.up_proj.bias), dim=0)
-                    if self.gate_proj.bias is not None
-                    else None
-                )
-                gate, up = F.linear(x, W_gu, b_gu).chunk(2, dim=-1)
+                if self.gate_proj.bias is None and self.up_proj.bias is None:
+                    gu = _FusedBaseGateUpFunction.apply(x, self.gate_proj.weight, self.up_proj.weight)
+                else:
+                    W_gu = torch.cat((self.gate_proj.weight, self.up_proj.weight), dim=0)
+                    b_gu = (
+                        torch.cat((self.gate_proj.bias, self.up_proj.bias), dim=0)
+                        if self.gate_proj.bias is not None
+                        else None
+                    )
+                    gu = F.linear(x, W_gu, b_gu)
+                gate, up = gu.chunk(2, dim=-1)
                 return _linear_or_lora(self.down_proj, fast_swiglu(gate, up))
             return _linear_or_lora(
                 self.down_proj,

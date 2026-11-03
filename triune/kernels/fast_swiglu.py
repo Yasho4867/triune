@@ -13,6 +13,38 @@ import torch.nn.functional as F
 
 from .dispatcher import is_triton_available
 
+if is_triton_available():
+    import triton
+    import triton.language as tl
+
+    @triton.jit
+    def _triton_swiglu_fwd_kernel(gate_ptr, up_ptr, out_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+        pid = tl.program_id(0)
+        offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        g = tl.load(gate_ptr + offsets, mask=mask, other=0.0).to(tl.float32)
+        u = tl.load(up_ptr + offsets, mask=mask, other=0.0)
+        sig = tl.sigmoid(g)
+        silu_g = (g * sig).to(u.dtype)
+        out = silu_g * u
+        tl.store(out_ptr + offsets, out, mask=mask)
+
+    @triton.jit
+    def _triton_swiglu_bwd_kernel(dout_ptr, gate_ptr, up_ptr, dg_ptr, du_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+        pid = tl.program_id(0)
+        offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        dout = tl.load(dout_ptr + offsets, mask=mask, other=0.0)
+        g = tl.load(gate_ptr + offsets, mask=mask, other=0.0).to(tl.float32)
+        u = tl.load(up_ptr + offsets, mask=mask, other=0.0)
+        sig = tl.sigmoid(g)
+        silu_g = (g * sig).to(dout.dtype)
+        du = dout * silu_g
+        dg_fp32 = dout.to(tl.float32) * u.to(tl.float32) * sig * (1.0 + g * (1.0 - sig))
+        dg = dg_fp32.to(dout.dtype)
+        tl.store(dg_ptr + offsets, dg, mask=mask)
+        tl.store(du_ptr + offsets, du, mask=mask)
+
 
 def _fused_swiglu_fwd(gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
     return F.silu(gate) * up
@@ -33,11 +65,32 @@ class _FusedSwiGLUFunction(torch.autograd.Function):
     @staticmethod
     def forward(ctx, gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
         ctx.save_for_backward(gate, up)
+        if is_triton_available() and gate.is_cuda and gate.is_contiguous() and up.is_contiguous():
+            n_elements = gate.numel()
+            out = torch.empty_like(gate)
+            BLOCK_SIZE = 1024
+            grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+            _triton_swiglu_fwd_kernel[grid](gate, up, out, n_elements, BLOCK_SIZE=BLOCK_SIZE)
+            return out
         return _fused_swiglu_fwd(gate, up)
 
     @staticmethod
     def backward(ctx, grad_output: torch.Tensor):
         gate, up = ctx.saved_tensors
+        if (
+            is_triton_available()
+            and grad_output.is_cuda
+            and grad_output.is_contiguous()
+            and gate.is_contiguous()
+            and up.is_contiguous()
+        ):
+            n_elements = gate.numel()
+            grad_gate = torch.empty_like(gate)
+            grad_up = torch.empty_like(up)
+            BLOCK_SIZE = 1024
+            grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+            _triton_swiglu_bwd_kernel[grid](grad_output, gate, up, grad_gate, grad_up, n_elements, BLOCK_SIZE=BLOCK_SIZE)
+            return grad_gate, grad_up
         return _fused_swiglu_bwd(grad_output, gate, up)
 
 

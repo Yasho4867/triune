@@ -67,6 +67,51 @@ if is_triton_available():
         tl.store(k2_ptr, out_k2.to(K.dtype.element_ty), mask=mask)
 
 
+    class _FastRoPEFunction(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx, q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+            B, H, T, D = q.shape
+            half_d = D // 2
+            cos_2d = cos.reshape(-1, cos.size(-1)).contiguous()
+            sin_2d = sin.reshape(-1, sin.size(-1)).contiguous()
+            out_q = q.clone()
+            out_k = k.clone()
+            BLOCK_SIZE = triton.next_power_of_2(half_d)
+            _rope_kernel[(B * H, T)](
+                out_q, out_k, cos_2d, sin_2d,
+                out_q.stride(0), out_q.stride(1), out_q.stride(2), out_q.stride(3),
+                out_k.stride(0), out_k.stride(1), out_k.stride(2), out_k.stride(3),
+                cos_2d.stride(0), cos_2d.stride(1),
+                sin_2d.stride(0), sin_2d.stride(1),
+                H, T, D,
+                BLOCK_SIZE=BLOCK_SIZE,
+            )
+            ctx.save_for_backward(cos_2d, sin_2d)
+            ctx.dims = (B, H, T, D)
+            return out_q, out_k
+
+        @staticmethod
+        def backward(ctx, grad_q: torch.Tensor, grad_k: torch.Tensor) -> tuple[Optional[torch.Tensor], Optional[torch.Tensor], None, None]:
+            cos_2d, sin_2d = ctx.saved_tensors
+            B, H, T, D = ctx.dims
+            half_d = D // 2
+            out_gq = grad_q.clone() if grad_q is not None else None
+            out_gk = grad_k.clone() if grad_k is not None else None
+            BLOCK_SIZE = triton.next_power_of_2(half_d)
+            if out_gq is not None and out_gk is not None:
+                # The inverse of a 2D rotation R(theta) is R(-theta), which corresponds to -sin
+                _rope_kernel[(B * H, T)](
+                    out_gq, out_gk, cos_2d, -sin_2d,
+                    out_gq.stride(0), out_gq.stride(1), out_gq.stride(2), out_gq.stride(3),
+                    out_gk.stride(0), out_gk.stride(1), out_gk.stride(2), out_gk.stride(3),
+                    cos_2d.stride(0), cos_2d.stride(1),
+                    sin_2d.stride(0), sin_2d.stride(1),
+                    H, T, D,
+                    BLOCK_SIZE=BLOCK_SIZE,
+                )
+            return out_gq, out_gk, None, None
+
+
 def fast_rope(q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     """Applies rotary position embeddings using fused Triton or vectorized PyTorch.
 
@@ -76,26 +121,14 @@ def fast_rope(q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Te
         cos: [T, D] or [1, 1, T, D]
         sin: [T, D] or [1, 1, T, D]
     """
-    requires_grad = (q.requires_grad or k.requires_grad or torch.is_grad_enabled())
-    if is_triton_available() and q.is_cuda and q.dim() == 4 and not requires_grad:
+    if is_triton_available() and q.is_cuda and q.dim() == 4 and k.shape == q.shape:
         try:
             B, H, T, D = q.shape
             half_d = D // 2
-            cos_2d = cos.reshape(-1, cos.size(-1)).contiguous()
-            sin_2d = sin.reshape(-1, sin.size(-1)).contiguous()
-            if cos_2d.dim() == 2 and cos_2d.size(0) >= T and cos_2d.size(1) >= half_d:
-                BLOCK_SIZE = triton.next_power_of_2(half_d)
-                grid = (B * H, T)
-                _rope_kernel[grid](
-                    q, k, cos_2d, sin_2d,
-                    q.stride(0), q.stride(1), q.stride(2), q.stride(3),
-                    k.stride(0), k.stride(1), k.stride(2), k.stride(3),
-                    cos_2d.stride(0), cos_2d.stride(1),
-                    sin_2d.stride(0), sin_2d.stride(1),
-                    H, T, D,
-                    BLOCK_SIZE=BLOCK_SIZE,
-                )
-                return q, k
+            cos_2d = cos.reshape(-1, cos.size(-1))
+            sin_2d = sin.reshape(-1, sin.size(-1))
+            if cos_2d.size(0) >= T and cos_2d.size(1) >= half_d:
+                return _FastRoPEFunction.apply(q, k, cos, sin)
         except Exception:
             pass
 

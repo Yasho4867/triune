@@ -103,7 +103,7 @@ class LoRAConfig:
         self.dropout = dropout
         self.target_modules = target_modules or [
             "q_proj", "k_proj", "v_proj", "o_proj", "out_proj",
-            "gate_proj", "up_proj", "down_proj", "0", "2"
+            "gate_proj", "up_proj", "down_proj", "qkv_proj", "gate_up_proj", "0", "2"
         ]
         self.quantization = quantization or ("4-bit NF4" if use_qlora else "FP16")
         self.use_qlora = bool(use_qlora or ("4-bit" in str(self.quantization) or "nf4" in str(self.quantization).lower()))
