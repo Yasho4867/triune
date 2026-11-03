@@ -19,18 +19,33 @@ import torch.nn.functional as F
 from triune.kernels import (
     FastChunkedCrossEntropyLoss,
     FastGELU,
+    FastRMSNorm,
     FastSwiGLU,
     chunked_cross_entropy_from_hidden,
     fast_chunk_gla,
     fast_cross_entropy,
+    fast_gate_up_lora_linear,
     fast_gelu,
     fast_lora_forward,
     fast_lora_linear,
+    fast_qkv_lora_linear,
     fast_rmsnorm,
     fast_swiglu,
 )
 from triune.optim.centroid import CentroidSteerOptimizer
 from triune.trainer.finetune import LoRAConfig, LoRALayer, TriuneFineTuner
+
+
+def _extract_lora_components(mod: nn.Module):
+    """Extract (weight, bias, lora_A, lora_B, scaling) from an nn.Linear or LoRALayer wrapper."""
+    if hasattr(mod, "original_layer") and hasattr(mod, "lora_A") and mod.lora_A is not None and mod.lora_B is not None:
+        orig = mod.original_layer
+        w = getattr(orig, "weight", None)
+        b = getattr(orig, "bias", None)
+        return w, b, mod.lora_A, mod.lora_B, float(getattr(mod, "scaling", 2.0))
+    elif type(mod) is nn.Linear and hasattr(mod, "lora_A") and hasattr(mod, "lora_B") and mod.lora_A is not None and mod.lora_B is not None:
+        return mod.weight, mod.bias, mod.lora_A, mod.lora_B, float(getattr(mod, "lora_scaling", 2.0))
+    return None
 
 
 def _linear_or_lora(mod: nn.Module, x: torch.Tensor) -> torch.Tensor:
@@ -74,24 +89,38 @@ class DenseAttention(nn.Module):
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         B, T, D = x.shape
         hd_total = self.num_heads * self.head_dim
-        can_fuse_eval = (
-            not torch.is_grad_enabled()
-            and type(self.q_proj) is nn.Linear
+
+        can_fuse_base = (
+            type(self.q_proj) is nn.Linear
             and type(self.k_proj) is nn.Linear
             and type(self.v_proj) is nn.Linear
             and not hasattr(self.q_proj, "lora_A")
             and not hasattr(self.k_proj, "lora_A")
             and not hasattr(self.v_proj, "lora_A")
         )
+        lora_q = _extract_lora_components(self.q_proj)
+        lora_k = _extract_lora_components(self.k_proj)
+        lora_v = _extract_lora_components(self.v_proj)
+        can_fuse_lora = (
+            lora_q is not None
+            and lora_k is not None
+            and lora_v is not None
+            and lora_q[2].shape[0] == lora_k[2].shape[0] == lora_v[2].shape[0]
+            and lora_q[4] == lora_k[4] == lora_v[4]
+        )
+
         if self.use_gla:
-            if can_fuse_eval and type(self.gate_proj) is nn.Linear and not hasattr(self.gate_proj, "lora_A"):
-                qkvg = F.linear(
-                    x,
-                    torch.cat(
-                        (self.q_proj.weight, self.k_proj.weight, self.v_proj.weight, self.gate_proj.weight),
-                        dim=0,
-                    ),
+            if can_fuse_base and type(self.gate_proj) is nn.Linear and not hasattr(self.gate_proj, "lora_A"):
+                W_qkvg = torch.cat(
+                    (self.q_proj.weight, self.k_proj.weight, self.v_proj.weight, self.gate_proj.weight),
+                    dim=0,
                 )
+                b_qkvg = (
+                    torch.cat((self.q_proj.bias, self.k_proj.bias, self.v_proj.bias, self.gate_proj.bias), dim=0)
+                    if self.q_proj.bias is not None
+                    else None
+                )
+                qkvg = F.linear(x, W_qkvg, b_qkvg)
                 q = qkvg[..., :hd_total].reshape(B, T, self.num_heads, self.head_dim)
                 k = qkvg[..., hd_total:2 * hd_total].reshape(B, T, self.num_heads, self.head_dim)
                 v = qkvg[..., 2 * hd_total:3 * hd_total].reshape(B, T, self.num_heads, self.head_dim)
@@ -105,11 +134,28 @@ class DenseAttention(nn.Module):
             out = out.reshape(B, T, -1)
             return _linear_or_lora(self.o_proj, out), new_state
         else:
-            if can_fuse_eval:
-                qkv = F.linear(
+            if can_fuse_lora:
+                qkv = fast_qkv_lora_linear(
                     x,
-                    torch.cat((self.q_proj.weight, self.k_proj.weight, self.v_proj.weight), dim=0),
+                    lora_q[0], lora_q[1],
+                    lora_k[0], lora_k[1],
+                    lora_v[0], lora_v[1],
+                    lora_q[2], lora_q[3],
+                    lora_k[2], lora_k[3],
+                    lora_v[2], lora_v[3],
+                    scaling=lora_q[4],
                 )
+                q = qkv[..., :hd_total].reshape(B, T, self.num_heads, self.head_dim)
+                k = qkv[..., hd_total:2 * hd_total].reshape(B, T, self.num_heads, self.head_dim)
+                v = qkv[..., 2 * hd_total:].reshape(B, T, self.num_heads, self.head_dim)
+            elif can_fuse_base:
+                W_qkv = torch.cat((self.q_proj.weight, self.k_proj.weight, self.v_proj.weight), dim=0)
+                b_qkv = (
+                    torch.cat((self.q_proj.bias, self.k_proj.bias, self.v_proj.bias), dim=0)
+                    if self.q_proj.bias is not None
+                    else None
+                )
+                qkv = F.linear(x, W_qkv, b_qkv)
                 q = qkv[..., :hd_total].reshape(B, T, self.num_heads, self.head_dim)
                 k = qkv[..., hd_total:2 * hd_total].reshape(B, T, self.num_heads, self.head_dim)
                 v = qkv[..., 2 * hd_total:].reshape(B, T, self.num_heads, self.head_dim)
@@ -143,16 +189,39 @@ class DenseMLP(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.act_type == "swiglu":
-            if (
-                not torch.is_grad_enabled()
-                and type(self.gate_proj) is nn.Linear
+            can_fuse_gu_base = (
+                type(self.gate_proj) is nn.Linear
                 and type(self.up_proj) is nn.Linear
                 and not hasattr(self.gate_proj, "lora_A")
                 and not hasattr(self.up_proj, "lora_A")
-            ):
-                gate, up = F.linear(
-                    x, torch.cat((self.gate_proj.weight, self.up_proj.weight), dim=0)
-                ).chunk(2, dim=-1)
+            )
+            lora_g = _extract_lora_components(self.gate_proj)
+            lora_u = _extract_lora_components(self.up_proj)
+            can_fuse_gu_lora = (
+                lora_g is not None
+                and lora_u is not None
+                and lora_g[2].shape[0] == lora_u[2].shape[0]
+                and lora_g[4] == lora_u[4]
+            )
+            if can_fuse_gu_lora:
+                gu = fast_gate_up_lora_linear(
+                    x,
+                    lora_g[0], lora_g[1],
+                    lora_u[0], lora_u[1],
+                    lora_g[2], lora_g[3],
+                    lora_u[2], lora_u[3],
+                    scaling=lora_g[4],
+                )
+                gate, up = gu.chunk(2, dim=-1)
+                return _linear_or_lora(self.down_proj, fast_swiglu(gate, up))
+            elif can_fuse_gu_base:
+                W_gu = torch.cat((self.gate_proj.weight, self.up_proj.weight), dim=0)
+                b_gu = (
+                    torch.cat((self.gate_proj.bias, self.up_proj.bias), dim=0)
+                    if self.gate_proj.bias is not None
+                    else None
+                )
+                gate, up = F.linear(x, W_gu, b_gu).chunk(2, dim=-1)
                 return _linear_or_lora(self.down_proj, fast_swiglu(gate, up))
             return _linear_or_lora(
                 self.down_proj,

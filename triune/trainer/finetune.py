@@ -222,6 +222,30 @@ class TriuneFineTuner:
     def count_trainable_parameters(self) -> int:
         return sum(p.numel() for p in self.model.parameters() if p.requires_grad)
 
+    def get_trainable_parameters(self) -> List[nn.Parameter]:
+        """Return list of all parameters requiring gradient in the model."""
+        return [p for p in self.model.parameters() if p.requires_grad]
+
+    def get_optimizer(
+        self,
+        lr: float = 2e-4,
+        weight_decay: float = 0.0,
+        use_8bit: bool = False,
+    ) -> torch.optim.Optimizer:
+        """Create high-performance optimizer for trainable LoRA adapter parameters."""
+        trainable_params = self.get_trainable_parameters()
+        if not trainable_params:
+            raise RuntimeError("No trainable LoRA parameters found on model.")
+        if use_8bit:
+            try:
+                import bitsandbytes as bnb
+                return bnb.optim.AdamW8bit(trainable_params, lr=lr, weight_decay=weight_decay)
+            except Exception:
+                pass
+        p_first = trainable_params[0]
+        use_fused = (p_first.device.type == "cuda")
+        return torch.optim.AdamW(trainable_params, lr=lr, weight_decay=weight_decay, fused=use_fused)
+
     def fit(
         self,
         dataset_path: str | Path | None = None,
@@ -230,6 +254,8 @@ class TriuneFineTuner:
         batch_size: int = 4,
         seq_len: int = 64,
         lr: float = 2e-4,
+        weight_decay: float = 0.0,
+        use_8bit: bool = False,
         export_formats: Optional[List[str]] = None,
         max_steps: Optional[int] = None,
         on_step: Optional[Any] = None,
@@ -237,14 +263,14 @@ class TriuneFineTuner:
     ) -> Dict[str, Any]:
         """Run real fine-tuning loop with gradient accumulation, event streaming, and checkpoint export."""
         self.attach_lora()
-        trainable_params = [p for p in self.model.parameters() if p.requires_grad]
+        trainable_params = self.get_trainable_parameters()
         if not trainable_params:
             raise RuntimeError("No trainable LoRA parameters found on model.")
         # Detect device & target vocab size
         p_first = next(self.model.parameters())
         device = p_first.device
         dtype = p_first.dtype if p_first.is_floating_point() else torch.float32
-        optimizer = torch.optim.AdamW(trainable_params, lr=lr, fused=(device.type == "cuda"))
+        optimizer = self.get_optimizer(lr=lr, weight_decay=weight_decay, use_8bit=use_8bit)
 
         # Prepare tokens
         token_batches: List[torch.Tensor] = []

@@ -138,17 +138,35 @@ class MoE_FFN(nn.Module):
         if self.top_k > 1:
             flat_vals = flat_vals / (flat_vals.sum(dim=-1, keepdim=True) + 1e-20)
 
-        any_b1 = any(e[0].bias is not None for e in self.experts)
-        all_b1 = all(e[0].bias is not None for e in self.experts)
-        any_b2 = any(e[2].bias is not None for e in self.experts)
-        all_b2 = all(e[2].bias is not None for e in self.experts)
+        def _get_submod_weight_bias(submod):
+            if hasattr(submod, "original_layer"):
+                orig = submod.original_layer
+                return getattr(orig, "weight", None), getattr(orig, "bias", None)
+            return getattr(submod, "weight", None), getattr(submod, "bias", None)
+
+        def _get_submod_lora(submod):
+            if hasattr(submod, "lora_A") and submod.lora_A is not None and hasattr(submod, "lora_B") and submod.lora_B is not None:
+                return submod.lora_A, submod.lora_B, float(getattr(submod, "scaling", getattr(submod, "lora_scaling", 2.0)))
+            return None
+
+        any_b1 = any(_get_submod_weight_bias(e[0])[1] is not None for e in self.experts)
+        all_b1 = all(_get_submod_weight_bias(e[0])[1] is not None for e in self.experts)
+        any_b2 = any(_get_submod_weight_bias(e[2])[1] is not None for e in self.experts)
+        all_b2 = all(_get_submod_weight_bias(e[2])[1] is not None for e in self.experts)
         mixed_biases = (any_b1 != all_b1) or (any_b2 != all_b2)
+
+        has_lora_e0 = all(_get_submod_lora(e[0]) is not None for e in self.experts)
+        has_lora_e2 = all(_get_submod_lora(e[2]) is not None for e in self.experts)
+        no_lora_e0 = all(_get_submod_lora(e[0]) is None for e in self.experts)
+        no_lora_e2 = all(_get_submod_lora(e[2]) is None for e in self.experts)
 
         can_batch_bmm = (
             not self.use_fp4
             and not self.use_fp8
             and not mixed_biases
-            and all(isinstance(e[0], nn.Linear) and isinstance(e[2], nn.Linear) for e in self.experts)
+            and (has_lora_e0 or no_lora_e0)
+            and (has_lora_e2 or no_lora_e2)
+            and all(_get_submod_weight_bias(e[0])[0] is not None and _get_submod_weight_bias(e[2])[0] is not None for e in self.experts)
         )
 
         # Fast path for single-token autoregressive decoding: evaluate only the selected top-k
@@ -159,20 +177,30 @@ class MoE_FFN(nn.Module):
             else:
                 out = torch.zeros_like(flat_x)
             if can_batch_bmm:
-                W1_stack = torch.stack([e[0].weight for e in self.experts], dim=0)
-                W2_stack = torch.stack([e[2].weight for e in self.experts], dim=0)
+                W1_stack = torch.stack([_get_submod_weight_bias(e[0])[0] for e in self.experts], dim=0)
+                W2_stack = torch.stack([_get_submod_weight_bias(e[2])[0] for e in self.experts], dim=0)
                 sel_idx = flat_idx[0]                                              # [top_k]
                 w1_sel = W1_stack[sel_idx]                                         # [top_k, H_ffn, D]
                 w2_sel = W2_stack[sel_idx]                                         # [top_k, D, H_ffn]
                 x_sel = flat_x.unsqueeze(0).expand(self.top_k, 1, D)               # [top_k, 1, D]
                 h_pre = torch.bmm(x_sel, w1_sel.transpose(1, 2))
+                if has_lora_e0:
+                    A1_stack = torch.stack([e[0].lora_A for e in self.experts], dim=0)[sel_idx]
+                    B1_stack = torch.stack([e[0].lora_B for e in self.experts], dim=0)[sel_idx]
+                    s1 = _get_submod_lora(self.experts[0][0])[2]
+                    h_pre = h_pre + torch.bmm(torch.bmm(x_sel, A1_stack.transpose(1, 2)) * s1, B1_stack.transpose(1, 2))
                 if all_b1:
-                    b1_stack = torch.stack([e[0].bias for e in self.experts], dim=0)
+                    b1_stack = torch.stack([_get_submod_weight_bias(e[0])[1] for e in self.experts], dim=0)
                     h_pre = h_pre + b1_stack[sel_idx].unsqueeze(1)
                 h = self.experts[0][1](h_pre)
                 y_sel = torch.bmm(h, w2_sel.transpose(1, 2))
+                if has_lora_e2:
+                    A2_stack = torch.stack([e[2].lora_A for e in self.experts], dim=0)[sel_idx]
+                    B2_stack = torch.stack([e[2].lora_B for e in self.experts], dim=0)[sel_idx]
+                    s2 = _get_submod_lora(self.experts[0][2])[2]
+                    y_sel = y_sel + torch.bmm(torch.bmm(h, A2_stack.transpose(1, 2)) * s2, B2_stack.transpose(1, 2))
                 if all_b2:
-                    b2_stack = torch.stack([e[2].bias for e in self.experts], dim=0)
+                    b2_stack = torch.stack([_get_submod_weight_bias(e[2])[1] for e in self.experts], dim=0)
                     y_sel = y_sel + b2_stack[sel_idx].unsqueeze(1)
                 weights_sel = flat_vals[0].view(self.top_k, 1, 1).to(y_sel.dtype)
                 out = out + (y_sel * weights_sel).sum(dim=0).to(out.dtype)
@@ -198,18 +226,45 @@ class MoE_FFN(nn.Module):
             out = out + (self.shared_scale * shared_out).to(out.dtype)
 
         if can_batch_bmm:
-            W1_stack = torch.stack([e[0].weight for e in self.experts], dim=0)
-            W2_stack = torch.stack([e[2].weight for e in self.experts], dim=0)
-            b1_stack = torch.stack([e[0].bias for e in self.experts], dim=0).unsqueeze(1) if all_b1 else None
-            b2_stack = torch.stack([e[2].bias for e in self.experts], dim=0).unsqueeze(1) if all_b2 else None
+            W1_stack = torch.stack([_get_submod_weight_bias(e[0])[0] for e in self.experts], dim=0)
+            W2_stack = torch.stack([_get_submod_weight_bias(e[2])[0] for e in self.experts], dim=0)
+            b1_stack = (
+                torch.stack([_get_submod_weight_bias(e[0])[1] for e in self.experts], dim=0).unsqueeze(1)
+                if all_b1
+                else None
+            )
+            b2_stack = (
+                torch.stack([_get_submod_weight_bias(e[2])[1] for e in self.experts], dim=0).unsqueeze(1)
+                if all_b2
+                else None
+            )
+            if has_lora_e0:
+                A1_stack = torch.stack([e[0].lora_A for e in self.experts], dim=0)
+                B1_stack = torch.stack([e[0].lora_B for e in self.experts], dim=0)
+                s1 = _get_submod_lora(self.experts[0][0])[2]
+            else:
+                A1_stack = B1_stack = None
+                s1 = 1.0
+
+            if has_lora_e2:
+                A2_stack = torch.stack([e[2].lora_A for e in self.experts], dim=0)
+                B2_stack = torch.stack([e[2].lora_B for e in self.experts], dim=0)
+                s2 = _get_submod_lora(self.experts[0][2])[2]
+            else:
+                A2_stack = B2_stack = None
+                s2 = 1.0
 
             if is_capturing:
                 x_exp = flat_x.unsqueeze(0).expand(self.num_experts, -1, -1)
                 h_pre = torch.bmm(x_exp, W1_stack.transpose(1, 2))
+                if has_lora_e0:
+                    h_pre = h_pre + torch.bmm(torch.bmm(x_exp, A1_stack.transpose(1, 2)) * s1, B1_stack.transpose(1, 2))
                 if b1_stack is not None:
                     h_pre = h_pre + b1_stack
                 h = self.experts[0][1](h_pre)
                 y_all = torch.bmm(h, W2_stack.transpose(1, 2))
+                if has_lora_e2:
+                    y_all = y_all + torch.bmm(torch.bmm(h, A2_stack.transpose(1, 2)) * s2, B2_stack.transpose(1, 2))
                 if b2_stack is not None:
                     y_all = y_all + b2_stack
                 routing_weights = torch.zeros(N_tok, self.num_experts, device=x.device, dtype=y_all.dtype)
@@ -247,10 +302,14 @@ class MoE_FFN(nn.Module):
                 if pad_m > 0:
                     gathered_x = F.pad(gathered_x, (0, 0, 0, pad_m))
                 h_pre = torch.bmm(gathered_x, W1_stack.transpose(1, 2))
+                if has_lora_e0:
+                    h_pre = h_pre + torch.bmm(torch.bmm(gathered_x, A1_stack.transpose(1, 2)) * s1, B1_stack.transpose(1, 2))
                 if b1_stack is not None:
                     h_pre = h_pre + b1_stack
                 h = self.experts[0][1](h_pre)
                 y = torch.bmm(h, W2_stack.transpose(1, 2))
+                if has_lora_e2:
+                    y = y + torch.bmm(torch.bmm(h, A2_stack.transpose(1, 2)) * s2, B2_stack.transpose(1, 2))
                 if b2_stack is not None:
                     y = y + b2_stack
                 if pad_m > 0:

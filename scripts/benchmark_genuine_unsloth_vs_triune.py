@@ -179,8 +179,8 @@ def run_cell_worker(
             lora_cfg = LoRAConfig(r=16, alpha=16.0, target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"])
             tuner = TriuneFineTuner(model, lora_cfg)
             tuner.attach_lora()
-            trainable_params = [p for p in model.parameters() if p.requires_grad]
-            optimizer = torch.optim.AdamW(trainable_params, lr=1e-3, weight_decay=0.0)
+            trainable_params = tuner.get_trainable_parameters()
+            optimizer = tuner.get_optimizer(lr=1e-3, weight_decay=0.0, use_8bit=True)
             adapter_param = trainable_params[0]
             init_adapter_val = adapter_param.detach().clone()
         else:

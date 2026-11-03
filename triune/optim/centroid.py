@@ -65,6 +65,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                  svd_device="auto",
                  use_triangular_core=getattr(defaults, 'USE_TRIANGULAR_CORE', True),
                  use_8bit_base: bool = getattr(defaults, 'USE_8BIT_BASE', False),
+                 subspace_stride: int = 1,
                  adaptive_subspace_refresh: bool = True,
                  energy_threshold: float = 0.50,
                  min_subspace_gap: int = 5,
@@ -93,6 +94,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
         self._last_synced_lr = lr
         self.use_triangular_core = use_triangular_core
         self.use_8bit_base = use_8bit_base
+        self.subspace_stride = max(1, int(subspace_stride))
         self.adaptive_subspace_refresh = adaptive_subspace_refresh
         self.energy_threshold = energy_threshold
         self.min_subspace_gap = min_subspace_gap

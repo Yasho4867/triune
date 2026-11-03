@@ -17,7 +17,7 @@ from .dispatcher import (
 )
 from .fast_cross_entropy import FastChunkedCrossEntropyLoss, chunked_cross_entropy_from_hidden, fast_cross_entropy
 from .fast_gla import fast_chunk_gla
-from .fast_lora import fast_lora_forward, fast_lora_linear
+from .fast_lora import fast_gate_up_lora_linear, fast_lora_forward, fast_lora_linear, fast_qkv_lora_linear
 from .fast_muon import fast_zeropower_via_newtonschulz5
 from .fast_rmsnorm import FastRMSNorm, fast_rmsnorm
 from .fast_rope import fast_rope
@@ -49,4 +49,6 @@ __all__ = [
     "fast_zeropower_via_newtonschulz5",
     "fast_lora_forward",
     "fast_lora_linear",
+    "fast_qkv_lora_linear",
+    "fast_gate_up_lora_linear",
 ]
