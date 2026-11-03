@@ -86,6 +86,8 @@ class CUDAGraphEngine:
             if hasattr(torch.autograd.graph, "set_warn_on_accumulate_grad_stream_mismatch"):
                 torch.autograd.graph.set_warn_on_accumulate_grad_stream_mismatch(False)
 
+            # Warmup runs on dedicated capture stream to fully initialize lazy optimizer
+            # state buffers (e.g. exp_avg, exp_avg_sq) before recording into CUDA Graph
             stream = torch.cuda.Stream(device=self.device)
             stream.wait_stream(torch.cuda.current_stream())
 
@@ -94,7 +96,7 @@ class CUDAGraphEngine:
                     if step_fn is not None:
                         _ = step_fn(model, optimizer, self.static_input, self.static_target)
                     else:
-                        optimizer.zero_grad(set_to_none=True)
+                        optimizer.zero_grad(set_to_none=False)
                         out = model(self.static_input)
                         if loss_fn is not None:
                             loss = loss_fn(out, self.static_target)
@@ -106,13 +108,13 @@ class CUDAGraphEngine:
 
             torch.cuda.current_stream().wait_stream(stream)
 
-            # Capture the static execution graph
+            # Capture the static execution graph with in-place zero_grad (set_to_none=False)
             self.graph = torch.cuda.CUDAGraph()
             with torch.cuda.graph(self.graph, stream=stream):
                 if step_fn is not None:
                     self.static_loss = step_fn(model, optimizer, self.static_input, self.static_target)
                 else:
-                    optimizer.zero_grad(set_to_none=True)
+                    optimizer.zero_grad(set_to_none=False)
                     out = model(self.static_input)
                     if loss_fn is not None:
                         self.static_loss = loss_fn(out, self.static_target)
@@ -134,12 +136,25 @@ class CUDAGraphEngine:
         self,
         input_tokens: torch.Tensor,
         target_tokens: Optional[torch.Tensor] = None,
-        fallback_fn: Optional[Callable[[torch.Tensor, Optional[torch.Tensor]], float]] = None,
-    ) -> float:
-        """Replay the hardware CUDA graph with new batch inputs at zero CPU latency."""
+        sync: bool = False,
+        fallback_fn: Optional[Callable[[torch.Tensor, Optional[torch.Tensor]], Any]] = None,
+    ) -> torch.Tensor | float:
+        """Replay the hardware CUDA graph with new batch inputs at zero CPU latency.
+        
+        Args:
+            input_tokens: New input token tensor [B, T].
+            target_tokens: Optional target token tensor [B, T].
+            sync: If False (default), executes purely asynchronously with zero host sync,
+                  returning the GPU-resident scalar loss tensor.
+                  If True, synchronizes and returns a Python float.
+            fallback_fn: Optional fallback function called when shapes do not match the static graph.
+        """
         if not self.can_replay(input_tokens, target_tokens):
             if fallback_fn is not None:
-                return float(fallback_fn(input_tokens, target_tokens))
+                res = fallback_fn(input_tokens, target_tokens)
+                if sync:
+                    return float(res) if not isinstance(res, torch.Tensor) else float(res.item())
+                return res if isinstance(res, torch.Tensor) else torch.tensor(res, device=self.device)
             raise RuntimeError("CUDA Graph cannot replay with mismatched tensor shapes without a fallback.")
 
         # Zero-copy copy into static graph input tensors
@@ -147,8 +162,14 @@ class CUDAGraphEngine:
         if self.static_target is not None and target_tokens is not None:
             self.static_target.copy_(target_tokens, non_blocking=True)
 
-        # Single hardware pulse replay
+        # Single hardware pulse replay (completely non-blocking on host CPU)
         self.graph.replay()
+        if sync:
+            return float(self.static_loss.item()) if self.static_loss is not None else 0.0
+        return self.static_loss
+
+    def current_loss_item(self) -> float:
+        """Explicitly query scalar loss value (forces host-device synchronization)."""
         return float(self.static_loss.item()) if self.static_loss is not None else 0.0
 
     def capture_inference_step(

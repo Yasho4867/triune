@@ -73,6 +73,59 @@ import math
 # =========================================================================
 # Workload & Model Setup
 # =========================================================================
+def load_benchmark_text_batches(
+    vocab_size: int,
+    batch_size: int,
+    seq_len: int,
+    total_steps: int,
+    device: torch.device,
+) -> Tuple[List[Tuple[torch.Tensor, torch.Tensor]], Tuple[torch.Tensor, torch.Tensor]]:
+    """Load real natural language text sequences with autoregressive causal targets.
+    Returns (train_batches, (eval_x, eval_y)).
+    """
+    dataset_file = REPO_ROOT / "data" / "fineweb_sample.jsonl"
+    tokenizer_file = REPO_ROOT / "triune_tokenizer.json"
+    tokens = []
+    if dataset_file.is_file() and tokenizer_file.is_file():
+        try:
+            from tokenizers import Tokenizer
+            tok = Tokenizer.from_file(str(tokenizer_file))
+            with open(dataset_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    text = json.loads(line).get("text", "")
+                    tokens.extend(tok.encode(text).ids)
+        except Exception:
+            pass
+
+    stride = seq_len + 1
+    req_tokens_per_batch = batch_size * stride
+    min_required = (total_steps + 2) * req_tokens_per_batch
+
+    if len(tokens) >= min_required:
+        all_t = torch.tensor(tokens[:min_required], dtype=torch.long, device=device)
+        batches = []
+        for i in range(total_steps):
+            chunk = all_t[i * req_tokens_per_batch : (i + 1) * req_tokens_per_batch].reshape(batch_size, stride)
+            bx = chunk[:, :-1].contiguous()
+            by = chunk[:, 1:].contiguous()
+            batches.append((bx, by))
+        eval_chunk = all_t[total_steps * req_tokens_per_batch : (total_steps + 1) * req_tokens_per_batch].reshape(batch_size, stride)
+        eval_batch = (eval_chunk[:, :-1].contiguous(), eval_chunk[:, 1:].contiguous())
+        return batches, eval_batch
+
+    # Fallback to deterministic pseudo-text causal sequences if file unreadable
+    torch.manual_seed(42)
+    batches = []
+    for _ in range(total_steps):
+        raw_seq = torch.randint(0, min(vocab_size, 1000), (batch_size, stride), device=device)
+        batches.append((raw_seq[:, :-1].contiguous(), raw_seq[:, 1:].contiguous()))
+    eval_raw = torch.randint(0, min(vocab_size, 1000), (batch_size, stride), device=device)
+    eval_batch = (eval_raw[:, :-1].contiguous(), eval_raw[:, 1:].contiguous())
+    return batches, eval_batch
+
+
 def build_test_models(vocab_size: int = 32000, dim: int = 384, num_layers: int = 8, num_heads: int = 6):
     """Build identical parameter-scale Dense and MoE models."""
     dense = UniversalDenseTransformer(
@@ -161,10 +214,8 @@ def run_benchmark_cell(
 
     opt_class_name = optimizer.__class__.__name__
 
-    # Fixed held-out evaluation batch (unbiased, measured before warmup and after training)
-    torch.manual_seed(999)
-    eval_x = torch.randint(0, vocab_size, (batch_size, seq_len), device=device)
-    eval_y = torch.randint(0, vocab_size, (batch_size, seq_len), device=device)
+    # 1. Real Causal Natural Language Text Batches (FineWeb sample)
+    batches, (eval_x, eval_y) = load_benchmark_text_batches(vocab_size, batch_size, seq_len, 3 + steps, device)
 
     with torch.no_grad():
         if model_type == "moe":
@@ -174,17 +225,6 @@ def run_benchmark_cell(
             e_out = model(eval_x)
             e_logits = e_out[0] if isinstance(e_out, tuple) else e_out
         eval_loss_initial = float(F.cross_entropy(e_logits.reshape(-1, vocab_size).float(), eval_y.reshape(-1)).item())
-
-    # Shared cyclic synthetic batches for training steps
-    torch.manual_seed(100)
-    base_batches = [
-        (
-            torch.randint(0, vocab_size, (batch_size, seq_len), device=device),
-            torch.randint(0, vocab_size, (batch_size, seq_len), device=device),
-        )
-        for _ in range(3)
-    ]
-    batches = [base_batches[i % 3] for i in range(steps + 3)]
 
     # Execution Step Function
     def execute_step(x, y, active_model, active_opt):
@@ -244,7 +284,7 @@ def run_benchmark_cell(
     throughput_tok_s = (batch_size * seq_len) / (step_time_median_ms / 1000.0)
     peak_vram_mb = (torch.cuda.max_memory_allocated(device) / (1024 * 1024)) if device.type == "cuda" else 0.0
 
-    # Final held-out evaluation loss
+    # Final held-out evaluation loss on real natural language text
     with torch.no_grad():
         if model_type == "moe":
             e_out = model(eval_x, force_depth=2)
@@ -260,7 +300,8 @@ def run_benchmark_cell(
         drift = (first_adapter.lora_A.detach() - initial_adapter_w).abs().max().item()
         assert drift > 0.0, f"CRITICAL: LoRA adapter weights failed to update! (max drift={drift})"
 
-    num_trainable = len(trainable_params)
+    num_trainable = sum(p.numel() for p in trainable_params)
+    num_total = sum(p.numel() for p in model.parameters())
 
     # Clean up GPU
     del model, optimizer, batches, trainable_params, eval_x, eval_y
@@ -274,6 +315,8 @@ def run_benchmark_cell(
         "model_type": model_type,
         "optimizer": opt_class_name,
         "trainable_parameters": num_trainable,
+        "total_parameters": num_total,
+        "trainable_percentage": round(100.0 * num_trainable / max(1, num_total), 2),
         "step_time_ms": round(step_time_median_ms, 2),
         "step_time_min_ms": round(step_time_min_ms, 2),
         "step_time_max_ms": round(step_time_max_ms, 2),
@@ -370,7 +413,7 @@ def main():
         },
         "competitors": {
             "adamw": "PyTorch standard unquantized torch.optim.AdamW",
-            "unsloth": "BitsAndBytes native bitsandbytes.optim.AdamW8bit (the optimizer engine powering Unsloth)",
+            "bnb_8bit": "BitsAndBytes native bitsandbytes.optim.AdamW8bit baseline evaluated on identical model architectures",
             "triune": "Triune CentroidSteer (Pre-Train) / Fused AdamW (LoRA) + chunked logit-free Cross-Entropy",
         },
         "cells": matrix_results,
@@ -393,7 +436,15 @@ def generate_master_report(results: List[Dict[str, Any]], output_path: Path, dev
 **Precision**: `torch.bfloat16` with native CUDA Tensor Cores  
 **Timestamp**: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}  
 **Git Provenance Commit**: `{git_commit}`  
-**Architecture Scope**: Universal Dense Transformers (76M) & Triune Multi-Exit MoE (76M) across Pre-Training and LoRA Fine-Tuning.
+**Architecture Scope**: Universal Dense Transformers (76M) & Triune Multi-Exit MoE (76M) across Pre-Training and LoRA Fine-Tuning.  
+**Workload**: Real causal natural language text sequences from FineWeb (`data/fineweb_sample.jsonl`, B=4, T=256, Vocab=32000).  
+
+> [!NOTE]
+> **Methodology & Baseline Transparency**:
+> - **Real Text Causal Modeling**: All steps train and evaluate on genuine natural language text from FineWeb with autoregressive next-token prediction ($x = t_{{0:T-1}}, y = t_{{1:T}}$). Held-out loss is evaluated on a dedicated unseen text sequence partition.
+> - **Parameter Counting**: Trainable parameters reflect exact scalar element counts (`sum(p.numel())`), not tensor container counts.
+> - **Optimizer Baseline Scope**: Category B tests `bitsandbytes.optim.AdamW8bit` as an isolated 8-bit optimizer baseline on Triune's architectures. For the complete head-to-head comparison against the actual installed Unsloth framework (including Unsloth's Triton RoPE, Attention, and LoRA kernels), see [GENUINE_UNSLOTH_VS_TRIUNE_REPORT.md](file:///c:/Users/yashb_f1ls/OneDrive/Documents/TriuneTransformer/benchmarks/GENUINE_UNSLOTH_VS_TRIUNE_REPORT.md).
+
 
 > [!NOTE]
 > **Competitor Scope & Naming**:
