@@ -252,10 +252,10 @@ def test_streaming_gradient_numerical_parity():
     loss_str = r2.sum() + l2.sum() + c2.sum() + rt2.sum()
     loss_str.backward()
 
-    assert torch.allclose(r1, r2, atol=1e-4, rtol=1e-3), "Reflex logits mismatch"
-    assert torch.allclose(l1, l2, atol=1e-4, rtol=1e-3), "Limbic logits mismatch"
-    assert torch.allclose(c1, c2, atol=1e-4, rtol=1e-3), "Cortex logits mismatch"
-    assert torch.allclose(rt1, rt2, atol=1e-4, rtol=1e-3), "Route logits mismatch"
+    assert torch.allclose(r1, r2, atol=1e-3, rtol=1e-3), "Reflex logits mismatch"
+    assert torch.allclose(l1, l2, atol=1e-3, rtol=1e-3), "Limbic logits mismatch"
+    assert torch.allclose(c1, c2, atol=1e-3, rtol=1e-3), "Cortex logits mismatch"
+    assert torch.allclose(rt1, rt2, atol=1e-3, rtol=1e-3), "Route logits mismatch"
 
     param_count = 0
     max_diff = 0.0

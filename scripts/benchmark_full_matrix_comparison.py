@@ -94,7 +94,7 @@ def build_test_models(vocab_size: int = 32000, dim: int = 384, num_layers: int =
 
 
 def run_benchmark_cell(
-    stack: str,               # "adamw", "unsloth", "triune"
+    stack: str,               # "adamw", "bnb_8bit", "triune"
     task: str,                # "pretrain", "finetune"
     model_type: str,          # "dense", "moe"
     steps: int = 15,
@@ -145,7 +145,7 @@ def run_benchmark_cell(
     # Instantiate Optimizer according to Stack
     if stack == "adamw":
         optimizer = torch.optim.AdamW(trainable_params, lr=1e-3, weight_decay=0.01)
-    elif stack == "unsloth":
+    elif stack in ("bnb_8bit", "unsloth"):
         optimizer = get_unsloth_optimizer(trainable_params, lr=1e-3, weight_decay=0.01)
     elif stack == "triune":
         if task == "pretrain":
@@ -319,14 +319,14 @@ def main():
         return
 
     print("=" * 80)
-    print(" TRIUNE vs UNSLOTH vs ADAMW — MASTER 3x2x2 BENCHMARK RUNNER")
+    print(" TRIUNE vs BITSANDBYTES 8-BIT vs ADAMW — MASTER 3x2x2 BENCHMARK RUNNER")
     print(f" Hardware: {device} ({torch.cuda.get_device_name(0) if device.type == 'cuda' else 'CPU'})")
     print(f" Precision: {dtype}")
     print("=" * 80)
 
     matrix_results: List[Dict[str, Any]] = []
 
-    stacks = ["adamw", "unsloth", "triune"]
+    stacks = ["adamw", "bnb_8bit", "triune"]
     tasks = ["pretrain", "finetune"]
     model_types = ["dense", "moe"]
 
@@ -417,7 +417,7 @@ def generate_master_report(results: List[Dict[str, Any]], output_path: Path, dev
     for r in pre:
         base = adamw_dense if r["model_type"] == "dense" else adamw_moe
         saved_pct = round(((base["peak_vram_mb"] - r["peak_vram_mb"]) / max(base["peak_vram_mb"], 1e-6)) * 100.0, 1) if base else 0.0
-        stack_label = f"**Triune Stack** (`{r.get('optimizer', 'CentroidSteer')}`)" if r["stack"] == "triune" else (f"BitsAndBytes 8-bit AdamW (`{r.get('optimizer', 'AdamW8bit')}`)" if r["stack"] == "unsloth" else f"Standard AdamW (`{r.get('optimizer', 'AdamW')}`)")
+        stack_label = f"**Triune Stack** (`{r.get('optimizer', 'CentroidSteer')}`)" if r["stack"] == "triune" else (f"BitsAndBytes 8-bit AdamW (`{r.get('optimizer', 'AdamW8bit')}`)" if r["stack"] in ("bnb_8bit", "unsloth") else f"Standard AdamW (`{r.get('optimizer', 'AdamW')}`)")
         model_label = "Universal Dense (76M)" if r["model_type"] == "dense" else "Triune MoE (76M)"
         latency_str = f"{r['step_time_ms']} ± {r.get('step_time_std_ms', 0.0)} ms"
         eval_drop = r.get("eval_loss_reduction", r.get("loss_reduction", 0.0))
@@ -439,29 +439,29 @@ def generate_master_report(results: List[Dict[str, Any]], output_path: Path, dev
     for r in fine:
         base = adamw_dense_f if r["model_type"] == "dense" else adamw_moe_f
         saved_pct = round(((base["peak_vram_mb"] - r["peak_vram_mb"]) / max(base["peak_vram_mb"], 1e-6)) * 100.0, 1) if base else 0.0
-        stack_label = f"**Triune Stack** (`{r.get('optimizer', 'AdamW')}`)" if r["stack"] == "triune" else (f"BitsAndBytes 8-bit AdamW (`{r.get('optimizer', 'AdamW8bit')}`)" if r["stack"] == "unsloth" else f"Standard AdamW (`{r.get('optimizer', 'AdamW')}`)")
+        stack_label = f"**Triune Stack** (`{r.get('optimizer', 'AdamW')}`)" if r["stack"] == "triune" else (f"BitsAndBytes 8-bit AdamW (`{r.get('optimizer', 'AdamW8bit')}`)" if r["stack"] in ("bnb_8bit", "unsloth") else f"Standard AdamW (`{r.get('optimizer', 'AdamW')}`)")
         model_label = "Universal Dense (76M)" if r["model_type"] == "dense" else "Triune MoE (76M)"
         latency_str = f"{r['step_time_ms']} ± {r.get('step_time_std_ms', 0.0)} ms"
         eval_drop = r.get("eval_loss_reduction", r.get("loss_reduction", 0.0))
         md += f"| {model_label} | {stack_label} | {latency_str} | {r['throughput_tok_s']:,.0f} tok/s | **{r['peak_vram_mb']} MB** | **{saved_pct}%** | {eval_drop} |\n"
 
     def find_cell(task_name, model_name, stack_name):
-        return next((r for r in results if r["task"] == task_name and r["model_type"] == model_name and r["stack"] == stack_name), None)
+        return next((r for r in results if r["task"] == task_name and r["model_type"] == model_name and r["stack"] in (stack_name, "unsloth" if stack_name == "bnb_8bit" else stack_name)), None)
 
     d_pt_adam = find_cell("pretrain", "dense", "adamw")
-    d_pt_bnb = find_cell("pretrain", "dense", "unsloth")
+    d_pt_bnb = find_cell("pretrain", "dense", "bnb_8bit")
     d_pt_triune = find_cell("pretrain", "dense", "triune")
 
     m_pt_adam = find_cell("pretrain", "moe", "adamw")
-    m_pt_bnb = find_cell("pretrain", "moe", "unsloth")
+    m_pt_bnb = find_cell("pretrain", "moe", "bnb_8bit")
     m_pt_triune = find_cell("pretrain", "moe", "triune")
 
     d_ft_adam = find_cell("finetune", "dense", "adamw")
-    d_ft_bnb = find_cell("finetune", "dense", "unsloth")
+    d_ft_bnb = find_cell("finetune", "dense", "bnb_8bit")
     d_ft_triune = find_cell("finetune", "dense", "triune")
 
     m_ft_adam = find_cell("finetune", "moe", "adamw")
-    m_ft_bnb = find_cell("finetune", "moe", "unsloth")
+    m_ft_bnb = find_cell("finetune", "moe", "bnb_8bit")
     m_ft_triune = find_cell("finetune", "moe", "triune")
 
     md += """
