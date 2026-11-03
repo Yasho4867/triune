@@ -48,11 +48,31 @@ except Exception:
     pass
 
 
-def get_git_commit() -> str:
+def compute_sha256(file_path: Path) -> str:
+    if not file_path.is_file():
+        return ""
+    h = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        while chunk := f.read(65536):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def get_git_info() -> Tuple[str, bool]:
     try:
-        return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=str(REPO_ROOT), text=True
+        ).strip()
     except Exception:
-        return "unknown"
+        commit = "unknown"
+    try:
+        status_out = subprocess.check_output(
+            ["git", "status", "--porcelain"], cwd=str(REPO_ROOT), text=True
+        ).strip()
+        is_dirty = bool(status_out)
+    except Exception:
+        is_dirty = False
+    return commit, is_dirty
 
 
 class DummyTokenizer:
@@ -66,14 +86,35 @@ def load_benchmark_text_batches(
     seq_len: int,
     total_steps: int,
     device: Any,
-) -> Tuple[List[Tuple[Any, Any]], Tuple[Any, Any]]:
+    allow_synthetic: bool = False,
+) -> Tuple[List[Tuple[Any, Any]], Tuple[Any, Any], Dict[str, Any]]:
     """Load real natural language text sequences with autoregressive causal targets.
-    Returns (train_batches, (eval_x, eval_y)).
+    Returns (train_batches, (eval_x, eval_y), dataset_metadata).
     """
     import torch
     dataset_file = REPO_ROOT / "data" / "fineweb_sample.jsonl"
     tokenizer_file = REPO_ROOT / "triune_tokenizer.json"
+
+    stride = seq_len + 1
+    req_tokens_per_batch = batch_size * stride
+    min_required = (total_steps + 2) * req_tokens_per_batch
+
+    if not allow_synthetic:
+        if not dataset_file.is_file():
+            raise FileNotFoundError(
+                f"Mandatory benchmark dataset not found: {dataset_file}. "
+                "Real-data benchmarks require FineWeb data. Pass --synthetic if you explicitly intend synthetic testing."
+            )
+        if not tokenizer_file.is_file():
+            raise FileNotFoundError(
+                f"Mandatory benchmark tokenizer not found: {tokenizer_file}. "
+                "Pass --synthetic if you explicitly intend synthetic testing."
+            )
+
     tokens = []
+    dataset_sha256 = compute_sha256(dataset_file) if dataset_file.is_file() else ""
+    tokenizer_sha256 = compute_sha256(tokenizer_file) if tokenizer_file.is_file() else ""
+
     if dataset_file.is_file() and tokenizer_file.is_file():
         try:
             from tokenizers import Tokenizer
@@ -84,12 +125,12 @@ def load_benchmark_text_batches(
                         continue
                     text = json.loads(line).get("text", "")
                     tokens.extend(tok.encode(text).ids)
-        except Exception:
-            pass
-
-    stride = seq_len + 1
-    req_tokens_per_batch = batch_size * stride
-    min_required = (total_steps + 2) * req_tokens_per_batch
+        except Exception as exc:
+            if not allow_synthetic:
+                raise RuntimeError(
+                    f"Failed to tokenize real dataset from {dataset_file}: {exc}. "
+                    "Pass --synthetic if you explicitly intend synthetic testing."
+                ) from exc
 
     if len(tokens) >= min_required:
         all_t = torch.tensor(tokens[:min_required], dtype=torch.long, device=device)
@@ -101,9 +142,27 @@ def load_benchmark_text_batches(
             batches.append((bx, by))
         eval_chunk = all_t[total_steps * req_tokens_per_batch : (total_steps + 1) * req_tokens_per_batch].reshape(batch_size, stride)
         eval_batch = (eval_chunk[:, :-1].contiguous(), eval_chunk[:, 1:].contiguous())
-        return batches, eval_batch
+        
+        meta = {
+            "dataset_mode": "fineweb_real",
+            "dataset_path": str(dataset_file.relative_to(REPO_ROOT)),
+            "dataset_sha256": dataset_sha256,
+            "tokenizer_path": str(tokenizer_file.relative_to(REPO_ROOT)),
+            "tokenizer_sha256": tokenizer_sha256,
+            "total_tokens_available": len(tokens),
+            "tokens_consumed": min_required,
+            "train_batches_count": total_steps,
+            "eval_batches_count": 1,
+        }
+        return batches, eval_batch, meta
 
-    # Fallback to deterministic pseudo-text causal sequences if file unreadable
+    if not allow_synthetic:
+        raise RuntimeError(
+            f"Insufficient tokens in {dataset_file}: required {min_required}, but got {len(tokens)}. "
+            "Pass --synthetic if you explicitly intend synthetic testing."
+        )
+
+    # Explicit synthetic fallback when requested
     torch.manual_seed(42)
     batches = []
     for _ in range(total_steps):
@@ -111,7 +170,18 @@ def load_benchmark_text_batches(
         batches.append((raw_seq[:, :-1].contiguous(), raw_seq[:, 1:].contiguous()))
     eval_raw = torch.randint(0, min(vocab_size, 1000), (batch_size, stride), device=device)
     eval_batch = (eval_raw[:, :-1].contiguous(), eval_raw[:, 1:].contiguous())
-    return batches, eval_batch
+    meta = {
+        "dataset_mode": "synthetic_causal",
+        "dataset_path": None,
+        "dataset_sha256": None,
+        "tokenizer_path": None,
+        "tokenizer_sha256": None,
+        "total_tokens_available": None,
+        "tokens_consumed": min_required,
+        "train_batches_count": total_steps,
+        "eval_batches_count": 1,
+    }
+    return batches, eval_batch, meta
 
 
 def run_cell_worker(
@@ -122,6 +192,7 @@ def run_cell_worker(
     seq_len: int,
     vocab_size: int,
     steps: int,
+    allow_synthetic: bool = False,
 ) -> Dict[str, Any]:
     import torch
     import torch.nn as nn
@@ -317,7 +388,7 @@ def run_cell_worker(
                 return float(F.cross_entropy(out.logits.reshape(-1, vocab_size).float(), ey.reshape(-1)).item())
 
     # 2. Real Causal Natural Language Text Batches (FineWeb sample)
-    batches, (eval_x, eval_y) = load_benchmark_text_batches(vocab_size, batch_size, seq_len, 3 + steps, device)
+    batches, (eval_x, eval_y), dataset_meta = load_benchmark_text_batches(vocab_size, batch_size, seq_len, 3 + steps, device, allow_synthetic=allow_synthetic)
     eval_loss_initial = eval_fn(eval_x, eval_y)
 
     # Warmup
@@ -370,6 +441,7 @@ def run_cell_worker(
         "task": task,
         "model_type": model_type,
         "optimizer": opt_name,
+        "dataset_provenance": dataset_meta,
         "trainable_parameters": num_trainable,
         "total_parameters": num_total,
         "trainable_percentage": round(100.0 * num_trainable / max(1, num_total), 2),
@@ -390,19 +462,36 @@ def run_cell_worker(
     return cell_result
 
 
-def generate_report(results: List[Dict[str, Any]], output_path: Path, device_name: str, git_commit: str):
+def generate_report(results: List[Dict[str, Any]], output_path: Path, device_name: str, provenance: Dict[str, Any]):
     def get_cell(f_name, t_name, m_name="dense"):
         return next((r for r in results if r["framework"] == f_name and r["task"] == t_name and r["model_type"] == m_name), None)
+
+    dense_pt = get_cell("pytorch", "pretrain", "dense") or get_cell("triune", "pretrain", "dense")
+    dense_ft = get_cell("pytorch", "finetune", "dense") or get_cell("triune", "finetune", "dense")
+    moe_pt = get_cell("triune", "pretrain", "moe")
+
+    dense_pt_params = dense_pt.get("total_parameters", 0) if dense_pt else 0
+    dense_ft_total = dense_ft.get("total_parameters", 0) if dense_ft else 0
+    dense_ft_trainable = dense_ft.get("trainable_parameters", 0) if dense_ft else 0
+    dense_ft_pct = dense_ft.get("trainable_percentage", 0.0) if dense_ft else 0.0
+    moe_pt_params = moe_pt.get("total_parameters", 0) if moe_pt else 0
+
+    d_meta = results[0].get("dataset_provenance", {}) if results else {}
 
     md = f"""# Triune AI vs Genuine Full-Stack Unsloth vs Standard PyTorch — Comprehensive Head-to-Head Benchmark
 
 **Benchmarked Hardware**: `{device_name}`  
 **Precision**: `torch.bfloat16` with native CUDA Tensor Cores  
 **Timestamp**: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}  
-**Git Provenance Commit**: `{git_commit}`  
-**Architecture Scope**: 76M Parameters (8 Layers, 384 Hidden Dim, 1024 MLP / Intermediate, 6 Attention Heads, 2 KV Heads (GQA), Vocab 32000, Sequence Length 256, Batch Size 4).  
-**Workload**: Real causal natural language text sequences from FineWeb (`data/fineweb_sample.jsonl`, B=4, T=256, Vocab=32000).  
-**Parameter Accounting**: Scalar element count `sum(p.numel())` (76M total parameters, ~2.1M trainable in LoRA rank 16).
+**Git Provenance Commit**: `{provenance['git_commit']}` (Working-Tree Clean: `{not provenance['git_dirty']}`)  
+**Script SHA-256**: `{provenance['script_sha256']}`  
+**Dataset**: `{d_meta.get('dataset_path', 'data/fineweb_sample.jsonl')}` (Mode: `{d_meta.get('dataset_mode', 'fineweb_real')}`, SHA-256: `{d_meta.get('dataset_sha256', 'N/A')}`)  
+**Tokenizer**: `{d_meta.get('tokenizer_path', 'triune_tokenizer.json')}` (SHA-256: `{d_meta.get('tokenizer_sha256', 'N/A')}`)  
+
+### Verified Parameter Accounting & Model Presets
+- **Dense Architecture**: **{dense_pt_params:,} scalar parameters** ({dense_pt_params/1e6:.2f}M) across 8 layers, 384 hidden dim, 1024 MLP / intermediate dim, 6 attention heads, 2 KV heads (GQA), vocab 32,000, sequence length 256, batch size 4.
+- **Dense LoRA Fine-Tuning**: **{dense_ft_total:,} total parameters** ({dense_ft_total/1e6:.2f}M), with **{dense_ft_trainable:,} trainable adapter parameters** ({dense_ft_trainable/1e3:.1f}K, **{dense_ft_pct:.2f}%** trainable) targeting all attention and MLP projections (`q, k, v, o, gate, up, down`).
+- **MoE Architecture**: **{moe_pt_params:,} scalar parameters** ({moe_pt_params/1e6:.2f}M) across 8 layers, 384 dim, 4 routed experts + 1 shared expert.
 
 > [!IMPORTANT]
 > **Genuine Full-Stack Unsloth Baseline Guarantee**:
@@ -414,12 +503,12 @@ def generate_report(results: List[Dict[str, Any]], output_path: Path, device_nam
 
 ---
 
-## 1. Pre-Training from Scratch (Dense 76M)
+## 1. Pre-Training from Scratch (Dense vs MoE)
 
-Evaluates raw pre-training performance from randomly initialized weights on equivalent 76M Llama/Universal architectures.
+Evaluates raw pre-training performance from randomly initialized weights on equivalent architectures.
 
-| Framework | Architecture | Optimizer | Step Latency (Median ± Std) | Throughput | Peak VRAM | VRAM vs PyTorch | VRAM vs Unsloth |
-| :--- | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
+| Framework | Architecture | Total Parameters | Optimizer | Step Latency (Median ± Std) | Throughput | Peak VRAM | VRAM vs PyTorch | VRAM vs Unsloth |
+| :--- | :--- | :---: | :--- | :---: | :---: | :---: | :---: | :---: |
 """
     pre_cells = [r for r in results if r["task"] == "pretrain"]
     pt_base = next((r for r in pre_cells if r["framework"] == "pytorch"), None)
@@ -429,17 +518,17 @@ Evaluates raw pre-training performance from randomly initialized weights on equi
         vram_vs_pt = round(((pt_base["peak_vram_mb"] - r["peak_vram_mb"]) / pt_base["peak_vram_mb"]) * 100.0, 1) if pt_base else 0.0
         vram_vs_un = round(((un_base["peak_vram_mb"] - r["peak_vram_mb"]) / un_base["peak_vram_mb"]) * 100.0, 1) if un_base else 0.0
         f_label = f"**{r['framework'].upper()}**" if r["framework"] == "triune" else r["framework"].capitalize()
-        md += f"| {f_label} | {r['model_type'].upper()} (76M) | `{r['optimizer']}` | {r['step_time_ms']} ± {r.get('step_time_std_ms', 0.0)} ms | {r['throughput_tok_s']:,.0f} tok/s | **{r['peak_vram_mb']} MB** | **{vram_vs_pt}%** | **{vram_vs_un}%** |\n"
+        md += f"| {f_label} | {r['model_type'].upper()} | {r['total_parameters']:,} ({r['total_parameters']/1e6:.2f}M) | `{r['optimizer']}` | {r['step_time_ms']} ± {r.get('step_time_std_ms', 0.0)} ms | {r['throughput_tok_s']:,.0f} tok/s | **{r['peak_vram_mb']} MB** | **{vram_vs_pt}%** | **{vram_vs_un}%** |\n"
 
     md += """
 ---
 
-## 2. LoRA Fine-Tuning (Dense 76M, Rank=16, Alpha=16)
+## 2. LoRA Fine-Tuning (Rank=16, Alpha=16)
 
 Evaluates parameter-efficient fine-tuning with active LoRA adapters targeting all attention and MLP projections (`q, k, v, o, gate, up, down`).
 
-| Framework | Adapter Engine | Optimizer | Step Latency (Median ± Std) | Throughput | Peak VRAM | VRAM vs PyTorch | VRAM vs Unsloth |
-| :--- | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
+| Framework | Adapter Engine | Total Params | Trainable Params (% Trainable) | Optimizer | Step Latency (Median ± Std) | Throughput | Peak VRAM | VRAM vs PyTorch | VRAM vs Unsloth |
+| :--- | :--- | :---: | :--- | :---: | :---: | :---: | :---: | :---: |
 """
     ft_cells = [r for r in results if r["task"] == "finetune"]
     pt_ft = next((r for r in ft_cells if r["framework"] == "pytorch"), None)
@@ -450,7 +539,7 @@ Evaluates parameter-efficient fine-tuning with active LoRA adapters targeting al
         vram_vs_un = round(((un_ft["peak_vram_mb"] - r["peak_vram_mb"]) / un_ft["peak_vram_mb"]) * 100.0, 1) if un_ft else 0.0
         f_label = f"**{r['framework'].upper()}**" if r["framework"] == "triune" else r["framework"].capitalize()
         engine_label = "Triune Fused addmm LoRA" if r["framework"] == "triune" else ("Unsloth Triton fast_lora" if r["framework"] == "unsloth" else "Hugging Face PEFT")
-        md += f"| {f_label} | {engine_label} | `{r['optimizer']}` | {r['step_time_ms']} ± {r.get('step_time_std_ms', 0.0)} ms | {r['throughput_tok_s']:,.0f} tok/s | **{r['peak_vram_mb']} MB** | **{vram_vs_pt}%** | **{vram_vs_un}%** |\n"
+        md += f"| {f_label} | {engine_label} | {r['total_parameters']:,} | {r['trainable_parameters']:,} ({r['trainable_percentage']}%) | `{r['optimizer']}` | {r['step_time_ms']} ± {r.get('step_time_std_ms', 0.0)} ms | {r['throughput_tok_s']:,.0f} tok/s | **{r['peak_vram_mb']} MB** | **{vram_vs_pt}%** | **{vram_vs_un}%** |\n"
 
     md += """
 ---
@@ -508,6 +597,7 @@ def main():
     parser.add_argument("--batch-size", type=int, default=4, help="Batch size (default 4)")
     parser.add_argument("--seq-len", type=int, default=256, help="Sequence length (default 256)")
     parser.add_argument("--vocab-size", type=int, default=32000, help="Vocabulary size (default 32000)")
+    parser.add_argument("--synthetic", action="store_true", help="Explicitly allow synthetic pseudo-text if dataset is missing")
     args = parser.parse_args()
 
     # Worker Mode: Run isolated cell
@@ -520,6 +610,7 @@ def main():
             seq_len=args.seq_len,
             vocab_size=args.vocab_size,
             steps=args.steps,
+            allow_synthetic=args.synthetic,
         )
         print("__CELL_JSON__:" + json.dumps(res))
         return
@@ -528,13 +619,29 @@ def main():
     import torch
     device_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU"
     total_vram = round(torch.cuda.get_device_properties(0).total_memory / (1024**3), 2) if torch.cuda.is_available() else 0.0
-    git_commit = get_git_commit()
+    git_commit, git_dirty = get_git_info()
+    script_sha256 = compute_sha256(Path(__file__).resolve())
+
+    provenance = {
+        "git_commit": git_commit,
+        "git_dirty": git_dirty,
+        "script_sha256": script_sha256,
+        "software": {
+            "python": sys.version.split()[0],
+            "torch": torch.__version__,
+            "cuda": torch.version.cuda if torch.cuda.is_available() else None,
+        },
+        "hardware": {
+            "device_name": device_name,
+            "total_vram_gb": total_vram,
+        },
+    }
 
     print("=" * 80)
     print(" GENUINE UNSLOTH vs TRIUNE AI vs STANDARD PYTORCH BENCHMARK")
     print(f" Hardware: {device_name} ({total_vram} GB VRAM)")
     print(f" Workload: B={args.batch_size}, T={args.seq_len}, Steps={args.steps}, Vocab={args.vocab_size}")
-    print(f" Git Commit: {git_commit}")
+    print(f" Git Commit: {git_commit} (Clean: {not git_dirty})")
     print("=" * 80)
 
     cell_configs = [
@@ -563,6 +670,8 @@ def main():
             "--seq-len", str(args.seq_len),
             "--vocab-size", str(args.vocab_size),
         ]
+        if args.synthetic:
+            cmd.append("--synthetic")
         proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         if proc.returncode != 0:
             print(f"ERROR executing cell {fw}-{tsk}-{mt}:\n{proc.stdout}")
@@ -583,20 +692,14 @@ def main():
         print(f"  -> {cell_data['step_time_ms']} ± {cell_data['step_time_std_ms']} ms | {cell_data['throughput_tok_s']:,.0f} tok/s | Peak VRAM: {cell_data['peak_vram_mb']} MB | Eval Loss Drop: {cell_data['eval_loss_reduction']}")
 
     # Save JSON artifact
-    out_dir = Path("benchmarks")
+    out_dir = REPO_ROOT / "benchmarks"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     payload = {
         "schema_version": "2.2.0",
         "benchmark_type": "genuine_unsloth_vs_triune_head_to_head",
         "timestamp_utc": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-        "git_commit": git_commit,
-        "hardware": {
-            "device_name": device_name,
-            "total_vram_gb": total_vram,
-            "cuda_version": torch.version.cuda or "N/A",
-            "pytorch_version": torch.__version__,
-        },
+        "provenance": provenance,
         "results": results,
     }
 
@@ -607,7 +710,7 @@ def main():
 
     # Generate Markdown Report
     report_path = out_dir / "GENUINE_UNSLOTH_VS_TRIUNE_REPORT.md"
-    generate_report(results, report_path, device_name, git_commit)
+    generate_report(results, report_path, device_name, provenance)
 
 
 if __name__ == "__main__":

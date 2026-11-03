@@ -1,0 +1,190 @@
+{
+  "benchmark_name": "cuda_graph_vs_eager_performance_and_parity",
+  "timestamp_utc": "2026-11-03 23:35:49 UTC",
+  "provenance": {
+    "git_commit": "3caf18732a5d7851b1bd57ec1e87d7691a9aeb45",
+    "git_dirty": true,
+    "script_sha256": "2ed3f7649996257a7f6a2efb19ce91019b474645b0dfbb8884621d881b12feb0",
+    "dataset": {
+      "dataset_mode": "fineweb_real",
+      "dataset_path": "data\\fineweb_sample.jsonl",
+      "dataset_sha256": "8acbf30894156292e921fe4c6e11f634d0042b42f4150968c4d3023863a777c4",
+      "tokenizer_path": "triune_tokenizer.json",
+      "tokenizer_sha256": "df2c43cfab506acce484e8c45a12e497a7901622fa60058fd4cd5802f4e36451",
+      "tokens_consumed": 28784
+    },
+    "software": {
+      "python": "3.14.7",
+      "torch": "2.14.1+cu132",
+      "cuda": "13.2"
+    },
+    "hardware": {
+      "device_name": "NVIDIA GeForce RTX 5070 Laptop GPU",
+      "total_memory_mb": 8123.75
+    }
+  },
+  "model_architecture": {
+    "name": "UniversalDenseTransformer",
+    "layers": 8,
+    "dim": 384,
+    "heads": 6,
+    "kv_heads": 2,
+    "hidden_dim": 1024,
+    "total_parameters": 37165440
+  },
+  "workload": {
+    "batch_size": 4,
+    "seq_len": 256,
+    "steps": 15,
+    "warmup": 3,
+    "vocab_size": 32000
+  },
+  "timing_metrics": {
+    "eager": {
+      "host_launch_us": {
+        "median": 18067.7,
+        "mean": 18455.53,
+        "min": 16618.9,
+        "max": 22827.7,
+        "std": 1688.99
+      },
+      "gpu_time_ms": {
+        "median": 22.78,
+        "mean": 23.03,
+        "min": 21.09,
+        "max": 27.48,
+        "std": 1.71
+      },
+      "total_step_ms": {
+        "median": 22.82,
+        "mean": 23.11,
+        "min": 21.12,
+        "max": 27.59,
+        "std": 1.72
+      }
+    },
+    "cuda_graph_sync": {
+      "host_launch_us": {
+        "median": 14299.0,
+        "mean": 14338.53,
+        "min": 14041.1,
+        "max": 14665.5,
+        "std": 204.5
+      },
+      "gpu_time_ms": {
+        "median": 14.38,
+        "mean": 14.34,
+        "min": 14.03,
+        "max": 14.72,
+        "std": 0.2
+      },
+      "total_step_ms": {
+        "median": 14.4,
+        "mean": 14.37,
+        "min": 14.05,
+        "max": 14.78,
+        "std": 0.22
+      }
+    },
+    "cuda_graph_async": {
+      "host_launch_us": {
+        "median": 194.3,
+        "mean": 215.88,
+        "min": 148.7,
+        "max": 544.1,
+        "std": 96.26
+      },
+      "gpu_time_ms": {
+        "median": 13.69,
+        "mean": 13.74,
+        "min": 13.63,
+        "max": 13.92,
+        "std": 0.1
+      },
+      "total_step_ms": {
+        "median": 13.73,
+        "mean": 13.79,
+        "min": 13.66,
+        "max": 14.05,
+        "std": 0.12
+      }
+    }
+  },
+  "parity_validation": {
+    "steps_evaluated": 10,
+    "max_observed_weight_drift": 8.195638656616211e-07,
+    "max_observed_loss_diff": 1e-07,
+    "step_records": [
+      {
+        "step": 1,
+        "loss_eager": 4.8408,
+        "loss_graph": 4.8408,
+        "loss_diff": 0.0,
+        "max_param_weight_drift": 8.195638656616211e-07
+      },
+      {
+        "step": 2,
+        "loss_eager": 4.28449,
+        "loss_graph": 4.28449,
+        "loss_diff": 0.0,
+        "max_param_weight_drift": 8.158385753631592e-07
+      },
+      {
+        "step": 3,
+        "loss_eager": 3.49092,
+        "loss_graph": 3.49092,
+        "loss_diff": 0.0,
+        "max_param_weight_drift": 8.158385753631592e-07
+      },
+      {
+        "step": 4,
+        "loss_eager": 2.14266,
+        "loss_graph": 2.14266,
+        "loss_diff": 0.0,
+        "max_param_weight_drift": 8.158385753631592e-07
+      },
+      {
+        "step": 5,
+        "loss_eager": 1.67813,
+        "loss_graph": 1.67813,
+        "loss_diff": 1e-07,
+        "max_param_weight_drift": 8.158385753631592e-07
+      },
+      {
+        "step": 6,
+        "loss_eager": 1.39022,
+        "loss_graph": 1.39022,
+        "loss_diff": 0.0,
+        "max_param_weight_drift": 8.158385753631592e-07
+      },
+      {
+        "step": 7,
+        "loss_eager": 0.96975,
+        "loss_graph": 0.96975,
+        "loss_diff": 0.0,
+        "max_param_weight_drift": 8.158385753631592e-07
+      },
+      {
+        "step": 8,
+        "loss_eager": 0.85226,
+        "loss_graph": 0.85226,
+        "loss_diff": 1e-07,
+        "max_param_weight_drift": 8.158385753631592e-07
+      },
+      {
+        "step": 9,
+        "loss_eager": 0.74333,
+        "loss_graph": 0.74333,
+        "loss_diff": 0.0,
+        "max_param_weight_drift": 8.158385753631592e-07
+      },
+      {
+        "step": 10,
+        "loss_eager": 0.60012,
+        "loss_graph": 0.60012,
+        "loss_diff": 0.0,
+        "max_param_weight_drift": 8.158385753631592e-07
+      }
+    ]
+  }
+}

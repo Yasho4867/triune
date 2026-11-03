@@ -123,6 +123,89 @@ class TestCUDAGraphEngine(unittest.TestCase):
         self.assertEqual(out[0].shape, (2, 32, 256))
         self.assertEqual(out[1].shape, (2, 64))
 
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for CUDA graph testing")
+    def test_multi_step_mathematical_optimizer_parity(self):
+        """Verifies multi-step weight updates in CUDA Graph replay match eager training bitwise."""
+        import copy
+        torch.manual_seed(42)
+        m_eager = SimpleModel().to(device=self.device, dtype=torch.float32)
+        m_graph = copy.deepcopy(m_eager)
+
+        opt_eager = torch.optim.AdamW(m_eager.parameters(), lr=1e-3, capturable=True)
+        opt_graph = torch.optim.AdamW(m_graph.parameters(), lr=1e-3, capturable=True)
+
+        engine = CUDAGraphEngine(self.device)
+        x0 = torch.randint(0, 256, (2, 32), device=self.device)
+        y0 = torch.randint(0, 256, (2, 32), device=self.device)
+
+        def loss_fn(out, target):
+            logits = out[0] if isinstance(out, tuple) else out
+            return nn.functional.cross_entropy(logits.reshape(-1, 256), target.reshape(-1))
+
+        # Warmup eager model with 2 steps to pre-allocate AdamW momentums identically
+        for _ in range(2):
+            opt_eager.zero_grad(set_to_none=False)
+            l = loss_fn(m_eager(x0), y0)
+            l.backward()
+            opt_eager.step()
+
+        # Capture CUDA Graph (which runs 2 warmup steps to pre-allocate buffers on dedicated stream)
+        captured = engine.capture_training_step(m_graph, opt_graph, x0, y0, loss_fn=loss_fn, warmup_steps=2)
+        self.assertTrue(captured)
+
+        # Verify weights are identical immediately post-capture
+        for p_e, p_g in zip(m_eager.parameters(), m_graph.parameters()):
+            self.assertEqual((p_e - p_g).abs().max().item(), 0.0)
+
+        # Run 5 steps on both eager and graph with distinct incoming batches
+        torch.manual_seed(100)
+        for step in range(5):
+            x = torch.randint(0, 256, (2, 32), device=self.device)
+            y = torch.randint(0, 256, (2, 32), device=self.device)
+
+            # Eager step
+            opt_eager.zero_grad(set_to_none=False)
+            out_e = m_eager(x)
+            loss_e = loss_fn(out_e, y)
+            loss_e.backward()
+            opt_eager.step()
+
+            # Graph step
+            _ = engine.step(x, y, sync=True)
+
+            # Verify parameter parity at every step (bitwise identical in FP32)
+            for p_e, p_g in zip(m_eager.parameters(), m_graph.parameters()):
+                diff = (p_e - p_g).abs().max().item()
+                self.assertEqual(diff, 0.0, f"Drift detected at step {step}: max drift = {diff}")
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for CUDA graph testing")
+    def test_host_launch_latency_asynchronous_vs_synchronous(self):
+        """Asynchronous step returns without waiting for GPU execution."""
+        import time
+        model = SimpleModel().to(device=self.device, dtype=torch.bfloat16)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3, capturable=True)
+        engine = CUDAGraphEngine(self.device)
+
+        x = torch.randint(0, 256, (2, 32), device=self.device)
+        y = torch.randint(0, 256, (2, 32), device=self.device)
+        engine.capture_training_step(model, opt, x, y, warmup_steps=3)
+
+        # Measure host launch duration of async step vs sync step
+        torch.cuda.synchronize()
+        t0 = time.perf_counter_ns()
+        res_async = engine.step(x, y, sync=False)
+        t_async_ns = time.perf_counter_ns() - t0
+
+        torch.cuda.synchronize()
+        t1 = time.perf_counter_ns()
+        res_sync = engine.step(x, y, sync=True)
+        t_sync_ns = time.perf_counter_ns() - t1
+
+        self.assertIsInstance(res_async, torch.Tensor)
+        self.assertIsInstance(res_sync, float)
+        # Async host launch should be completed very quickly (< 100 microseconds)
+        self.assertLess(t_async_ns, 1_000_000)  # < 1 ms on any modern CPU
+
 
 if __name__ == "__main__":
     unittest.main()

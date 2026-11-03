@@ -67,7 +67,35 @@ def get_unsloth_optimizer(trainable_params, lr=1e-3, weight_decay=0.01):
     return BnbAdamW8bit(trainable_params, lr=lr, weight_decay=weight_decay)
 
 
+import hashlib
 import math
+
+
+def compute_sha256(file_path: Path) -> str:
+    if not file_path.is_file():
+        return ""
+    h = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        while chunk := f.read(65536):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def get_git_info() -> Tuple[str, bool]:
+    try:
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=str(REPO_ROOT), text=True
+        ).strip()
+    except Exception:
+        commit = "unknown"
+    try:
+        status_out = subprocess.check_output(
+            ["git", "status", "--porcelain"], cwd=str(REPO_ROOT), text=True
+        ).strip()
+        is_dirty = bool(status_out)
+    except Exception:
+        is_dirty = False
+    return commit, is_dirty
 
 
 # =========================================================================
@@ -79,13 +107,34 @@ def load_benchmark_text_batches(
     seq_len: int,
     total_steps: int,
     device: torch.device,
-) -> Tuple[List[Tuple[torch.Tensor, torch.Tensor]], Tuple[torch.Tensor, torch.Tensor]]:
+    allow_synthetic: bool = False,
+) -> Tuple[List[Tuple[torch.Tensor, torch.Tensor]], Tuple[torch.Tensor, torch.Tensor], Dict[str, Any]]:
     """Load real natural language text sequences with autoregressive causal targets.
-    Returns (train_batches, (eval_x, eval_y)).
+    Returns (train_batches, (eval_x, eval_y), dataset_metadata).
     """
     dataset_file = REPO_ROOT / "data" / "fineweb_sample.jsonl"
     tokenizer_file = REPO_ROOT / "triune_tokenizer.json"
+
+    stride = seq_len + 1
+    req_tokens_per_batch = batch_size * stride
+    min_required = (total_steps + 2) * req_tokens_per_batch
+
+    if not allow_synthetic:
+        if not dataset_file.is_file():
+            raise FileNotFoundError(
+                f"Mandatory benchmark dataset not found: {dataset_file}. "
+                "Pass --synthetic if you explicitly intend synthetic testing."
+            )
+        if not tokenizer_file.is_file():
+            raise FileNotFoundError(
+                f"Mandatory benchmark tokenizer not found: {tokenizer_file}. "
+                "Pass --synthetic if you explicitly intend synthetic testing."
+            )
+
     tokens = []
+    dataset_sha256 = compute_sha256(dataset_file) if dataset_file.is_file() else ""
+    tokenizer_sha256 = compute_sha256(tokenizer_file) if tokenizer_file.is_file() else ""
+
     if dataset_file.is_file() and tokenizer_file.is_file():
         try:
             from tokenizers import Tokenizer
@@ -96,12 +145,12 @@ def load_benchmark_text_batches(
                         continue
                     text = json.loads(line).get("text", "")
                     tokens.extend(tok.encode(text).ids)
-        except Exception:
-            pass
-
-    stride = seq_len + 1
-    req_tokens_per_batch = batch_size * stride
-    min_required = (total_steps + 2) * req_tokens_per_batch
+        except Exception as exc:
+            if not allow_synthetic:
+                raise RuntimeError(
+                    f"Failed to tokenize real dataset from {dataset_file}: {exc}. "
+                    "Pass --synthetic if you explicitly intend synthetic testing."
+                ) from exc
 
     if len(tokens) >= min_required:
         all_t = torch.tensor(tokens[:min_required], dtype=torch.long, device=device)
@@ -113,9 +162,27 @@ def load_benchmark_text_batches(
             batches.append((bx, by))
         eval_chunk = all_t[total_steps * req_tokens_per_batch : (total_steps + 1) * req_tokens_per_batch].reshape(batch_size, stride)
         eval_batch = (eval_chunk[:, :-1].contiguous(), eval_chunk[:, 1:].contiguous())
-        return batches, eval_batch
+        
+        meta = {
+            "dataset_mode": "fineweb_real",
+            "dataset_path": str(dataset_file.relative_to(REPO_ROOT)),
+            "dataset_sha256": dataset_sha256,
+            "tokenizer_path": str(tokenizer_file.relative_to(REPO_ROOT)),
+            "tokenizer_sha256": tokenizer_sha256,
+            "total_tokens_available": len(tokens),
+            "tokens_consumed": min_required,
+            "train_batches_count": total_steps,
+            "eval_batches_count": 1,
+        }
+        return batches, eval_batch, meta
 
-    # Fallback to deterministic pseudo-text causal sequences if file unreadable
+    if not allow_synthetic:
+        raise RuntimeError(
+            f"Insufficient tokens in {dataset_file}: required {min_required}, but got {len(tokens)}. "
+            "Pass --synthetic if you explicitly intend synthetic testing."
+        )
+
+    # Explicit synthetic fallback when requested
     torch.manual_seed(42)
     batches = []
     for _ in range(total_steps):
@@ -123,7 +190,18 @@ def load_benchmark_text_batches(
         batches.append((raw_seq[:, :-1].contiguous(), raw_seq[:, 1:].contiguous()))
     eval_raw = torch.randint(0, min(vocab_size, 1000), (batch_size, stride), device=device)
     eval_batch = (eval_raw[:, :-1].contiguous(), eval_raw[:, 1:].contiguous())
-    return batches, eval_batch
+    meta = {
+        "dataset_mode": "synthetic_causal",
+        "dataset_path": None,
+        "dataset_sha256": None,
+        "tokenizer_path": None,
+        "tokenizer_sha256": None,
+        "total_tokens_available": None,
+        "tokens_consumed": min_required,
+        "train_batches_count": total_steps,
+        "eval_batches_count": 1,
+    }
+    return batches, eval_batch, meta
 
 
 def build_test_models(vocab_size: int = 32000, dim: int = 384, num_layers: int = 8, num_heads: int = 6):
@@ -155,6 +233,7 @@ def run_benchmark_cell(
     seq_len: int = 256,
     device: torch.device = None,
     dtype: torch.dtype = None,
+    allow_synthetic: bool = False,
 ) -> Dict[str, Any]:
     """Execute a single cell of the 3x2x2 matrix and record exact hardware telemetry."""
     if device is None:
@@ -215,7 +294,7 @@ def run_benchmark_cell(
     opt_class_name = optimizer.__class__.__name__
 
     # 1. Real Causal Natural Language Text Batches (FineWeb sample)
-    batches, (eval_x, eval_y) = load_benchmark_text_batches(vocab_size, batch_size, seq_len, 3 + steps, device)
+    batches, (eval_x, eval_y), dataset_meta = load_benchmark_text_batches(vocab_size, batch_size, seq_len, 3 + steps, device, allow_synthetic=allow_synthetic)
 
     with torch.no_grad():
         if model_type == "moe":
@@ -314,6 +393,7 @@ def run_benchmark_cell(
         "task": task,
         "model_type": model_type,
         "optimizer": opt_class_name,
+        "dataset_provenance": dataset_meta,
         "trainable_parameters": num_trainable,
         "total_parameters": num_total,
         "trainable_percentage": round(100.0 * num_trainable / max(1, num_total), 2),
@@ -339,17 +419,33 @@ def run_benchmark_cell(
 def main():
     parser = argparse.ArgumentParser(description="Triune Master Matrix Benchmark Runner")
     parser.add_argument("--report-only", action="store_true", help="Regenerate Markdown report from existing master_matrix_results.json without re-running benchmark cells")
+    parser.add_argument("--synthetic", action="store_true", help="Explicitly allow synthetic pseudo-text if dataset is missing")
     args = parser.parse_args()
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     dtype = torch.bfloat16 if (device.type == "cuda" and torch.cuda.is_bf16_supported()) else torch.float32
     out_dir = Path("benchmarks")
 
-    # Capture git commit hash for full provenance
-    try:
-        git_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-    except Exception:
-        git_commit = "unknown"
+    # Capture git commit hash and working tree status for full provenance
+    git_commit, git_dirty = get_git_info()
+    script_sha256 = compute_sha256(Path(__file__).resolve())
+
+    provenance = {
+        "git_commit": git_commit,
+        "git_dirty": git_dirty,
+        "script_sha256": script_sha256,
+        "software": {
+            "python": sys.version.split()[0],
+            "torch": torch.__version__,
+            "cuda": torch.version.cuda if torch.cuda.is_available() else None,
+        },
+        "hardware": {
+            "device_name": torch.cuda.get_device_name(0) if device.type == "cuda" else "CPU",
+            "total_vram_gb": round(torch.cuda.get_device_properties(0).total_memory / (1024**3), 2) if device.type == "cuda" else 0.0,
+            "cuda_version": torch.version.cuda or "N/A",
+            "pytorch_version": torch.__version__,
+        },
+    }
 
     if args.report_only:
         fpath = out_dir / "master_matrix_results.json"
@@ -358,13 +454,15 @@ def main():
         with open(fpath, "r", encoding="utf-8") as f:
             data = json.load(f)
         cells = data.get("cells", data) if isinstance(data, dict) else data
-        generate_master_report(cells, out_dir / "MASTER_COMPETITIVE_MATRIX_REPORT.md", device, data.get("git_commit", git_commit) if isinstance(data, dict) else git_commit)
+        prov = data.get("provenance", provenance) if isinstance(data, dict) else provenance
+        generate_master_report(cells, out_dir / "MASTER_COMPETITIVE_MATRIX_REPORT.md", device, prov)
         return
 
     print("=" * 80)
     print(" TRIUNE vs BITSANDBYTES 8-BIT vs ADAMW — MASTER 3x2x2 BENCHMARK RUNNER")
     print(f" Hardware: {device} ({torch.cuda.get_device_name(0) if device.type == 'cuda' else 'CPU'})")
     print(f" Precision: {dtype}")
+    print(f" Git Commit: {git_commit} (Clean: {not git_dirty})")
     print("=" * 80)
 
     matrix_results: List[Dict[str, Any]] = []
@@ -390,27 +488,19 @@ def main():
                     seq_len=256,
                     device=device,
                     dtype=dtype,
+                    allow_synthetic=args.synthetic,
                 )
                 matrix_results.append(result)
                 print(f"  -> {result['step_time_ms']} ms/step (±{result['step_time_std_ms']} ms) | {result['throughput_tok_s']:,.0f} tok/s | Peak VRAM: {result['peak_vram_mb']} MB | Eval Loss Drop: {result['eval_loss_reduction']}")
 
-    # Capture git commit hash for full provenance
-    try:
-        git_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-    except Exception:
-        git_commit = "unknown"
+    d_meta = matrix_results[0].get("dataset_provenance", {}) if matrix_results else {}
+    provenance["dataset"] = d_meta
 
     artifact_payload = {
         "schema_version": "2.2.0",
         "benchmark_name": "master_competitive_matrix",
         "timestamp_utc": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-        "git_commit": git_commit,
-        "hardware": {
-            "device_name": torch.cuda.get_device_name(0) if device.type == "cuda" else "CPU",
-            "total_vram_gb": round(torch.cuda.get_device_properties(0).total_memory / (1024**3), 2) if device.type == "cuda" else 0.0,
-            "cuda_version": torch.version.cuda or "N/A",
-            "pytorch_version": torch.__version__,
-        },
+        "provenance": provenance,
         "competitors": {
             "adamw": "PyTorch standard unquantized torch.optim.AdamW",
             "bnb_8bit": "BitsAndBytes native bitsandbytes.optim.AdamW8bit baseline evaluated on identical model architectures",
@@ -419,25 +509,51 @@ def main():
         "cells": matrix_results,
     }
 
-    # Save JSON results (storing both structured dict and list for backward compatibility)
-    out_dir = Path("benchmarks")
+    # Save JSON results
+    out_dir = REPO_ROOT / "benchmarks"
     out_dir.mkdir(parents=True, exist_ok=True)
     with open(out_dir / "master_matrix_results.json", "w", encoding="utf-8") as f:
         json.dump(artifact_payload, f, indent=2)
 
     # Generate Markdown Report
-    generate_master_report(matrix_results, out_dir / "MASTER_COMPETITIVE_MATRIX_REPORT.md", device, git_commit)
+    generate_master_report(matrix_results, out_dir / "MASTER_COMPETITIVE_MATRIX_REPORT.md", device, provenance)
 
 
-def generate_master_report(results: List[Dict[str, Any]], output_path: Path, device: torch.device, git_commit: str = "unknown"):
+def generate_master_report(results: List[Dict[str, Any]], output_path: Path, device: torch.device, provenance: Dict[str, Any] | str = "unknown"):
+    dense_pt = next((r for r in results if r["task"] == "pretrain" and r["model_type"] == "dense"), None)
+    moe_pt = next((r for r in results if r["task"] == "pretrain" and r["model_type"] == "moe"), None)
+    dense_ft = next((r for r in results if r["task"] == "finetune" and r["model_type"] == "dense"), None)
+    moe_ft = next((r for r in results if r["task"] == "finetune" and r["model_type"] == "moe"), None)
+
+    d_pre_params = dense_pt.get("total_parameters", 0) if dense_pt else 0
+    m_pre_params = moe_pt.get("total_parameters", 0) if moe_pt else 0
+
+    d_ft_total = dense_ft.get("total_parameters", 0) if dense_ft else 0
+    d_ft_trainable = dense_ft.get("trainable_parameters", 0) if dense_ft else 0
+    d_ft_pct = dense_ft.get("trainable_percentage", 0.0) if dense_ft else 0.0
+
+    m_ft_total = moe_ft.get("total_parameters", 0) if moe_ft else 0
+    m_ft_trainable = moe_ft.get("trainable_parameters", 0) if moe_ft else 0
+    m_ft_pct = moe_ft.get("trainable_percentage", 0.0) if moe_ft else 0.0
+
+    prov = provenance if isinstance(provenance, dict) else {"git_commit": provenance, "git_dirty": False, "script_sha256": "N/A"}
+    d_meta = results[0].get("dataset_provenance", {}) if results else {}
+
     md = f"""# Triune vs BitsAndBytes 8-bit AdamW vs Standard AdamW — Master 3x2x2 Competitive Matrix
 
 **Benchmarked Hardware**: `{torch.cuda.get_device_name(0) if device.type == 'cuda' else 'CPU'}`  
 **Precision**: `torch.bfloat16` with native CUDA Tensor Cores  
 **Timestamp**: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}  
-**Git Provenance Commit**: `{git_commit}`  
-**Architecture Scope**: Universal Dense Transformers (76M) & Triune Multi-Exit MoE (76M) across Pre-Training and LoRA Fine-Tuning.  
-**Workload**: Real causal natural language text sequences from FineWeb (`data/fineweb_sample.jsonl`, B=4, T=256, Vocab=32000).  
+**Git Provenance Commit**: `{prov.get('git_commit', 'unknown')}` (Working-Tree Clean: `{not prov.get('git_dirty', False)}`)  
+**Script SHA-256**: `{prov.get('script_sha256', 'N/A')}`  
+**Dataset**: `{d_meta.get('dataset_path', 'data/fineweb_sample.jsonl')}` (Mode: `{d_meta.get('dataset_mode', 'fineweb_real')}`, SHA-256: `{d_meta.get('dataset_sha256', 'N/A')}`)  
+**Tokenizer**: `{d_meta.get('tokenizer_path', 'triune_tokenizer.json')}` (SHA-256: `{d_meta.get('tokenizer_sha256', 'N/A')}`)  
+
+### Verified Parameter Accounting & Model Presets
+- **Universal Dense Pre-Training**: **{d_pre_params:,} scalar parameters** ({d_pre_params/1e6:.2f}M) across 8 layers, 384 dim, 6 heads.
+- **Triune MoE Pre-Training**: **{m_pre_params:,} scalar parameters** ({m_pre_params/1e6:.2f}M) across 8 layers, 384 dim, 4 routed experts + 1 shared expert.
+- **Universal Dense LoRA Fine-Tuning**: **{d_ft_total:,} total parameters** ({d_ft_total/1e6:.2f}M), with **{d_ft_trainable:,} trainable adapter parameters** ({d_ft_trainable/1e3:.1f}K, **{d_ft_pct:.2f}%** trainable).
+- **Triune MoE LoRA Fine-Tuning**: **{m_ft_total:,} total parameters** ({m_ft_total/1e6:.2f}M), with **{m_ft_trainable:,} trainable adapter parameters** ({m_ft_trainable/1e3:.1f}K, **{m_ft_pct:.2f}%** trainable).
 
 > [!NOTE]
 > **Methodology & Baseline Transparency**:
@@ -457,8 +573,8 @@ def generate_master_report(results: List[Dict[str, Any]], output_path: Path, dev
 
 ## 1. Pre-Training from Scratch (Dense vs MoE)
 
-| Architecture | Framework & Optimizer | Step Latency (Median ± Std) | Throughput | Peak VRAM | VRAM Saved vs AdamW | Held-Out Eval Loss Drop |
-| :--- | :--- | :---: | :---: | :---: | :---: | :---: |
+| Architecture | Total Params | Framework & Optimizer | Step Latency (Median ± Std) | Throughput | Peak VRAM | VRAM Saved vs AdamW | Held-Out Eval Loss Drop |
+| :--- | :---: | :--- | :---: | :---: | :---: | :---: | :---: |
 """
     # Filter pretraining
     pre = [r for r in results if r["task"] == "pretrain"]
@@ -469,18 +585,18 @@ def generate_master_report(results: List[Dict[str, Any]], output_path: Path, dev
         base = adamw_dense if r["model_type"] == "dense" else adamw_moe
         saved_pct = round(((base["peak_vram_mb"] - r["peak_vram_mb"]) / max(base["peak_vram_mb"], 1e-6)) * 100.0, 1) if base else 0.0
         stack_label = f"**Triune Stack** (`{r.get('optimizer', 'CentroidSteer')}`)" if r["stack"] == "triune" else (f"BitsAndBytes 8-bit AdamW (`{r.get('optimizer', 'AdamW8bit')}`)" if r["stack"] in ("bnb_8bit", "unsloth") else f"Standard AdamW (`{r.get('optimizer', 'AdamW')}`)")
-        model_label = "Universal Dense (76M)" if r["model_type"] == "dense" else "Triune MoE (76M)"
+        model_label = "Universal Dense" if r["model_type"] == "dense" else "Triune MoE"
         latency_str = f"{r['step_time_ms']} ± {r.get('step_time_std_ms', 0.0)} ms"
         eval_drop = r.get("eval_loss_reduction", r.get("loss_reduction", 0.0))
-        md += f"| {model_label} | {stack_label} | {latency_str} | {r['throughput_tok_s']:,.0f} tok/s | **{r['peak_vram_mb']} MB** | **{saved_pct}%** | {eval_drop} |\n"
+        md += f"| {model_label} | {r['total_parameters']:,} ({r['total_parameters']/1e6:.2f}M) | {stack_label} | {latency_str} | {r['throughput_tok_s']:,.0f} tok/s | **{r['peak_vram_mb']} MB** | **{saved_pct}%** | {eval_drop} |\n"
 
     md += """
 ---
 
 ## 2. LoRA Fine-Tuning (Dense vs MoE)
 
-| Architecture | Framework & Optimizer | Step Latency (Median ± Std) | Throughput | Peak VRAM | VRAM Saved vs AdamW | Held-Out Eval Loss Drop |
-| :--- | :--- | :---: | :---: | :---: | :---: | :---: |
+| Architecture | Total Params | Trainable Params (% Trainable) | Framework & Optimizer | Step Latency (Median ± Std) | Throughput | Peak VRAM | VRAM Saved vs AdamW | Held-Out Eval Loss Drop |
+| :--- | :---: | :---: | :--- | :---: | :---: | :---: | :---: | :---: |
 """
     # Filter finetuning
     fine = [r for r in results if r["task"] == "finetune"]
@@ -491,10 +607,10 @@ def generate_master_report(results: List[Dict[str, Any]], output_path: Path, dev
         base = adamw_dense_f if r["model_type"] == "dense" else adamw_moe_f
         saved_pct = round(((base["peak_vram_mb"] - r["peak_vram_mb"]) / max(base["peak_vram_mb"], 1e-6)) * 100.0, 1) if base else 0.0
         stack_label = f"**Triune Stack** (`{r.get('optimizer', 'AdamW')}`)" if r["stack"] == "triune" else (f"BitsAndBytes 8-bit AdamW (`{r.get('optimizer', 'AdamW8bit')}`)" if r["stack"] in ("bnb_8bit", "unsloth") else f"Standard AdamW (`{r.get('optimizer', 'AdamW')}`)")
-        model_label = "Universal Dense (76M)" if r["model_type"] == "dense" else "Triune MoE (76M)"
+        model_label = "Universal Dense" if r["model_type"] == "dense" else "Triune MoE"
         latency_str = f"{r['step_time_ms']} ± {r.get('step_time_std_ms', 0.0)} ms"
         eval_drop = r.get("eval_loss_reduction", r.get("loss_reduction", 0.0))
-        md += f"| {model_label} | {stack_label} | {latency_str} | {r['throughput_tok_s']:,.0f} tok/s | **{r['peak_vram_mb']} MB** | **{saved_pct}%** | {eval_drop} |\n"
+        md += f"| {model_label} | {r['total_parameters']:,} | {r['trainable_parameters']:,} ({r['trainable_percentage']}%) | {stack_label} | {latency_str} | {r['throughput_tok_s']:,.0f} tok/s | **{r['peak_vram_mb']} MB** | **{saved_pct}%** | {eval_drop} |\n"
 
     def find_cell(task_name, model_name, stack_name):
         return next((r for r in results if r["task"] == task_name and r["model_type"] == model_name and r["stack"] in (stack_name, "unsloth" if stack_name == "bnb_8bit" else stack_name)), None)
