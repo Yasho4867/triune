@@ -34,6 +34,7 @@ class BenchmarkValidityTest(unittest.TestCase):
             "long_context_results.json",
             "layer_streaming_results.json",
             "master_matrix_results.json",
+            "genuine_unsloth_vs_triune_results.json",
         ]
         for fname in required_files:
             fpath = BENCHMARK_DIR / fname
@@ -51,6 +52,7 @@ class BenchmarkValidityTest(unittest.TestCase):
             "long_context_results.json",
             "layer_streaming_results.json",
             "master_matrix_results.json",
+            "genuine_unsloth_vs_triune_results.json",
         ]
         for fname in files_with_hw:
             fpath = BENCHMARK_DIR / fname
@@ -172,6 +174,34 @@ class BenchmarkValidityTest(unittest.TestCase):
                 self.assertIn("AdamW8bit", cell["optimizer"])
             elif cell["stack"] == "triune" and cell["task"] == "pretrain":
                 self.assertIn("CentroidSteer", cell["optimizer"])
+
+    def test_genuine_unsloth_results_validity(self):
+        """Verifies genuine Unsloth vs Triune benchmark provenance, metrics, and parameters."""
+        fpath = BENCHMARK_DIR / "genuine_unsloth_vs_triune_results.json"
+        with open(fpath, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        self.assertIn("schema_version", data)
+        self.assertIn("git_commit", data)
+        self.assertIn("hardware", data)
+        results = data.get("results", [])
+        self.assertEqual(len(results), 7, "Must have exactly 7 benchmark cells")
+
+        frameworks = {r["framework"] for r in results}
+        self.assertEqual(frameworks, {"pytorch", "unsloth", "triune"})
+
+        for r in results:
+            self.assertGreater(r["step_time_ms"], 0.0)
+            self.assertGreater(r["throughput_tok_s"], 0.0)
+            self.assertGreater(r["peak_vram_mb"], 0.0)
+            self.assertFalse(math.isnan(r["step_time_ms"]))
+            self.assertFalse(math.isnan(r["peak_vram_mb"]))
+            if r["framework"] == "unsloth":
+                self.assertEqual(r["optimizer"], "AdamW8bit")
+            elif r["framework"] == "triune" and r["task"] == "pretrain":
+                self.assertIn("CentroidSteer", r["optimizer"])
+            elif r["framework"] == "pytorch":
+                self.assertEqual(r["optimizer"], "AdamW")
 
 
 if __name__ == "__main__":

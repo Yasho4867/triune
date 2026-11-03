@@ -17,7 +17,8 @@ and runtime components against PyTorch standard baselines and native competitor 
 | **C** | **Layer Streaming** | LayerStreamingEngine (CPU/GPU) | Standard GPU-Resident Training (OOM prevention) | Memory virtualization: trains large models in small VRAM | [Report](LAYER_STREAMING_REPORT.md) |
 | **D** | **Long-Context Generation** | Gated Linear Attention (GLA) | Softmax Attention (SDPA) KV-Cache ($O(1)$ vs $O(L)$) | Constant-memory recurrent decoding (256x-512x cache compression) | [Report](LONG_CONTEXT_REPORT.md) |
 | **E** | **Dynamic Exits & Pareto** | Reflex (L2), Limbic (L5), Cortex (L8) | Full-depth monolithic execution | Low-entropy early exit inference speedup (1.9x-3.7x) | [Report](DYNAMIC_EXITS_REPORT.md) |
-| **F** | **Full Competitive Matrix** | Universal Dense & MoE Transformers | PyTorch AdamW, Unsloth native 8-bit AdamW | Verified 3x2x2 pre-training and LoRA fine-tuning | [Report](MASTER_COMPETITIVE_MATRIX_REPORT.md) |
+| **F** | **Full Competitive Matrix** | Universal Dense & MoE Transformers | PyTorch AdamW, BitsAndBytes 8-bit AdamW | Verified 3x2x2 pre-training and LoRA fine-tuning | [Report](MASTER_COMPETITIVE_MATRIX_REPORT.md) |
+| **G** | **Genuine Full-Stack Unsloth** | FastLlamaModel, FastLanguageModel, fast_lora, fast_cross_entropy_loss | Genuine installed Unsloth (2026.10.10) vs Standard PyTorch vs Triune AI | Pre-training and LoRA fine-tuning in isolated Python processes | [Report](GENUINE_UNSLOTH_VS_TRIUNE_REPORT.md) |
 
 ---
 
@@ -26,17 +27,27 @@ and runtime components against PyTorch standard baselines and native competitor 
 ### 1. Master Competitive Matrix (`Category F`, Verified Hardware Measurements)
 Evaluated across identical architectures (Universal Dense 76M and Triune MoE 76M) with **actively participating LoRA adapters**, verified parameter weight updates, and genuine BitsAndBytes 8-bit AdamW (no silent fallback):
 
-- **Dense LoRA Fine-Tuning (Strongest Triune Result)**:
-  - **Throughput**: Triune runs at **63.17 ms/step (16,211 tok/s)**, delivering a **30.4% speedup over genuine Unsloth 8-bit AdamW (82.34 ms/step, 12,436 tok/s)** while remaining competitive with unquantized AdamW (61.15 ms/step).
-  - **Memory**: Triune uses only **402.2 MB peak VRAM**, representing a **43.8% reduction vs standard AdamW (716.1 MB)** and a **31.4% reduction vs Unsloth 8-bit AdamW (586.1 MB)** due to fused linear-LoRA and chunked logit-free backprop.
+- **Dense LoRA Fine-Tuning**:
+  - **Memory**: Triune uses only **465.1 MB peak VRAM**, representing a **40.3% reduction vs Standard AdamW (779.1 MB)** and a **28.6% reduction vs BitsAndBytes 8-bit AdamW (651.0 MB)** due to fused linear-LoRA and chunked logit-free backprop.
+  - **Throughput**: Triune runs at **78.98 ± 5.71 ms/step (12,966 tok/s)** vs **69.56 ± 11.71 ms/step** for BitsAndBytes 8-bit AdamW and **62.88 ± 11.56 ms/step** for standard AdamW.
 - **MoE LoRA Fine-Tuning**:
-  - Triune executes at **164.51 ms/step** (vs Unsloth's 173.62 ms/step and AdamW's 163.54 ms/step) while matching Unsloth in peak VRAM (**933.6 MB vs 932.7 MB**, an 11.8% reduction over standard AdamW's 1,058.5 MB).
+  - Triune executes at **154.17 ± 7.66 ms/step** (6,642 tok/s) and **992.0 MB peak VRAM** (11.3% lower VRAM than Standard AdamW's 1,118.8 MB, operating at near parity with BitsAndBytes's 991.1 MB and 156.59 ms/step).
 - **Dense Pre-Training (Memory & Convergence Win, Throughput Trade-off)**:
-  - **Memory**: Triune uses **504.5 MB peak VRAM**, saving **42.8% vs standard AdamW (882.6 MB)** and **24.2% vs Unsloth (665.6 MB)**.
-  - **Convergence**: CentroidSteer + Muon achieves **6.8131 loss drop** over 15 steps (+16.3% faster initial loss reduction vs 5.8562 for AdamW and 5.8598 for Unsloth).
-  - **Throughput Trade-off**: Triune runs at **62.40 ms/step** vs **50.48 ms/step** for standard AdamW (~23% latency overhead) due to online subspace projections.
-- **MoE Pre-Training**:
-  - Triune achieves the lowest peak VRAM (**1,094.4 MB**, saving 22.4% vs AdamW's 1,409.9 MB and 5.4% vs Unsloth's 1,157.0 MB) and the strongest initial loss reduction (**4.1021 vs 3.5229 AdamW and 3.5348 Unsloth**), with step latency comparable to Unsloth (173.89 ms vs 171.89 ms).
+  - **Memory**: Triune uses **570.1 MB peak VRAM**, saving **39.8% vs standard AdamW (947.6 MB)** and **21.9% vs BitsAndBytes 8-bit AdamW (729.9 MB)**.
+  - **Throughput Trade-off**: Triune runs at **53.78 ± 4.95 ms/step** (19,040 tok/s) vs **42.43 ± 9.00 ms/step** for standard AdamW (~25% latency overhead) due to online subspace projections.
+- **MoE Pre-Training (Speed & Memory Win over 8-Bit Baseline)**:
+  - Triune achieves the lowest peak VRAM in this category (**1,152.8 MB**, saving 21.6% vs AdamW's 1,470.7 MB and 5.2% vs BitsAndBytes's 1,215.6 MB) and outpaces BitsAndBytes 8-bit AdamW (**159.25 ms/step vs 196.15 ms/step**, an **18.8% speedup**).
+
+### 1.1 Genuine Full-Stack Unsloth Head-to-Head (`Category G`, Isolated Subprocesses)
+Benchmarked against the actual installed **`unsloth` 2026.10.10 framework** across Pre-Training and LoRA Fine-Tuning on 76M parameters (8 layers, 384 dim, 1024 MLP, 6 heads):
+- **LoRA Fine-Tuning**:
+  - **Throughput Parity**: Triune runs at **36.27 ± 1.00 ms/step (28,230 tok/s)** vs Genuine Unsloth's **35.66 ± 0.63 ms/step (28,714 tok/s)** — operating within **1.7% latency parity**, while delivering a **34.3% speedup over Standard PyTorch PEFT (55.24 ± 6.14 ms/step, 18,538 tok/s)**.
+  - **VRAM**: Unsloth with 8-bit AdamW uses 340.6 MB; Triune with FP32 AdamW states uses 545.1 MB (-9.0% vs Standard PyTorch's 599.1 MB).
+- **Pre-Training from Scratch**:
+  - Unsloth's fused Triton kernels and 8-bit optimizer achieve **22.30 ± 0.50 ms/step (45,911 tok/s, 464.8 MB)** on standard dense Llama.
+  - Triune's `CentroidSteerOptimizer` achieves **34.35 ± 0.95 ms/step (29,813 tok/s, 588.2 MB)**, running competitively with Standard PyTorch (`35.14 ms/step`) while saving 11.1% VRAM and providing 3-tier Muon orthogonalization.
+- **Mixture of Experts Support**:
+  - Triune natively supports and trains Multi-Exit MoE models (91.69 ms/step, 11,168 tok/s), whereas Unsloth is specialized exclusively for dense autoregressive architectures.
 
 ### 2. Chunked Logit-Free Cross-Entropy (`Category A`)
 Standard PyTorch cross-entropy materializes the entire $[N, V]$ logits matrix simultaneously, consuming gigabytes of transient VRAM on large vocabularies ($V=32,000$):
