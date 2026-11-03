@@ -142,15 +142,55 @@ class VectorisedGLA(nn.Module):
         B, T, D = x.shape
         H, HD = self.heads, self.head_dim
 
-        q = self.q_proj(x).view(B, T, H, HD)
-        k = self.k_proj(x).view(B, T, H, HD)
-        v = self.v_proj(x).view(B, T, H, HD)
-        g = F.logsigmoid(self.g_proj(x).view(B, T, H, HD))
+        can_fuse_qkvg = (
+            type(self.q_proj) is nn.Linear
+            and type(self.k_proj) is nn.Linear
+            and type(self.v_proj) is nn.Linear
+            and type(self.g_proj) is nn.Linear
+            and self.q_proj.bias is None
+            and self.k_proj.bias is None
+            and self.v_proj.bias is None
+            and self.g_proj.bias is None
+            and not hasattr(self.q_proj, "lora_A")
+            and not hasattr(self.v_proj, "lora_A")
+        )
 
-        q = F.elu(q) + 1.0
-        k = F.elu(k) + 1.0
-        q = q / (q.norm(dim=-1, keepdim=True) + 1e-6)
-        k = k / (k.norm(dim=-1, keepdim=True) + 1e-6)
+        if can_fuse_qkvg:
+            if not self.training and not torch.is_grad_enabled():
+                sig = (
+                    self.q_proj.weight.data_ptr(),
+                    self.k_proj.weight.data_ptr(),
+                    self.v_proj.weight.data_ptr(),
+                    self.g_proj.weight.data_ptr(),
+                    self.q_proj.weight._version,
+                    self.k_proj.weight._version,
+                    self.v_proj.weight._version,
+                    self.g_proj.weight._version,
+                )
+                if getattr(self, "_eval_qkvg_sig", None) != sig or getattr(self, "_eval_w_qkvg", None) is None:
+                    self._eval_w_qkvg = torch.cat(
+                        (self.q_proj.weight, self.k_proj.weight, self.v_proj.weight, self.g_proj.weight), dim=0
+                    )
+                    self._eval_qkvg_sig = sig
+                w_qkvg = self._eval_w_qkvg
+            else:
+                self._eval_w_qkvg = None
+                w_qkvg = torch.cat(
+                    (self.q_proj.weight, self.k_proj.weight, self.v_proj.weight, self.g_proj.weight), dim=0
+                )
+            qkvg = F.linear(x, w_qkvg)
+            hd2 = 2 * self.hidden_dim
+            hd3 = 3 * self.hidden_dim
+            qk = qkvg[..., :hd2].reshape(B, T, 2, H, HD)
+            v = qkvg[..., hd2:hd3].reshape(B, T, H, HD)
+            g = F.logsigmoid(qkvg[..., hd3:].reshape(B, T, H, HD))
+            qk = F.normalize(F.elu(qk) + 1.0, p=2.0, dim=-1, eps=1e-6)
+        else:
+            q = self.q_proj(x).view(B, T, H, HD)
+            k = self.k_proj(x).view(B, T, H, HD)
+            v = self.v_proj(x).view(B, T, H, HD)
+            g = F.logsigmoid(self.g_proj(x).view(B, T, H, HD))
+            qk = F.normalize(F.elu(torch.stack((q, k), dim=2)) + 1.0, p=2.0, dim=-1, eps=1e-6)
 
         initial_state = None
         offset = 0
@@ -168,11 +208,13 @@ class VectorisedGLA(nn.Module):
 
         if self.use_rope:
             cos, sin = self.rope(T, x.device, offset=offset)
-            q = q.transpose(1, 2)
-            k = k.transpose(1, 2)
-            q, k = apply_rotary(q, k, cos, sin)
-            q = q.transpose(1, 2).to(dtype=v.dtype)
-            k = k.transpose(1, 2).to(dtype=v.dtype)
+            cos_b = cos.to(dtype=qk.dtype, device=qk.device).view(1, T, 1, 1, HD)
+            sin_b = sin.to(dtype=qk.dtype, device=qk.device).view(1, T, 1, 1, HD)
+            qk1, qk2 = qk.chunk(2, dim=-1)
+            qk = (qk * cos_b + torch.cat((-qk2, qk1), dim=-1) * sin_b).to(dtype=v.dtype)
+
+        q = qk[:, :, 0]
+        k = qk[:, :, 1]
 
         if HAS_FLA and x.is_cuda:
             # FLA consumes [batch, sequence, heads, head_dim]. The prompt/prefill

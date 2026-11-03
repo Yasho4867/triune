@@ -1,6 +1,6 @@
-# Architecture Configuration Guide
+# Triune AI — Architecture Configuration Guide
 
-Triune models are configured via parameter dictionaries or JSON files. This guide details architectural parameters, structural invariants, and hardware sizing.
+**Triune AI** models (`TriuneTransformer` and `UniversalTransformer`) are configured via parameter dictionaries, `UniversalConfig`, or JSON files. This guide details architectural parameters, structural invariants, and hardware sizing.
 
 ---
 

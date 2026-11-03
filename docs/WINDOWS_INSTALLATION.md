@@ -1,7 +1,7 @@
-# Windows Studio Setup
+# Triune AI Studio — Windows Setup
 
-Triune Studio runs its Python backend natively on Windows; WSL is not required.
-The Windows desktop shell is published self-contained for .NET. Its first-launch
+**Triune AI Studio** runs its Python backend and native C/AVX2 engine (`triune_core.dll`) natively on Windows; WSL is not required.
+The Windows desktop shell (`TriuneStudio.exe` at the repository root) is published as a self-contained single-file executable bundling `.NET 10`, `WebView2`, and `triune_core.dll`. Its first-launch
 **Install / repair Studio environment** action provisions the managed Python
 environment, PyTorch, CUDA-compatible dependencies, W&B, and Studio packages.
 An NVIDIA driver is still required for CUDA acceleration. If Python is missing,

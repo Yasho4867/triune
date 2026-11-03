@@ -55,16 +55,49 @@ class DenseAttention(nn.Module):
         state: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         B, T, D = x.shape
-        q = self.q_proj(x).reshape(B, T, self.num_heads, self.head_dim)
-        k = self.k_proj(x).reshape(B, T, self.num_heads, self.head_dim)
-        v = self.v_proj(x).reshape(B, T, self.num_heads, self.head_dim)
-
+        hd_total = self.num_heads * self.head_dim
+        can_fuse = (
+            type(self.q_proj) is nn.Linear
+            and type(self.k_proj) is nn.Linear
+            and type(self.v_proj) is nn.Linear
+            and not hasattr(self.q_proj, "lora_A")
+            and not hasattr(self.k_proj, "lora_A")
+            and not hasattr(self.v_proj, "lora_A")
+        )
         if self.use_gla:
-            g = -F.softplus(self.gate_proj(x).reshape(B, T, self.num_heads, self.head_dim))
+            if can_fuse and type(self.gate_proj) is nn.Linear and not hasattr(self.gate_proj, "lora_A"):
+                qkvg = F.linear(
+                    x,
+                    torch.cat(
+                        (self.q_proj.weight, self.k_proj.weight, self.v_proj.weight, self.gate_proj.weight),
+                        dim=0,
+                    ),
+                )
+                q = qkvg[..., :hd_total].reshape(B, T, self.num_heads, self.head_dim)
+                k = qkvg[..., hd_total:2 * hd_total].reshape(B, T, self.num_heads, self.head_dim)
+                v = qkvg[..., 2 * hd_total:3 * hd_total].reshape(B, T, self.num_heads, self.head_dim)
+                g = -F.softplus(qkvg[..., 3 * hd_total:].reshape(B, T, self.num_heads, self.head_dim))
+            else:
+                q = self.q_proj(x).reshape(B, T, self.num_heads, self.head_dim)
+                k = self.k_proj(x).reshape(B, T, self.num_heads, self.head_dim)
+                v = self.v_proj(x).reshape(B, T, self.num_heads, self.head_dim)
+                g = -F.softplus(self.gate_proj(x).reshape(B, T, self.num_heads, self.head_dim))
             out, new_state = fast_chunk_gla(q, k, v, g, initial_state=state)
             out = out.reshape(B, T, -1)
             return self.o_proj(out), new_state
         else:
+            if can_fuse:
+                qkv = F.linear(
+                    x,
+                    torch.cat((self.q_proj.weight, self.k_proj.weight, self.v_proj.weight), dim=0),
+                )
+                q = qkv[..., :hd_total].reshape(B, T, self.num_heads, self.head_dim)
+                k = qkv[..., hd_total:2 * hd_total].reshape(B, T, self.num_heads, self.head_dim)
+                v = qkv[..., 2 * hd_total:].reshape(B, T, self.num_heads, self.head_dim)
+            else:
+                q = self.q_proj(x).reshape(B, T, self.num_heads, self.head_dim)
+                k = self.k_proj(x).reshape(B, T, self.num_heads, self.head_dim)
+                v = self.v_proj(x).reshape(B, T, self.num_heads, self.head_dim)
             q_sdpa = q.transpose(1, 2)
             k_sdpa = k.transpose(1, 2)
             v_sdpa = v.transpose(1, 2)
@@ -91,6 +124,16 @@ class DenseMLP(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.act_type == "swiglu":
+            if (
+                type(self.gate_proj) is nn.Linear
+                and type(self.up_proj) is nn.Linear
+                and not hasattr(self.gate_proj, "lora_A")
+                and not hasattr(self.up_proj, "lora_A")
+            ):
+                gate, up = F.linear(
+                    x, torch.cat((self.gate_proj.weight, self.up_proj.weight), dim=0)
+                ).chunk(2, dim=-1)
+                return self.down_proj(fast_swiglu(gate, up))
             return self.down_proj(fast_swiglu(self.gate_proj(x), self.up_proj(x)))
         return self.linear2(self.act(self.linear1(x)))
 
@@ -146,6 +189,7 @@ class UniversalDenseTransformer(nn.Module):
         self,
         input_ids: torch.Tensor,
         states: Optional[List[Optional[torch.Tensor]]] = None,
+        return_hidden: bool = False,
     ) -> Tuple[torch.Tensor, List[Optional[torch.Tensor]]]:
         x = self.embed(input_ids)
         new_states = []
@@ -154,6 +198,8 @@ class UniversalDenseTransformer(nn.Module):
             x, new_s = layer(x, state=s)
             new_states.append(new_s)
         x = fast_rmsnorm(x, self.final_norm_w)
+        if return_hidden:
+            return x, new_states
         logits = self.lm_head(x)
         return logits, new_states
 

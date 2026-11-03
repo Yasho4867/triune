@@ -1,37 +1,48 @@
-# Framework Guide
+# Triune AI — Framework Guide
 
-Triune is a modular PyTorch framework for multi-exit Mixture-of-Experts language models.
+**Triune AI** is a modular, hardware-aware deep learning ecosystem combining a native C/AVX2/CUDA/Triton operator engine, the `triune` Python SDK (`TriuneTransformer` and `UniversalTransformer`), and the `Triune AI Studio` desktop workstation.
 
-## Repository Layout
+## 3-Tier Refactored Architecture & Repository Layout
 
 ```text
 triune/
-├── pyproject.toml              # Package configuration
-├── requirements.txt            # Dependency fallback
-├── triune/                     # Core framework
-│   ├── __init__.py             # Public exports (load_model, TriuneTransformer, Muon, etc.)
-│   ├── cli.py                  # CLI entrypoints (studio, train, chat, plan-memory)
-│   ├── model/                  # Transformer, Attention, MoE, Norms, FP8, Zoo
-│   ├── optim/                  # Optimizers: Muon, CentroidSteer, AdamW, Factory
-│   ├── runtime/                # Layer Streaming, Resource Manager, Sandbox, Profiler
-│   ├── trainer/                # Trainer, TrainingEngine, Checkpointing, Scheduler
+├── TriuneStudio.exe            # Self-contained native Windows desktop binary (.NET 10 + WebView2 + triune_core.dll)
+├── pyproject.toml              # Package configuration (Minimalist Public API + CLI entrypoints)
+├── csrc/                       # Tier 1: Native C/AVX2/OpenMP & CUDA Engine (libtriune_core)
+│   ├── include/triune_core.h   # C ABI header for native kernels and telemetry
+│   ├── src/                    # Native C/AVX2 implementations (RMSNorm, RoPE, GLA step, CentroidSteer, Router)
+│   ├── cuda/                   # Native CUDA kernels
+│   └── build_native.py         # Cross-platform shared library builder (.dll / .so / .dylib)
+├── triune/                     # Tier 2: Core Python SDK & Runtime
+│   ├── __init__.py             # Minimalist Public API (Model, Config, CentroidSteer, Muon, ops)
+│   ├── cli.py                  # Unified CLI entrypoints (studio, serve, train, finetune, chat, benchmark)
+│   ├── universal.py            # UniversalTransformer (Dense & MoE with fused QKV/SwiGLU projections)
+│   ├── ops/                    # Unified Operator API (dispatches to Triton/CUDA or native C/AVX2)
+│   │   ├── _c_bridge.py        # Zero-copy ctypes bridge to libtriune_core
+│   │   ├── gla.py              # Gated Linear Attention operator
+│   │   ├── norm.py             # Fused RMSNorm operator
+│   │   ├── rope.py             # Rotary Position Embedding operator
+│   │   ├── cross_entropy.py    # Chunked Logit-Free Cross-Entropy operator
+│   │   ├── centroid_steer.py   # Batched Cholesky-QR & CentroidSteer operator
+│   │   ├── muon_ns.py          # 5th-order Newton-Schulz polar orthogonalization operator
+│   │   └── speculative.py      # Self-speculative Reflex-to-Cortex decoding operator
+│   ├── kernels/                # Triton & PyTorch Tensor Core kernels (fast_gla, fast_muon, fast_triangular, fast_ce)
+│   ├── model/                  # TriuneTransformer, VectorisedGLA, MoE_FFN, GumbelSoftmaxRouter, FP8/FP4, Zoo
+│   ├── optim/                  # 3-Tier Optimizers: Muon, CentroidSteer (Triangular Core), AdamW
+│   ├── runtime/                # LayerStreamingEngine, ParameterStager, DynamicResourceManager, NeuronScope
+│   ├── trainer/                # Trainer, TrainingEngine, LoRA/QLoRA, Checkpointing, Scheduler
 │   ├── data/                   # Tokenizers, Streaming Datasets, CyclingDataLoader
 │   ├── configs/                # Configuration builder and defaults
-│   ├── modules/                # Modular extension and registry system
-│   ├── api/                    # FastAPI and WebSocket server
-│   └── desktop.py              # Desktop window launcher
-├── studio/                     # Triune Studio frontend, launchers, and Windows app
-│   ├── src/                    # Web frontend assets (HTML, CSS, React UI)
-│   ├── TriuneStudio.bat        # 1-click desktop launcher (Windows)
-│   ├── TriuneStudio.sh         # 1-click desktop launcher (Linux / macOS)
-│   ├── windows/                # Visual Studio WPF + WebView2 native host
+│   ├── plugins/                # Signed extension and DAG operator registry
+│   ├── api/                    # FastAPI server, OpenAI-compatible endpoints, WebSocket telemetry
+│   └── desktop.py              # Native desktop host & process lifecycle manager
+├── studio/                     # Tier 3: Triune AI Studio Frontend & Native Host
+│   ├── src/                    # Web frontend assets (Modern & Classic editions, DAG editor, Neuron Scope)
+│   ├── windows/                # Visual Studio WPF + WebView2 native host & C# P/Invoke bridge
 │   └── installer/              # Automated hardware-aware installers
-│       ├── installer.py        # Cross-platform hardware probe and venv setup
-│       ├── install_studio.bat  # 1-click installer (Windows)
-│       └── install_studio.sh   # 1-click installer (Linux / macOS)
-└── models/                     # Model zoo presets and configurations
-    ├── README.md               # Model specifications
-    └── configs/                # JSON architecture configurations
+├── models/                     # Model zoo presets and JSON architecture configurations
+├── benchmarks/                 # Hardware-verified empirical benchmark reports (Categories A–F)
+└── tests/                      # Mathematical invariant, parity, C-ABI, and integration test suites
 ```
 
 ---

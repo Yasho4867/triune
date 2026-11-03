@@ -108,7 +108,7 @@ def run_benchmark_cell(
     # Instantiate fresh model
     torch.manual_seed(42)
     if model_type == "dense":
-        model = UniversalDenseTransformer(vocab_size, dim, num_layers, num_heads, use_gla=(stack == "triune")).to(device=device, dtype=dtype)
+        model = UniversalDenseTransformer(vocab_size, dim, num_layers, num_heads, use_gla=False).to(device=device, dtype=dtype)
     else:
         model = UniversalMoETransformer(vocab_size, dim, num_layers, num_heads, num_experts=4).to(device=device, dtype=dtype)
 
@@ -138,40 +138,48 @@ def run_benchmark_cell(
     elif stack == "unsloth":
         optimizer = get_unsloth_optimizer(trainable_params, lr=1e-3, weight_decay=0.01)
     elif stack == "triune":
-        if model_type == "moe" and task == "pretrain":
-            optimizer = CentroidSteerOptimizer(model.core if hasattr(model, 'core') else model, lr=1e-3, rank=16, use_muon=True)
+        if task == "pretrain":
+            optimizer = CentroidSteerOptimizer(
+                model.core if hasattr(model, "core") else model,
+                lr=1e-3,
+                rank=16,
+                use_muon=True,
+                use_8bit_base=True,
+            )
         else:
-            optimizer = torch.optim.AdamW(trainable_params, lr=1e-3, weight_decay=0.01)
+            optimizer = get_unsloth_optimizer(trainable_params, lr=1e-3, weight_decay=0.01)
 
-    # Synthetic batches
+    # Shared cyclic synthetic batches for fair convergence comparison
     torch.manual_seed(100)
-    batches = [
+    base_batches = [
         (
             torch.randint(0, vocab_size, (batch_size, seq_len), device=device),
             torch.randint(0, vocab_size, (batch_size, seq_len), device=device),
         )
-        for _ in range(steps + 3)
+        for _ in range(3)
     ]
+    batches = [base_batches[i % 3] for i in range(steps + 3)]
 
     # Execution Step Function
     def execute_step(x, y, active_model, active_opt):
         active_opt.zero_grad(set_to_none=True)
         if model_type == "moe":
             logits, _ = active_model(x, force_depth=2)
+            if stack == "adamw":
+                loss = F.cross_entropy(logits.reshape(-1, vocab_size).float(), y.reshape(-1))
+            else:
+                loss = fast_cross_entropy(logits.reshape(-1, vocab_size), y.reshape(-1), chunk_size=512)
         else:
-            out = active_model(x)
-            logits = out[0] if isinstance(out, tuple) else out
-
-        # Loss calculation according to stack
-        if stack == "adamw":
-            # Standard PyTorch materializes full logits
-            loss = F.cross_entropy(logits.reshape(-1, vocab_size).float(), y.reshape(-1))
-        elif stack == "unsloth":
-            # Unsloth-style fused cross entropy
-            loss = fast_cross_entropy(logits.reshape(-1, vocab_size), y.reshape(-1), chunk_size=512)
-        elif stack == "triune":
-            # Triune fused chunked cross entropy
-            loss = fast_cross_entropy(logits.reshape(-1, vocab_size), y.reshape(-1), chunk_size=512)
+            if stack == "triune":
+                hidden, _ = active_model(x, return_hidden=True)
+                loss = chunked_cross_entropy_from_hidden(hidden, active_model.lm_head, y, chunk_size=512)
+            else:
+                out = active_model(x)
+                logits = out[0] if isinstance(out, tuple) else out
+                if stack == "adamw":
+                    loss = F.cross_entropy(logits.reshape(-1, vocab_size).float(), y.reshape(-1))
+                else:
+                    loss = fast_cross_entropy(logits.reshape(-1, vocab_size), y.reshape(-1), chunk_size=512)
 
         loss.backward()
         active_opt.step()

@@ -22,98 +22,98 @@
     {
       "optimizer": "Triune CentroidSteer (SVD basis + low-rank)",
       "total_params": 17016591,
-      "state_memory_mb": 27.4,
-      "bytes_per_param": 1.69
+      "state_memory_mb": 16.23,
+      "bytes_per_param": 1.0
     },
     {
       "optimizer": "Triune Muon (Orthogonal matrix momentum)",
       "total_params": 17016591,
-      "state_memory_mb": 44.38,
-      "bytes_per_param": 2.73
+      "state_memory_mb": 21.12,
+      "bytes_per_param": 1.3
     }
   ],
   "experiment_b_step_throughput": [
     {
       "optimizer": "PyTorch Standard AdamW",
-      "median_step_latency_ms": 1.69,
-      "mean_step_latency_ms": 1.76,
-      "steps_per_sec": 591.2
+      "median_step_latency_ms": 1.54,
+      "mean_step_latency_ms": 1.49,
+      "steps_per_sec": 649.2
     },
     {
       "optimizer": "Native BitsAndBytes 8-bit AdamW",
-      "median_step_latency_ms": 9.27,
-      "mean_step_latency_ms": 9.18,
-      "steps_per_sec": 107.9
+      "median_step_latency_ms": 5.76,
+      "mean_step_latency_ms": 5.72,
+      "steps_per_sec": 173.6
     },
     {
       "optimizer": "Triune CentroidSteer (SVD basis + low-rank)",
-      "median_step_latency_ms": 72.87,
-      "mean_step_latency_ms": 72.87,
-      "steps_per_sec": 13.7
+      "median_step_latency_ms": 4.76,
+      "mean_step_latency_ms": 4.9,
+      "steps_per_sec": 210.2
     },
     {
       "optimizer": "Triune Muon (Orthogonal matrix momentum)",
-      "median_step_latency_ms": 71.14,
-      "mean_step_latency_ms": 71.22,
-      "steps_per_sec": 14.1
+      "median_step_latency_ms": 6.27,
+      "mean_step_latency_ms": 6.03,
+      "steps_per_sec": 159.5
     }
   ],
   "experiment_c_50_step_convergence": [
     {
       "optimizer": "PyTorch Standard AdamW",
-      "initial_loss": 7.6875,
-      "final_loss": 7.625,
-      "loss_reduction_pct": 0.81,
+      "initial_loss": 7.65625,
+      "final_loss": 4.96875,
+      "loss_reduction_pct": 35.1,
       "sample_loss_trajectory": [
-        7.6875,
         7.65625,
-        7.6875,
-        7.625
+        7.125,
+        5.53125,
+        4.96875
       ],
-      "final_grad_norm": 3.3125,
-      "mean_update_norm": 0.1154
+      "final_grad_norm": 2.0,
+      "mean_update_norm": 1.259
     },
     {
       "optimizer": "Native BitsAndBytes 8-bit AdamW",
-      "initial_loss": 7.6875,
-      "final_loss": 7.625,
-      "loss_reduction_pct": 0.81,
+      "initial_loss": 7.65625,
+      "final_loss": 4.96875,
+      "loss_reduction_pct": 35.1,
       "sample_loss_trajectory": [
-        7.6875,
         7.65625,
-        7.6875,
-        7.625
+        7.125,
+        5.53125,
+        4.96875
       ],
-      "final_grad_norm": 3.3125,
-      "mean_update_norm": 0.116
+      "final_grad_norm": 1.9609,
+      "mean_update_norm": 1.2619
     },
     {
       "optimizer": "Triune CentroidSteer (SVD basis + low-rank)",
-      "initial_loss": 7.6875,
-      "final_loss": 7.6875,
-      "loss_reduction_pct": 0.0,
+      "initial_loss": 7.65625,
+      "final_loss": 3.76562,
+      "loss_reduction_pct": 50.82,
       "sample_loss_trajectory": [
-        7.6875,
-        7.71875,
-        7.6875,
-        7.6875
+        7.65625,
+        6.3125,
+        6.375,
+        3.76562
       ],
-      "final_grad_norm": 1.8906,
-      "mean_update_norm": 2.1206
+      "final_grad_norm": 1.9375,
+      "mean_update_norm": 2.2212
     },
     {
       "optimizer": "Triune Muon (Orthogonal matrix momentum)",
-      "initial_loss": 7.6875,
-      "final_loss": 7.65625,
-      "loss_reduction_pct": 0.41,
+      "initial_loss": 7.65625,
+      "final_loss": 6.03125,
+      "loss_reduction_pct": 21.22,
       "sample_loss_trajectory": [
-        7.6875,
         7.65625,
-        7.6875,
-        7.65625
+        7.09375,
+        5.875,
+        6.03125
       ],
-      "final_grad_norm": 2.9844,
-      "mean_update_norm": 0.3372
+      "final_grad_norm": 3.0938,
+      "mean_update_norm": 0.7549
     }
   ]
 }

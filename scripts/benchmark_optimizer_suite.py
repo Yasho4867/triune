@@ -66,6 +66,15 @@ def create_mini_workload(device: torch.device) -> TriuneTransformer:
     return TriuneTransformer(**cfg).to(device).to(torch.bfloat16)
 
 
+def _get_muon_2d_params(model: nn.Module) -> List[nn.Parameter]:
+    """Returns hidden 2D weight matrices (excluding vocabulary embeddings and router gates)."""
+    params = []
+    for name, p in model.named_parameters():
+        if p.ndim == 2 and not any(k in name.lower() for k in ("embed", "head", "router")):
+            params.append(p)
+    return params
+
+
 def experiment_a_state_memory(device: torch.device) -> List[Dict[str, Any]]:
     """Experiment A: Measure pure optimizer state memory on GPU."""
     print("\n--- Experiment A: Optimizer State Memory Footprint ---")
@@ -76,7 +85,7 @@ def experiment_a_state_memory(device: torch.device) -> List[Dict[str, Any]]:
         ("PyTorch Standard AdamW", lambda m: torch.optim.AdamW(m.parameters(), lr=1e-3)),
         ("Native BitsAndBytes 8-bit AdamW", lambda m: BnbAdamW8bit(m.parameters(), lr=1e-3) if BnbAdamW8bit else None),
         ("Triune CentroidSteer (SVD basis + low-rank)", lambda m: CentroidSteerOptimizer(m, lr=1e-3, rank=16)),
-        ("Triune Muon (Orthogonal matrix momentum)", lambda m: Muon([p for p in m.parameters() if p.ndim >= 2], lr=0.02)),
+        ("Triune Muon (Orthogonal matrix momentum)", lambda m: Muon(_get_muon_2d_params(m), lr=0.02)),
     ]
 
     for name, opt_factory in optimizers_to_test:
@@ -135,7 +144,7 @@ def experiment_b_step_throughput(device: torch.device) -> List[Dict[str, Any]]:
         ("PyTorch Standard AdamW", lambda m: torch.optim.AdamW(m.parameters(), lr=1e-3)),
         ("Native BitsAndBytes 8-bit AdamW", lambda m: BnbAdamW8bit(m.parameters(), lr=1e-3) if BnbAdamW8bit else None),
         ("Triune CentroidSteer (SVD basis + low-rank)", lambda m: CentroidSteerOptimizer(m, lr=1e-3, rank=16)),
-        ("Triune Muon (Orthogonal matrix momentum)", lambda m: Muon([p for p in m.parameters() if p.ndim >= 2], lr=0.02)),
+        ("Triune Muon (Orthogonal matrix momentum)", lambda m: Muon(_get_muon_2d_params(m), lr=0.02)),
     ]
 
     for name, opt_factory in optimizers_to_test:
@@ -201,16 +210,18 @@ def experiment_c_50_step_convergence(device: torch.device) -> List[Dict[str, Any
 
     BnbAdamW8bit = get_bnb_8bit_adamw()
     optimizers_to_test = [
-        ("PyTorch Standard AdamW", lambda m: torch.optim.AdamW(m.parameters(), lr=1e-4)),
-        ("Native BitsAndBytes 8-bit AdamW", lambda m: BnbAdamW8bit(m.parameters(), lr=1e-4) if BnbAdamW8bit else None),
-        ("Triune CentroidSteer (SVD basis + low-rank)", lambda m: CentroidSteerOptimizer(m, lr=1e-4, rank=16)),
-        ("Triune Muon (Orthogonal matrix momentum)", lambda m: Muon([p for p in m.parameters() if p.ndim >= 2], lr=0.002)),
+        ("PyTorch Standard AdamW", lambda m: torch.optim.AdamW(m.parameters(), lr=1e-3)),
+        ("Native BitsAndBytes 8-bit AdamW", lambda m: BnbAdamW8bit(m.parameters(), lr=1e-3) if BnbAdamW8bit else None),
+        ("Triune CentroidSteer (SVD basis + low-rank)", lambda m: CentroidSteerOptimizer(m, lr=1e-3, rank=16)),
+        ("Triune Muon (Orthogonal matrix momentum)", lambda m: Muon(_get_muon_2d_params(m), lr=0.005)),
     ]
 
-    # Fixed dataset of 50 batches for fair trajectory comparison
+    # Shared cyclic micro-dataset of 4 batches for fair 50-step convergence trajectory comparison
     torch.manual_seed(1337)
-    synthetic_inputs = [torch.randint(0, 2048, (2, 64), device=device) for _ in range(50)]
-    synthetic_targets = [torch.randint(0, 2048, (2, 64), device=device) for _ in range(50)]
+    base_inputs = [torch.randint(0, 2048, (2, 64), device=device) for _ in range(4)]
+    base_targets = [torch.randint(0, 2048, (2, 64), device=device) for _ in range(4)]
+    synthetic_inputs = [base_inputs[i % 4] for i in range(50)]
+    synthetic_targets = [base_targets[i % 4] for i in range(50)]
 
     for name, opt_factory in optimizers_to_test:
         if "8-bit" in name and BnbAdamW8bit is None:

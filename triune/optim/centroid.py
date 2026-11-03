@@ -56,7 +56,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                  rank=defaults.GALORE_RANK, update_gap=defaults.GALORE_UPDATE_GAP,
                  steer_scale=defaults.STEER_SCALE,
                  steer_update_gap=getattr(defaults, 'STEER_UPDATE_GAP', 10),
-                 expert_lr=defaults.GALORE_LR, expert_betas=defaults.GALORE_BETAS,
+                 expert_lr=None, expert_betas=defaults.GALORE_BETAS,
                  expert_wd=defaults.GALORE_WEIGHT_DECAY,
                  use_muon=getattr(defaults, 'USE_MUON', True),
                  muon_lr=getattr(defaults, 'MUON_LR', 0.02),
@@ -69,6 +69,8 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                  energy_threshold: float = 0.50,
                  min_subspace_gap: int = 5,
                  max_subspace_gap: int = 50):
+        if expert_lr is None:
+            expert_lr = lr
         defaults_dict = dict(lr=lr, betas=betas, weight_decay=weight_decay)
         dummy_param = torch.nn.Parameter(torch.zeros(1))
         initial_group = _SyncedParamGroup(self, {'params': [dummy_param], 'lr': lr, 'betas': betas, 'weight_decay': weight_decay})
@@ -149,14 +151,13 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                                 p = submod.weight
                                 if p.requires_grad and p.dim() >= 2 and id(p) not in seen_param_ids:
                                     seen_param_ids.add(id(p))
-                                    stagger = -(group_idx * (update_gap // max(1, num_expert_groups)))
                                     self.layer_groups.append({
                                         'module': module,
                                         'expert_idx': expert_idx,
                                         'param': p,
                                         'projection': None,
                                         'projection_side': 'left' if p.shape[0] <= p.shape[1] else 'right',
-                                        'proj_step': stagger,
+                                        'proj_step': 0,
                                         'state': {'momentum': None, 'variance': None, 'step': 0}
                                     })
                                     group_idx += 1
@@ -170,14 +171,13 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                         self.muon_params.append(param)
                     elif not self.use_muon and id(param) not in router_param_ids and id(param) not in embedding_param_ids:
                         # Standard GaLore fallback
-                        stagger = -(group_idx * (update_gap // max(1, num_expert_groups + 1)))
                         self.layer_groups.append({
                             'module': None,
                             'expert_idx': None,
                             'param': param,
                             'projection': None,
                             'projection_side': 'left' if param.shape[0] <= param.shape[1] else 'right',
-                            'proj_step': stagger,
+                            'proj_step': 0,
                             'state': {'momentum': None, 'variance': None, 'step': 0}
                         })
                         group_idx += 1
@@ -344,277 +344,265 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
             return
 
         if self.use_triangular_core:
-            # Universal Triangular I-Matrix Engine (Zero Shape Buckets)
+            # Universal Triangular I-Matrix Engine
             # Condenses all parameter matrices into (N, rank+1, rank+1) Upper Triangles
             # using dual isometric I-bases (Q_L^T Q_L = I, Q_R^T Q_R = I)
             N = len(active_groups)
             device = active_groups[0]['param'].device
             dtype = active_groups[0]['param'].dtype
 
-            # 1. Initialize or periodically update Q_L and Q_R isometric bases
-            for g in active_groups:
-                p = g['param']
-                grad = p.grad.data
-                m, n = grad.shape
-                d_small, d_large = min(m, n), max(m, n)
-                r = min(self.rank, d_small, d_large)
-                st = g['state']
-
-                needs_init = g.get('Q_L') is None
-                if needs_init:
-                    needs_update = False
-                elif self.adaptive_subspace_refresh:
-                    effective_min_gap = min(self.min_subspace_gap, self.update_gap)
-                    elapsed = self.step_count - g.get('proj_step', 0)
-                    if elapsed < effective_min_gap:
-                        needs_update = False
-                    elif elapsed >= min(self.max_subspace_gap, self.update_gap):
-                        needs_update = True
-                    else:
-                        last_energy = g.get('last_energy_ratio', 1.0)
-                        if isinstance(last_energy, torch.Tensor):
-                            needs_update = bool((last_energy < self.energy_threshold).item())
-                        else:
-                            needs_update = (last_energy < self.energy_threshold)
-                else:
-                    needs_update = (self.step_count - g.get('proj_step', 0)) >= self.update_gap
-                if needs_init or needs_update:
-                    G_canon = grad if m <= n else grad.t()
-                    Omega = torch.randn(d_large, r, device=device, dtype=dtype)
-                    Y = G_canon @ Omega
-                    ql, _ = torch.linalg.qr(Y.float())
-                    ql = ql.to(dtype)
-                    Z = G_canon.t() @ ql
-                    qr, _ = torch.linalg.qr(Z.float())
-                    qr = qr.to(dtype)
-                    Y = G_canon @ qr
-                    ql, _ = torch.linalg.qr(Y.float())
-                    ql = ql.to(dtype)
-
-                    # Fix 3: Support mixed effective ranks safely using fixed self.rank + 1 spatial dimensions
-                    Q_L_basis = torch.zeros(d_small, self.rank + 1, device=device, dtype=dtype)
-                    Q_L_basis[:, :r] = ql
-                    Q_R_basis = torch.zeros(d_large, self.rank + 1, device=device, dtype=dtype)
-                    Q_R_basis[:, :r] = qr
-
-                    g['Q_L'] = Q_L_basis
-                    g['Q_R'] = Q_R_basis
-                    g['projection'] = Q_L_basis[:, :r]
-                    g['projection_side'] = 'left' if m <= n else 'right'
-                    g['proj_step'] = self.step_count
-                    g['_basis_dirty'] = True
-
-                    # Fix 1 & 3: Allocate persistent states with fixed (self.rank + 1, self.rank + 1) in FP32
-                    if needs_init:
-                        st['momentum'] = torch.zeros(self.rank + 1, self.rank + 1, device=device, dtype=torch.float32)
-                        st['variance'] = torch.zeros(self.rank + 1, self.rank + 1, device=device, dtype=torch.float32)
-                        st['subspace_step'] = 0
-                        st['step'] = 0
-                    elif needs_update:
-                        st['momentum'].zero_()
-                        st['variance'].zero_()
-                        st['subspace_step'] = 0
-
-                # Step 1: Incremental Centroid Steering with dual orthonormal vector (eliminates redundant every-step QR)
-                centroids = g['module'].last_centroids if g['module'] is not None else None
-                expert_idx = g['expert_idx']
-                steer_applied = g.get('steer_applied', False)
-                if centroids is not None and expert_idx is not None and expert_idx < centroids.size(0) and self.steer_scale > 0:
-                    c = centroids[expert_idx]
-                    if c.size(0) == d_small:
-                        needs_steer_refresh = (
-                            needs_init
-                            or needs_update
-                            or (g.get('last_steer_step') is None)
-                            or ((self.step_count - g.get('last_steer_step', 0)) >= self.steer_update_gap)
-                        )
-                        if needs_steer_refresh:
-                            c_d = c.to(device=device, dtype=dtype)
-                            c_proj = g['Q_L'][:, :r] @ (g['Q_L'][:, :r].t() @ c_d)
-                            c_res = c_d - c_proj
-                            c_res_norm = c_res.norm()
-                            if c_res_norm > 1e-8:
-                                c_orth = c_res / c_res_norm
-                                g['Q_L'][:, r].copy_(c_orth)
-
-                                # Dual right vector ensures S[r, r] > 0 and survives torch.triu
-                                G_canon = grad if m <= n else grad.t()
-                                v = G_canon.t() @ c_orth
-                                v_proj = g['Q_R'][:, :r] @ (g['Q_R'][:, :r].t() @ v)
-                                v_res = v - v_proj
-                                v_res_norm = v_res.norm()
-                                if v_res_norm > 1e-8:
-                                    v_orth = v_res / v_res_norm
-                                    g['Q_R'][:, r].copy_(v_orth)
-                                    steer_applied = True
-                                else:
-                                    g['Q_R'][:, r].zero_()
-                                    steer_applied = False
-                            else:
-                                g['Q_L'][:, r].zero_()
-                                g['Q_R'][:, r].zero_()
-                                steer_applied = False
-                            g['last_steer_step'] = self.step_count
-                            g['_basis_dirty'] = True
-                else:
-                    g['Q_L'][:, r].zero_()
-                    g['Q_R'][:, r].zero_()
-                    steer_applied = False
-                g['steer_applied'] = steer_applied
-
-            # 2. Project all gradients into unified (N, rank+1, rank+1) Upper Triangles
-            # Zero-allocation buffer reuse
             if not hasattr(self, '_triangular_buffers'):
                 self._triangular_buffers = {}
             buf_key = (N, device, dtype)
             if buf_key not in self._triangular_buffers:
                 self._triangular_buffers[buf_key] = {
-                    'R_batch': torch.zeros(N, self.rank + 1, self.rank + 1, device=device, dtype=dtype),
                     'batch_mom': torch.zeros(N, self.rank + 1, self.rank + 1, device=device, dtype=torch.float32),
                     'batch_var': torch.zeros(N, self.rank + 1, self.rank + 1, device=device, dtype=torch.float32),
-                    'step_vals': torch.zeros(N, 1, 1, device=device, dtype=torch.float32),
-                    'batch_delta': torch.zeros(N, self.rank + 1, self.rank + 1, device=device, dtype=dtype),
                 }
             buf = self._triangular_buffers[buf_key]
-            R_batch = buf['R_batch'].zero_()
             batch_mom = buf['batch_mom']
             batch_var = buf['batch_var']
-            step_vals = buf['step_vals']
-            batch_delta_R = buf['batch_delta']
 
-            # Step 2: Layer-Level Batched Projections using torch.bmm with persistent zero-allocation buffers
+            R_batch = torch.zeros(N, self.rank + 1, self.rank + 1, device=device, dtype=dtype)
+            batch_delta_R = torch.zeros(N, self.rank + 1, self.rank + 1, device=device, dtype=dtype)
+
             if not hasattr(self, '_bucket_buffers'):
                 self._bucket_buffers = {}
 
-            shape_buckets = {}
-            for idx, g in enumerate(active_groups):
+            # Group active_groups by (m, n, r) so each bucket occupies a contiguous slice [start:end] in R_batch
+            raw_buckets = {}
+            for g in active_groups:
                 m, n = g['param'].shape
                 r = min(self.rank, min(m, n))
                 key = (m, n, r)
-                if key not in shape_buckets:
-                    shape_buckets[key] = []
-                shape_buckets[key].append((idx, g))
+                if key not in raw_buckets:
+                    raw_buckets[key] = []
+                raw_buckets[key].append(g)
 
-            for (m, n, r), bucket in shape_buckets.items():
-                K = len(bucket)
-                if K >= 2:
-                    d_small = min(m, n)
-                    d_large = max(m, n)
-                    canon_m, canon_n = (m, n) if m <= n else (n, m)
-                    bkey = (K, m, n, r, device, dtype)
-                    if bkey not in self._bucket_buffers:
-                        self._bucket_buffers[bkey] = {
-                            'G_stack': torch.empty(K, canon_m, canon_n, device=device, dtype=dtype),
-                            'QL_stack': torch.empty(K, d_small, r + 1, device=device, dtype=dtype),
-                            'QR_stack': torch.empty(K, d_large, r + 1, device=device, dtype=dtype),
-                            'temp_proj': torch.empty(K, canon_m, r + 1, device=device, dtype=dtype),
-                            'S_bmm': torch.empty(K, r + 1, r + 1, device=device, dtype=dtype),
-                            'temp_recon': torch.empty(K, m, r + 1, device=device, dtype=dtype),
-                            'delta_stack': torch.empty(K, r + 1, r + 1, device=device, dtype=dtype),
-                            'delta_W': torch.empty(K, m, n, device=device, dtype=dtype),
-                        }
-                    bbuf = self._bucket_buffers[bkey]
-                    G_stack = bbuf['G_stack']
-                    QL_stack = bbuf['QL_stack']
-                    QR_stack = bbuf['QR_stack']
-                    temp_proj = bbuf['temp_proj']
-                    S_bmm = bbuf['S_bmm']
+            shape_buckets = []
+            cursor = 0
+            for key, g_list in raw_buckets.items():
+                K = len(g_list)
+                shape_buckets.append((key, cursor, cursor + K, g_list))
+                cursor += K
 
-                    for b_idx, (_, g) in enumerate(bucket):
-                        QL_stack[b_idx].copy_(g['Q_L'][:, :r+1])
-                        QR_stack[b_idx].copy_(g['Q_R'][:, :r+1])
-                        p_grad = g['param'].grad.data
-                        G_stack[b_idx].copy_(p_grad if m <= n else p_grad.t())
-                        g['_basis_dirty'] = False
+            def _batched_qr(Y_mat: torch.Tensor) -> torch.Tensor:
+                Y_f = Y_mat.float()
+                col_norms = torch.linalg.norm(Y_f, dim=1, keepdim=True)
+                Y_norm = Y_f / col_norms.clamp_min(1e-12)
+                Gram = torch.bmm(Y_norm.transpose(1, 2), Y_norm)
+                Gram.diagonal(dim1=1, dim2=2).add_(1e-7)
+                L, info = torch.linalg.cholesky_ex(Gram)
+                Q = torch.linalg.solve_triangular(L, Y_norm.transpose(1, 2), upper=False).transpose(1, 2)
+                if bool((col_norms <= 1e-12).any() or info.any()):
+                    Q, _ = torch.linalg.qr(Y_f)
+                return Q.to(dtype=dtype)
 
-                    torch.bmm(G_stack, QR_stack, out=temp_proj)
-                    torch.bmm(QL_stack.transpose(1, 2), temp_proj, out=S_bmm)
+            bucket_cache = []
+            step_list = [0.0] * N
 
-                    # Vectorized energy ratio on GPU (zero host CPU sync)
-                    if self.adaptive_subspace_refresh:
-                        s_energies = (S_bmm[:, :r, :r].float() ** 2).sum(dim=(-2, -1))
-                        g_energies = (G_stack.float() ** 2).sum(dim=(-2, -1)).clamp_min(1e-12)
-                        ratios = s_energies / g_energies
+            # 1 & 2. Batched Subspace Init/Update, Batched Centroid Steering, and Batched Projection
+            for (m, n, r), start, end, g_list in shape_buckets:
+                K = end - start
+                d_small = min(m, n)
+                d_large = max(m, n)
+                side = 'left' if m <= n else 'right'
 
-                    for b_idx, (idx, g) in enumerate(bucket):
-                        S_i = S_bmm[b_idx]
-                        if self.adaptive_subspace_refresh:
-                            g['last_energy_ratio'] = ratios[b_idx]
-                        if g.get('steer_applied', False):
-                            S_i[r, r] *= (1.0 + self.steer_scale)
-                        R_batch[idx, :r+1, :r+1] = torch.triu(S_i)
-                        batch_mom[idx].copy_(g['state']['momentum'])
-                        batch_var[idx].copy_(g['state']['variance'])
-                        step_vals[idx, 0, 0] = float(g['state'].get('subspace_step', 0) + 1)
+                bkey = (K, m, n, r, device, dtype)
+                if bkey not in self._bucket_buffers:
+                    self._bucket_buffers[bkey] = {
+                        'QL_stack': torch.zeros(K, d_small, self.rank + 1, device=device, dtype=dtype),
+                        'QR_stack': torch.zeros(K, d_large, self.rank + 1, device=device, dtype=dtype),
+                    }
+                bbuf = self._bucket_buffers[bkey]
+                QL_stack = bbuf['QL_stack']
+                QR_stack = bbuf['QR_stack']
+
+                G_raw = torch.stack([g['param'].grad.data for g in g_list], dim=0)
+                G_stack = G_raw if m <= n else G_raw.transpose(1, 2)  # [K, d_small, d_large]
+
+                init_flags = [g.get('Q_L') is None for g in g_list]
+                upd_flags = [
+                    (not init_flags[b_idx]) and ((self.step_count - g.get('proj_step', 0)) >= self.update_gap)
+                    for b_idx, g in enumerate(g_list)
+                ]
+                any_refresh = any(init_flags) or any(upd_flags)
+
+                if any_refresh:
+                    has_preset_proj = all(
+                        (init_flags[b_idx] and g.get('projection') is not None and tuple(g['projection'].shape) == (d_small, r))
+                        for b_idx, g in enumerate(g_list)
+                    )
+                    if has_preset_proj:
+                        ql = torch.stack([g['projection'].to(device=device, dtype=dtype) for g in g_list], dim=0)
+                        Z = torch.bmm(G_stack.transpose(1, 2), ql)
+                        qr = _batched_qr(Z)
+                    else:
+                        Omega = torch.randn(K, d_large, r, device=device, dtype=dtype)
+                        Y = torch.bmm(G_stack, Omega)
+                        ql = _batched_qr(Y)
+                        Z = torch.bmm(G_stack.transpose(1, 2), ql)
+                        qr = _batched_qr(Z)
+                        Y = torch.bmm(G_stack, qr)
+                        ql = _batched_qr(Y)
+
+                    for b_idx, g in enumerate(g_list):
+                        idx = start + b_idx
+                        st = g['state']
+                        if init_flags[b_idx] or upd_flags[b_idx]:
+                            QL_stack[b_idx].zero_()
+                            QL_stack[b_idx, :, :r].copy_(ql[b_idx])
+                            QR_stack[b_idx].zero_()
+                            QR_stack[b_idx, :, :r].copy_(qr[b_idx])
+                            g['Q_L'] = QL_stack[b_idx]
+                            g['Q_R'] = QR_stack[b_idx]
+                            g['projection'] = QL_stack[b_idx, :, :r]
+                            g['projection_side'] = side
+                            g['proj_step'] = self.step_count
+                            batch_mom[idx].zero_()
+                            batch_var[idx].zero_()
+                            st['momentum'] = batch_mom[idx]
+                            st['variance'] = batch_var[idx]
+                            st['subspace_step'] = 0
+                            if init_flags[b_idx]:
+                                st['step'] = 0
+                        else:
+                            if g['Q_L'].data_ptr() != QL_stack[b_idx].data_ptr():
+                                QL_stack[b_idx].copy_(g['Q_L'])
+                                QR_stack[b_idx].copy_(g['Q_R'])
+                                g['Q_L'] = QL_stack[b_idx]
+                                g['Q_R'] = QR_stack[b_idx]
+                                g['projection'] = QL_stack[b_idx, :, :r]
+                            if st['momentum'].data_ptr() != batch_mom[idx].data_ptr():
+                                batch_mom[idx].copy_(st['momentum'])
+                                batch_var[idx].copy_(st['variance'])
+                                st['momentum'] = batch_mom[idx]
+                                st['variance'] = batch_var[idx]
                 else:
-                    idx, g = bucket[0]
-                    p = g['param']
-                    grad = p.grad.data
-                    G_canon = grad if m <= n else grad.t()
-                    S = g['Q_L'][:, :r+1].t() @ G_canon @ g['Q_R'][:, :r+1]
-                    if self.adaptive_subspace_refresh:
-                        s_energy = (S[:r, :r].float() ** 2).sum()
-                        g_energy = (G_canon.float() ** 2).sum().clamp_min(1e-12)
-                        g['last_energy_ratio'] = s_energy / g_energy
-                    if g.get('steer_applied', False):
-                        S[r, r] *= (1.0 + self.steer_scale)
-                    R_batch[idx, :r+1, :r+1] = torch.triu(S)
-                    batch_mom[idx].copy_(g['state']['momentum'])
-                    batch_var[idx].copy_(g['state']['variance'])
-                    step_vals[idx, 0, 0] = float(g['state'].get('subspace_step', 0) + 1)
+                    for b_idx, g in enumerate(g_list):
+                        idx = start + b_idx
+                        st = g['state']
+                        if g['Q_L'].data_ptr() != QL_stack[b_idx].data_ptr():
+                            QL_stack[b_idx].copy_(g['Q_L'])
+                            QR_stack[b_idx].copy_(g['Q_R'])
+                            g['Q_L'] = QL_stack[b_idx]
+                            g['Q_R'] = QR_stack[b_idx]
+                            g['projection'] = QL_stack[b_idx, :, :r]
+                        if st['momentum'].data_ptr() != batch_mom[idx].data_ptr():
+                            batch_mom[idx].copy_(st['momentum'])
+                            batch_var[idx].copy_(st['variance'])
+                            st['momentum'] = batch_mom[idx]
+                            st['variance'] = batch_var[idx]
 
-            # Step 4: Unified Fused Triton Triangular AdamW Step with PyTorch Vectorized Fallback
+                # Batched Centroid Steering with dual orthonormal vector
+                g0 = g_list[0]
+                needs_steer_refresh = (
+                    any_refresh
+                    or (g0.get('last_steer_step') is None)
+                    or ((self.step_count - g0.get('last_steer_step', 0)) >= self.steer_update_gap)
+                )
+                if needs_steer_refresh:
+                    can_steer = (
+                        self.steer_scale > 0
+                        and all(
+                            g['module'] is not None
+                            and getattr(g['module'], 'last_centroids', None) is not None
+                            and g['expert_idx'] is not None
+                            and g['expert_idx'] < g['module'].last_centroids.size(0)
+                            and g['module'].last_centroids.size(1) == d_small
+                            for g in g_list
+                        )
+                    )
+                    if can_steer:
+                        C = torch.stack(
+                            [g['module'].last_centroids[g['expert_idx']].to(device=device, dtype=dtype) for g in g_list],
+                            dim=0,
+                        ).unsqueeze(-1)  # [K, d_small, 1]
+                        QL_r = QL_stack[:, :, :r]
+                        QR_r = QR_stack[:, :, :r]
+                        c_proj = torch.bmm(QL_r, torch.bmm(QL_r.transpose(1, 2), C))
+                        c_res = (C - c_proj).squeeze(-1)
+                        c_res_norm = c_res.norm(dim=-1, keepdim=True)
+                        c_orth = torch.where(c_res_norm > 1e-8, c_res / c_res_norm.clamp_min(1e-8), torch.zeros_like(c_res))
+
+                        v = torch.bmm(G_stack.transpose(1, 2), c_orth.unsqueeze(-1))
+                        v_proj = torch.bmm(QR_r, torch.bmm(QR_r.transpose(1, 2), v))
+                        v_res = (v - v_proj).squeeze(-1)
+                        v_res_norm = v_res.norm(dim=-1, keepdim=True)
+                        steer_mask = (c_res_norm.squeeze(-1) > 1e-8) & (v_res_norm.squeeze(-1) > 1e-8)
+                        v_orth = torch.where(steer_mask.unsqueeze(-1), v_res / v_res_norm.clamp_min(1e-8), torch.zeros_like(v_res))
+                        c_orth = torch.where(steer_mask.unsqueeze(-1), c_orth, torch.zeros_like(c_orth))
+
+                        QL_stack[:, :, r].copy_(c_orth)
+                        QR_stack[:, :, r].copy_(v_orth)
+                        steer_flags = steer_mask.tolist()
+                        for b_idx, g in enumerate(g_list):
+                            g['steer_applied'] = bool(steer_flags[b_idx])
+                            g['last_steer_step'] = self.step_count
+                    else:
+                        QL_stack[:, :, r].zero_()
+                        QR_stack[:, :, r].zero_()
+                        for g in g_list:
+                            g['steer_applied'] = False
+                            g['last_steer_step'] = self.step_count
+
+                # Batched isometric projection into R_batch (uncorrupted by steer_scale before AdamW)
+                QL_act = QL_stack[:, :, :r+1]
+                QR_act = QR_stack[:, :, :r+1]
+                temp_proj = torch.bmm(G_stack, QR_act)
+                S_bmm = torch.bmm(QL_act.transpose(1, 2), temp_proj)
+
+                if self.adaptive_subspace_refresh:
+                    s_energies = (S_bmm[:, :r, :r].float() ** 2).sum(dim=(-2, -1))
+                    g_energies = (G_stack.float() ** 2).sum(dim=(-2, -1)).clamp_min(1e-12)
+                    ratios = s_energies / g_energies
+                    for b_idx, g in enumerate(g_list):
+                        g['last_energy_ratio'] = ratios[b_idx]
+
+                R_batch[start:end, :r+1, :r+1].copy_(torch.triu(S_bmm))
+
+                for b_idx, g in enumerate(g_list):
+                    idx = start + b_idx
+                    sub_step = g['state'].get('subspace_step', 0) + 1
+                    g['state']['subspace_step'] = sub_step
+                    g['state']['step'] += 1
+                    step_list[idx] = float(sub_step)
+
+                bucket_cache.append((m, n, r, start, end, g_list, QL_act, QR_act))
+
+            step_vals = torch.tensor(step_list, device=device, dtype=torch.float32).view(N, 1, 1)
+
+            # 3. Unified Fused Triton Triangular AdamW Step with PyTorch Vectorized Fallback
             from triune.kernels.fast_triangular import fast_triangular_adamw
             fast_triangular_adamw(
                 R_batch, batch_mom, batch_var, batch_delta_R, step_vals,
                 beta1=expert_beta1, beta2=expert_beta2, eps=1e-8
             )
 
-            # Fix 1: Save updated persistent moments back to each group
-            for idx, g in enumerate(active_groups):
-                g['state']['momentum'].copy_(batch_mom[idx])
-                g['state']['variance'].copy_(batch_var[idx])
-                g['state']['subspace_step'] = g['state'].get('subspace_step', 0) + 1
-                g['state']['step'] += 1
-
-            # 4. Batched BMM Reconstruction with persistent zero-allocation buffers
-            for (m, n, r), bucket in shape_buckets.items():
-                K = len(bucket)
-                scale = 1.0 / (r ** 0.5)
-                beta_wd = 1.0 - expert_lr * expert_wd if expert_wd != 0 else 1.0
-                alpha_upd = -expert_lr * scale
-                if K >= 2:
-                    bkey = (K, m, n, r, device, dtype)
-                    bbuf = self._bucket_buffers[bkey]
-                    QL_stack = bbuf['QL_stack']
-                    QR_stack = bbuf['QR_stack']
-                    temp_recon = bbuf['temp_recon']
-                    delta_stack = bbuf['delta_stack']
-                    delta_W = bbuf['delta_W']
-
-                    for b_idx, (idx, _) in enumerate(bucket):
-                        delta_stack[b_idx].copy_(batch_delta_R[idx, :r+1, :r+1])
-
-                    if m <= n:
-                        torch.bmm(QL_stack, delta_stack, out=temp_recon)
-                        torch.bmm(temp_recon, QR_stack.transpose(1, 2), out=delta_W)
+            # 4. Batched BMM Reconstruction & Fused Multi-Tensor Weight Update
+            beta_wd = 1.0 - expert_lr * expert_wd if expert_wd != 0 else 1.0
+            alpha_upd = -expert_lr
+            for m, n, r, start, end, g_list, QL_act, QR_act in bucket_cache:
+                delta_stack = batch_delta_R[start:end, :r+1, :r+1]
+                if any(g.get('steer_applied', False) for g in g_list):
+                    if all(g.get('steer_applied', False) for g in g_list):
+                        delta_stack[:, :r+1, r].mul_(1.0 + self.steer_scale)
                     else:
-                        torch.bmm(QR_stack, delta_stack.transpose(1, 2), out=temp_recon)
-                        torch.bmm(temp_recon, QL_stack.transpose(1, 2), out=delta_W)
+                        for b_idx, g in enumerate(g_list):
+                            if g.get('steer_applied', False):
+                                delta_stack[b_idx, :r+1, r].mul_(1.0 + self.steer_scale)
 
-                    for b_idx, (idx, g) in enumerate(bucket):
-                        p = g['param']
-                        p.data.mul_(beta_wd).add_(delta_W[b_idx], alpha=alpha_upd)
+                if m <= n:
+                    temp_recon = torch.bmm(QL_act, delta_stack)
+                    delta_W = torch.bmm(temp_recon, QR_act.transpose(1, 2))
                 else:
-                    idx, g = bucket[0]
-                    p = g['param']
-                    active_delta = batch_delta_R[idx, :r+1, :r+1]
-                    if m <= n:
-                        temp = g['Q_L'][:, :r+1] @ active_delta
-                        p.data.addmm_(temp, g['Q_R'][:, :r+1].t(), beta=beta_wd, alpha=alpha_upd)
-                    else:
-                        temp = g['Q_R'][:, :r+1] @ active_delta.t()
-                        p.data.addmm_(temp, g['Q_L'][:, :r+1].t(), beta=beta_wd, alpha=alpha_upd)
+                    temp_recon = torch.bmm(QR_act, delta_stack.transpose(1, 2))
+                    delta_W = torch.bmm(temp_recon, QL_act.transpose(1, 2))
+
+                params_b = [g['param'].data for g in g_list]
+                if expert_wd != 0:
+                    torch._foreach_mul_(params_b, beta_wd)
+                torch._foreach_add_(params_b, list(delta_W.unbind(0)), alpha=alpha_upd)
 
             if is_global_step_end:
                 self.step_count += 1

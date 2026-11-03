@@ -5,11 +5,11 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "triune"
 version = "2.1.0"
-description = "PyTorch framework for multi-exit Mixture-of-Experts language models with layer streaming and Muon optimization"
+description = "Triune AI — High-performance framework for multi-exit Mixture-of-Experts language models, native C/CUDA/Triton operators, layer streaming, and 3-tier optimization"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [
-    { name = "Triune Authors" }
+    { name = "Triune AI" }
 ]
 keywords = [
     "deep-learning",

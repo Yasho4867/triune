@@ -83,10 +83,28 @@ class MoE_FFN(nn.Module):
         self.last_accepted_counts = None
         self.last_dropped_counts = None
         self.last_target = None
-        self.overflow_counter = 0
+        self.register_buffer("_overflow_counter", torch.tensor(0, dtype=torch.long), persistent=False)
         self.register_buffer("_global_step", torch.tensor(0, dtype=torch.long))
 
+    @property
+    def overflow_counter(self) -> int:
+        buffers = self.__dict__.get("_buffers")
+        if buffers is not None and "_overflow_counter" in buffers and buffers["_overflow_counter"] is not None:
+            return int(buffers["_overflow_counter"].item())
+        return 0
+
     def __setattr__(self, name: str, value: Any) -> None:
+        if name == "overflow_counter":
+            buffers = self.__dict__.get("_buffers")
+            if buffers is not None and "_overflow_counter" in buffers and buffers["_overflow_counter"] is not None:
+                if isinstance(value, torch.Tensor):
+                    buffers["_overflow_counter"].copy_(value.to(dtype=torch.long, device=buffers["_overflow_counter"].device))
+                else:
+                    buffers["_overflow_counter"].fill_(int(value))
+                return
+            value = torch.tensor(int(value), dtype=torch.long)
+            super().__setattr__("_overflow_counter", value)
+            return
         if name == "_global_step" and not isinstance(value, torch.Tensor):
             buffers = self.__dict__.get("_buffers")
             if buffers is not None and "_global_step" in buffers and buffers["_global_step"] is not None:
@@ -120,13 +138,45 @@ class MoE_FFN(nn.Module):
         if self.top_k > 1:
             flat_vals = flat_vals / (flat_vals.sum(dim=-1, keepdim=True) + 1e-20)
 
+        any_b1 = any(e[0].bias is not None for e in self.experts)
+        all_b1 = all(e[0].bias is not None for e in self.experts)
+        any_b2 = any(e[2].bias is not None for e in self.experts)
+        all_b2 = all(e[2].bias is not None for e in self.experts)
+        mixed_biases = (any_b1 != all_b1) or (any_b2 != all_b2)
+
+        can_batch_bmm = (
+            not self.use_fp4
+            and not self.use_fp8
+            and not mixed_biases
+            and all(isinstance(e[0], nn.Linear) and isinstance(e[2], nn.Linear) for e in self.experts)
+        )
+
         # Fast path for single-token autoregressive decoding: evaluate only the selected top-k
-        # experts directly without per-expert nonzero() CUDA stream syncs, padding, or bincount.
+        # experts directly on GPU without .tolist() or nonzero() CUDA stream syncs.
         if not self.training and N_tok == 1 and not any(isinstance(m, FP4Linear) for m in self.experts.modules()):
             if self.shared_expert:
                 out = (self.shared_scale * self.shared(flat_x)).to(flat_x.dtype)
             else:
                 out = torch.zeros_like(flat_x)
+            if can_batch_bmm:
+                W1_stack = torch.stack([e[0].weight for e in self.experts], dim=0)
+                W2_stack = torch.stack([e[2].weight for e in self.experts], dim=0)
+                sel_idx = flat_idx[0]                                              # [top_k]
+                w1_sel = W1_stack[sel_idx]                                         # [top_k, H_ffn, D]
+                w2_sel = W2_stack[sel_idx]                                         # [top_k, D, H_ffn]
+                x_sel = flat_x.unsqueeze(0).expand(self.top_k, 1, D)               # [top_k, 1, D]
+                h_pre = torch.bmm(x_sel, w1_sel.transpose(1, 2))
+                if all_b1:
+                    b1_stack = torch.stack([e[0].bias for e in self.experts], dim=0)
+                    h_pre = h_pre + b1_stack[sel_idx].unsqueeze(1)
+                h = self.experts[0][1](h_pre)
+                y_sel = torch.bmm(h, w2_sel.transpose(1, 2))
+                if all_b2:
+                    b2_stack = torch.stack([e[2].bias for e in self.experts], dim=0)
+                    y_sel = y_sel + b2_stack[sel_idx].unsqueeze(1)
+                weights_sel = flat_vals[0].view(self.top_k, 1, 1).to(y_sel.dtype)
+                out = out + (y_sel * weights_sel).sum(dim=0).to(out.dtype)
+                return out.reshape(B, T, D)
             chosen_experts = flat_idx[0].tolist()
             for k_idx, e_idx in enumerate(chosen_experts):
                 w = flat_vals[0, k_idx]
@@ -146,19 +196,6 @@ class MoE_FFN(nn.Module):
         if self.shared_expert:
             shared_out = self.shared(flat_x)
             out = out + (self.shared_scale * shared_out).to(out.dtype)
-
-        any_b1 = any(e[0].bias is not None for e in self.experts)
-        all_b1 = all(e[0].bias is not None for e in self.experts)
-        any_b2 = any(e[2].bias is not None for e in self.experts)
-        all_b2 = all(e[2].bias is not None for e in self.experts)
-        mixed_biases = (any_b1 != all_b1) or (any_b2 != all_b2)
-
-        can_batch_bmm = (
-            not self.use_fp4
-            and not self.use_fp8
-            and not mixed_biases
-            and all(isinstance(e[0], nn.Linear) and isinstance(e[2], nn.Linear) for e in self.experts)
-        )
 
         if can_batch_bmm:
             W1_stack = torch.stack([e[0].weight for e in self.experts], dim=0)
@@ -224,7 +261,9 @@ class MoE_FFN(nn.Module):
                 out = out.index_add(0, top_idx_e.reshape(-1), weighted_y.reshape(-1, D))
 
             if need_stats and overflow_total is not None:
-                self.overflow_counter += int(overflow_total.item())
+                if self._overflow_counter.device != overflow_total.device:
+                    self._overflow_counter = self._overflow_counter.to(overflow_total.device)
+                self._overflow_counter.add_(overflow_total)
         else:
             for k in range(self.top_k):
                 idx_k = flat_idx[:, k]

@@ -121,6 +121,8 @@ class Muon(Optimizer):
             ns_steps = group["ns_steps"]
 
             buckets = {}
+            all_moms = []
+            all_grads = []
             for p in group["params"]:
                 if p.ndim != 2:
                     raise ValueError(
@@ -141,70 +143,61 @@ class Muon(Optimizer):
                 momentum = state["momentum"]
 
                 # Fix H-5: ensure momentum is on the same device as grad
-                if momentum.device != grad.device:
-                    state['momentum'] = momentum.to(grad.device)
-                    momentum = state['momentum']
+                if momentum.device != grad.device or momentum.dtype != grad.dtype:
+                    state["momentum"] = momentum.to(device=grad.device, dtype=grad.dtype)
+                    momentum = state["momentum"]
 
-                # Momentum accumulation
-                momentum.lerp_(grad, 1.0 - beta)
-
-                # Nesterov blend
-                if nesterov:
-                    update = grad.lerp(momentum, beta)
-                else:
-                    update = momentum.clone()
+                all_moms.append(momentum)
+                all_grads.append(grad)
 
                 key = (p.shape, p.device, p.dtype)
                 if key not in buckets:
                     buckets[key] = []
-                buckets[key].append((p, update, state))
+                buckets[key].append((p, grad, momentum, state))
+
+            if not all_moms:
+                continue
+
+            # Fused multi-tensor momentum accumulation across all 2D matrices simultaneously
+            torch._foreach_lerp_(all_moms, all_grads, 1.0 - beta)
 
             for (shape, device, dtype), items in buckets.items():
                 K = len(items)
                 d_out, d_in = shape
                 scale = max(1.0, d_out / d_in) ** 0.5
                 if K >= 2:
-                    update_stack = torch.stack([u for _, u, _ in items], dim=0)
-                    if not hasattr(self, "_batched_scratch_buffers"):
-                        self._batched_scratch_buffers = {}
-                    b_scratch_key = (shape, device, dtype, K)
-                    b_scratch = self._batched_scratch_buffers.get(b_scratch_key)
+                    mom_stack = torch.stack([m for _, _, m, _ in items], dim=0)
+                    if nesterov:
+                        grad_stack = torch.stack([g for _, g, _, _ in items], dim=0)
+                        update_stack = torch.lerp(grad_stack, mom_stack, beta)
+                    else:
+                        update_stack = mom_stack
                     try:
                         from triune.kernels.fast_muon import fast_zeropower_via_newtonschulz5_batched
-                        res = fast_zeropower_via_newtonschulz5_batched(
-                            update_stack, steps=ns_steps, scratch_buffer=b_scratch, return_scratch=True
+                        ortho_stack = fast_zeropower_via_newtonschulz5_batched(
+                            update_stack, steps=ns_steps
                         )
-                        if isinstance(res, tuple):
-                            ortho_stack, self._batched_scratch_buffers[b_scratch_key] = res
-                        else:
-                            ortho_stack = res
                     except Exception:
                         ortho_stack = torch.stack([
-                            zeropower_via_newtonschulz5(u, steps=ns_steps)
-                            for _, u, _ in items
+                            zeropower_via_newtonschulz5(update_stack[i], steps=ns_steps)
+                            for i in range(K)
                         ], dim=0)
 
-                    for idx, (p, _, state) in enumerate(items):
-                        ortho_u = ortho_stack[idx]
-                        if wd != 0.0:
-                            p.data.mul_(1.0 - lr * wd)
-                        p.data.add_(ortho_u.to(dtype=p.dtype, device=p.device), alpha=-lr * scale)
+                    ortho_stack = ortho_stack.to(dtype=dtype, device=device)
+                    params_b = [p.data for p, _, _, _ in items]
+                    if wd != 0.0:
+                        torch._foreach_mul_(params_b, 1.0 - lr * wd)
+                    torch._foreach_add_(params_b, list(ortho_stack.unbind(0)), alpha=-lr * scale)
                 else:
-                    p, update, state = items[0]
-                    res = zeropower_via_newtonschulz5(
+                    p, grad, momentum, state = items[0]
+                    update = grad.lerp(momentum, beta) if nesterov else momentum
+                    ortho_update = zeropower_via_newtonschulz5(
                         update,
                         steps=ns_steps,
-                        scratch_buffer=state.get("scratch_buffer"),
-                        return_scratch=True,
                     )
-                    if isinstance(res, tuple):
-                        ortho_update, state["scratch_buffer"] = res
-                    else:
-                        ortho_update = res
 
-                    ortho_update.mul_(scale)
                     if wd != 0.0:
                         p.data.mul_(1.0 - lr * wd)
-                    p.data.add_(ortho_update.to(dtype=p.dtype, device=p.device), alpha=-lr)
+                    p.data.add_(ortho_update.to(dtype=p.dtype, device=p.device), alpha=-lr * scale)
 
         return loss

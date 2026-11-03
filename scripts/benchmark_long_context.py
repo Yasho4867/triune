@@ -193,11 +193,11 @@ def run_long_context_suite() -> Dict[str, Any]:
 
         with torch.no_grad():
             for _ in range(10):
-                _ = gla_module(tok)
+                _ = gla_module(tok, cache=(gla_state, prompt_len))
             torch.cuda.synchronize()
             t0 = time.perf_counter()
             for _ in range(50):
-                _ = gla_module(tok)
+                _ = gla_module(tok, cache=(gla_state, prompt_len))
             torch.cuda.synchronize()
             t_gla_dec = (time.perf_counter() - t0) / 50.0 * 1000.0
 

@@ -46,7 +46,7 @@ def fast_chunk_gla(
         decay = torch.exp(g[:, 0]).unsqueeze(-1)
         key = k[:, 0].unsqueeze(-1)
         value = v[:, 0].unsqueeze(-2)
-        state = state * decay + torch.matmul(key, value)
+        state = torch.addcmul(state * decay, key, value)
         query = q[:, 0].unsqueeze(-2)
         out = torch.matmul(query, state).squeeze(-2).unsqueeze(1)
         return out, state
@@ -67,34 +67,31 @@ def fast_chunk_gla(
 
         # Factored Tensor Core GEMM intra-chunk attention:
         # For causal pairs (t >= s): exp(g_cum[t] - g_cum[s]) = exp(g_cum[t] - g_mid) * exp(g_mid - g_cum[s]).
-        # Eliminates the 5D [B, H, C, C, HD] intermediate broadcast tensor and computes all chunks in 2 batched GEMMs.
+        # Clamping g_rel to [-35, 35] guarantees exp(35)*exp(35) = exp(70) << FP32_MAX (zero Inf/NaN overflow).
         g_cum_f = g_cumsum.float()
         g_mid = 0.5 * (g_cum_f[..., :1, :] + g_cum_f[..., -1:, :])
-        g_rel = torch.clamp(g_cum_f - g_mid, min=-60.0, max=60.0)
+        g_rel = torch.clamp(g_cum_f - g_mid, min=-35.0, max=35.0)
         q_intra = q_c.float() * torch.exp(g_rel)
         k_intra = k_c.float() * torch.exp(-g_rel)
         attn_all = torch.matmul(q_intra, k_intra.transpose(-1, -2)).masked_fill(~causal_mask_2d, 0.0).to(dtype)
         out_intra = torch.matmul(attn_all, v_c)
 
-        # Inter-chunk recurrent state propagation with batched KV GEMM
+        # Inter-chunk recurrent state propagation with batched KV GEMM & batched query-state GEMM
         g_last = g_cumsum[:, :, :, -1:, :]
         k_decayed_all = k_c * torch.exp(torch.clamp(g_last - g_cumsum, max=0.0))
-        chunk_decay = torch.exp(g_last)
+        chunk_decay = torch.exp(g_last).squeeze(-2).unsqueeze(-1)
 
         # Batch all chunk KV state projections into a single fused Tensor Core GEMM
         kv_all = torch.matmul(k_decayed_all.transpose(-1, -2), v_c)
 
         q_exp = q_c * torch.exp(g_cumsum)
-        out_inter = []
+        states_prev = []
         for i in range(num_chunks):
-            q_i = q_exp[:, :, i]
-            out_from_prev = torch.matmul(q_i, state)
-            out_inter.append(out_from_prev)
+            states_prev.append(state)
+            state = state * chunk_decay[:, :, i] + kv_all[:, :, i]
 
-            decay_i = chunk_decay[:, :, i, 0, :].unsqueeze(-1)
-            state = state * decay_i + kv_all[:, :, i]
-
-        out_inter = torch.stack(out_inter, dim=2)
+        S_all = torch.stack(states_prev, dim=2)
+        out_inter = torch.matmul(q_exp, S_all)
         out_chunks = (out_intra + out_inter).permute(0, 2, 3, 1, 4).reshape(B, T_chunk, H, HD)
         if T == T_chunk:
             return out_chunks, state

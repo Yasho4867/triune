@@ -16,7 +16,7 @@ from pathlib import Path
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="triune",
-        description="Triune Framework Unified CLI — High-Performance Mixture-of-Experts Engine",
+        description="Triune AI Unified CLI — High-Performance Mixture-of-Experts & Native Operator Engine",
     )
     subparsers = parser.add_subparsers(dest="command", help="Available CLI Commands")
 

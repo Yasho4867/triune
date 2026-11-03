@@ -25,16 +25,17 @@ from .dispatcher import is_triton_available  # noqa: F401  (re-exported for back
 
 
 def _chunk_ce_grad(chunk_logits_fp32: torch.Tensor, chunk_y: torch.Tensor, ignore_index: int):
-    """Returns (sum_loss, grad_logits_unscaled) for one chunk. grad = softmax - onehot, zeroed on ignored rows."""
+    """Returns (sum_loss, grad_logits_unscaled) for one chunk in-place on chunk_logits_fp32."""
     valid = chunk_y != ignore_index
     safe_y = torch.where(valid, chunk_y, torch.zeros_like(chunk_y))
-    lse = torch.logsumexp(chunk_logits_fp32, dim=-1)
-    target_logit = chunk_logits_fp32.gather(1, safe_y.unsqueeze(1)).squeeze(1)
-    loss_sum = ((lse - target_logit) * valid).sum()
+    lse = torch.logsumexp(chunk_logits_fp32, dim=-1, keepdim=True)
+    target_logit = chunk_logits_fp32.gather(1, safe_y.unsqueeze(1))
+    loss_sum = ((lse - target_logit) * valid.unsqueeze(1)).sum()
 
-    grad = torch.softmax(chunk_logits_fp32, dim=-1)
-    grad.scatter_add_(1, safe_y.unsqueeze(1), -torch.ones_like(target_logit).unsqueeze(1))
-    grad.mul_(valid.unsqueeze(1).to(grad.dtype))
+    grad = chunk_logits_fp32.sub_(lse).exp_()
+    grad.scatter_add_(1, safe_y.unsqueeze(1), -torch.ones_like(target_logit))
+    if not bool(valid.all()):
+        grad.mul_(valid.unsqueeze(1).to(grad.dtype))
     return loss_sum, grad
 
 
@@ -52,8 +53,8 @@ class _FusedLinearCrossEntropy(torch.autograd.Function):
         need_h, need_w, need_b = ctx.needs_input_grad[0], ctx.needs_input_grad[1], (
             bias is not None and ctx.needs_input_grad[2]
         )
-        grad_h = torch.zeros_like(flat_h) if need_h else None
-        grad_w = torch.zeros(weight.shape, device=weight.device, dtype=acc) if need_w else None
+        grad_h = torch.empty_like(flat_h) if need_h else None
+        grad_w = torch.zeros_like(weight) if need_w else None
         grad_b = torch.zeros(bias.shape, device=bias.device, dtype=acc) if need_b else None
 
         total = torch.zeros((), device=hidden.device, dtype=acc)
@@ -65,18 +66,20 @@ class _FusedLinearCrossEntropy(torch.autograd.Function):
             total = total + loss_sum
             del logits
             g.mul_(inv_n)
-            if need_h:
-                grad_h[i : i + chunk_size] = (g.to(weight.dtype) @ weight).to(grad_h.dtype)
-            if need_w:
-                grad_w.addmm_(g.t(), h.to(acc))
             if need_b:
                 grad_b = grad_b + g.sum(0)
+            g_w = g.to(weight.dtype)
             del g
+            if need_h:
+                torch.matmul(g_w, weight, out=grad_h[i : i + chunk_size])
+            if need_w:
+                grad_w.addmm_(g_w.t(), h.to(weight.dtype))
+            del g_w
         total = total * inv_n
 
         ctx.save_for_backward(
             grad_h.reshape(hidden.shape) if grad_h is not None else None,
-            grad_w.to(weight.dtype) if grad_w is not None else None,
+            grad_w if grad_w is not None else None,
             grad_b.to(bias.dtype) if grad_b is not None else None,
         )
         return total

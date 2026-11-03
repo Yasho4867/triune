@@ -1,6 +1,6 @@
-# Mathematical Foundations
+# Triune AI — Mathematical Foundations
 
-This document details the mathematical formulations and derivations for Triune's optimization algorithms, routing mechanism, and runtime memory bounds.
+This document details the mathematical formulations, invariants, and derivations for **Triune AI**'s optimization algorithms (`CentroidSteer` Universal Triangular Core and `Muon`), Gated Linear Attention (GLA), differentiable depth routing, and runtime memory bounds.
 
 ---
 

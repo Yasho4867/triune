@@ -1,6 +1,6 @@
 # Triune Category E: Hierarchical Dynamic Exits & Quality vs. Compute Report
 
-**Date**: October 29, 2026
+**Date**: November 03, 2026
 **Hardware**: NVIDIA GeForce RTX 5070 Laptop GPU (7.93 GB VRAM)
 **Software**: PyTorch 2.14.1+cu132, CUDA 13.2, Python 3.14.7
 **Workload**: Batch Size 4, Sequence Length 512, Vocab Size 4096
@@ -17,10 +17,10 @@ is attained. Three discrete execution tiers are provided:
 
 | Exit Tier | Active Depth | Forward Latency (ms) | Throughput (tok/s) | Decode Speed (tok/s) | Validation Loss | Perplexity | Latency Reduction vs Cortex |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Reflex Exit (L2)** | L0 | 27.81 ms | 73640.9 | 70.9 | 8.4313 | 4588.23 | **-68.7%** latency |
-| **Limbic Exit (L5)** | L1 | 65.15 ms | 31436.2 | 43.6 | 8.4250 | 4559.64 | **-26.7%** latency |
-| **Cortex Exit (L8)** | L2 | 88.86 ms | 23048.7 | 49.4 | 8.4250 | 4559.64 | Full Depth (0%) |
-| **Learned Dynamic Routing** | Adaptive | 29.55 ms | 69294.7 | 73.6 | 8.4313 | 4588.23 | **-66.7%** latency |
+| **Reflex Exit (L2)** | L0 | 7.29 ms | 280940.8 | 205.5 | 8.4313 | 4588.23 | **-72.8%** latency |
+| **Limbic Exit (L5)** | L1 | 17.88 ms | 114527.9 | 111.7 | 8.4250 | 4559.64 | **-33.2%** latency |
+| **Cortex Exit (L8)** | L2 | 26.76 ms | 76542.8 | 107.3 | 8.4250 | 4559.64 | Full Depth (0%) |
+| **Learned Dynamic Routing** | Adaptive | 6.84 ms | 299506.3 | 160.2 | 8.4313 | 4588.23 | **-74.4%** latency |
 
 ## 3. Key Observations & Trade-Offs
 

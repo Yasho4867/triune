@@ -1,6 +1,6 @@
 # Triune Category C: Memory-Constrained Training & Layer Streaming Report
 
-**Date**: October 30, 2026
+**Date**: November 03, 2026
 **Hardware**: NVIDIA GeForce RTX 5070 Laptop GPU (7.93 GB VRAM)
 **Software**: PyTorch 2.14.1+cu132, CUDA 13.2, Python 3.14.7
 **Workload**: Batch Size 2, Sequence Length 512, Vocab Size 4096, Precision BFloat16
@@ -16,9 +16,9 @@ The Triune `LayerStreamingEngine` decouples model parameter capacity from physic
 
 | Model Scale | Total Parameters | Standard GPU Peak VRAM | LayerStreaming Peak VRAM | VRAM Reduction | Standard Latency | Streaming Latency | Throughput (tok/s) |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **76M** | 101.97M | 2657.52 MB | 2217.86 MB | 16.54% | 367.91 ms | 1019.27 ms | 1004.6 tok/s |
-| **150M** | 270.56M | 5376.7 MB | 4211.03 MB | 21.68% | 374.1 ms | 1911.68 ms | 535.7 tok/s |
-| **350M** | 694.85M | 10893.02 MB | 8097.9 MB | 25.66% | 3825.01 ms | 14237.67 ms | 71.9 tok/s |
+| **76M** | 101.97M | 1385.93 MB | 905.28 MB | 34.68% | 142.8 ms | 690.72 ms | 1482.5 tok/s |
+| **150M** | 270.56M | 3163.88 MB | 1824.25 MB | 42.34% | 141.75 ms | 1538.27 ms | 665.7 tok/s |
+| **350M** | 694.85M | 7023.08 MB | 3661.73 MB | 47.86% | 1850.0 ms | 4531.24 ms | 226.0 tok/s |
 
 ## 3. Analysis: Memory Footprint vs. PCIe Bandwidth Trade-off
 

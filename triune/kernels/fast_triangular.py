@@ -94,15 +94,18 @@ def fast_triangular_adamw(
     """
     N, DR, _ = R_batch.shape
     if not HAS_TRITON or not R_batch.is_cuda:
-        # High-performance PyTorch vectorized fallback
-        batch_mom.mul_(beta1).add_(R_batch, alpha=1.0 - beta1)
-        batch_var.mul_(beta2).addcmul_(R_batch, R_batch, value=1.0 - beta2)
-        step_view = step_vals.view(N, 1, 1).to(torch.float32)
-        bias_c1 = (1.0 - (beta1 ** step_view)).to(dtype=R_batch.dtype)
-        bias_c2 = (1.0 - (beta2 ** step_view)).clamp_min(1e-7).to(dtype=R_batch.dtype)
-        m_hat = batch_mom / bias_c1
-        v_hat = batch_var / bias_c2
-        batch_delta.copy_(torch.triu(m_hat / (v_hat.sqrt() + eps)))
+        # High-performance PyTorch vectorized fallback in exact FP32
+        R_f32 = R_batch if R_batch.dtype == torch.float32 else R_batch.float()
+        batch_mom.lerp_(R_f32, 1.0 - beta1)
+        batch_var.mul_(beta2).addcmul_(R_f32, R_f32, value=1.0 - beta2)
+        step_view = step_vals.view(N, 1, 1)
+        if step_view.dtype != torch.float32:
+            step_view = step_view.to(torch.float32)
+        bias_c1 = 1.0 - (beta1 ** step_view)
+        bias_c2 = (1.0 - (beta2 ** step_view)).clamp_min(1e-7)
+        denom = (batch_var / bias_c2).sqrt_().add_(eps)
+        delta_f32 = (batch_mom / bias_c1).div_(denom).triu_()
+        batch_delta.copy_(delta_f32)
         return batch_delta
 
     # Calculate next power of 2 for Triton tile size

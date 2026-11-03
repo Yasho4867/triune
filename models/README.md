@@ -1,17 +1,17 @@
-# Model Zoo
+# Triune AI — Model Zoo
 
-This directory contains architecture specifications and configuration files for the Triune model family.
+This directory contains architecture specifications and configuration files for the **Triune AI** model family (`TriuneTransformer` and `UniversalTransformer`).
 
 ## Architecture Overview
 
-Triune models combine:
-- **Gated Linear Attention (GLA)**: $O(N)$ linear attention with data-dependent decay gates and RoPE.
-- **Sparse Mixture of Experts (MoE)**: Centroid-steered routing with $E$ experts and a dedicated shared expert.
+Triune AI models combine:
+- **Gated Linear Attention (GLA)**: $O(N)$ linear attention with data-dependent decay gates, fused QKVG projections, and RoPE.
+- **Sparse Mixture of Experts (MoE)**: Batched 3D BMM top-$k$ routing with $E$ experts, a dedicated shared expert, and activation centroid tracking.
 - **Hierarchical Early Exits**:
   - **Reflex Head**: Intermediate exit at early depth (~25% depth).
   - **Limbic Head**: Intermediate exit at mid depth (~65% depth).
   - **Cortex Head**: Full-depth exit at final layer (100% depth).
-  - Intermediate exit heads are normalized with RMSNorm to match Cortex representation scale.
+  - Intermediate exit heads are normalized with parameter-free `RMSNorm` to match Cortex representation scale.
 
 ## Model Specifications
 

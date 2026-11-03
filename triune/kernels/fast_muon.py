@@ -78,11 +78,8 @@ def fast_zeropower_via_newtonschulz5(
         # A = X @ X.T
         torch.mm(X, X.t(), out=A)
 
-        # A2 = A @ A
-        torch.mm(A, A, out=A2)
-
-        # B = b * A + c * A2
-        B.copy_(A).mul_(b).add_(A2, alpha=c)
+        # Fused B = b * A + c * (A @ A) in a single GEMM kernel
+        torch.addmm(A, A, A, beta=b, alpha=c, out=B)
 
         # X = a * X + B @ X
         X = torch.addmm(X, B, X, beta=a, alpha=1.0)
@@ -155,10 +152,9 @@ def fast_zeropower_via_newtonschulz5_batched(
         B = torch.empty((B_sz, M, M), device=orig_device, dtype=compute_dtype)
 
     for _ in range(steps):
-        # In-place GEMM and polynomial evaluation with zero allocations
+        # In-place GEMM and fused polynomial evaluation with zero allocations
         torch.bmm(X, X.transpose(1, 2), out=A)
-        torch.bmm(A, A, out=A2)
-        B.copy_(A).mul_(b).add_(A2, alpha=c)
+        torch.baddbmm(A, A, A, beta=b, alpha=c, out=B)
         X = torch.baddbmm(X, B, X, beta=a, alpha=1.0)
 
     if transposed:
