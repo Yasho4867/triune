@@ -891,37 +891,14 @@ if HAS_FASTAPI:
             ckpt_dir = Path("checkpoints")
             if ckpt_dir.is_dir():
                 ckpts = sorted(ckpt_dir.glob("*.pt"), key=lambda x: x.stat().st_mtime, reverse=True)
-                if ckpts:
-                    try:
-                        latest = ckpts[0]
-                        if HAS_TORCH:
-                            ckpt_data = torch.load(latest, map_location="cpu", weights_only=True)
-                            ckpt_tokens = ckpt_data.get("total_tokens_trained", ckpt_data.get("tokens_trained", 0))
-                            ckpt_step = ckpt_data.get("step", 0)
-                            if not ckpt_tokens and ckpt_step > 0:
-                                b = ckpt_data.get("batch_size", self.batch_size)
-                                s = ckpt_data.get("seq_len", self.seq_len)
-                                a = ckpt_data.get("grad_accum_steps", self.grad_accum_steps)
-                                ckpt_tokens = ckpt_step * b * s * a
-                            if ckpt_tokens and (not restored or ckpt_tokens > restored):
-                                restored = ckpt_tokens
-                            if ckpt_step > self.step:
-                                self.step = ckpt_step
-                            if not self.active_checkpoint:
-                                self.active_checkpoint = latest.name
-                    except Exception:
-                        pass
+                if ckpts and not self.active_checkpoint:
+                    self.active_checkpoint = ckpts[0].name
 
             self.total_tokens_trained = restored
             self.tokens_trained = restored
             self.current_lr = float(self.lr_schedule(self.config, self.step))
-            if restored > 0:
-                msg = f"[Triune Engine] Restored {restored:,} historical cumulative trained tokens from previous sessions (step {self.step})."
-                self.logs.insert(0, msg)
-                print(msg)
-                self._save_persisted_session_state()
 
-            # Auto-restore active checkpoint weights on startup
+            # Auto-restore active checkpoint weights on startup (single-pass load without duplicate CPU copies)
             if HAS_TORCH and ckpt_dir.is_dir():
                 target_ckpt = None
                 if self.active_checkpoint and (ckpt_dir / self.active_checkpoint).is_file():
@@ -932,6 +909,10 @@ if HAS_FASTAPI:
                 if target_ckpt is not None:
                     try:
                         self.load_model_checkpoint(target_ckpt, restore_optimizer=True)
+                        if self.total_tokens_trained > 0:
+                            msg = f"[Triune Engine] Restored {self.total_tokens_trained:,} historical cumulative trained tokens from previous sessions (step {self.step})."
+                            self.logs.insert(0, msg)
+                            print(msg)
                         loaded_msg = f"[Triune Engine] Auto-restored weights from active checkpoint: {target_ckpt.name}"
                         self.logs.insert(0, loaded_msg)
                         print(loaded_msg)
@@ -1053,9 +1034,10 @@ if HAS_FASTAPI:
                     requested_gpu_layers = max(0, min(num_layers, int(round((pct / 100.0) * num_layers))))
 
                 if self.device.type == "cuda":
-                    if hasattr(self.model, "enable_gradient_checkpointing"):
+                    # Only enable activation recomputation when model exceeds 250M params or uses layer streaming;
+                    # smaller GPU-resident models keep activations in VRAM to eliminate 2x forward recompute overhead.
+                    if (total_p > 250_000_000 or requested_gpu_layers < num_layers or getattr(spec, "use_layer_streaming", False)) and hasattr(self.model, "enable_gradient_checkpointing"):
                         self.model.enable_gradient_checkpointing()
-                    # Per-process memory fraction unconstrained to prevent virtual memory handle desync
                     target_dtype = torch.bfloat16 if (getattr(self, "precision", "bf16") == "bf16" and torch.cuda.is_bf16_supported()) else torch.float32
 
                     if total_p > 150_000_000 or requested_gpu_layers < num_layers or getattr(spec, "use_layer_streaming", False):
@@ -1241,13 +1223,16 @@ if HAS_FASTAPI:
             # strict=True is intentional: partial/randomly initialized models must never
             # be reported as successfully loaded trained checkpoints.
             self.model.load_state_dict(state_dict, strict=True)
+            del state_dict
+            if isinstance(checkpoint, dict):
+                checkpoint.pop("model_state", None)
             if getattr(self.model, "_streaming_engine", None) is None:
                 if self.device.type == "cuda":
                     target_dtype = torch.bfloat16 if (getattr(self, "precision", "bf16") == "bf16" and torch.cuda.is_bf16_supported()) else torch.float32
                     self.model = self.model.to(device=self.device, dtype=target_dtype)
-                    if hasattr(self.model, "enable_gradient_checkpointing"):
+                    total_p = sum(p_t.numel() for p_t in self.model.parameters())
+                    if total_p > 250_000_000 and hasattr(self.model, "enable_gradient_checkpointing"):
                         self.model.enable_gradient_checkpointing()
-                    # Per-process memory fraction unconstrained to prevent virtual memory handle desync
                 else:
                     self.model = self.model.to(self.device)
 
@@ -1297,6 +1282,11 @@ if HAS_FASTAPI:
                 except Exception as exc:
                     # Inference weights are valid even when an old optimizer schema is not.
                     self.logs.insert(0, f"[CHECKPOINT] Optimizer state not restored: {exc}")
+                finally:
+                    if isinstance(checkpoint, dict):
+                        checkpoint.pop("optimizer_state", None)
+            import gc
+            gc.collect()
 
             saved_loss = float(checkpoint.get("loss", 0.0) or 0.0)
             saved_depth_ema = checkpoint.get("depth_usage_ema")
@@ -2372,7 +2362,11 @@ if HAS_FASTAPI:
                 except Exception:
                     pass
 
-            self.history.append(payload)
+            history_entry = {
+                k: v for k, v in payload.items()
+                if k not in ("batch_preview", "architecture", "wandb_url", "dataset_name", "dataset_type", "device")
+            }
+            self.history.append(history_entry)
             if len(self.history) > 100:
                 self.history.pop(0)
 

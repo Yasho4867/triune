@@ -64,7 +64,8 @@ class TrainingEngine:
         pad_id = getattr(self.trainer, "pad_token_id", -100)
         if pad_id is None:
             pad_id = -100
-        return F.cross_entropy(logits.reshape(-1, vocab_size), y_flat, ignore_index=pad_id, reduction="mean")
+        valid_count = (y_flat != pad_id).sum().clamp_min(1)
+        return F.cross_entropy(logits.reshape(-1, vocab_size), y_flat, ignore_index=pad_id, reduction="sum") / valid_count
 
     def _router_labels_from_logits(self, reflex, limbic, cortex, x, y):
         with torch.no_grad():

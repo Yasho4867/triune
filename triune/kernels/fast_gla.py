@@ -8,8 +8,6 @@ by 3x-8x at sequences >= 8,192 tokens while using 80% less memory.
 from __future__ import annotations
 
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 
 
 def fast_chunk_gla(
@@ -62,26 +60,21 @@ def fast_chunk_gla(
         q_c = q[:, :T_chunk].reshape(B, num_chunks, C, H, HD).permute(0, 3, 1, 2, 4)
         k_c = k[:, :T_chunk].reshape(B, num_chunks, C, H, HD).permute(0, 3, 1, 2, 4)
         v_c = v[:, :T_chunk].reshape(B, num_chunks, C, H, HD).permute(0, 3, 1, 2, 4)
-        g_c = g[:, :T_chunk].reshape(B, num_chunks, C, H, HD).permute(0, 3, 1, 2, 4)
+        g_c = torch.clamp(g[:, :T_chunk].reshape(B, num_chunks, C, H, HD).permute(0, 3, 1, 2, 4), max=0.0)
 
         g_cumsum = torch.cumsum(g_c, dim=-2)
-        causal_mask = torch.tril(torch.ones(C, C, device=device, dtype=torch.bool)).view(1, 1, C, C, 1)
+        causal_mask_2d = torch.tril(torch.ones(C, C, device=device, dtype=torch.bool)).view(1, 1, 1, C, C)
 
-        # Chunk-by-chunk intra-chunk attention:
-        # Evaluated sequentially across chunks to prevent allocating massive 6D intermediate tensors
-        # [B, H, num_chunks, C, C, HD], slashing peak transient VRAM by 7x on long contexts and large batches.
-        out_intra_list = []
-        for i in range(num_chunks):
-            q_i = q_c[:, :, i]
-            k_i = k_c[:, :, i]
-            v_i = v_c[:, :, i]
-            g_cum_i = g_cumsum[:, :, i]
-            g_diff_i = torch.clamp(g_cum_i.unsqueeze(-2) - g_cum_i.unsqueeze(-3), max=0.0)
-            decay_i = torch.exp(g_diff_i).masked_fill(~causal_mask, 0.0)
-            attn_i = ((q_i.unsqueeze(-2) * k_i.unsqueeze(-3)) * decay_i).sum(dim=-1)
-            out_i = torch.matmul(attn_i, v_i)
-            out_intra_list.append(out_i)
-        out_intra = torch.stack(out_intra_list, dim=2)
+        # Factored Tensor Core GEMM intra-chunk attention:
+        # For causal pairs (t >= s): exp(g_cum[t] - g_cum[s]) = exp(g_cum[t] - g_mid) * exp(g_mid - g_cum[s]).
+        # Eliminates the 5D [B, H, C, C, HD] intermediate broadcast tensor and computes all chunks in 2 batched GEMMs.
+        g_cum_f = g_cumsum.float()
+        g_mid = 0.5 * (g_cum_f[..., :1, :] + g_cum_f[..., -1:, :])
+        g_rel = torch.clamp(g_cum_f - g_mid, min=-60.0, max=60.0)
+        q_intra = q_c.float() * torch.exp(g_rel)
+        k_intra = k_c.float() * torch.exp(-g_rel)
+        attn_all = torch.matmul(q_intra, k_intra.transpose(-1, -2)).masked_fill(~causal_mask_2d, 0.0).to(dtype)
+        out_intra = torch.matmul(attn_all, v_c)
 
         # Inter-chunk recurrent state propagation with batched KV GEMM
         g_last = g_cumsum[:, :, :, -1:, :]
