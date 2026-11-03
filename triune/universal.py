@@ -286,6 +286,7 @@ class TriuneUniversalEngine:
         lr: float = 1e-3,
         use_centroid_steer: bool = True,
         rank: int = 16,
+        optimizer: Optional[torch.optim.Optimizer] = None,
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
     ):
@@ -305,8 +306,8 @@ class TriuneUniversalEngine:
         if self.mode == "finetune":
             self.finetuner = TriuneFineTuner(self.model, lora_config=lora_config or LoRAConfig(rank=rank))
 
-        # Build Optimizer
-        self.optimizer = self._build_optimizer()
+        # Build or use provided Optimizer
+        self.optimizer = optimizer if optimizer is not None else self._build_optimizer()
 
     def _build_optimizer(self) -> torch.optim.Optimizer:
         if self.mode == "inference":
@@ -399,10 +400,11 @@ def upgrade_model(
     lora_alpha: float = 32.0,
     streaming: bool = False,
     resident_gpu_layers: int = 0,
+    as_engine: bool = False,
     return_optimizer: bool = False,
     lr: float = 1e-3,
     rank: int = 16,
-) -> Union[nn.Module, Tuple[nn.Module, torch.optim.Optimizer]]:
+) -> Union[nn.Module, Tuple[nn.Module, torch.optim.Optimizer], TriuneUniversalEngine]:
     """Universal 1-line Triune AI drop-in accelerator for any PyTorch or Hugging Face model.
 
     Automatically patches:
@@ -412,6 +414,7 @@ def upgrade_model(
     - Optional LoRA adapters (when lora_rank is specified) -> fused addmm LoRALayer
     - Optional LayerStreamingEngine (when streaming=True)
     - Optional 3-Tier CentroidSteer + Muon optimizer (when return_optimizer=True)
+    - Optional TriuneUniversalEngine wrap (when as_engine=True)
     """
     import types
 
@@ -460,7 +463,7 @@ def upgrade_model(
         )
         engine.attach()
 
-    if return_optimizer:
+    if as_engine or return_optimizer:
         is_moe = any("expert" in n.lower() for n, _ in model.named_modules())
         target_mod = model.core if hasattr(model, "core") else model
         opt = CentroidSteerOptimizer(
@@ -473,6 +476,8 @@ def upgrade_model(
         )
         if getattr(model, "_streaming_engine", None) is not None:
             model._streaming_engine.set_optimizer(opt)
+        if as_engine:
+            return TriuneUniversalEngine(model, optimizer=opt)
         return model, opt
 
     return model
