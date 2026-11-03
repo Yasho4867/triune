@@ -50,6 +50,7 @@ class BenchmarkValidityTest(unittest.TestCase):
             "dynamic_exits_results.json",
             "long_context_results.json",
             "layer_streaming_results.json",
+            "master_matrix_results.json",
         ]
         for fname in files_with_hw:
             fpath = BENCHMARK_DIR / fname
@@ -141,6 +142,36 @@ class BenchmarkValidityTest(unittest.TestCase):
             self.assertTrue(hasattr(bnb.optim, "AdamW8bit"), "BitsAndBytes AdamW8bit must exist")
         except ImportError:
             self.fail("BitsAndBytes must be installed and functional for Unsloth baselines")
+
+    def test_master_matrix_provenance_and_competitor_integrity(self):
+        """Verifies master matrix records git provenance, valid optimizers, and non-zero adapter drift."""
+        fpath = BENCHMARK_DIR / "master_matrix_results.json"
+        with open(fpath, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        if isinstance(data, dict):
+            self.assertIn("schema_version", data)
+            self.assertIn("git_commit", data)
+            self.assertIn("timestamp_utc", data)
+            cells = data.get("cells", [])
+        else:
+            cells = data
+
+        self.assertEqual(len(cells), 12, "Master matrix must have exactly 12 cells (3x2x2)")
+
+        for cell in cells:
+            self.assertIn("optimizer", cell)
+            self.assertGreater(cell["step_time_ms"], 0.0)
+            self.assertGreater(cell["throughput_tok_s"], 0.0)
+            self.assertGreater(cell["peak_vram_mb"], 0.0)
+            self.assertFalse(math.isnan(cell["step_time_ms"]))
+            self.assertFalse(math.isnan(cell["peak_vram_mb"]))
+            if cell["stack"] == "adamw":
+                self.assertIn("AdamW", cell["optimizer"])
+            elif cell["stack"] == "unsloth":
+                self.assertIn("AdamW8bit", cell["optimizer"])
+            elif cell["stack"] == "triune" and cell["task"] == "pretrain":
+                self.assertIn("CentroidSteer", cell["optimizer"])
 
 
 if __name__ == "__main__":

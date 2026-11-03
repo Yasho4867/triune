@@ -1,51 +1,59 @@
-# Triune vs Unsloth vs Standard AdamW — Master 3x2x2 Competitive Matrix
+# Triune vs BitsAndBytes 8-bit AdamW vs Standard AdamW — Master 3x2x2 Competitive Matrix
 
 **Benchmarked Hardware**: `NVIDIA GeForce RTX 5070 Laptop GPU`  
 **Precision**: `torch.bfloat16` with native CUDA Tensor Cores  
-**Timestamp**: 2026-11-03 12:06:38 UTC  
+**Timestamp**: 2026-11-03 12:34:42 UTC  
+**Git Provenance Commit**: `94601be9eb0d75da7e6c8fa3fff50497e66cf03a`  
 **Architecture Scope**: Universal Dense Transformers (76M) & Triune Multi-Exit MoE (76M) across Pre-Training and LoRA Fine-Tuning.
+
+> [!NOTE]
+> **Competitor Scope & Naming**:
+> - **Standard AdamW**: PyTorch's native `torch.optim.AdamW`.
+> - **BitsAndBytes 8-bit AdamW**: Genuine native `bitsandbytes.optim.AdamW8bit` (the core 8-bit optimizer engine used by Unsloth) evaluated on identical Triune model architectures.
+> - **Triune Stack**: `CentroidSteerOptimizer` (3-tier Muon + Triangular Core CentroidSteer + 8-bit AdamW base) during pre-training; fused `addmm_` LoRA + chunked logit-free cross-entropy during fine-tuning.
+> - **Convergence Accounting**: Evaluation loss is measured on a **fixed held-out evaluation batch** (seed 999) before warmup and after the 15 training steps.
 
 ---
 
 ## 1. Pre-Training from Scratch (Dense vs MoE)
 
-| Architecture | Framework Stack | Step Latency | Throughput | Peak VRAM | VRAM Saved vs AdamW | Loss Drop (15 steps) |
+| Architecture | Framework & Optimizer | Step Latency (Median ± Std) | Throughput | Peak VRAM | VRAM Saved vs AdamW | Held-Out Eval Loss Drop |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
-| Universal Dense (76M) | Standard AdamW | 50.48 ms | 20,284 tok/s | **882.6 MB** | **0.0%** | 5.8562 |
-| Universal Dense (76M) | Unsloth Style | 61.13 ms | 16,752 tok/s | **665.6 MB** | **24.6%** | 5.8598 |
-| Universal Dense (76M) | **Triune Stack** | 62.4 ms | 16,410 tok/s | **504.5 MB** | **42.8%** | 6.8131 |
-| Triune MoE (76M) | Standard AdamW | 157.48 ms | 6,503 tok/s | **1409.9 MB** | **0.0%** | 3.5229 |
-| Triune MoE (76M) | Unsloth Style | 171.89 ms | 5,957 tok/s | **1157.0 MB** | **17.9%** | 3.5348 |
-| Triune MoE (76M) | **Triune Stack** | 173.89 ms | 5,889 tok/s | **1094.4 MB** | **22.4%** | 4.1021 |
+| Universal Dense (76M) | Standard AdamW (`AdamW`) | 42.43 ± 9.0 ms | 24,134 tok/s | **947.6 MB** | **0.0%** | -0.1739 |
+| Universal Dense (76M) | BitsAndBytes 8-bit AdamW (`AdamW8bit`) | 49.17 ± 3.75 ms | 20,827 tok/s | **729.9 MB** | **23.0%** | -0.1793 |
+| Universal Dense (76M) | **Triune Stack** (`CentroidSteerOptimizer`) | 53.78 ± 4.95 ms | 19,040 tok/s | **570.1 MB** | **39.8%** | -0.1648 |
+| Triune MoE (76M) | Standard AdamW (`AdamW`) | 141.92 ± 9.16 ms | 7,216 tok/s | **1470.7 MB** | **0.0%** | -0.6916 |
+| Triune MoE (76M) | BitsAndBytes 8-bit AdamW (`AdamW8bit`) | 196.15 ± 12.49 ms | 5,220 tok/s | **1215.6 MB** | **17.3%** | -0.6872 |
+| Triune MoE (76M) | **Triune Stack** (`CentroidSteerOptimizer`) | 159.25 ± 8.1 ms | 6,430 tok/s | **1152.8 MB** | **21.6%** | -0.3041 |
 
 ---
 
 ## 2. LoRA Fine-Tuning (Dense vs MoE)
 
-| Architecture | Framework Stack | Step Latency | Throughput | Peak VRAM | VRAM Saved vs AdamW | Loss Drop (15 steps) |
+| Architecture | Framework & Optimizer | Step Latency (Median ± Std) | Throughput | Peak VRAM | VRAM Saved vs AdamW | Held-Out Eval Loss Drop |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
-| Universal Dense (76M) | Standard AdamW | 61.15 ms | 16,745 tok/s | **716.1 MB** | **0.0%** | 0.3794 |
-| Universal Dense (76M) | Unsloth Style | 82.34 ms | 12,436 tok/s | **586.1 MB** | **18.2%** | 0.3805 |
-| Universal Dense (76M) | **Triune Stack** | 63.17 ms | 16,211 tok/s | **402.2 MB** | **43.8%** | 0.3805 |
-| Triune MoE (76M) | Standard AdamW | 163.54 ms | 6,262 tok/s | **1058.5 MB** | **0.0%** | 0.4108 |
-| Triune MoE (76M) | Unsloth Style | 173.62 ms | 5,898 tok/s | **932.7 MB** | **11.9%** | 0.4122 |
-| Triune MoE (76M) | **Triune Stack** | 164.51 ms | 6,224 tok/s | **933.6 MB** | **11.8%** | 0.412 |
+| Universal Dense (76M) | Standard AdamW (`AdamW`) | 62.88 ± 11.56 ms | 16,285 tok/s | **779.1 MB** | **0.0%** | 0.0007 |
+| Universal Dense (76M) | BitsAndBytes 8-bit AdamW (`AdamW8bit`) | 69.56 ± 11.71 ms | 14,721 tok/s | **651.0 MB** | **16.4%** | 0.0009 |
+| Universal Dense (76M) | **Triune Stack** (`AdamW`) | 78.98 ± 5.71 ms | 12,966 tok/s | **465.1 MB** | **40.3%** | 0.0008 |
+| Triune MoE (76M) | Standard AdamW (`AdamW`) | 153.66 ± 8.9 ms | 6,664 tok/s | **1118.8 MB** | **0.0%** | -0.0022 |
+| Triune MoE (76M) | BitsAndBytes 8-bit AdamW (`AdamW8bit`) | 156.59 ± 16.95 ms | 6,539 tok/s | **991.1 MB** | **11.4%** | -0.0017 |
+| Triune MoE (76M) | **Triune Stack** (`AdamW`) | 154.17 ± 7.66 ms | 6,642 tok/s | **992.0 MB** | **11.3%** | -0.0017 |
 
 ---
 
 ## 3. Workload-by-Workload Empirical Trade-Offs
 
-1. **Dense LoRA Fine-Tuning (Strongest Triune Win)**:
-   - **Throughput**: Triune runs at **63.17 ms/step (16,211 tok/s)**, outperforming Unsloth 8-bit AdamW (**82.34 ms/step**, **12,436 tok/s**, **30.4% speedup**) while performing competitively with standard AdamW (61.15 ms/step).
-   - **Memory**: Triune uses only **402.2 MB peak VRAM**, representing a **43.8% reduction vs standard AdamW (716.1 MB)** and a **31.4% reduction vs Unsloth 8-bit AdamW (586.1 MB)** due to fused linear-LoRA and chunked logit-free backprop.
+1. **Dense LoRA Fine-Tuning**:
+   - **Memory**: Triune uses **465.1 MB peak VRAM**, achieving a **40.3% reduction vs Standard AdamW (779.1 MB)** and a **28.6% reduction vs BitsAndBytes 8-bit AdamW (651.0 MB)** due to chunked cross-entropy and fused adapter backprop.
+   - **Throughput**: Triune runs at **78.98 ± 5.71 ms/step (12,966 tok/s)** vs **69.56 ± 11.71 ms/step** for BitsAndBytes 8-bit AdamW and **62.88 ± 11.56 ms/step** for standard AdamW.
 
 2. **MoE LoRA Fine-Tuning**:
-   - Triune runs at **164.51 ms/step** (vs Unsloth 173.62 ms/step and AdamW 163.54 ms/step) while matching Unsloth in peak VRAM (**933.6 MB vs 932.7 MB**, an 11.8% reduction vs standard AdamW's 1058.5 MB).
+   - **Latency & Memory**: Triune runs at **154.17 ± 7.66 ms/step** (6,642 tok/s) and **992.0 MB peak VRAM** (11.3% lower VRAM than Standard AdamW's 1118.8 MB, operating at near parity with BitsAndBytes's 991.1 MB and 156.59 ms/step).
 
-3. **Dense Pre-Training from Scratch (Memory & Convergence Win, Throughput Trade-off)**:
-   - **Memory**: Triune slashes peak VRAM to **504.5 MB**, saving **42.8% vs standard AdamW (882.6 MB)** and **24.2% vs Unsloth (665.6 MB)**.
-   - **Convergence**: CentroidSteer + Muon achieves **6.8131 loss drop** over 15 steps (+16.3% faster initial loss reduction vs 5.8562 for AdamW and 5.8598 for Unsloth).
-   - **Throughput**: Triune pays a ~23% latency penalty (62.40 ms vs 50.48 ms for unquantized AdamW) due to online subspace projections.
+3. **Dense Pre-Training from Scratch (VRAM Efficiency Trade-Off)**:
+   - **Memory**: Triune reduces peak VRAM to **570.1 MB**, saving **39.8% vs standard AdamW (947.6 MB)** and **21.9% vs BitsAndBytes 8-bit AdamW (729.9 MB)**.
+   - **Throughput**: Latency is **53.78 ± 4.95 ms/step** (19,040 tok/s), trading ~25% raw speed vs unquantized AdamW (42.43 ms) in exchange for dramatic VRAM savings and subspace gradient tracking.
 
-4. **MoE Pre-Training from Scratch**:
-   - Triune uses the lowest peak VRAM (**1,094.4 MB**, saving 22.4% vs AdamW's 1,409.9 MB and 5.4% vs Unsloth's 1,157.0 MB) while achieving the strongest loss reduction (**4.1021 vs 3.5229 AdamW and 3.5348 Unsloth**), running at comparable latency to Unsloth (173.89 ms vs 171.89 ms).
+4. **MoE Pre-Training from Scratch (Speed & Memory Win over 8-Bit Baseline)**:
+   - **Speed**: Triune runs at **159.25 ± 8.1 ms/step**, outperforming BitsAndBytes 8-bit AdamW (196.15 ms/step) by **18.8%**.
+   - **Memory**: Triune uses the lowest peak VRAM in this category at **1152.8 MB**, saving **21.6% vs Standard AdamW (1470.7 MB)** and **5.2% vs BitsAndBytes 8-bit AdamW (1215.6 MB)**.

@@ -16,6 +16,8 @@ import argparse
 import gc
 import json
 import os
+import statistics
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -159,7 +161,21 @@ def run_benchmark_cell(
 
     opt_class_name = optimizer.__class__.__name__
 
-    # Shared cyclic synthetic batches for fair convergence comparison
+    # Fixed held-out evaluation batch (unbiased, measured before warmup and after training)
+    torch.manual_seed(999)
+    eval_x = torch.randint(0, vocab_size, (batch_size, seq_len), device=device)
+    eval_y = torch.randint(0, vocab_size, (batch_size, seq_len), device=device)
+
+    with torch.no_grad():
+        if model_type == "moe":
+            e_out = model(eval_x, force_depth=2)
+            e_logits = e_out[0] if isinstance(e_out, tuple) else e_out
+        else:
+            e_out = model(eval_x)
+            e_logits = e_out[0] if isinstance(e_out, tuple) else e_out
+        eval_loss_initial = float(F.cross_entropy(e_logits.reshape(-1, vocab_size).float(), eval_y.reshape(-1)).item())
+
+    # Shared cyclic synthetic batches for training steps
     torch.manual_seed(100)
     base_batches = [
         (
@@ -204,31 +220,50 @@ def run_benchmark_cell(
         torch.cuda.synchronize(device)
         torch.cuda.reset_peak_memory_stats(device)
 
-    # Timed Steps
-    losses = []
-    t0 = time.perf_counter()
+    # Timed Steps with individual step timing for variance quantification
+    train_losses = []
+    step_latencies_ms = []
     for i in range(3, 3 + steps):
         x, y = batches[i]
+        if device.type == "cuda":
+            torch.cuda.synchronize(device)
+        t_start = time.perf_counter()
         loss_val = execute_step(x, y, model, optimizer)
-        losses.append(loss_val)
+        if device.type == "cuda":
+            torch.cuda.synchronize(device)
+        t_end = time.perf_counter()
+        step_latencies_ms.append((t_end - t_start) * 1000.0)
+        train_losses.append(loss_val)
 
-    if device.type == "cuda":
-        torch.cuda.synchronize(device)
-    t1 = time.perf_counter()
+    step_time_median_ms = statistics.median(step_latencies_ms)
+    step_time_min_ms = min(step_latencies_ms)
+    step_time_max_ms = max(step_latencies_ms)
+    step_time_std_ms = statistics.stdev(step_latencies_ms) if len(step_latencies_ms) > 1 else 0.0
 
-    elapsed = t1 - t0
-    step_time_ms = (elapsed / steps) * 1000.0
     tokens_trained = batch_size * seq_len * steps
-    throughput_tok_s = tokens_trained / elapsed
+    throughput_tok_s = (batch_size * seq_len) / (step_time_median_ms / 1000.0)
     peak_vram_mb = (torch.cuda.max_memory_allocated(device) / (1024 * 1024)) if device.type == "cuda" else 0.0
+
+    # Final held-out evaluation loss
+    with torch.no_grad():
+        if model_type == "moe":
+            e_out = model(eval_x, force_depth=2)
+            e_logits = e_out[0] if isinstance(e_out, tuple) else e_out
+        else:
+            e_out = model(eval_x)
+            e_logits = e_out[0] if isinstance(e_out, tuple) else e_out
+        eval_loss_final = float(F.cross_entropy(e_logits.reshape(-1, vocab_size).float(), eval_y.reshape(-1)).item())
+    eval_loss_reduction = round(eval_loss_initial - eval_loss_final, 4)
 
     # Verify LoRA parameter update invariance (proves adapter weights actively update)
     if task == "finetune" and first_adapter is not None:
         drift = (first_adapter.lora_A.detach() - initial_adapter_w).abs().max().item()
         assert drift > 0.0, f"CRITICAL: LoRA adapter weights failed to update! (max drift={drift})"
 
+    num_trainable = len(trainable_params)
+
     # Clean up GPU
-    del model, optimizer, batches, trainable_params
+    del model, optimizer, batches, trainable_params, eval_x, eval_y
     gc.collect()
     if device.type == "cuda":
         torch.cuda.empty_cache()
@@ -238,19 +273,50 @@ def run_benchmark_cell(
         "task": task,
         "model_type": model_type,
         "optimizer": opt_class_name,
-        "step_time_ms": round(step_time_ms, 2),
+        "trainable_parameters": num_trainable,
+        "step_time_ms": round(step_time_median_ms, 2),
+        "step_time_min_ms": round(step_time_min_ms, 2),
+        "step_time_max_ms": round(step_time_max_ms, 2),
+        "step_time_std_ms": round(step_time_std_ms, 2),
         "throughput_tok_s": round(throughput_tok_s, 0),
         "peak_vram_mb": round(peak_vram_mb, 1),
         "peak_vram_gb": round(peak_vram_mb / 1024.0, 2),
-        "initial_loss": round(losses[0], 4),
-        "final_loss": round(losses[-1], 4),
-        "loss_reduction": round(losses[0] - losses[-1], 4),
+        "eval_loss_initial": round(eval_loss_initial, 4),
+        "eval_loss_final": round(eval_loss_final, 4),
+        "eval_loss_reduction": eval_loss_reduction,
+        "initial_loss": round(eval_loss_initial, 4),
+        "final_loss": round(eval_loss_final, 4),
+        "loss_reduction": eval_loss_reduction,
+        "train_loss_first_step": round(train_losses[0], 4),
+        "train_loss_last_step": round(train_losses[-1], 4),
+        "train_loss_reduction": round(train_losses[0] - train_losses[-1], 4),
     }
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Triune Master Matrix Benchmark Runner")
+    parser.add_argument("--report-only", action="store_true", help="Regenerate Markdown report from existing master_matrix_results.json without re-running benchmark cells")
+    args = parser.parse_args()
+
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     dtype = torch.bfloat16 if (device.type == "cuda" and torch.cuda.is_bf16_supported()) else torch.float32
+    out_dir = Path("benchmarks")
+
+    # Capture git commit hash for full provenance
+    try:
+        git_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    except Exception:
+        git_commit = "unknown"
+
+    if args.report_only:
+        fpath = out_dir / "master_matrix_results.json"
+        if not fpath.exists():
+            raise FileNotFoundError(f"Cannot generate report: {fpath} does not exist.")
+        with open(fpath, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        cells = data.get("cells", data) if isinstance(data, dict) else data
+        generate_master_report(cells, out_dir / "MASTER_COMPETITIVE_MATRIX_REPORT.md", device, data.get("git_commit", git_commit) if isinstance(data, dict) else git_commit)
+        return
 
     print("=" * 80)
     print(" TRIUNE vs UNSLOTH vs ADAMW — MASTER 3x2x2 BENCHMARK RUNNER")
@@ -283,52 +349,86 @@ def main():
                     dtype=dtype,
                 )
                 matrix_results.append(result)
-                print(f"  -> {result['step_time_ms']} ms/step | {result['throughput_tok_s']:,.0f} tok/s | Peak VRAM: {result['peak_vram_mb']} MB | Loss Drop: {result['loss_reduction']}")
+                print(f"  -> {result['step_time_ms']} ms/step (±{result['step_time_std_ms']} ms) | {result['throughput_tok_s']:,.0f} tok/s | Peak VRAM: {result['peak_vram_mb']} MB | Eval Loss Drop: {result['eval_loss_reduction']}")
 
-    # Save JSON results
+    # Capture git commit hash for full provenance
+    try:
+        git_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    except Exception:
+        git_commit = "unknown"
+
+    artifact_payload = {
+        "schema_version": "2.2.0",
+        "benchmark_name": "master_competitive_matrix",
+        "timestamp_utc": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "git_commit": git_commit,
+        "hardware": {
+            "device_name": torch.cuda.get_device_name(0) if device.type == "cuda" else "CPU",
+            "total_vram_gb": round(torch.cuda.get_device_properties(0).total_memory / (1024**3), 2) if device.type == "cuda" else 0.0,
+            "cuda_version": torch.version.cuda or "N/A",
+            "pytorch_version": torch.__version__,
+        },
+        "competitors": {
+            "adamw": "PyTorch standard unquantized torch.optim.AdamW",
+            "unsloth": "BitsAndBytes native bitsandbytes.optim.AdamW8bit (the optimizer engine powering Unsloth)",
+            "triune": "Triune CentroidSteer (Pre-Train) / Fused AdamW (LoRA) + chunked logit-free Cross-Entropy",
+        },
+        "cells": matrix_results,
+    }
+
+    # Save JSON results (storing both structured dict and list for backward compatibility)
     out_dir = Path("benchmarks")
     out_dir.mkdir(parents=True, exist_ok=True)
     with open(out_dir / "master_matrix_results.json", "w", encoding="utf-8") as f:
-        json.dump(matrix_results, f, indent=2)
+        json.dump(artifact_payload, f, indent=2)
 
     # Generate Markdown Report
-    generate_master_report(matrix_results, out_dir / "MASTER_COMPETITIVE_MATRIX_REPORT.md", device)
+    generate_master_report(matrix_results, out_dir / "MASTER_COMPETITIVE_MATRIX_REPORT.md", device, git_commit)
 
 
-def generate_master_report(results: List[Dict[str, Any]], output_path: Path, device: torch.device):
-    md = f"""# Triune vs Unsloth vs Standard AdamW — Master 3x2x2 Competitive Matrix
+def generate_master_report(results: List[Dict[str, Any]], output_path: Path, device: torch.device, git_commit: str = "unknown"):
+    md = f"""# Triune vs BitsAndBytes 8-bit AdamW vs Standard AdamW — Master 3x2x2 Competitive Matrix
 
 **Benchmarked Hardware**: `{torch.cuda.get_device_name(0) if device.type == 'cuda' else 'CPU'}`  
 **Precision**: `torch.bfloat16` with native CUDA Tensor Cores  
 **Timestamp**: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}  
+**Git Provenance Commit**: `{git_commit}`  
 **Architecture Scope**: Universal Dense Transformers (76M) & Triune Multi-Exit MoE (76M) across Pre-Training and LoRA Fine-Tuning.
+
+> [!NOTE]
+> **Competitor Scope & Naming**:
+> - **Standard AdamW**: PyTorch's native `torch.optim.AdamW`.
+> - **BitsAndBytes 8-bit AdamW**: Genuine native `bitsandbytes.optim.AdamW8bit` (the core 8-bit optimizer engine used by Unsloth) evaluated on identical Triune model architectures.
+> - **Triune Stack**: `CentroidSteerOptimizer` (3-tier Muon + Triangular Core CentroidSteer + 8-bit AdamW base) during pre-training; fused `addmm_` LoRA + chunked logit-free cross-entropy during fine-tuning.
+> - **Convergence Accounting**: Evaluation loss is measured on a **fixed held-out evaluation batch** (seed 999) before warmup and after the 15 training steps.
 
 ---
 
 ## 1. Pre-Training from Scratch (Dense vs MoE)
 
-| Architecture | Framework Stack | Step Latency | Throughput | Peak VRAM | VRAM Saved vs AdamW | Loss Drop (15 steps) |
+| Architecture | Framework & Optimizer | Step Latency (Median ± Std) | Throughput | Peak VRAM | VRAM Saved vs AdamW | Held-Out Eval Loss Drop |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
 """
     # Filter pretraining
     pre = [r for r in results if r["task"] == "pretrain"]
-    # Find baseline adamw for dense and moe
     adamw_dense = next((r for r in pre if r["model_type"] == "dense" and r["stack"] == "adamw"), None)
     adamw_moe = next((r for r in pre if r["model_type"] == "moe" and r["stack"] == "adamw"), None)
 
     for r in pre:
         base = adamw_dense if r["model_type"] == "dense" else adamw_moe
         saved_pct = round(((base["peak_vram_mb"] - r["peak_vram_mb"]) / max(base["peak_vram_mb"], 1e-6)) * 100.0, 1) if base else 0.0
-        stack_label = "**Triune Stack**" if r["stack"] == "triune" else ("Unsloth Style" if r["stack"] == "unsloth" else "Standard AdamW")
+        stack_label = f"**Triune Stack** (`{r.get('optimizer', 'CentroidSteer')}`)" if r["stack"] == "triune" else (f"BitsAndBytes 8-bit AdamW (`{r.get('optimizer', 'AdamW8bit')}`)" if r["stack"] == "unsloth" else f"Standard AdamW (`{r.get('optimizer', 'AdamW')}`)")
         model_label = "Universal Dense (76M)" if r["model_type"] == "dense" else "Triune MoE (76M)"
-        md += f"| {model_label} | {stack_label} | {r['step_time_ms']} ms | {r['throughput_tok_s']:,.0f} tok/s | **{r['peak_vram_mb']} MB** | **{saved_pct}%** | {r['loss_reduction']} |\n"
+        latency_str = f"{r['step_time_ms']} ± {r.get('step_time_std_ms', 0.0)} ms"
+        eval_drop = r.get("eval_loss_reduction", r.get("loss_reduction", 0.0))
+        md += f"| {model_label} | {stack_label} | {latency_str} | {r['throughput_tok_s']:,.0f} tok/s | **{r['peak_vram_mb']} MB** | **{saved_pct}%** | {eval_drop} |\n"
 
     md += """
 ---
 
 ## 2. LoRA Fine-Tuning (Dense vs MoE)
 
-| Architecture | Framework Stack | Step Latency | Throughput | Peak VRAM | VRAM Saved vs AdamW | Loss Drop (15 steps) |
+| Architecture | Framework & Optimizer | Step Latency (Median ± Std) | Throughput | Peak VRAM | VRAM Saved vs AdamW | Held-Out Eval Loss Drop |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
 """
     # Filter finetuning
@@ -339,29 +439,69 @@ def generate_master_report(results: List[Dict[str, Any]], output_path: Path, dev
     for r in fine:
         base = adamw_dense_f if r["model_type"] == "dense" else adamw_moe_f
         saved_pct = round(((base["peak_vram_mb"] - r["peak_vram_mb"]) / max(base["peak_vram_mb"], 1e-6)) * 100.0, 1) if base else 0.0
-        stack_label = "**Triune Stack**" if r["stack"] == "triune" else ("Unsloth Style" if r["stack"] == "unsloth" else "Standard AdamW")
+        stack_label = f"**Triune Stack** (`{r.get('optimizer', 'AdamW')}`)" if r["stack"] == "triune" else (f"BitsAndBytes 8-bit AdamW (`{r.get('optimizer', 'AdamW8bit')}`)" if r["stack"] == "unsloth" else f"Standard AdamW (`{r.get('optimizer', 'AdamW')}`)")
         model_label = "Universal Dense (76M)" if r["model_type"] == "dense" else "Triune MoE (76M)"
-        md += f"| {model_label} | {stack_label} | {r['step_time_ms']} ms | {r['throughput_tok_s']:,.0f} tok/s | **{r['peak_vram_mb']} MB** | **{saved_pct}%** | {r['loss_reduction']} |\n"
+        latency_str = f"{r['step_time_ms']} ± {r.get('step_time_std_ms', 0.0)} ms"
+        eval_drop = r.get("eval_loss_reduction", r.get("loss_reduction", 0.0))
+        md += f"| {model_label} | {stack_label} | {latency_str} | {r['throughput_tok_s']:,.0f} tok/s | **{r['peak_vram_mb']} MB** | **{saved_pct}%** | {eval_drop} |\n"
+
+    def find_cell(task_name, model_name, stack_name):
+        return next((r for r in results if r["task"] == task_name and r["model_type"] == model_name and r["stack"] == stack_name), None)
+
+    d_pt_adam = find_cell("pretrain", "dense", "adamw")
+    d_pt_bnb = find_cell("pretrain", "dense", "unsloth")
+    d_pt_triune = find_cell("pretrain", "dense", "triune")
+
+    m_pt_adam = find_cell("pretrain", "moe", "adamw")
+    m_pt_bnb = find_cell("pretrain", "moe", "unsloth")
+    m_pt_triune = find_cell("pretrain", "moe", "triune")
+
+    d_ft_adam = find_cell("finetune", "dense", "adamw")
+    d_ft_bnb = find_cell("finetune", "dense", "unsloth")
+    d_ft_triune = find_cell("finetune", "dense", "triune")
+
+    m_ft_adam = find_cell("finetune", "moe", "adamw")
+    m_ft_bnb = find_cell("finetune", "moe", "unsloth")
+    m_ft_triune = find_cell("finetune", "moe", "triune")
 
     md += """
 ---
 
 ## 3. Workload-by-Workload Empirical Trade-Offs
 
-1. **Dense LoRA Fine-Tuning (Strongest Triune Win)**:
-   - **Throughput**: Triune runs at **63.17 ms/step (16,211 tok/s)**, outperforming Unsloth 8-bit AdamW (**82.34 ms/step**, **12,436 tok/s**, **30.4% speedup**) while performing competitively with standard AdamW (61.15 ms/step).
-   - **Memory**: Triune uses only **402.2 MB peak VRAM**, representing a **43.8% reduction vs standard AdamW (716.1 MB)** and a **31.4% reduction vs Unsloth 8-bit AdamW (586.1 MB)** due to fused linear-LoRA and chunked logit-free backprop.
+"""
+    if d_ft_triune and d_ft_adam and d_ft_bnb:
+        vram_sav_adam = round(((d_ft_adam["peak_vram_mb"] - d_ft_triune["peak_vram_mb"]) / max(d_ft_adam["peak_vram_mb"], 1e-6)) * 100.0, 1)
+        vram_sav_bnb = round(((d_ft_bnb["peak_vram_mb"] - d_ft_triune["peak_vram_mb"]) / max(d_ft_bnb["peak_vram_mb"], 1e-6)) * 100.0, 1)
+        md += f"""1. **Dense LoRA Fine-Tuning**:
+   - **Memory**: Triune uses **{d_ft_triune['peak_vram_mb']} MB peak VRAM**, achieving a **{vram_sav_adam}% reduction vs Standard AdamW ({d_ft_adam['peak_vram_mb']} MB)** and a **{vram_sav_bnb}% reduction vs BitsAndBytes 8-bit AdamW ({d_ft_bnb['peak_vram_mb']} MB)** due to chunked cross-entropy and fused adapter backprop.
+   - **Throughput**: Triune runs at **{d_ft_triune['step_time_ms']} ± {d_ft_triune.get('step_time_std_ms', 0.0)} ms/step ({d_ft_triune['throughput_tok_s']:,.0f} tok/s)** vs **{d_ft_bnb['step_time_ms']} ± {d_ft_bnb.get('step_time_std_ms', 0.0)} ms/step** for BitsAndBytes 8-bit AdamW and **{d_ft_adam['step_time_ms']} ± {d_ft_adam.get('step_time_std_ms', 0.0)} ms/step** for standard AdamW.
 
-2. **MoE LoRA Fine-Tuning**:
-   - Triune runs at **164.51 ms/step** (vs Unsloth 173.62 ms/step and AdamW 163.54 ms/step) while matching Unsloth in peak VRAM (**933.6 MB vs 932.7 MB**, an 11.8% reduction vs standard AdamW's 1058.5 MB).
+"""
 
-3. **Dense Pre-Training from Scratch (Memory & Convergence Win, Throughput Trade-off)**:
-   - **Memory**: Triune slashes peak VRAM to **504.5 MB**, saving **42.8% vs standard AdamW (882.6 MB)** and **24.2% vs Unsloth (665.6 MB)**.
-   - **Convergence**: CentroidSteer + Muon achieves **6.8131 loss drop** over 15 steps (+16.3% faster initial loss reduction vs 5.8562 for AdamW and 5.8598 for Unsloth).
-   - **Throughput**: Triune pays a ~23% latency penalty (62.40 ms vs 50.48 ms for unquantized AdamW) due to online subspace projections.
+    if m_ft_triune and m_ft_adam and m_ft_bnb:
+        vram_sav_adam = round(((m_ft_adam["peak_vram_mb"] - m_ft_triune["peak_vram_mb"]) / max(m_ft_adam["peak_vram_mb"], 1e-6)) * 100.0, 1)
+        md += f"""2. **MoE LoRA Fine-Tuning**:
+   - **Latency & Memory**: Triune runs at **{m_ft_triune['step_time_ms']} ± {m_ft_triune.get('step_time_std_ms', 0.0)} ms/step** ({m_ft_triune['throughput_tok_s']:,.0f} tok/s) and **{m_ft_triune['peak_vram_mb']} MB peak VRAM** ({vram_sav_adam}% lower VRAM than Standard AdamW's {m_ft_adam['peak_vram_mb']} MB, operating at near parity with BitsAndBytes's {m_ft_bnb['peak_vram_mb']} MB and {m_ft_bnb['step_time_ms']} ms/step).
 
-4. **MoE Pre-Training from Scratch**:
-   - Triune uses the lowest peak VRAM (**1,094.4 MB**, saving 22.4% vs AdamW's 1,409.9 MB and 5.4% vs Unsloth's 1,157.0 MB) while achieving the strongest loss reduction (**4.1021 vs 3.5229 AdamW and 3.5348 Unsloth**), running at comparable latency to Unsloth (173.89 ms vs 171.89 ms).
+"""
+
+    if d_pt_triune and d_pt_adam and d_pt_bnb:
+        vram_sav_adam = round(((d_pt_adam["peak_vram_mb"] - d_pt_triune["peak_vram_mb"]) / max(d_pt_adam["peak_vram_mb"], 1e-6)) * 100.0, 1)
+        vram_sav_bnb = round(((d_pt_bnb["peak_vram_mb"] - d_pt_triune["peak_vram_mb"]) / max(d_pt_bnb["peak_vram_mb"], 1e-6)) * 100.0, 1)
+        md += f"""3. **Dense Pre-Training from Scratch (VRAM Efficiency Trade-Off)**:
+   - **Memory**: Triune reduces peak VRAM to **{d_pt_triune['peak_vram_mb']} MB**, saving **{vram_sav_adam}% vs standard AdamW ({d_pt_adam['peak_vram_mb']} MB)** and **{vram_sav_bnb}% vs BitsAndBytes 8-bit AdamW ({d_pt_bnb['peak_vram_mb']} MB)**.
+   - **Throughput**: Latency is **{d_pt_triune['step_time_ms']} ± {d_pt_triune.get('step_time_std_ms', 0.0)} ms/step** ({d_pt_triune['throughput_tok_s']:,.0f} tok/s), trading ~25% raw speed vs unquantized AdamW ({d_pt_adam['step_time_ms']} ms) in exchange for dramatic VRAM savings and subspace gradient tracking.
+
+"""
+
+    if m_pt_triune and m_pt_adam and m_pt_bnb:
+        vram_sav_adam = round(((m_pt_adam["peak_vram_mb"] - m_pt_triune["peak_vram_mb"]) / max(m_pt_adam["peak_vram_mb"], 1e-6)) * 100.0, 1)
+        vram_sav_bnb = round(((m_pt_bnb["peak_vram_mb"] - m_pt_triune["peak_vram_mb"]) / max(m_pt_bnb["peak_vram_mb"], 1e-6)) * 100.0, 1)
+        speedup_vs_bnb = round(((m_pt_bnb["step_time_ms"] - m_pt_triune["step_time_ms"]) / max(m_pt_bnb["step_time_ms"], 1e-6)) * 100.0, 1)
+        md += f"""4. **MoE Pre-Training from Scratch (Speed & Memory Win over 8-Bit Baseline)**:
+   - **Speed**: Triune runs at **{m_pt_triune['step_time_ms']} ± {m_pt_triune.get('step_time_std_ms', 0.0)} ms/step**, outperforming BitsAndBytes 8-bit AdamW ({m_pt_bnb['step_time_ms']} ms/step) by **{speedup_vs_bnb}%**.
+   - **Memory**: Triune uses the lowest peak VRAM in this category at **{m_pt_triune['peak_vram_mb']} MB**, saving **{vram_sav_adam}% vs Standard AdamW ({m_pt_adam['peak_vram_mb']} MB)** and **{vram_sav_bnb}% vs BitsAndBytes 8-bit AdamW ({m_pt_bnb['peak_vram_mb']} MB)**.
 """
     output_path.write_text(md, encoding="utf-8")
     print(f"\n[SUCCESS] Generated Master Report: {output_path}")
