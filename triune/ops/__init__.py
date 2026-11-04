@@ -2,6 +2,20 @@
 
 from __future__ import annotations
 
+from triune.kernels.fast_cross_entropy import (
+    FastChunkedCrossEntropyLoss,
+)
+from triune.kernels.fast_cross_entropy import (
+    chunked_cross_entropy_from_hidden as chunked_cross_entropy,
+)
+from triune.kernels.fast_cross_entropy import (
+    fast_cross_entropy as cross_entropy,
+)
+from triune.kernels.fast_lora import fast_lora_forward as lora_forward
+from triune.kernels.fast_lora import fast_lora_linear as lora_linear
+from triune.kernels.fast_rope import fast_rope as rope
+from triune.kernels.fast_swiglu import fast_gelu as gelu
+
 from ._c_bridge import (
     NativeTriuneEngine,
     c_centroid_steer_update_f32,
@@ -22,14 +36,6 @@ from .muon import muon_orthogonalize
 from .norm import norm
 from .router import TIER_CORTEX, TIER_LIMBIC, TIER_NAMES, TIER_REFLEX, route_tiers
 from .swiglu import swiglu
-from triune.kernels.fast_cross_entropy import (
-    FastChunkedCrossEntropyLoss,
-    chunked_cross_entropy_from_hidden as chunked_cross_entropy,
-    fast_cross_entropy as cross_entropy,
-)
-from triune.kernels.fast_lora import fast_lora_forward as lora_forward, fast_lora_linear as lora_linear
-from triune.kernels.fast_rope import fast_rope as rope
-from triune.kernels.fast_swiglu import fast_gelu as gelu
 
 rmsnorm = norm
 muon_ns = muon_orthogonalize
@@ -40,6 +46,7 @@ def upgrade(model, **kwargs):
     from triune.universal import upgrade_model
 
     return upgrade_model(model, **kwargs)
+
 
 __all__ = [
     "NativeTriuneEngine",

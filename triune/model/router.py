@@ -1,7 +1,9 @@
 import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
 
 class GumbelSoftmaxRouter(nn.Module):
     """
@@ -9,12 +11,13 @@ class GumbelSoftmaxRouter(nn.Module):
     Enables end-to-end differentiability of discrete early-exit decisions
     while maintaining physical execution sparsity in the forward pass.
     """
+
     def __init__(self, hidden_dim: int, target_depth_dist=(0.34, 0.33, 0.33), balance_coef: float | None = None):
         super().__init__()
         self.router_mlp = nn.Sequential(
             nn.Linear(hidden_dim, 256),
             nn.ReLU(),
-            nn.Linear(256, 3)  # Outputs: logits for [Reflex, Limbic, Cortex]
+            nn.Linear(256, 3),  # Outputs: logits for [Reflex, Limbic, Cortex]
         )
         target_tensor = torch.as_tensor(target_depth_dist, dtype=torch.float32)
         if target_tensor.ndim != 1 or target_tensor.shape[0] != 3:
@@ -42,7 +45,7 @@ class GumbelSoftmaxRouter(nn.Module):
             raise ValueError(f"Gumbel-Softmax temperature must be a finite positive number, got {temperature}")
         B, T, D = x.shape
         if T > 8:
-            tail = x[:, -min(T, 12):, :].mean(dim=1)
+            tail = x[:, -min(T, 12) :, :].mean(dim=1)
             pooled = 0.75 * tail + 0.25 * x.mean(dim=1)
         else:
             pooled = x.mean(dim=1)
@@ -58,14 +61,14 @@ class GumbelSoftmaxRouter(nn.Module):
             # 1. Sample standard Gumbel noise: G = -log(-log(U)) where U ~ Uniform(0,1)
             unif = torch.rand_like(logits)
             gumbels = -torch.log(-torch.log(unif + 1e-20) + 1e-20)
-            
+
             # 2. Compute continuous relaxed softmax
             y_soft = F.softmax((logits + gumbels) / temperature, dim=-1)
-            
+
             # 3. Discretization using Straight-Through (ST) estimator
             index = y_soft.argmax(dim=-1, keepdim=True)
             y_hard = torch.zeros_like(logits).scatter_(-1, index, 1.0)
-            
+
             # Straight-through gradient identity block
             y_route = y_hard + y_soft - y_soft.detach()
         else:

@@ -12,20 +12,20 @@ Proves:
 from __future__ import annotations
 
 import math
-import random
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from triune.model import MoE_FFN, TriuneTransformer, get_model_spec, build_model_from_spec
+from triune.model import MoE_FFN, build_model_from_spec, get_model_spec
 from triune.optim.centroid import CentroidSteerOptimizer, fast_subspace_projection
 from triune.trainer.engine import TrainingEngine
-from triune.trainer.scheduler import lr_schedule, set_optimizer_lr
-
+from triune.trainer.scheduler import set_optimizer_lr
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. MoE Architecture & Positional Constructor Compatibility
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def test_moe_activation_is_gelu_and_positional_api():
     """Verify MoE uses canonical GELU (not SiLU) and supports original positional arguments."""
@@ -59,6 +59,7 @@ def test_moe_activation_is_gelu_and_positional_api():
 # ─────────────────────────────────────────────────────────────────────────────
 # 2. Padding-Aware Loss Normalization
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class _MockTrainer:
     def __init__(self, vocab_size=100, pad_token_id=0):
@@ -132,6 +133,7 @@ def test_padding_loss_normalization():
 # 3. Gradient Checkpointing Parity & State Invariance
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_checkpointing_gradient_and_state_parity():
     """Prove that gradient checkpointing produces identical gradients and preserves MoE state."""
     dim = 64
@@ -149,7 +151,7 @@ def test_checkpointing_gradient_and_state_parity():
     moe_cp = MoE_FFN(dim=dim, num_experts=num_experts, top_k=top_k, shared_expert=True)
     moe_cp.train()
 
-    from triune.model.config import checkpoint_fwd_ctx, checkpoint_bwd_ctx
+    from triune.model.config import checkpoint_bwd_ctx, checkpoint_fwd_ctx
 
     x = torch.randn(B, T, dim)
 
@@ -189,6 +191,7 @@ def test_checkpointing_gradient_and_state_parity():
 # ─────────────────────────────────────────────────────────────────────────────
 # 4. Cholesky-QR Subspace Projection Robustness
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def test_cholesky_qr_numerical_robustness():
     """Verify fast_subspace_projection stability across varied scales and rank-deficiencies."""
@@ -233,6 +236,7 @@ def test_cholesky_qr_numerical_robustness():
 # 5. Expert Learning-Rate Schedule Decay
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_expert_lr_schedule_decay():
     """Prove that expert learning rate decays in lockstep with base learning rate."""
     spec = get_model_spec("triune-nano", vocab_size=256)
@@ -262,6 +266,7 @@ def test_expert_lr_schedule_decay():
 # ─────────────────────────────────────────────────────────────────────────────
 # 6. Telemetry Semantics: Measured Usage vs Target Distribution
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def test_telemetry_semantics_distinguishes_usage_from_target():
     """Verify that unmeasured models report exit_usage=None and expose target separately."""

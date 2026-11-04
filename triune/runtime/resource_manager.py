@@ -7,16 +7,18 @@ to prevent CUDA driver mapping crashes on consumer GPUs.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import gc
 import math
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
+
 import torch
 import torch.nn as nn
 
 
 class VRAMBudgetExceededError(RuntimeError):
     """Raised when a model or training configuration exceeds available VRAM and --force is not set."""
+
     pass
 
 
@@ -84,8 +86,7 @@ class LiveVRAMMonitor:
         self.device = device
         self.defrag_threshold = defrag_threshold
         self.total_gb = (
-            torch.cuda.get_device_properties(device).total_memory / (1024 ** 3)
-            if device.type == "cuda" else 8.0
+            torch.cuda.get_device_properties(device).total_memory / (1024**3) if device.type == "cuda" else 8.0
         )
         self.last_allocated_gb = 0.0
         self.last_reserved_gb = 0.0
@@ -97,9 +98,9 @@ class LiveVRAMMonitor:
         if self.device.type != "cuda" or not torch.cuda.is_available():
             return {"allocated_gb": 0.0, "reserved_gb": 0.0, "peak_gb": 0.0, "headroom_gb": 8.0}
 
-        alloc = torch.cuda.memory_allocated(self.device) / (1024 ** 3)
-        res = torch.cuda.memory_reserved(self.device) / (1024 ** 3)
-        peak = torch.cuda.max_memory_allocated(self.device) / (1024 ** 3)
+        alloc = torch.cuda.memory_allocated(self.device) / (1024**3)
+        res = torch.cuda.memory_reserved(self.device) / (1024**3)
+        peak = torch.cuda.max_memory_allocated(self.device) / (1024**3)
 
         self.last_allocated_gb = alloc
         self.last_reserved_gb = res
@@ -111,7 +112,7 @@ class LiveVRAMMonitor:
         if (res / self.total_gb) >= self.defrag_threshold or cached_unused >= 1.5:
             torch.cuda.empty_cache()
             self.defrag_count += 1
-            res = torch.cuda.memory_reserved(self.device) / (1024 ** 3)
+            res = torch.cuda.memory_reserved(self.device) / (1024**3)
             self.last_reserved_gb = res
 
         headroom = max(0.0, self.total_gb - res)
@@ -146,6 +147,7 @@ class DynamicResourceManager:
         has_te = False
         try:
             import transformer_engine.pytorch  # noqa: F401
+
             has_te = True
         except ImportError:
             has_te = False
@@ -168,8 +170,8 @@ class DynamicResourceManager:
         props = torch.cuda.get_device_properties(dev)
         free_bytes, total_bytes = torch.cuda.mem_get_info(dev)
 
-        total_vram_gb = total_bytes / (1024 ** 3)
-        free_vram_gb = free_bytes / (1024 ** 3)
+        total_vram_gb = total_bytes / (1024**3)
+        free_vram_gb = free_bytes / (1024**3)
         used_vram_gb = total_vram_gb - free_vram_gb
 
         major, minor = props.major, props.minor
@@ -213,7 +215,7 @@ class DynamicResourceManager:
             total_layer_params = 0
             for i in range(num_layers):
                 # Attention (Q, K, V, Gate, Out) + 2 RMSNorms
-                attn_params = 5 * (hidden_dim ** 2) + 2 * hidden_dim
+                attn_params = 5 * (hidden_dim**2) + 2 * hidden_dim
 
                 # FFN: MoE vs dense prefix
                 if i > reflex_exit_layer:
@@ -242,7 +244,7 @@ class DynamicResourceManager:
         else:
             bytes_per_param = 2.0  # BF16
 
-        param_memory_gb = (total_params * bytes_per_param) / (1024 ** 3)
+        param_memory_gb = (total_params * bytes_per_param) / (1024**3)
         return total_params, param_memory_gb
 
     @classmethod
@@ -283,14 +285,14 @@ class DynamicResourceManager:
             staged_layer_params = single_layer_params * 2.0  # active layer + prefetch buffer
 
             bytes_per_param_gpu = 1.0 if cfg.get("use_fp8") else (0.5 if cfg.get("use_fp4") else 2.0)
-            gpu_weight_memory_gb = ((gpu_persistent_params + staged_layer_params) * bytes_per_param_gpu) / (1024 ** 3)
+            gpu_weight_memory_gb = ((gpu_persistent_params + staged_layer_params) * bytes_per_param_gpu) / (1024**3)
             # In streaming, optimizer state resides on CPU RAM, not GPU VRAM!
             optimizer_memory_gb = 0.05  # tiny staging buffer for active layer update
-            gradient_memory_gb = (staged_layer_params * 2.0) / (1024 ** 3)  # local layer gradients before D2H async
+            gradient_memory_gb = (staged_layer_params * 2.0) / (1024**3)  # local layer gradients before D2H async
             cuda_overhead_gb = 0.4
             baseline_static_gb = gpu_weight_memory_gb + optimizer_memory_gb + gradient_memory_gb + cuda_overhead_gb
             act_per_sample_bytes = seq_len * hidden_dim * 2 * 2  # per-layer staged activations
-            act_per_sample_gb = act_per_sample_bytes / (1024 ** 3)
+            act_per_sample_gb = act_per_sample_bytes / (1024**3)
             activation_memory_gb = initial_batch * act_per_sample_gb
         else:
             opt_bytes_factor = 0.5 if use_muon else 0.8
@@ -300,7 +302,7 @@ class DynamicResourceManager:
             baseline_static_gb = param_memory_gb + optimizer_memory_gb + gradient_memory_gb + cuda_overhead_gb
             # Activation per sample across all layers (with gradient checkpointing)
             act_per_sample_bytes = num_layers * seq_len * hidden_dim * 2
-            act_per_sample_gb = act_per_sample_bytes / (1024 ** 3)
+            act_per_sample_gb = act_per_sample_bytes / (1024**3)
             activation_memory_gb = initial_batch * act_per_sample_gb
 
         estimated_total_gb = baseline_static_gb + activation_memory_gb
@@ -311,7 +313,9 @@ class DynamicResourceManager:
             suggested_batch = 1
         else:
             remaining_headroom_gb = max(0.1, safe_budget_gb - baseline_static_gb)
-            suggested_batch = max(1, min(initial_batch, int(remaining_headroom_gb // max(0.001, act_per_sample_gb * 3.0))))
+            suggested_batch = max(
+                1, min(initial_batch, int(remaining_headroom_gb // max(0.001, act_per_sample_gb * 3.0)))
+            )
 
         suggested_accum = max(1, math.ceil(target_effective_batch / suggested_batch))
 
@@ -343,10 +347,10 @@ class DynamicResourceManager:
                     f"Total static footprint (~{baseline_static_gb:.2f} GB: weights + optimizer + gradients) exceeds total GPU VRAM ({total_vram_gb:.2f} GB)."
                 )
             if hw.supports_fp8 and not cfg.get("use_fp8"):
-                bf16_weights_gb = (total_params * 2.0) / (1024 ** 3)
+                bf16_weights_gb = (total_params * 2.0) / (1024**3)
                 recommendations.append(
                     f"Enable Native FP8 (--use_fp8): Halves model weight footprint from ~{bf16_weights_gb:.2f} GB to "
-                    f"~{bf16_weights_gb*0.5:.2f} GB on {hw.device_name} (native PyTorch scaled GEMM, zero external builds needed)."
+                    f"~{bf16_weights_gb * 0.5:.2f} GB on {hw.device_name} (native PyTorch scaled GEMM, zero external builds needed)."
                 )
             if hw.has_transformer_engine and not cfg.get("use_fp4"):
                 recommendations.append(
@@ -374,9 +378,7 @@ class DynamicResourceManager:
                 recommendations.append(
                     f"Scale micro-batch: Set '--batch_size {suggested_batch} --grad_accum_steps {suggested_accum}' to reduce activation memory by 50%+ while preserving effective batch size ({target_effective_batch})."
                 )
-            recommendations.append(
-                "Override Authority: Pass '--force' to proceed without micro-batch adjustments."
-            )
+            recommendations.append("Override Authority: Pass '--force' to proceed without micro-batch adjustments.")
         else:
             recommendations.append(
                 f"Configuration fits comfortably within hardware budget (Estimated Headroom: ~{headroom_gb:.2f} GB)."
@@ -430,7 +432,7 @@ class DynamicResourceManager:
             f"  • Optimizer (Centroid+Muon):   ~{assessment.optimizer_memory_gb:.2f} GB",
             f"  • Activations & Gradients:     ~{assessment.activation_memory_gb + assessment.gradient_memory_gb:.2f} GB",
             f"  • CUDA Context & Overhead:     ~{assessment.cuda_overhead_gb:.2f} GB",
-            f"  -------------------------------------------",
+            "  -------------------------------------------",
             f"  • Total Projected VRAM:        ~{assessment.estimated_total_gb:.2f} GB",
             f"  • Safe Budget Ceiling (85%):   ~{assessment.safe_budget_gb:.2f} GB",
             f"  • Headroom / Deficit:           {assessment.headroom_gb:+.2f} GB",
@@ -551,19 +553,22 @@ class DynamicResourceManager:
                     layer.to(device=device, dtype=dtype)
                     allocated_bytes = torch.cuda.memory_allocated(device)
                     if not force and allocated_bytes >= max_allowed_bytes:
-                        used_gb = allocated_bytes / (1024 ** 3)
-                        total_gb = total_bytes / (1024 ** 3)
+                        used_gb = allocated_bytes / (1024**3)
+                        total_gb = total_bytes / (1024**3)
                         raise VRAMBudgetExceededError(
                             f"Aborting transfer at layer {idx + 1}/{len(model.layers)}: "
-                            f"allocated {used_gb:.2f} GB of {total_gb:.2f} GB exceeds safe ceiling ({safety_ceiling_pct*100:.0f}%).\n"
+                            f"allocated {used_gb:.2f} GB of {total_gb:.2f} GB exceeds safe ceiling ({safety_ceiling_pct * 100:.0f}%).\n"
                             f"Pass '--force' to override this check, or optimize precision/model size."
                         )
 
             # 3. Any remaining submodules
             # Removed self-defeating final model.to() call that bulk-transfers everything
             # model.to(device=device, dtype=dtype)
-            allocated_gb = torch.cuda.memory_allocated(device) / (1024 ** 3)
-            print(f"[Resource Manager] Staged transfer complete. Allocated: {allocated_gb:.2f}/{total_bytes/(1024**3):.2f} GB", flush=True)
+            allocated_gb = torch.cuda.memory_allocated(device) / (1024**3)
+            print(
+                f"[Resource Manager] Staged transfer complete. Allocated: {allocated_gb:.2f}/{total_bytes / (1024**3):.2f} GB",
+                flush=True,
+            )
             return model
 
         except torch.cuda.OutOfMemoryError as oom_err:

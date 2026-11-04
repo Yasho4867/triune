@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-import tempfile
-import unittest
 import base64
 import hashlib
 import json
 import os
 import sys
-from types import SimpleNamespace
+import tempfile
+import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from triune.modules.manager import ModuleManager, _verified_plugin_entrypoints
@@ -34,12 +34,14 @@ class TestModuleManagerFailures(unittest.TestCase):
 
     def test_failed_checkpoint_download_does_not_create_fake_artifact(self) -> None:
         with patch("triune.modules.manager.urllib.request.urlretrieve", side_effect=OSError("offline")):
-            result = self.manager.install_module({
-                "id": "test-missing-weights",
-                "name": "Missing Weights",
-                "download_url": "https://example.invalid/model.safetensors",
-                "type": "model",
-            })
+            result = self.manager.install_module(
+                {
+                    "id": "test-missing-weights",
+                    "name": "Missing Weights",
+                    "download_url": "https://example.invalid/model.safetensors",
+                    "type": "model",
+                }
+            )
 
         self.assertFalse(result["success"])
         self.assertFalse((self.manager.modules_dir / "test-missing-weights" / "model.safetensors").exists())
@@ -48,11 +50,15 @@ class TestModuleManagerFailures(unittest.TestCase):
     def test_uninstall_failure_preserves_module_registration(self) -> None:
         module_dir = self.manager.modules_dir / "test-protected-module"
         module_dir.mkdir(parents=True)
-        self.manager._save_installed_modules([{
-            "id": "test-protected-module",
-            "name": "Protected Module",
-            "installed_at": str(module_dir),
-        }])
+        self.manager._save_installed_modules(
+            [
+                {
+                    "id": "test-protected-module",
+                    "name": "Protected Module",
+                    "installed_at": str(module_dir),
+                }
+            ]
+        )
 
         with patch("triune.modules.manager.shutil.rmtree", side_effect=PermissionError("locked")):
             result = self.manager.uninstall_module("test-protected-module")
@@ -69,11 +75,20 @@ class TestModuleManagerFailures(unittest.TestCase):
         remote_path = self.manager._module_path("triune-base-weights")
         self.assertIsNotNone(remote_path)
         remote_path.mkdir()
-        with patch.object(self.manager, "get_installed_modules", return_value=[{
-            "id": "triune-base-weights",  # Deliberately collides with a curated registry ID.
-            "installed_at": str(remote_path),
-            "repo_url": "https://example.invalid/untrusted.git",
-        }]), patch.object(self.manager, "discover_and_register_nodes") as discover:
+        with (
+            patch.object(
+                self.manager,
+                "get_installed_modules",
+                return_value=[
+                    {
+                        "id": "triune-base-weights",  # Deliberately collides with a curated registry ID.
+                        "installed_at": str(remote_path),
+                        "repo_url": "https://example.invalid/untrusted.git",
+                    }
+                ],
+            ),
+            patch.object(self.manager, "discover_and_register_nodes") as discover,
+        ):
             self.manager._auto_register_installed_nodes()
 
         discover.assert_not_called()
@@ -92,11 +107,14 @@ class TestModuleManagerFailures(unittest.TestCase):
             "size_mb": 0.01,
             "artifacts": {"adapters": [], "weights": [], "datasets": [], "python_files": ["plugin.py"]},
         }
-        with patch("triune.modules.manager.subprocess.run", return_value=SimpleNamespace(
-            returncode=0, stdout="cloned", stderr=""
-        )), patch.object(self.manager, "inspect_directory", return_value=inspection), patch.object(
-            self.manager, "discover_and_register_nodes"
-        ) as discover:
+        with (
+            patch(
+                "triune.modules.manager.subprocess.run",
+                return_value=SimpleNamespace(returncode=0, stdout="cloned", stderr=""),
+            ),
+            patch.object(self.manager, "inspect_directory", return_value=inspection),
+            patch.object(self.manager, "discover_and_register_nodes") as discover,
+        ):
             result = self.manager.clone_repository(
                 "https://github.com/example/plugin.git", module_type="plugin", custom_name="review-plugin"
             )
@@ -112,7 +130,9 @@ class TestModuleManagerFailures(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertFalse(outside.exists())
 
-        with tempfile.TemporaryDirectory(dir=self.manager._workspace_root(), prefix=".plugin-template-test-") as workspace_name:
+        with tempfile.TemporaryDirectory(
+            dir=self.manager._workspace_root(), prefix=".plugin-template-test-"
+        ) as workspace_name:
             workspace = Path(workspace_name)
             target = workspace / "plugin_example.py"
             target.write_text("user-owned content\n", encoding="utf-8")
@@ -121,11 +141,13 @@ class TestModuleManagerFailures(unittest.TestCase):
             self.assertEqual(target.read_text(encoding="utf-8"), "user-owned content\n")
 
     def test_plugin_template_escapes_names_and_categories_as_python_literals(self) -> None:
-        with tempfile.TemporaryDirectory(dir=self.manager._workspace_root(), prefix=".plugin-template-escape-test-") as workspace_name:
+        with tempfile.TemporaryDirectory(
+            dir=self.manager._workspace_root(), prefix=".plugin-template-escape-test-"
+        ) as workspace_name:
             workspace = Path(workspace_name)
             with patch.object(self.manager, "discover_and_register_nodes") as discover:
                 result = self.manager.create_custom_plugin_template(
-                    "2; import os", category='Custom\")\nimport os\n#', destination_dir=str(workspace)
+                    "2; import os", category='Custom")\nimport os\n#', destination_dir=str(workspace)
                 )
             discover.assert_not_called()
             self.assertTrue(result["success"], result)
@@ -134,7 +156,9 @@ class TestModuleManagerFailures(unittest.TestCase):
             self.assertNotIn("\nimport os\n#", source)
 
     def test_plugin_template_handles_non_string_name_without_crashing(self) -> None:
-        with tempfile.TemporaryDirectory(dir=self.manager._workspace_root(), prefix=".plugin-template-input-test-") as workspace_name:
+        with tempfile.TemporaryDirectory(
+            dir=self.manager._workspace_root(), prefix=".plugin-template-input-test-"
+        ) as workspace_name:
             result = self.manager.create_custom_plugin_template(None, destination_dir=workspace_name)
             self.assertTrue(result["success"], result)
             self.assertEqual(result["node_name"], "CustomNode")
@@ -167,8 +191,9 @@ class TestModuleManagerFailures(unittest.TestCase):
                 self.values.pop((service, username), None)
 
         fake_keyring = FakeKeyring()
-        with patch.dict("sys.modules", {"keyring": fake_keyring}), patch.object(
-            ModuleManager, "_get_secure_keyring", return_value=fake_keyring
+        with (
+            patch.dict("sys.modules", {"keyring": fake_keyring}),
+            patch.object(ModuleManager, "_get_secure_keyring", return_value=fake_keyring),
         ):
             self.manager.save_config({"byok_keys": {"openai": "sk-secret-test-value"}})
             stored = self.manager.config_file.read_text(encoding="utf-8")
@@ -185,9 +210,10 @@ class TestModuleManagerFailures(unittest.TestCase):
 
     def test_explicit_byok_save_uses_secure_store_even_when_same_value_is_in_environment(self) -> None:
         secret = "hf_test_token_that_must_persist"
-        with patch.dict(os.environ, {"HF_TOKEN": secret}), patch.object(
-            ModuleManager, "_write_secure_secret"
-        ) as write_secret:
+        with (
+            patch.dict(os.environ, {"HF_TOKEN": secret}),
+            patch.object(ModuleManager, "_write_secure_secret") as write_secret,
+        ):
             self.manager.save_config(
                 {"byok_keys": {"huggingface": secret}},
                 force_secure_secrets={"byok:huggingface"},
@@ -202,9 +228,10 @@ class TestModuleManagerFailures(unittest.TestCase):
         fake_windows_python = Path(self.temp_dir.name) / "python.exe"
         fake_windows_python.write_bytes(b"test placeholder")
         result = SimpleNamespace(returncode=0, stdout='{"value":"stored-secret"}', stderr="")
-        with patch.dict(os.environ, {"TRIUNE_WINDOWS_PYTHON": str(fake_windows_python)}), patch(
-            "triune.modules.manager.subprocess.run", return_value=result
-        ) as run:
+        with (
+            patch.dict(os.environ, {"TRIUNE_WINDOWS_PYTHON": str(fake_windows_python)}),
+            patch("triune.modules.manager.subprocess.run", return_value=result) as run,
+        ):
             bridge = ModuleManager._get_secure_keyring()
             bridge.set_password("Triune Studio", "byok:openai", "new-secret")
             self.assertEqual(bridge.get_password("Triune Studio", "byok:openai"), "stored-secret")
@@ -216,6 +243,7 @@ class TestModuleManagerFailures(unittest.TestCase):
         self.assertEqual(set_payload["password"], "new-secret")
         self.assertNotIn("new-secret", " ".join(run.call_args_list[0].args[0]))
         from triune.modules.manager import _WindowsCredentialStoreBridge
+
         self.assertIn("CredWriteW", _WindowsCredentialStoreBridge._HELPER)
         self.assertIn("CredReadW", _WindowsCredentialStoreBridge._HELPER)
         self.assertNotIn("import keyring", _WindowsCredentialStoreBridge._HELPER)
@@ -223,8 +251,9 @@ class TestModuleManagerFailures(unittest.TestCase):
     def test_native_windows_credential_store_does_not_require_keyring_package(self) -> None:
         from triune.modules.manager import _WindowsCredentialStoreBridge
 
-        with patch("triune.modules.manager.sys.platform", "win32"), patch.dict(
-            os.environ, {"TRIUNE_WINDOWS_PYTHON": ""}
+        with (
+            patch("triune.modules.manager.sys.platform", "win32"),
+            patch.dict(os.environ, {"TRIUNE_WINDOWS_PYTHON": ""}),
         ):
             bridge = ModuleManager._get_secure_keyring()
 
@@ -239,7 +268,10 @@ class TestModuleManagerFailures(unittest.TestCase):
         plugin_dir = Path(self.temp_dir.name) / "signed-plugin"
         plugin_dir.mkdir()
         entrypoint = plugin_dir / "plugin.py"
-        entrypoint.write_text("from triune.plugins.registry import register_node\n@register_node('SignedDemo')\ndef run(x): return x\n", encoding="utf-8")
+        entrypoint.write_text(
+            "from triune.plugins.registry import register_node\n@register_node('SignedDemo')\ndef run(x): return x\n",
+            encoding="utf-8",
+        )
         private_key = Ed25519PrivateKey.generate()
         public_bytes = private_key.public_key().public_bytes(
             encoding=serialization.Encoding.Raw,
@@ -260,14 +292,17 @@ class TestModuleManagerFailures(unittest.TestCase):
             "value": base64.b64encode(private_key.sign(canonical)).decode("ascii"),
         }
         (plugin_dir / "triune_plugin.json").write_text(json.dumps(manifest), encoding="utf-8")
-        with patch.dict(os.environ, {"TRIUNE_PLUGIN_TRUSTED_KEYS": json.dumps({
-            "test-key": base64.b64encode(public_bytes).decode("ascii")
-        })}):
+        with patch.dict(
+            os.environ,
+            {"TRIUNE_PLUGIN_TRUSTED_KEYS": json.dumps({"test-key": base64.b64encode(public_bytes).decode("ascii")})},
+        ):
             paths, error = _verified_plugin_entrypoints(plugin_dir)
             self.assertIsNone(error)
             self.assertEqual(paths, [entrypoint.resolve()])
 
-            entrypoint.write_text(entrypoint.read_text(encoding="utf-8") + "# changed after signing\n", encoding="utf-8")
+            entrypoint.write_text(
+                entrypoint.read_text(encoding="utf-8") + "# changed after signing\n", encoding="utf-8"
+            )
             paths, error = _verified_plugin_entrypoints(plugin_dir)
             self.assertEqual(paths, [])
             self.assertIn("hash mismatch", error)

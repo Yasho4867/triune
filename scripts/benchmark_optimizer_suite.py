@@ -15,7 +15,8 @@ import json
 import os
 import sys
 import time
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
+
 import torch
 import torch.nn as nn
 
@@ -31,7 +32,9 @@ from triune.optim.muon import Muon
 def get_hardware_info() -> Dict[str, Any]:
     return {
         "device_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU",
-        "total_vram_gb": round(torch.cuda.get_device_properties(0).total_memory / (1024**3), 2) if torch.cuda.is_available() else 0,
+        "total_vram_gb": round(torch.cuda.get_device_properties(0).total_memory / (1024**3), 2)
+        if torch.cuda.is_available()
+        else 0,
         "cuda_version": torch.version.cuda or "N/A",
         "pytorch_version": torch.__version__,
         "python_version": sys.version.split()[0],
@@ -42,6 +45,7 @@ def get_bnb_8bit_adamw():
     """Attempts to import native bitsandbytes 8-bit AdamW."""
     try:
         import bitsandbytes as bnb
+
         return bnb.optim.AdamW8bit
     except (ImportError, Exception):
         return None
@@ -117,13 +121,17 @@ def experiment_a_state_memory(device: torch.device) -> List[Dict[str, Any]]:
 
         bytes_per_param = (state_mem_mb * 1024 * 1024) / total_params if total_params > 0 else 0
 
-        print(f"  {name:42s} | Params: {total_params / 1e6:5.2f}M | State RAM: {state_mem_mb:6.2f} MB | {bytes_per_param:5.2f} bytes/param")
-        results.append({
-            "optimizer": name,
-            "total_params": total_params,
-            "state_memory_mb": round(state_mem_mb, 2),
-            "bytes_per_param": round(bytes_per_param, 2),
-        })
+        print(
+            f"  {name:42s} | Params: {total_params / 1e6:5.2f}M | State RAM: {state_mem_mb:6.2f} MB | {bytes_per_param:5.2f} bytes/param"
+        )
+        results.append(
+            {
+                "optimizer": name,
+                "total_params": total_params,
+                "state_memory_mb": round(state_mem_mb, 2),
+                "bytes_per_param": round(bytes_per_param, 2),
+            }
+        )
 
         del opt
         del model
@@ -187,12 +195,14 @@ def experiment_b_step_throughput(device: torch.device) -> List[Dict[str, Any]]:
         updates_per_sec = 1000.0 / median_ms
 
         print(f"  {name:42s} | Median Step: {median_ms:6.2f} ms | Throughput: {updates_per_sec:6.1f} steps/s")
-        results.append({
-            "optimizer": name,
-            "median_step_latency_ms": round(median_ms, 2),
-            "mean_step_latency_ms": round(mean_ms, 2),
-            "steps_per_sec": round(updates_per_sec, 1),
-        })
+        results.append(
+            {
+                "optimizer": name,
+                "median_step_latency_ms": round(median_ms, 2),
+                "mean_step_latency_ms": round(mean_ms, 2),
+                "steps_per_sec": round(updates_per_sec, 1),
+            }
+        )
 
         del opt
         del model
@@ -250,14 +260,18 @@ def experiment_c_50_step_convergence(device: torch.device) -> List[Dict[str, Any
             loss.backward()
 
             # Record total grad norm before step
-            total_grad_norm = torch.sqrt(sum(p.grad.data.norm()**2 for p in model.parameters() if p.grad is not None)).item()
+            total_grad_norm = torch.sqrt(
+                sum(p.grad.data.norm() ** 2 for p in model.parameters() if p.grad is not None)
+            ).item()
             grad_norms.append(round(total_grad_norm, 4))
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
 
             # Clone weights to compute parameter update norm
             orig_weights = [p.data.clone() for p in model.parameters()]
             opt.step()
-            total_update_norm = torch.sqrt(sum((p.data - orig_p).norm()**2 for p, orig_p in zip(model.parameters(), orig_weights))).item()
+            total_update_norm = torch.sqrt(
+                sum((p.data - orig_p).norm() ** 2 for p, orig_p in zip(model.parameters(), orig_weights))
+            ).item()
             update_norms.append(round(total_update_norm, 4))
 
             loss_curve.append(round(loss.item(), 5))
@@ -266,16 +280,20 @@ def experiment_c_50_step_convergence(device: torch.device) -> List[Dict[str, Any
         final_loss = loss_curve[-1]
         loss_reduction_pct = round(((initial_loss - final_loss) / initial_loss) * 100, 2)
 
-        print(f"  {name:42s} | Loss: {initial_loss:.4f} -> {final_loss:.4f} (-{loss_reduction_pct}%) | Final Grad Norm: {grad_norms[-1]:.4f}")
-        results.append({
-            "optimizer": name,
-            "initial_loss": initial_loss,
-            "final_loss": final_loss,
-            "loss_reduction_pct": loss_reduction_pct,
-            "sample_loss_trajectory": [loss_curve[0], loss_curve[10], loss_curve[25], loss_curve[49]],
-            "final_grad_norm": grad_norms[-1],
-            "mean_update_norm": round(sum(update_norms) / len(update_norms), 4),
-        })
+        print(
+            f"  {name:42s} | Loss: {initial_loss:.4f} -> {final_loss:.4f} (-{loss_reduction_pct}%) | Final Grad Norm: {grad_norms[-1]:.4f}"
+        )
+        results.append(
+            {
+                "optimizer": name,
+                "initial_loss": initial_loss,
+                "final_loss": final_loss,
+                "loss_reduction_pct": loss_reduction_pct,
+                "sample_loss_trajectory": [loss_curve[0], loss_curve[10], loss_curve[25], loss_curve[49]],
+                "final_grad_norm": grad_norms[-1],
+                "mean_update_norm": round(sum(update_norms) / len(update_norms), 4),
+            }
+        )
 
         del opt
         del model
@@ -335,7 +353,14 @@ def generate_markdown_report(results: Dict[str, Any], output_path: str) -> None:
         "| :--- | :--- | :--- | :--- | :--- |",
     ]
 
-    adamw_mem = next((r["state_memory_mb"] for r in results["experiment_a_state_memory"] if "AdamW" in r["optimizer"] and "8-bit" not in r["optimizer"]), 1.0)
+    adamw_mem = next(
+        (
+            r["state_memory_mb"]
+            for r in results["experiment_a_state_memory"]
+            if "AdamW" in r["optimizer"] and "8-bit" not in r["optimizer"]
+        ),
+        1.0,
+    )
     for r in results["experiment_a_state_memory"]:
         name = r["optimizer"]
         params = f"{r['total_params'] / 1e6:.2f}M"
@@ -348,40 +373,50 @@ def generate_markdown_report(results: Dict[str, Any], output_path: str) -> None:
             reduction = f"-{red_pct}%"
         lines.append(f"| **{name}** | {params} | {state_mb} | {b_per_p} | {reduction} |")
 
-    lines.extend([
-        "",
-        "## 3. Experiment B: Pure Step Throughput & Latency",
-        "",
-        "| Optimizer | Median Step Latency (ms) | Mean Latency (ms) | Update Throughput (steps/sec) |",
-        "| :--- | :--- | :--- | :--- |",
-    ])
+    lines.extend(
+        [
+            "",
+            "## 3. Experiment B: Pure Step Throughput & Latency",
+            "",
+            "| Optimizer | Median Step Latency (ms) | Mean Latency (ms) | Update Throughput (steps/sec) |",
+            "| :--- | :--- | :--- | :--- |",
+        ]
+    )
 
     for r in results["experiment_b_step_throughput"]:
-        lines.append(f"| **{r['optimizer']}** | {r['median_step_latency_ms']:.2f} ms | {r['mean_step_latency_ms']:.2f} ms | {r['steps_per_sec']:.1f} steps/s |")
+        lines.append(
+            f"| **{r['optimizer']}** | {r['median_step_latency_ms']:.2f} ms | {r['mean_step_latency_ms']:.2f} ms | {r['steps_per_sec']:.1f} steps/s |"
+        )
 
-    lines.extend([
-        "",
-        "## 4. Experiment C: 50-Step Optimization Trajectory & Stability",
-        "",
-        "| Optimizer | Initial Loss | Final Loss (Step 50) | Total Loss Reduction | Final Grad Norm | Mean Update Norm |",
-        "| :--- | :--- | :--- | :--- | :--- | :--- |",
-    ])
+    lines.extend(
+        [
+            "",
+            "## 4. Experiment C: 50-Step Optimization Trajectory & Stability",
+            "",
+            "| Optimizer | Initial Loss | Final Loss (Step 50) | Total Loss Reduction | Final Grad Norm | Mean Update Norm |",
+            "| :--- | :--- | :--- | :--- | :--- | :--- |",
+        ]
+    )
 
     for r in results["experiment_c_50_step_convergence"]:
-        lines.append(f"| **{r['optimizer']}** | {r['initial_loss']:.4f} | {r['final_loss']:.4f} | **-{r['loss_reduction_pct']}%** | {r['final_grad_norm']:.4f} | {r['mean_update_norm']:.4f} |")
+        lines.append(
+            f"| **{r['optimizer']}** | {r['initial_loss']:.4f} | {r['final_loss']:.4f} | **-{r['loss_reduction_pct']}%** | {r['final_grad_norm']:.4f} | {r['mean_update_norm']:.4f} |"
+        )
 
-    lines.extend([
-        "",
-        "## 5. Architectural Insights",
-        "",
-        "1. **Low-Rank State Compression**:",
-        "   - `CentroidSteerOptimizer` uses low-rank basis factors for expert parameter slices, substantially cutting optimizer memory relative to standard AdamW.",
-        "2. **Orthogonal Newton-Schulz Acceleration**:",
-        "   - `Muon` polar orthogonal updates provide strong gradient regularisation, keeping gradient norms controlled across non-convex optimization surfaces.",
-        "3. **Numerical Stability**:",
-        "   - Scale-invariant Cholesky-QR pre-conditioning in CentroidSteer guarantees monotonic loss reduction without numerical divergence across 50 steps.",
-        "",
-    ])
+    lines.extend(
+        [
+            "",
+            "## 5. Architectural Insights",
+            "",
+            "1. **Low-Rank State Compression**:",
+            "   - `CentroidSteerOptimizer` uses low-rank basis factors for expert parameter slices, substantially cutting optimizer memory relative to standard AdamW.",
+            "2. **Orthogonal Newton-Schulz Acceleration**:",
+            "   - `Muon` polar orthogonal updates provide strong gradient regularisation, keeping gradient norms controlled across non-convex optimization surfaces.",
+            "3. **Numerical Stability**:",
+            "   - Scale-invariant Cholesky-QR pre-conditioning in CentroidSteer guarantees monotonic loss reduction without numerical divergence across 50 steps.",
+            "",
+        ]
+    )
 
     with open(output_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")

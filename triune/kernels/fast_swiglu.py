@@ -6,7 +6,6 @@ in-place, bypassing autograd's double-activation retention (Unsloth & Liger styl
 
 from __future__ import annotations
 
-import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -50,7 +49,9 @@ def _fused_swiglu_fwd(gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
     return F.silu(gate) * up
 
 
-def _fused_swiglu_bwd(grad_output: torch.Tensor, gate: torch.Tensor, up: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+def _fused_swiglu_bwd(
+    grad_output: torch.Tensor, gate: torch.Tensor, up: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
     sig = torch.sigmoid(gate)
     silu_gate = gate * sig
     d_silu = sig * (1.0 + gate * (1.0 - sig))

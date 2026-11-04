@@ -21,8 +21,8 @@ def _depth(value: str) -> int | None:
 
 def benchmark_cli(args: argparse.Namespace) -> dict[str, object]:
     import torch
-    from triune.inference import generate_response
-    from triune.inference import load_checkpoint_model
+
+    from triune.inference import generate_response, load_checkpoint_model
 
     load_started = time.perf_counter()
     model, tokenizer, checkpoint, device, pad_id, eos_id = load_checkpoint_model(
@@ -70,8 +70,7 @@ def benchmark_cli(args: argparse.Namespace) -> dict[str, object]:
             "ttft_ms": warmup.get("ttft_ms"),
         },
         **result,
-        "cuda_allocated_gb": round(torch.cuda.memory_allocated(device) / 1024**3, 3)
-        if device.type == "cuda" else 0.0,
+        "cuda_allocated_gb": round(torch.cuda.memory_allocated(device) / 1024**3, 3) if device.type == "cuda" else 0.0,
     }
 
 
@@ -174,7 +173,9 @@ def main() -> None:
     parser.add_argument("--tokenizer", default="triune_tokenizer.json")
     parser.add_argument("--prompt", required=True)
     parser.add_argument("--max-tokens", type=int, default=128)
-    parser.add_argument("--warmup-tokens", type=int, default=4, help="Short unscored generation to warm kernels before measurement")
+    parser.add_argument(
+        "--warmup-tokens", type=int, default=4, help="Short unscored generation to warm kernels before measurement"
+    )
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--depth", choices=("auto", "reflex", "limbic", "cortex"), default="auto")
     parser.add_argument("--device", default=None, help="CLI device; defaults to CUDA when available")

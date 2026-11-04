@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import gc
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
+
 import torch
 
 
@@ -24,10 +25,10 @@ class VRAMProfiler:
                 "total": 8.0,
                 "oom_risk": False,
             }
-        allocated = torch.cuda.memory_allocated(dev) / (1024 ** 3)
-        reserved = torch.cuda.memory_reserved(dev) / (1024 ** 3)
-        max_allocated = torch.cuda.max_memory_allocated(dev) / (1024 ** 3)
-        total = torch.cuda.get_device_properties(dev).total_memory / (1024 ** 3)
+        allocated = torch.cuda.memory_allocated(dev) / (1024**3)
+        reserved = torch.cuda.memory_reserved(dev) / (1024**3)
+        max_allocated = torch.cuda.max_memory_allocated(dev) / (1024**3)
+        total = torch.cuda.get_device_properties(dev).total_memory / (1024**3)
         oom_risk = ((reserved / total) >= 0.85 or (allocated / total) >= 0.85) if total > 0 else False
 
         return {
@@ -56,7 +57,9 @@ class VRAMProfiler:
 class AutoOffloader:
     """Automatically offloads inactive model layers to CPU RAM when VRAM spikes."""
 
-    def __init__(self, model: torch.nn.Module | None = None, offload_device: str = "cpu", vram_threshold_gb: float = 7.5):
+    def __init__(
+        self, model: torch.nn.Module | None = None, offload_device: str = "cpu", vram_threshold_gb: float = 7.5
+    ):
         self.model = model
         self.offload_device = torch.device(offload_device)
         self.vram_threshold_gb = vram_threshold_gb

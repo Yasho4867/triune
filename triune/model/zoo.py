@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+
 import torch
 
 from .base import CANONICAL_MODEL_SPECS, MODEL_REGISTRY, build_model_from_spec, get_model_spec
@@ -27,6 +28,7 @@ def load_model(model_name_or_path: str | Path, **kwargs: Any) -> torch.nn.Module
     # Check local JSON config file
     if path_obj.is_file() and path_obj.suffix.lower() == ".json":
         import json
+
         with open(path_obj, encoding="utf-8") as f:
             file_cfg = json.load(f)
         config = build_config({**file_cfg, **kwargs})
@@ -64,6 +66,7 @@ def load_model(model_name_or_path: str | Path, **kwargs: Any) -> torch.nn.Module
 
     if json_path.is_file() and json_path.suffix.lower() == ".json":
         import json
+
         with open(json_path, encoding="utf-8") as f:
             file_cfg = json.load(f)
         config = build_config({**file_cfg, **kwargs})
@@ -77,6 +80,7 @@ def load_model(model_name_or_path: str | Path, **kwargs: Any) -> torch.nn.Module
     hf_err = None
     try:
         from transformers import AutoModelForCausalLM
+
         return AutoModelForCausalLM.from_pretrained(str(model_name_or_path), **kwargs)
     except Exception as exc:
         hf_err = exc

@@ -9,13 +9,13 @@ from __future__ import annotations
 
 import copy
 import unittest
+
 import torch
-import torch.nn as nn
 
 from triune.model.transformer import TriuneTransformer
-from triune.runtime.streaming import LayerStreamingEngine, StreamingConfig
-from triune.optim.muon import Muon
 from triune.optim.centroid import CentroidSteerOptimizer
+from triune.optim.muon import Muon
+from triune.runtime.streaming import LayerStreamingEngine, StreamingConfig
 
 
 def create_paired_models(device: torch.device, seed: int = 42):
@@ -66,6 +66,7 @@ class StreamingTrainingParityTest(unittest.TestCase):
 
     def tearDown(self):
         import gc
+
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.synchronize()
@@ -120,8 +121,10 @@ class StreamingTrainingParityTest(unittest.TestCase):
                 if state_ref is not None and state_str is not None:
                     step_ref = state_ref.get("step")
                     step_str = state_str.get("step")
-                    if isinstance(step_ref, torch.Tensor): step_ref = step_ref.item()
-                    if isinstance(step_str, torch.Tensor): step_str = step_str.item()
+                    if isinstance(step_ref, torch.Tensor):
+                        step_ref = step_ref.item()
+                    if isinstance(step_str, torch.Tensor):
+                        step_str = step_str.item()
                     # MoE routed expert activations depend on argmax router selection which may tie-break differently after multi-step accumulation
                     if "experts" not in name:
                         self.assertEqual(step_ref, step_str, msg=f"Step mismatch for {name} at step {step}")
@@ -149,8 +152,16 @@ class StreamingTrainingParityTest(unittest.TestCase):
         model_ref, model_str, engine = create_paired_models(self.device, seed=202)
 
         # 2D hidden layer parameters for Muon (embeddings stay on AdamW per Muon specification)
-        p_ref_2d = [(n, p) for n, p in model_ref.named_parameters() if p.ndim == 2 and "embed" not in n.lower() and "wte" not in n.lower()]
-        p_str_2d = [(n, p) for n, p in model_str.named_parameters() if p.ndim == 2 and "embed" not in n.lower() and "wte" not in n.lower()]
+        p_ref_2d = [
+            (n, p)
+            for n, p in model_ref.named_parameters()
+            if p.ndim == 2 and "embed" not in n.lower() and "wte" not in n.lower()
+        ]
+        p_str_2d = [
+            (n, p)
+            for n, p in model_str.named_parameters()
+            if p.ndim == 2 and "embed" not in n.lower() and "wte" not in n.lower()
+        ]
 
         opt_ref = Muon([p for _, p in p_ref_2d], lr=0.01, momentum=0.95, weight_decay=0.01)
         opt_str = Muon([p for _, p in p_str_2d], lr=0.01, momentum=0.95, weight_decay=0.01)
@@ -191,7 +202,12 @@ class StreamingTrainingParityTest(unittest.TestCase):
 
                 state_ref = opt_ref.state.get(p_ref)
                 state_str = opt_str.state.get(p_str)
-                if state_ref is not None and state_str is not None and "momentum" in state_ref and "momentum" in state_str:
+                if (
+                    state_ref is not None
+                    and state_str is not None
+                    and "momentum" in state_ref
+                    and "momentum" in state_str
+                ):
                     torch.testing.assert_close(
                         state_str["momentum"].cpu(),
                         state_ref["momentum"].cpu(),
@@ -206,12 +222,26 @@ class StreamingTrainingParityTest(unittest.TestCase):
         """Phase 4: Multi-step training parity with full 3-tier CentroidSteerOptimizer."""
         model_ref, model_str, engine = create_paired_models(self.device, seed=303)
         opt_ref = CentroidSteerOptimizer(
-            model_ref, lr=1e-3, betas=(0.9, 0.95), weight_decay=0.01,
-            rank=8, update_gap=5, steer_scale=0.10, use_muon=True, muon_lr=0.01
+            model_ref,
+            lr=1e-3,
+            betas=(0.9, 0.95),
+            weight_decay=0.01,
+            rank=8,
+            update_gap=5,
+            steer_scale=0.10,
+            use_muon=True,
+            muon_lr=0.01,
         )
         opt_str = CentroidSteerOptimizer(
-            model_str, lr=1e-3, betas=(0.9, 0.95), weight_decay=0.01,
-            rank=8, update_gap=5, steer_scale=0.10, use_muon=True, muon_lr=0.01
+            model_str,
+            lr=1e-3,
+            betas=(0.9, 0.95),
+            weight_decay=0.01,
+            rank=8,
+            update_gap=5,
+            steer_scale=0.10,
+            use_muon=True,
+            muon_lr=0.01,
         )
         engine.set_optimizer(opt_str)
 
@@ -256,8 +286,10 @@ class StreamingTrainingParityTest(unittest.TestCase):
                 if s_ref is not None and s_str is not None:
                     if "exp_avg" in s_ref and "exp_avg" in s_str:
                         torch.testing.assert_close(
-                            s_str["exp_avg"].cpu(), s_ref["exp_avg"].cpu(),
-                            rtol=5e-3, atol=5e-3,
+                            s_str["exp_avg"].cpu(),
+                            s_ref["exp_avg"].cpu(),
+                            rtol=5e-3,
+                            atol=5e-3,
                             msg="CentroidSteer base_optimizer exp_avg diverged",
                         )
 
@@ -306,25 +338,25 @@ class StreamingTrainingParityTest(unittest.TestCase):
         model_ref, model_str, engine = create_paired_models(self.device, seed=42)
         model_ref.train()
         model_str.train()
-        
+
         opt_ref = torch.optim.AdamW(model_ref.parameters(), lr=1e-3)
         opt_str = torch.optim.AdamW(model_str.parameters(), lr=1e-3)
         engine.set_optimizer(opt_str)
-        
+
         inputs = torch.randint(0, 128, (2, 8), device=self.device)
-        
+
         # Reference step
         opt_ref.zero_grad()
         logits_ref, _ = model_ref(inputs)
         loss_ref = logits_ref.pow(2).mean()
         loss_ref.backward()
-        
+
         # Streaming step
         engine.zero_grad()
         logits_str, _ = model_str(inputs)
         loss_str = logits_str.pow(2).mean()
         loss_str.backward()
-        
+
         # Verify finite grads
         for p in model_ref.parameters():
             if p.grad is not None:
@@ -333,7 +365,7 @@ class StreamingTrainingParityTest(unittest.TestCase):
             grad = getattr(p, "_cpu_grad", p.grad)
             if grad is not None:
                 self.assertTrue(torch.isfinite(grad).all().item())
-                
+
         engine.detach()
 
     def test_seeded_train_mode_numerical_parity(self):
@@ -378,7 +410,10 @@ class StreamingTrainingParityTest(unittest.TestCase):
             self.assertEqual(g_ref is None, g_str is None, f"Grad presence mismatch for {name}")
             if g_ref is not None:
                 torch.testing.assert_close(
-                    g_str.float().cpu(), g_ref.float().cpu(), rtol=1e-4, atol=1e-5,
+                    g_str.float().cpu(),
+                    g_ref.float().cpu(),
+                    rtol=1e-4,
+                    atol=1e-5,
                     msg=f"Train-mode grad diverged for {name}",
                 )
 

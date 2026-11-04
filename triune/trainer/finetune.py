@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import csv
 import json
 import math
-import csv
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
 import torch
 import torch.nn as nn
 
@@ -102,11 +103,23 @@ class LoRAConfig:
         self.alpha = lora_alpha if lora_alpha is not None else alpha
         self.dropout = dropout
         self.target_modules = target_modules or [
-            "q_proj", "k_proj", "v_proj", "o_proj", "out_proj",
-            "gate_proj", "up_proj", "down_proj", "qkv_proj", "gate_up_proj", "0", "2"
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj",
+            "out_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj",
+            "qkv_proj",
+            "gate_up_proj",
+            "0",
+            "2",
         ]
         self.quantization = quantization or ("4-bit NF4" if use_qlora else "FP16")
-        self.use_qlora = bool(use_qlora or ("4-bit" in str(self.quantization) or "nf4" in str(self.quantization).lower()))
+        self.use_qlora = bool(
+            use_qlora or ("4-bit" in str(self.quantization) or "nf4" in str(self.quantization).lower())
+        )
 
 
 class TriuneFineTuner:
@@ -131,7 +144,9 @@ class TriuneFineTuner:
         for name, module in list(self.model.named_modules()):
             if isinstance(module, LoRALayer):
                 continue
-            if any(target == name or target in name for target in self.lora_config.target_modules) and isinstance(module, nn.Linear):
+            if any(target == name or target in name for target in self.lora_config.target_modules) and isinstance(
+                module, nn.Linear
+            ):
                 parent_name, attr_name = name.rsplit(".", 1) if "." in name else ("", name)
                 if attr_name == "original_layer":
                     continue
@@ -186,6 +201,7 @@ class TriuneFineTuner:
             json.dump(config, f, indent=2)
         try:
             from safetensors.torch import save_file
+
             save_file(state_dict, str(p / "adapter_model.safetensors"))
         except Exception:
             torch.save(state_dict, str(p / "adapter_model.pt"))
@@ -206,6 +222,7 @@ class TriuneFineTuner:
 
         if weights_file.suffix == ".safetensors":
             from safetensors.torch import load_file
+
             state_dict = load_file(str(weights_file))
         else:
             state_dict = torch.load(weights_file, map_location="cpu")
@@ -239,11 +256,12 @@ class TriuneFineTuner:
         if use_8bit:
             try:
                 import bitsandbytes as bnb
+
                 return bnb.optim.AdamW8bit(trainable_params, lr=lr, weight_decay=weight_decay)
             except Exception:
                 pass
         p_first = trainable_params[0]
-        use_fused = (p_first.device.type == "cuda")
+        use_fused = p_first.device.type == "cuda"
         return torch.optim.AdamW(trainable_params, lr=lr, weight_decay=weight_decay, fused=use_fused)
 
     def fit(
@@ -332,6 +350,7 @@ class TriuneFineTuner:
                 if Path(cand).is_file():
                     try:
                         from triune.data.tokenizer import load_tokenizer
+
                         tokenizer = load_tokenizer(cand)
                         break
                     except Exception:
@@ -444,6 +463,7 @@ class TriuneFineTuner:
 def list_adapters(scan_dirs: Optional[List[str]] = None) -> List[Dict[str, Any]]:
     """Discover all saved LoRA/QLoRA adapters on disk across standard directories."""
     import time
+
     scan_dirs = scan_dirs or ["checkpoints", "checkpoints/adapters", "exports"]
     adapters: List[Dict[str, Any]] = []
     seen_paths = set()
@@ -477,37 +497,42 @@ def list_adapters(scan_dirs: Optional[List[str]] = None) -> List[Dict[str, Any]]
                         except Exception:
                             pass
                     sz_mb = round(weights_file.stat().st_size / (1024 * 1024), 2) if weights_file.exists() else 0.0
-                    adapters.append({
-                        "id": item.name,
-                        "name": item.name.replace("_", " ").title(),
-                        "path": clean_path,
-                        "rank": rank_val,
-                        "alpha": alpha_val,
-                        "quantization": quant_val,
-                        "trainable_params": trainable_val,
-                        "size_mb": sz_mb,
-                        "mtime": time.strftime("%Y-%m-%d %H:%M", time.localtime(item.stat().st_mtime)),
-                    })
+                    adapters.append(
+                        {
+                            "id": item.name,
+                            "name": item.name.replace("_", " ").title(),
+                            "path": clean_path,
+                            "rank": rank_val,
+                            "alpha": alpha_val,
+                            "quantization": quant_val,
+                            "trainable_params": trainable_val,
+                            "size_mb": sz_mb,
+                            "mtime": time.strftime("%Y-%m-%d %H:%M", time.localtime(item.stat().st_mtime)),
+                        }
+                    )
             elif item.is_file() and "adapter" in item.name.lower() and item.suffix in (".safetensors", ".pt"):
                 seen_paths.add(clean_path)
                 sz_mb = round(item.stat().st_size / (1024 * 1024), 2)
-                adapters.append({
-                    "id": item.stem,
-                    "name": item.stem.replace("_", " ").title(),
-                    "path": clean_path,
-                    "rank": 16,
-                    "alpha": 32.0,
-                    "quantization": "4-bit NF4",
-                    "trainable_params": 0,
-                    "size_mb": sz_mb,
-                    "mtime": time.strftime("%Y-%m-%d %H:%M", time.localtime(item.stat().st_mtime)),
-                })
+                adapters.append(
+                    {
+                        "id": item.stem,
+                        "name": item.stem.replace("_", " ").title(),
+                        "path": clean_path,
+                        "rank": 16,
+                        "alpha": 32.0,
+                        "quantization": "4-bit NF4",
+                        "trainable_params": 0,
+                        "size_mb": sz_mb,
+                        "mtime": time.strftime("%Y-%m-%d %H:%M", time.localtime(item.stat().st_mtime)),
+                    }
+                )
     return adapters
 
 
 def export_adapter(adapter_path: str | Path, output_path: str | Path | None = None, fmt: str = "safetensors") -> Path:
     """Export an adapter as a standalone SafeTensors package."""
     import shutil
+
     p = Path(adapter_path)
     if not p.exists():
         raise FileNotFoundError(f"Adapter source not found: {adapter_path}")
@@ -534,6 +559,7 @@ def merge_adapter_checkpoint(
 ) -> Path:
     """Load base model checkpoint, attach and merge adapter, and save updated checkpoint."""
     from triune.inference import load_checkpoint_model
+
     model, tokenizer, checkpoint, device, _, _ = load_checkpoint_model(checkpoint_path, tokenizer_path)
     cfg = LoRAConfig()
     tuner = TriuneFineTuner(model, cfg)

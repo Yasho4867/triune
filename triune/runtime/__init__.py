@@ -1,5 +1,9 @@
 try:
-    from .memory_planner import MemoryEstimate, MemoryPlanner, MemoryEstimate as MemoryPlan
+    from .capabilities import PrecisionCapabilities
+    from .cuda_graph import CUDAGraphEngine
+    from .memory_planner import MemoryEstimate, MemoryPlanner
+    from .memory_planner import MemoryEstimate as MemoryPlan
+    from .neuron_scope import NeuronScope
     from .resource_manager import (
         AllotmentPlan,
         DynamicResourceManager,
@@ -7,17 +11,14 @@ try:
         LiveVRAMMonitor,
         VRAMBudgetExceededError,
     )
+    from .staging import FP8StagingBuffer, ParameterStager, StagingBuffer
     from .streaming import (
         LayerStreamingEngine,
         StreamingConfig,
         apply_layer_streaming_if_requested,
         enable_layer_streaming,
     )
-    from .capabilities import PrecisionCapabilities
-    from .staging import FP8StagingBuffer, ParameterStager, StagingBuffer
     from .vram import AutoOffloader, VRAMProfiler
-    from .cuda_graph import CUDAGraphEngine
-    from .neuron_scope import NeuronScope
 except ImportError:
     CUDAGraphEngine = None
     NeuronScope = None
@@ -66,4 +67,3 @@ __all__ = [
     "CUDAGraphEngine",
     "NeuronScope",
 ]
-

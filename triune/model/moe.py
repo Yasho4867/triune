@@ -1,9 +1,12 @@
-from dataclasses import dataclass
 import math
+from dataclasses import dataclass
 from typing import Any
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+from triune.kernels.fast_swiglu import FastGELU
 
 from .config import (
     CENTROID_EMA,
@@ -18,18 +21,18 @@ from .config import (
 )
 from .fp4 import FP4Linear
 from .fp8 import FP8Linear
-from triune.kernels.fast_swiglu import FastGELU
 
 
 @dataclass
 class RoutingResult:
     """Unified routing statistics and assignment tensor container."""
-    indices: torch.Tensor             # [B * T, top_k] expert indices
-    weights: torch.Tensor             # [B * T, top_k] normalized routing weights
-    accepted_mask: torch.Tensor       # [B * T, top_k] boolean mask of tokens accepted by expert capacity
-    requested_counts: torch.Tensor    # [num_experts] total tokens requesting each expert
-    accepted_counts: torch.Tensor     # [num_experts] tokens actually accepted into capacity
-    dropped_counts: torch.Tensor      # [num_experts] tokens dropped due to capacity overflow
+
+    indices: torch.Tensor  # [B * T, top_k] expert indices
+    weights: torch.Tensor  # [B * T, top_k] normalized routing weights
+    accepted_mask: torch.Tensor  # [B * T, top_k] boolean mask of tokens accepted by expert capacity
+    requested_counts: torch.Tensor  # [num_experts] total tokens requesting each expert
+    accepted_counts: torch.Tensor  # [num_experts] tokens actually accepted into capacity
+    dropped_counts: torch.Tensor  # [num_experts] tokens dropped due to capacity overflow
 
 
 class MoE_FFN(nn.Module):
@@ -56,13 +59,16 @@ class MoE_FFN(nn.Module):
         hidden_dim = dim * EXPERT_HIDDEN_MULTIPLIER
 
         # Standard expert MLP: canonical GELU activation matching pre-trained checkpoints
-        self.experts = nn.ModuleList([
-            nn.Sequential(
-                Linear(dim, hidden_dim),
-                FastGELU(),
-                Linear(hidden_dim, dim),
-            ) for _ in range(num_experts)
-        ])
+        self.experts = nn.ModuleList(
+            [
+                nn.Sequential(
+                    Linear(dim, hidden_dim),
+                    FastGELU(),
+                    Linear(hidden_dim, dim),
+                )
+                for _ in range(num_experts)
+            ]
+        )
 
         # DeepSeek-V3 inspired Shared Expert: always processes every token with fixed scale
         if self.shared_expert:
@@ -98,7 +104,9 @@ class MoE_FFN(nn.Module):
             buffers = self.__dict__.get("_buffers")
             if buffers is not None and "_overflow_counter" in buffers and buffers["_overflow_counter"] is not None:
                 if isinstance(value, torch.Tensor):
-                    buffers["_overflow_counter"].copy_(value.to(dtype=torch.long, device=buffers["_overflow_counter"].device))
+                    buffers["_overflow_counter"].copy_(
+                        value.to(dtype=torch.long, device=buffers["_overflow_counter"].device)
+                    )
                 else:
                     buffers["_overflow_counter"].fill_(int(value))
                 return
@@ -145,8 +153,17 @@ class MoE_FFN(nn.Module):
             return getattr(submod, "weight", None), getattr(submod, "bias", None)
 
         def _get_submod_lora(submod):
-            if hasattr(submod, "lora_A") and submod.lora_A is not None and hasattr(submod, "lora_B") and submod.lora_B is not None:
-                return submod.lora_A, submod.lora_B, float(getattr(submod, "scaling", getattr(submod, "lora_scaling", 2.0)))
+            if (
+                hasattr(submod, "lora_A")
+                and submod.lora_A is not None
+                and hasattr(submod, "lora_B")
+                and submod.lora_B is not None
+            ):
+                return (
+                    submod.lora_A,
+                    submod.lora_B,
+                    float(getattr(submod, "scaling", getattr(submod, "lora_scaling", 2.0))),
+                )
             return None
 
         any_b1 = any(_get_submod_weight_bias(e[0])[1] is not None for e in self.experts)
@@ -166,7 +183,10 @@ class MoE_FFN(nn.Module):
             and not mixed_biases
             and (has_lora_e0 or no_lora_e0)
             and (has_lora_e2 or no_lora_e2)
-            and all(_get_submod_weight_bias(e[0])[0] is not None and _get_submod_weight_bias(e[2])[0] is not None for e in self.experts)
+            and all(
+                _get_submod_weight_bias(e[0])[0] is not None and _get_submod_weight_bias(e[2])[0] is not None
+                for e in self.experts
+            )
         )
 
         # Fast path for single-token autoregressive decoding: evaluate only the selected top-k
@@ -179,10 +199,10 @@ class MoE_FFN(nn.Module):
             if can_batch_bmm:
                 W1_stack = torch.stack([_get_submod_weight_bias(e[0])[0] for e in self.experts], dim=0)
                 W2_stack = torch.stack([_get_submod_weight_bias(e[2])[0] for e in self.experts], dim=0)
-                sel_idx = flat_idx[0]                                              # [top_k]
-                w1_sel = W1_stack[sel_idx]                                         # [top_k, H_ffn, D]
-                w2_sel = W2_stack[sel_idx]                                         # [top_k, D, H_ffn]
-                x_sel = flat_x.unsqueeze(0).expand(self.top_k, 1, D)               # [top_k, 1, D]
+                sel_idx = flat_idx[0]  # [top_k]
+                w1_sel = W1_stack[sel_idx]  # [top_k, H_ffn, D]
+                w2_sel = W2_stack[sel_idx]  # [top_k, D, H_ffn]
+                x_sel = flat_x.unsqueeze(0).expand(self.top_k, 1, D)  # [top_k, 1, D]
                 h_pre = torch.bmm(x_sel, w1_sel.transpose(1, 2))
                 if has_lora_e0:
                     A1_stack = torch.stack([e[0].lora_A for e in self.experts], dim=0)[sel_idx]
@@ -285,9 +305,9 @@ class MoE_FFN(nn.Module):
                 one_hot_k = F.one_hot(idx_k, num_classes=self.num_experts).bool()  # [N_tok, E]
 
                 scores_ne = torch.where(one_hot_k, val_k.unsqueeze(1).float() + 1.0 - tie_break, float("-inf"))
-                _, top_cap_idx = torch.topk(scores_ne, k=cap, dim=0)               # [cap, E]
-                top_idx_e = top_cap_idx.t().contiguous()                           # [E, cap]
-                valid_e = one_hot_k.t().gather(1, top_idx_e)                       # [E, cap]
+                _, top_cap_idx = torch.topk(scores_ne, k=cap, dim=0)  # [cap, E]
+                top_idx_e = top_cap_idx.t().contiguous()  # [E, cap]
+                valid_e = one_hot_k.t().gather(1, top_idx_e)  # [E, cap]
 
                 if need_stats:
                     req_k = one_hot_k.sum(dim=0)
@@ -298,12 +318,14 @@ class MoE_FFN(nn.Module):
                     acc_ne.scatter_(1, top_idx_e, valid_e)
                     accepted_mask[:, k] = acc_ne.any(dim=0)
 
-                gathered_x = flat_x[top_idx_e]                                     # [E, cap, D]
+                gathered_x = flat_x[top_idx_e]  # [E, cap, D]
                 if pad_m > 0:
                     gathered_x = F.pad(gathered_x, (0, 0, 0, pad_m))
                 h_pre = torch.bmm(gathered_x, W1_stack.transpose(1, 2))
                 if has_lora_e0:
-                    h_pre = h_pre + torch.bmm(torch.bmm(gathered_x, A1_stack.transpose(1, 2)) * s1, B1_stack.transpose(1, 2))
+                    h_pre = h_pre + torch.bmm(
+                        torch.bmm(gathered_x, A1_stack.transpose(1, 2)) * s1, B1_stack.transpose(1, 2)
+                    )
                 if b1_stack is not None:
                     h_pre = h_pre + b1_stack
                 h = self.experts[0][1](h_pre)
@@ -328,7 +350,7 @@ class MoE_FFN(nn.Module):
                 idx_k = flat_idx[:, k]
                 val_k = flat_vals[:, k]
                 for e in range(self.num_experts):
-                    mask = (idx_k == e)
+                    mask = idx_k == e
                     indices = mask.nonzero(as_tuple=True)[0]
                     if indices.numel() == 0:
                         continue
@@ -399,13 +421,17 @@ class MoE_FFN(nn.Module):
 
         # Vectorized Centroid EMA update across all experts simultaneously (zero nonzero() or .norm() CPU syncs)
         ema_decay = float(getattr(self, "centroid_ema", CENTROID_EMA))
-        if self.last_centroids is None or self.last_centroids.device != flat_x.device or self.last_centroids.shape != (self.num_experts, self.dim):
+        if (
+            self.last_centroids is None
+            or self.last_centroids.device != flat_x.device
+            or self.last_centroids.shape != (self.num_experts, self.dim)
+        ):
             self.last_centroids = torch.zeros(self.num_experts, self.dim, device=flat_x.device, dtype=flat_x.dtype)
 
         expert_token_mask = torch.zeros(flat_x.size(0), self.num_experts, dtype=torch.bool, device=flat_x.device)
         expert_token_mask.scatter_(1, result.indices, result.accepted_mask)
-        mask_f = expert_token_mask.t().to(dtype=flat_x.dtype)                     # [E, N_tok]
-        counts = mask_f.sum(dim=1, keepdim=True)                                  # [E, 1]
+        mask_f = expert_token_mask.t().to(dtype=flat_x.dtype)  # [E, N_tok]
+        counts = mask_f.sum(dim=1, keepdim=True)  # [E, 1]
         batch_centroids = torch.mm(mask_f, flat_x.detach()) / counts.clamp_min(1.0)
         has_tokens = counts > 0
         is_uninit = self.last_centroids.float().norm(dim=-1, keepdim=True) < 1e-6

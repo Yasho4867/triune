@@ -6,10 +6,9 @@ import hashlib
 import json
 import logging
 import os
-from pathlib import Path
 import shutil
-import tempfile
 import time
+from pathlib import Path
 from typing import Any, Mapping
 
 import torch
@@ -39,17 +38,19 @@ OPTIMIZER_FINGERPRINT_KEYS = {
     "optimizer": ["use_muon", "muon_lr", "galore", "galore_rank"],
 }
 
+
 def compute_model_fingerprint(config):
     canonical = {"schema_version": 2}
     for category, keys in MODEL_FINGERPRINT_KEYS.items():
         cat_dict = {}
         for k in keys:
             val = config.get(k)
-            if isinstance(val, tuple): val = list(val)
+            if isinstance(val, tuple):
+                val = list(val)
             cat_dict[k] = val
         canonical[category] = cat_dict
-    serialized = json.dumps(canonical, sort_keys=True, separators=(',', ':'))
-    return hashlib.sha256(serialized.encode('utf-8')).hexdigest()
+    serialized = json.dumps(canonical, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
 def extract_canonical_semantics(config: Mapping[str, Any]) -> dict[str, Any]:
@@ -193,7 +194,11 @@ def load_checkpoint(trainer, path: str | Path, *, load_optimizer: bool) -> dict:
 
                 if mismatches or load_optimizer:
                     if not (not load_optimizer and not mismatches):
-                        diff_str = "\n".join(f"  - {m}" for m in mismatches) if mismatches else "  - Non-semantic configuration variation"
+                        diff_str = (
+                            "\n".join(f"  - {m}" for m in mismatches)
+                            if mismatches
+                            else "  - Non-semantic configuration variation"
+                        )
                         raise ValueError(
                             f"Checkpoint architecture mismatch: fingerprint mismatch for {path}\n"
                             f"Saved fingerprint:   {saved_fp}\n"
@@ -227,7 +232,7 @@ def load_checkpoint(trainer, path: str | Path, *, load_optimizer: bool) -> dict:
                 raise ValueError(
                     f"Checkpoint architecture mismatch for {path}:\n"
                     + "\n".join(f"  - {m}" for m in mismatches)
-                    + f"\nCannot restore weights into an incompatible model configuration."
+                    + "\nCannot restore weights into an incompatible model configuration."
                 )
 
     state_dict = checkpoint["model_state"]

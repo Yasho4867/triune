@@ -34,13 +34,17 @@ def profile_model(
         checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
         state_dict = checkpoint["model_state"]
         saved = checkpoint.get("config", {})
-        config = build_config({
-            "vocab_size": saved.get("vocab_size", tokenizer.get_vocab_size()),
-            "hidden_dim": saved.get("hidden_dim"),
-            "num_layers": saved.get("num_layers"),
-            "use_fp4": saved.get("use_fp4", any(".ffn.experts." in key and ".linear.weight" in key for key in state_dict)),
-            "seq_len": seq_len,
-        })
+        config = build_config(
+            {
+                "vocab_size": saved.get("vocab_size", tokenizer.get_vocab_size()),
+                "hidden_dim": saved.get("hidden_dim"),
+                "num_layers": saved.get("num_layers"),
+                "use_fp4": saved.get(
+                    "use_fp4", any(".ffn.experts." in key and ".linear.weight" in key for key in state_dict)
+                ),
+                "seq_len": seq_len,
+            }
+        )
         if any(key.startswith("_orig_mod.") for key in state_dict):
             state_dict = {key.removeprefix("_orig_mod."): value for key, value in state_dict.items()}
     model = build_model(config).to(device).bfloat16().train()
@@ -59,7 +63,9 @@ def profile_model(
 
     for _ in range(warmup_steps):
         training_step()
-    with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True, with_stack=True) as profiler:
+    with profile(
+        activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True, with_stack=True
+    ) as profiler:
         for _ in range(active_steps):
             training_step()
     table = profiler.key_averages().table(sort_by="cpu_time_total", row_limit=20)

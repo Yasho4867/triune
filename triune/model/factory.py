@@ -12,9 +12,11 @@ def build_model(config: dict[str, Any] | str | None = None, **kwargs: Any) -> Tr
     """Build the established Triune model from a preset string, config dictionary, or keyword arguments."""
     if isinstance(config, str):
         from triune.configs.config import build_config
+
         config = build_config(config, **kwargs)
     elif config is None and kwargs:
         from triune.configs.config import build_config
+
         config = build_config(kwargs)
     elif config is None:
         return TriuneTransformer()

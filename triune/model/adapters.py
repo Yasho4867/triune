@@ -8,7 +8,8 @@ dynamic margin gating (1.8x - 2.2x inference speedup).
 from __future__ import annotations
 
 import math
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -85,6 +86,7 @@ class EarlyExitManager:
         def hook(module, input, output):
             act = output[0] if isinstance(output, tuple) else output
             self.intermediate_activations[layer_idx] = act
+
         return hook
 
 
@@ -278,7 +280,11 @@ def generate_adaptive(
         if pad_token_id is not None:
             next_logits[pad_token_id] = -torch.inf
 
-        next_token = torch.argmax(next_logits).item() if temperature <= 0.05 else torch.multinomial(F.softmax(next_logits, dim=-1), num_samples=1).item()
+        next_token = (
+            torch.argmax(next_logits).item()
+            if temperature <= 0.05
+            else torch.multinomial(F.softmax(next_logits, dim=-1), num_samples=1).item()
+        )
 
         if eos_token_id is not None and next_token == eos_token_id:
             break

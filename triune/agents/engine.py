@@ -7,9 +7,11 @@ integrated with PythonSandbox for secure code execution.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, List
-from .tools import ToolRegistry
+from typing import List
+
 from triune.runtime.sandbox import PythonSandbox
+
+from .tools import ToolRegistry
 
 
 @dataclass

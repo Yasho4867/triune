@@ -8,14 +8,14 @@
 
 import copy
 import math
+
 import pytest
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 
-from triune.model.transformer import TriuneTransformer
-from triune.optim.centroid import CentroidSteerOptimizer, HAS_8BIT
 from triune.kernels.fast_muon import fast_zeropower_via_newtonschulz5, fast_zeropower_via_newtonschulz5_batched
+from triune.model.transformer import TriuneTransformer
+from triune.optim.centroid import CentroidSteerOptimizer
 
 
 def _create_mini_model(device="cpu", dtype=torch.float32):
@@ -40,9 +40,7 @@ def test_8bit_adamw_state_persistence():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = _create_mini_model(device=device)
 
-    opt = CentroidSteerOptimizer(
-        model, lr=1e-3, rank=8, use_triangular_core=True, use_muon=True
-    )
+    opt = CentroidSteerOptimizer(model, lr=1e-3, rank=8, use_triangular_core=True, use_muon=True)
     assert opt.base_optimizer is not None
 
     x = torch.randint(0, 512, (2, 8), device=device)
@@ -73,9 +71,7 @@ def test_repeated_step_parameters_base_state_survival():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = _create_mini_model(device=device)
 
-    opt = CentroidSteerOptimizer(
-        model, lr=1e-3, rank=8, use_triangular_core=True, use_muon=True
-    )
+    opt = CentroidSteerOptimizer(model, lr=1e-3, rank=8, use_triangular_core=True, use_muon=True)
     base_params = opt.non_expert_params
     assert len(base_params) > 0
 
@@ -136,8 +132,7 @@ def test_checkpoint_roundtrip_triangular_core_parity():
 
     # 1. Train Model A for 5 steps on deterministic batches
     batches = [
-        (torch.randint(0, 512, (2, 8), device=device), torch.randint(0, 512, (2, 8), device=device))
-        for _ in range(7)
+        (torch.randint(0, 512, (2, 8), device=device), torch.randint(0, 512, (2, 8), device=device)) for _ in range(7)
     ]
 
     for step in range(5):
@@ -208,16 +203,11 @@ def test_checkpoint_roundtrip_standard_core_parity():
     model_A = _create_mini_model(device=device)
     model_B = copy.deepcopy(model_A)
 
-    opt_A = CentroidSteerOptimizer(
-        model_A, lr=1e-3, rank=8, update_gap=5, use_triangular_core=False, use_muon=False
-    )
-    opt_B = CentroidSteerOptimizer(
-        model_B, lr=1e-3, rank=8, update_gap=5, use_triangular_core=False, use_muon=False
-    )
+    opt_A = CentroidSteerOptimizer(model_A, lr=1e-3, rank=8, update_gap=5, use_triangular_core=False, use_muon=False)
+    opt_B = CentroidSteerOptimizer(model_B, lr=1e-3, rank=8, update_gap=5, use_triangular_core=False, use_muon=False)
 
     batches = [
-        (torch.randint(0, 512, (2, 8), device=device), torch.randint(0, 512, (2, 8), device=device))
-        for _ in range(5)
+        (torch.randint(0, 512, (2, 8), device=device), torch.randint(0, 512, (2, 8), device=device)) for _ in range(5)
     ]
 
     for step in range(3):
@@ -273,9 +263,7 @@ def test_pytorch_lr_scheduler_integration():
     muon_lr = 0.02
     expert_lr = 5e-4
 
-    opt = CentroidSteerOptimizer(
-        model, lr=base_lr, expert_lr=expert_lr, muon_lr=muon_lr, use_muon=True
-    )
+    opt = CentroidSteerOptimizer(model, lr=base_lr, expert_lr=expert_lr, muon_lr=muon_lr, use_muon=True)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=10, eta_min=1e-5)
 
     x = torch.randint(0, 512, (2, 8), device=device)
@@ -334,7 +322,7 @@ def test_newtonschulz_input_tensor_strict_immutability():
 
 def test_triton_pytorch_triangular_kernel_parity():
     """Verify numerical parity between Triton fused triangular kernel and PyTorch reference."""
-    from triune.kernels.fast_triangular import fast_triangular_adamw, HAS_TRITON
+    from triune.kernels.fast_triangular import HAS_TRITON, fast_triangular_adamw
 
     if not torch.cuda.is_available() or not HAS_TRITON:
         pytest.skip("CUDA or Triton unavailable for fused triangular kernel parity test.")
@@ -369,16 +357,14 @@ def test_triton_pytorch_triangular_kernel_parity():
                 mom_ref.mul_(beta1).add_(R, alpha=1.0 - beta1)
                 var_ref.mul_(beta2).addcmul_(R, R, value=1.0 - beta2)
                 step_view = step_tensor.view(N, 1, 1).to(torch.float32)
-                bias_c1 = (1.0 - (beta1 ** step_view))
-                bias_c2 = (1.0 - (beta2 ** step_view)).clamp_min(1e-7)
+                bias_c1 = 1.0 - (beta1**step_view)
+                bias_c2 = (1.0 - (beta2**step_view)).clamp_min(1e-7)
                 m_hat = mom_ref / bias_c1
                 v_hat = var_ref / bias_c2
                 delta_ref.copy_(torch.triu(m_hat / (v_hat.sqrt() + eps)))
 
                 # Triton kernel step
-                fast_triangular_adamw(
-                    R, mom_triton, var_triton, delta_triton, step_tensor, beta1, beta2, eps
-                )
+                fast_triangular_adamw(R, mom_triton, var_triton, delta_triton, step_tensor, beta1, beta2, eps)
 
                 # Assert exact parity between Triton and PyTorch
                 diff_mom = (mom_ref - mom_triton).abs().max().item()
@@ -392,7 +378,7 @@ def test_triton_pytorch_triangular_kernel_parity():
 
 def test_trainer_checkpoint_roundtrip_equivalence(tmp_path):
     """Verify that saving and restoring through triune.trainer.checkpoint produces exact training continuation."""
-    from triune.trainer.checkpoint import save_latest, load_checkpoint
+    from triune.trainer.checkpoint import load_checkpoint, save_latest
 
     torch.manual_seed(1337)
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -430,15 +416,12 @@ def test_trainer_checkpoint_roundtrip_equivalence(tmp_path):
             self.config = cfg
 
     model_A = _create_mini_model(device=device)
-    opt_A = CentroidSteerOptimizer(
-        model_A, lr=1e-3, rank=8, update_gap=5, use_triangular_core=True, use_muon=True
-    )
+    opt_A = CentroidSteerOptimizer(model_A, lr=1e-3, rank=8, update_gap=5, use_triangular_core=True, use_muon=True)
     trainer_A = MockTrainer(model_A, opt_A, config)
 
     # Deterministic inputs
     batches = [
-        (torch.randint(0, 512, (2, 8), device=device), torch.randint(0, 512, (2, 8), device=device))
-        for _ in range(7)
+        (torch.randint(0, 512, (2, 8), device=device), torch.randint(0, 512, (2, 8), device=device)) for _ in range(7)
     ]
 
     # Train for 5 steps
@@ -455,9 +438,7 @@ def test_trainer_checkpoint_roundtrip_equivalence(tmp_path):
 
     # Create fresh model B and restore via checkpoint.py
     model_B = _create_mini_model(device=device)
-    opt_B = CentroidSteerOptimizer(
-        model_B, lr=1e-3, rank=8, update_gap=5, use_triangular_core=True, use_muon=True
-    )
+    opt_B = CentroidSteerOptimizer(model_B, lr=1e-3, rank=8, update_gap=5, use_triangular_core=True, use_muon=True)
     trainer_B = MockTrainer(model_B, opt_B, copy.deepcopy(config))
 
     load_checkpoint(trainer_B, ckpt_path, load_optimizer=True)
@@ -496,9 +477,7 @@ def test_scheduler_and_resume_lr_continuity():
     muon_lr = 0.02
     expert_lr = 5e-4
 
-    opt_A = CentroidSteerOptimizer(
-        model_A, lr=base_lr, expert_lr=expert_lr, muon_lr=muon_lr, use_muon=True
-    )
+    opt_A = CentroidSteerOptimizer(model_A, lr=base_lr, expert_lr=expert_lr, muon_lr=muon_lr, use_muon=True)
     sched_A = torch.optim.lr_scheduler.CosineAnnealingLR(opt_A, T_max=20, eta_min=1e-5)
 
     x = torch.randint(0, 512, (2, 8), device=device)
@@ -521,9 +500,7 @@ def test_scheduler_and_resume_lr_continuity():
     # New model, optimizer, scheduler
     model_B = _create_mini_model(device=device)
     model_B.load_state_dict(model_A.state_dict())
-    opt_B = CentroidSteerOptimizer(
-        model_B, lr=base_lr, expert_lr=expert_lr, muon_lr=muon_lr, use_muon=True
-    )
+    opt_B = CentroidSteerOptimizer(model_B, lr=base_lr, expert_lr=expert_lr, muon_lr=muon_lr, use_muon=True)
     sched_B = torch.optim.lr_scheduler.CosineAnnealingLR(opt_B, T_max=20, eta_min=1e-5)
 
     opt_B.load_state_dict(checkpoint["opt_state"])
@@ -532,7 +509,9 @@ def test_scheduler_and_resume_lr_continuity():
     # Verify identical learning rates immediately upon restore
     assert math.isclose(opt_A.param_groups[0]["lr"], opt_B.param_groups[0]["lr"], rel_tol=1e-5)
     assert math.isclose(opt_A.expert_lr, opt_B.expert_lr, rel_tol=1e-5)
-    assert math.isclose(opt_A.muon_optimizer.param_groups[0]["lr"], opt_B.muon_optimizer.param_groups[0]["lr"], rel_tol=1e-5)
+    assert math.isclose(
+        opt_A.muon_optimizer.param_groups[0]["lr"], opt_B.muon_optimizer.param_groups[0]["lr"], rel_tol=1e-5
+    )
 
     # Run 5 more steps on both and verify continued exact LR match at every step
     for step in range(8, 13):
@@ -548,5 +527,6 @@ def test_scheduler_and_resume_lr_continuity():
 
         assert math.isclose(opt_A.param_groups[0]["lr"], opt_B.param_groups[0]["lr"], rel_tol=1e-5)
         assert math.isclose(opt_A.expert_lr, opt_B.expert_lr, rel_tol=1e-5)
-        assert math.isclose(opt_A.muon_optimizer.param_groups[0]["lr"], opt_B.muon_optimizer.param_groups[0]["lr"], rel_tol=1e-5)
-
+        assert math.isclose(
+            opt_A.muon_optimizer.param_groups[0]["lr"], opt_B.muon_optimizer.param_groups[0]["lr"], rel_tol=1e-5
+        )

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import torch
@@ -56,8 +56,10 @@ class TestHardwareTuning(unittest.TestCase):
             is_training=False,
         )
 
-        with patch("triune.runtime.streaming.LayerStreamingEngine", _FakeStreamingEngine), \
-             patch("torch.cuda.mem_get_info", return_value=(8 * 1024**3, 8 * 1024**3)):
+        with (
+            patch("triune.runtime.streaming.LayerStreamingEngine", _FakeStreamingEngine),
+            patch("torch.cuda.mem_get_info", return_value=(8 * 1024**3, 8 * 1024**3)),
+        ):
             applied = _apply_model_gpu_residency(state, 4)
 
         self.assertTrue(old.detached)
@@ -73,9 +75,11 @@ class TestHardwareTuning(unittest.TestCase):
         self.assertEqual(_apply_model_gpu_residency(state, 1), 0)
 
     def test_cpu_profile_does_not_claim_gpu_offload_or_invent_speed(self):
-        with patch.object(routes.pytorch_state, "cuda_available", False), \
-             patch.object(routes.pytorch_state, "model", None), \
-             patch.object(routes.pytorch_state, "history", []):
+        with (
+            patch.object(routes.pytorch_state, "cuda_available", False),
+            patch.object(routes.pytorch_state, "model", None),
+            patch.object(routes.pytorch_state, "history", []),
+        ):
             profile = routes._compute_hardware_profile()
 
         self.assertEqual(profile["recommended_preset"], "eco")

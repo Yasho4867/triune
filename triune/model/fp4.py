@@ -21,7 +21,6 @@ def _is_te_supported() -> bool:
     return caps.transformer_engine and (caps.compute_capability[0] >= 8)
 
 
-
 class FP4Linear(nn.Module):
     """Use Transformer Engine when available and hardware-supported, otherwise retain a BF16 fallback.
 

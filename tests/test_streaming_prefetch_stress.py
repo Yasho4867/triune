@@ -1,6 +1,6 @@
 import unittest
+
 import torch
-import torch.nn as nn
 
 from triune.model.transformer import TriuneTransformer
 from triune.runtime.streaming import LayerStreamingEngine, StreamingConfig
@@ -43,7 +43,7 @@ class TestStreamingPrefetchStress(unittest.TestCase):
         optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
         engine.set_optimizer(optimizer)
 
-        initial_vram_mb = torch.cuda.memory_allocated(self.device) / (1024 ** 2)
+        initial_vram_mb = torch.cuda.memory_allocated(self.device) / (1024**2)
 
         num_iterations = 15
         batch_size = 2
@@ -62,15 +62,21 @@ class TestStreamingPrefetchStress(unittest.TestCase):
             engine.step_streaming_optimizer(optimizer=optimizer, grad_clip=1.0)
 
             # Record memory after each complete iteration
-            current_vram_mb = torch.cuda.memory_allocated(self.device) / (1024 ** 2)
+            current_vram_mb = torch.cuda.memory_allocated(self.device) / (1024**2)
             vram_readings.append(current_vram_mb)
 
             # Invariant: all layer parameters must point to CPU master storage
             for layer_idx, layer in enumerate(model.layers):
-                self.assertFalse(getattr(layer, "_is_prefetched", False), f"Layer {layer_idx} left with _is_prefetched=True")
+                self.assertFalse(
+                    getattr(layer, "_is_prefetched", False), f"Layer {layer_idx} left with _is_prefetched=True"
+                )
                 for p in layer.parameters():
                     self.assertEqual(p.device.type, "cpu", f"Layer {layer_idx} parameter stranded on GPU")
-                    self.assertEqual(p.data.data_ptr(), p._cpu_data.data_ptr(), f"Layer {layer_idx} parameter did not revert to CPU master")
+                    self.assertEqual(
+                        p.data.data_ptr(),
+                        p._cpu_data.data_ptr(),
+                        f"Layer {layer_idx} parameter did not revert to CPU master",
+                    )
                     self.assertIsNone(p.grad, f"Layer {layer_idx} param.grad not cleared")
                     self.assertIsNone(getattr(p, "_cpu_grad", None), f"Layer {layer_idx} _cpu_grad not cleared")
 

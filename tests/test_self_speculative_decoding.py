@@ -1,11 +1,11 @@
 """Test native self-speculative decoding using Triune's hierarchical exits."""
 
 import unittest
-import torch
-import torch.nn as nn
 
-from triune.model.transformer import TriuneTransformer
+import torch
+
 from triune.model.speculative import SelfSpeculativeGenerator
+from triune.model.transformer import TriuneTransformer
 
 
 class MockTokenizer:
@@ -15,6 +15,7 @@ class MockTokenizer:
     def encode(self, text):
         class Result:
             ids = [1, 5, 12, 18]
+
         return Result()
 
     def decode(self, token_ids, skip_special_tokens=True):
@@ -77,9 +78,7 @@ class TestSelfSpeculativeDecoding(unittest.TestCase):
         res = generator.generate("Test prompt", max_new_tokens=8)
         self.assertGreater(generator.telemetry["verification_passes"], 0)
         self.assertGreater(generator.telemetry["draft_tokens_proposed"], 0)
-        self.assertEqual(
-            generator.telemetry["total_tokens_emitted"], len(res["token_ids"])
-        )
+        self.assertEqual(generator.telemetry["total_tokens_emitted"], len(res["token_ids"]))
 
     def test_self_speculative_eos_handling(self):
         # Force reflex exit to predict EOS (id=2) immediately

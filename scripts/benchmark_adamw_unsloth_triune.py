@@ -27,11 +27,11 @@ Measures across:
 """
 
 import gc
-import json
 import os
 import sys
 import time
 from typing import Any, Dict, List, Tuple
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -44,11 +44,10 @@ if ROOT not in sys.path:
 import bitsandbytes as bnb
 import unsloth.kernels as uk
 
-from triune.model.transformer import TriuneTransformer
-from triune.model.moe import MoE_FFN
-from triune.optim.centroid import CentroidSteerOptimizer
 from triune.kernels.fast_cross_entropy import fast_cross_entropy
-from triune.kernels.fast_rmsnorm import fast_rmsnorm
+from triune.model.moe import MoE_FFN
+from triune.model.transformer import TriuneTransformer
+from triune.optim.centroid import CentroidSteerOptimizer
 
 
 def get_gpu_meta() -> Dict[str, Any]:
@@ -196,7 +195,7 @@ def run_lora_finetune_benchmark(stack_name: str, device: torch.device, steps: in
     torch.manual_seed(42)
 
     model = create_benchmark_model(model_type="moe", dim=256, num_layers=6, device=device)
-    
+
     class LoRALinear(nn.Module):
         def __init__(self, base_linear: nn.Linear, rank: int = 16, alpha: float = 16.0):
             super().__init__()
@@ -205,8 +204,12 @@ def run_lora_finetune_benchmark(stack_name: str, device: torch.device, steps: in
             if self.base.bias is not None:
                 self.base.bias.requires_grad = False
             p_in, p_out = base_linear.in_features, base_linear.out_features
-            self.lora_A = nn.Parameter(torch.randn(rank, p_in, device=base_linear.weight.device, dtype=base_linear.weight.dtype) * 0.02)
-            self.lora_B = nn.Parameter(torch.zeros(p_out, rank, device=base_linear.weight.device, dtype=base_linear.weight.dtype))
+            self.lora_A = nn.Parameter(
+                torch.randn(rank, p_in, device=base_linear.weight.device, dtype=base_linear.weight.dtype) * 0.02
+            )
+            self.lora_B = nn.Parameter(
+                torch.zeros(p_out, rank, device=base_linear.weight.device, dtype=base_linear.weight.dtype)
+            )
             self.scaling = alpha / rank
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -216,6 +219,7 @@ def run_lora_finetune_benchmark(stack_name: str, device: torch.device, steps: in
 
     # Attach LoRA adapters to attention projections
     from triune.model.attention import VectorisedGLA
+
     for name, module in model.named_modules():
         if isinstance(module, VectorisedGLA):
             for attr in ["q_proj", "k_proj", "v_proj", "g_proj", "out_proj"]:
@@ -335,9 +339,9 @@ def get_exact_state_tensor_bytes(optimizer) -> int:
     total_bytes = 0
 
     # Ensure model parameters themselves are NEVER counted as optimizer state
-    if hasattr(optimizer, 'param_groups'):
+    if hasattr(optimizer, "param_groups"):
         for pg in optimizer.param_groups:
-            for p in pg.get('params', []):
+            for p in pg.get("params", []):
                 visited_ids.add(id(p))
 
     def visit(obj):
@@ -354,36 +358,36 @@ def get_exact_state_tensor_bytes(optimizer) -> int:
         elif isinstance(obj, (list, tuple, set)):
             for item in obj:
                 visit(item)
-        elif hasattr(obj, '__dict__'):
+        elif hasattr(obj, "__dict__"):
             for k, v in obj.__dict__.items():
-                if k not in ('model', 'param_groups', '_optimizer'):
+                if k not in ("model", "param_groups", "_optimizer"):
                     visit(v)
 
-    if hasattr(optimizer, 'state'):
+    if hasattr(optimizer, "state"):
         for p, p_state in optimizer.state.items():
             visited_ids.add(id(p))
             visit(p_state)
-    if hasattr(optimizer, 'base_optimizer') and optimizer.base_optimizer is not None:
-        if hasattr(optimizer.base_optimizer, 'state'):
+    if hasattr(optimizer, "base_optimizer") and optimizer.base_optimizer is not None:
+        if hasattr(optimizer.base_optimizer, "state"):
             for p, p_state in optimizer.base_optimizer.state.items():
                 visited_ids.add(id(p))
                 visit(p_state)
-    if hasattr(optimizer, 'muon_optimizer') and optimizer.muon_optimizer is not None:
-        if hasattr(optimizer.muon_optimizer, 'state'):
+    if hasattr(optimizer, "muon_optimizer") and optimizer.muon_optimizer is not None:
+        if hasattr(optimizer.muon_optimizer, "state"):
             for p, p_state in optimizer.muon_optimizer.state.items():
                 visited_ids.add(id(p))
                 visit(p_state)
-    if hasattr(optimizer, 'layer_groups'):
+    if hasattr(optimizer, "layer_groups"):
         for g in optimizer.layer_groups:
-            if 'param' in g:
-                visited_ids.add(id(g['param']))
-            visit(g.get('projection'))
-            visit(g.get('Q_L'))
-            visit(g.get('Q_R'))
-            visit(g.get('proj_basis'))
-            visit(g.get('last_c_orth'))
-            visit(g.get('state'))
-    if hasattr(optimizer, '_triangular_buffers'):
+            if "param" in g:
+                visited_ids.add(id(g["param"]))
+            visit(g.get("projection"))
+            visit(g.get("Q_L"))
+            visit(g.get("Q_R"))
+            visit(g.get("proj_basis"))
+            visit(g.get("last_c_orth"))
+            visit(g.get("state"))
+    if hasattr(optimizer, "_triangular_buffers"):
         visit(optimizer._triangular_buffers)
 
     return total_bytes
@@ -396,7 +400,7 @@ def run_pure_optimizer_benchmark(device: torch.device) -> Tuple[List[Dict[str, A
 
     K = 16
     m = 256
-    
+
     class ExpertBank(nn.Module):
         def __init__(self):
             super().__init__()
@@ -415,7 +419,10 @@ def run_pure_optimizer_benchmark(device: torch.device) -> Tuple[List[Dict[str, A
     optimizers = [
         ("PyTorch Standard AdamW", lambda b: torch.optim.AdamW(b.parameters(), lr=1e-4)),
         ("Unsloth Native 8-bit AdamW", lambda b: bnb.optim.AdamW8bit(b.parameters(), lr=1e-4)),
-        ("Triune CentroidSteer (Triangular Core)", lambda b: CentroidSteerOptimizer(b, lr=1e-4, rank=16, use_triangular_core=True, use_muon=False)),
+        (
+            "Triune CentroidSteer (Triangular Core)",
+            lambda b: CentroidSteerOptimizer(b, lr=1e-4, rank=16, use_triangular_core=True, use_muon=False),
+        ),
     ]
 
     results = []
@@ -469,13 +476,15 @@ def run_pure_optimizer_benchmark(device: torch.device) -> Tuple[List[Dict[str, A
         wall_times.sort()
         wall_median_ms = wall_times[len(wall_times) // 2]
 
-        results.append({
-            "optimizer": name,
-            "gpu_latency_ms": round(gpu_median_ms, 2),
-            "wall_latency_ms": round(wall_median_ms, 2),
-            "state_vram_mb": round(exact_mb, 2),
-            "peak_step_vram_mb": round(peak_step_delta, 2),
-        })
+        results.append(
+            {
+                "optimizer": name,
+                "gpu_latency_ms": round(gpu_median_ms, 2),
+                "wall_latency_ms": round(wall_median_ms, 2),
+                "state_vram_mb": round(exact_mb, 2),
+                "peak_step_vram_mb": round(peak_step_delta, 2),
+            }
+        )
 
         del opt
         torch.cuda.empty_cache()
@@ -489,9 +498,9 @@ def run_pure_optimizer_benchmark(device: torch.device) -> Tuple[List[Dict[str, A
 
 def main():
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    print("="*80)
+    print("=" * 80)
     print("RIGOROUS 3-WAY BENCHMARK: PYTORCH ADAMW vs NATIVE UNSLOTH vs TRIUNE")
-    print("="*80)
+    print("=" * 80)
     meta = get_gpu_meta()
     print(f"Hardware: {meta['device']} ({meta['vram_gb']} GB VRAM)")
     print(f"CUDA: {meta['cuda_version']} | PyTorch: {meta['pytorch_version']}")
@@ -503,7 +512,10 @@ def main():
     for stack in ["AdamW", "Unsloth", "Triune"]:
         res = run_pretrain_benchmark(stack, "moe", device, steps=25)
         moe_results.append(res)
-        print(f"  [{stack:7s}] GPU Latency: {res['gpu_median_latency_ms']:6.2f} ms | Wall-Clock: {res['wall_median_latency_ms']:6.2f} ms | GPU Throughput: {res['throughput_tokens_sec']:5.0f} tok/s | Peak VRAM: {res['peak_vram_mb']:5.1f} MB | Loss (Untrained: {res['untrained_loss']:.4f}): {res['initial_loss']:.4f} -> {res['final_loss']:.4f}", flush=True)
+        print(
+            f"  [{stack:7s}] GPU Latency: {res['gpu_median_latency_ms']:6.2f} ms | Wall-Clock: {res['wall_median_latency_ms']:6.2f} ms | GPU Throughput: {res['throughput_tokens_sec']:5.0f} tok/s | Peak VRAM: {res['peak_vram_mb']:5.1f} MB | Loss (Untrained: {res['untrained_loss']:.4f}): {res['initial_loss']:.4f} -> {res['final_loss']:.4f}",
+            flush=True,
+        )
 
     # 2. Dense Pre-Training
     print("\n--- 2. Dense Pre-Training Benchmark (25 Steps, Batch 4, Seq 128) ---")
@@ -511,7 +523,10 @@ def main():
     for stack in ["AdamW", "Unsloth", "Triune"]:
         res = run_pretrain_benchmark(stack, "dense", device, steps=25)
         dense_results.append(res)
-        print(f"  [{stack:7s}] GPU Latency: {res['gpu_median_latency_ms']:6.2f} ms | Wall-Clock: {res['wall_median_latency_ms']:6.2f} ms | GPU Throughput: {res['throughput_tokens_sec']:5.0f} tok/s | Peak VRAM: {res['peak_vram_mb']:5.1f} MB | Loss (Untrained: {res['untrained_loss']:.4f}): {res['initial_loss']:.4f} -> {res['final_loss']:.4f}", flush=True)
+        print(
+            f"  [{stack:7s}] GPU Latency: {res['gpu_median_latency_ms']:6.2f} ms | Wall-Clock: {res['wall_median_latency_ms']:6.2f} ms | GPU Throughput: {res['throughput_tokens_sec']:5.0f} tok/s | Peak VRAM: {res['peak_vram_mb']:5.1f} MB | Loss (Untrained: {res['untrained_loss']:.4f}): {res['initial_loss']:.4f} -> {res['final_loss']:.4f}",
+            flush=True,
+        )
 
     # 3. LoRA Fine-Tuning
     print("\n--- 3. LoRA Fine-Tuning Benchmark (25 Steps, Batch 4, Seq 128) ---")
@@ -519,13 +534,19 @@ def main():
     for stack in ["AdamW", "Unsloth", "Triune"]:
         res = run_lora_finetune_benchmark(stack, device, steps=25)
         lora_results.append(res)
-        print(f"  [{stack:7s}] GPU Latency: {res['gpu_median_latency_ms']:6.2f} ms | Wall-Clock: {res['wall_median_latency_ms']:6.2f} ms | GPU Throughput: {res['throughput_tokens_sec']:5.0f} tok/s | Peak VRAM: {res['peak_vram_mb']:5.1f} MB | Loss (Untrained: {res['untrained_loss']:.4f}): {res['initial_loss']:.4f} -> {res['final_loss']:.4f}", flush=True)
+        print(
+            f"  [{stack:7s}] GPU Latency: {res['gpu_median_latency_ms']:6.2f} ms | Wall-Clock: {res['wall_median_latency_ms']:6.2f} ms | GPU Throughput: {res['throughput_tokens_sec']:5.0f} tok/s | Peak VRAM: {res['peak_vram_mb']:5.1f} MB | Loss (Untrained: {res['untrained_loss']:.4f}): {res['initial_loss']:.4f} -> {res['final_loss']:.4f}",
+            flush=True,
+        )
 
     # 4. Pure Optimizer Benchmark
     opt_results, shape_desc = run_pure_optimizer_benchmark(device)
     print(f"\n--- 4. Pure Optimizer Microbenchmark ({shape_desc}) ---", flush=True)
     for r in opt_results:
-        print(f"  {r['optimizer']:42s} | GPU Latency: {r['gpu_latency_ms']:6.2f} ms | Wall Latency: {r['wall_latency_ms']:6.2f} ms | Persistent State RAM: {r['state_vram_mb']:5.2f} MB | Peak Step Scratch: {r['peak_step_vram_mb']:5.2f} MB", flush=True)
+        print(
+            f"  {r['optimizer']:42s} | GPU Latency: {r['gpu_latency_ms']:6.2f} ms | Wall Latency: {r['wall_latency_ms']:6.2f} ms | Persistent State RAM: {r['state_vram_mb']:5.2f} MB | Peak Step Scratch: {r['peak_step_vram_mb']:5.2f} MB",
+            flush=True,
+        )
 
     # Save to Markdown Report
     report_file = os.path.join(ROOT, "benchmarks", "RIGOROUS_ADAMW_UNSLOTH_TRIUNE_REPORT.md")
@@ -536,33 +557,65 @@ def main():
         f.write(f"- **Unsloth**: {meta['unsloth_version']} | **BitsAndBytes**: {meta['bitsandbytes_version']}\n\n")
 
         f.write("## 1. MoE Pre-Training from Scratch\n\n")
-        f.write("| Stack | Optimizer Details | GPU Step Latency (ms) | Wall-Clock Latency (ms) | GPU Throughput (tok/s) | Peak VRAM (MB) | Loss Trajectory (Untrained -> 25 steps) |\n")
+        f.write(
+            "| Stack | Optimizer Details | GPU Step Latency (ms) | Wall-Clock Latency (ms) | GPU Throughput (tok/s) | Peak VRAM (MB) | Loss Trajectory (Untrained -> 25 steps) |\n"
+        )
         f.write("| :--- | :--- | :---: | :---: | :---: | :---: | :---: |\n")
         for r in moe_results:
-            opt_detail = "Triune CentroidSteer (Triangular Core + Batched Muon)" if r['stack'] == "Triune" else ("bitsandbytes 8-bit AdamW" if r['stack'] == "Unsloth" else "PyTorch Standard AdamW")
-            f.write(f"| **{r['stack']}** | {opt_detail} | **{r['gpu_median_latency_ms']} ms** | **{r['wall_median_latency_ms']} ms** | **{r['throughput_tokens_sec']}** | **{r['peak_vram_mb']} MB** | Untrained {r['untrained_loss']} -> {r['initial_loss']} -> {r['final_loss']} (Δ {r['loss_delta']:+.4f}) |\n")
+            opt_detail = (
+                "Triune CentroidSteer (Triangular Core + Batched Muon)"
+                if r["stack"] == "Triune"
+                else ("bitsandbytes 8-bit AdamW" if r["stack"] == "Unsloth" else "PyTorch Standard AdamW")
+            )
+            f.write(
+                f"| **{r['stack']}** | {opt_detail} | **{r['gpu_median_latency_ms']} ms** | **{r['wall_median_latency_ms']} ms** | **{r['throughput_tokens_sec']}** | **{r['peak_vram_mb']} MB** | Untrained {r['untrained_loss']} -> {r['initial_loss']} -> {r['final_loss']} (Δ {r['loss_delta']:+.4f}) |\n"
+            )
 
         f.write("\n## 2. Dense Pre-Training\n\n")
-        f.write("| Stack | Optimizer Details | GPU Step Latency (ms) | Wall-Clock Latency (ms) | GPU Throughput (tok/s) | Peak VRAM (MB) | Loss Trajectory (Untrained -> 25 steps) |\n")
+        f.write(
+            "| Stack | Optimizer Details | GPU Step Latency (ms) | Wall-Clock Latency (ms) | GPU Throughput (tok/s) | Peak VRAM (MB) | Loss Trajectory (Untrained -> 25 steps) |\n"
+        )
         f.write("| :--- | :--- | :---: | :---: | :---: | :---: | :---: |\n")
         for r in dense_results:
-            opt_detail = "Triune CentroidSteer (Triangular Core + Batched Muon)" if r['stack'] == "Triune" else ("bitsandbytes 8-bit AdamW" if r['stack'] == "Unsloth" else "PyTorch Standard AdamW")
-            f.write(f"| **{r['stack']}** | {opt_detail} | **{r['gpu_median_latency_ms']} ms** | **{r['wall_median_latency_ms']} ms** | **{r['throughput_tokens_sec']}** | **{r['peak_vram_mb']} MB** | Untrained {r['untrained_loss']} -> {r['initial_loss']} -> {r['final_loss']} (Δ {r['loss_delta']:+.4f}) |\n")
+            opt_detail = (
+                "Triune CentroidSteer (Triangular Core + Batched Muon)"
+                if r["stack"] == "Triune"
+                else ("bitsandbytes 8-bit AdamW" if r["stack"] == "Unsloth" else "PyTorch Standard AdamW")
+            )
+            f.write(
+                f"| **{r['stack']}** | {opt_detail} | **{r['gpu_median_latency_ms']} ms** | **{r['wall_median_latency_ms']} ms** | **{r['throughput_tokens_sec']}** | **{r['peak_vram_mb']} MB** | Untrained {r['untrained_loss']} -> {r['initial_loss']} -> {r['final_loss']} (Δ {r['loss_delta']:+.4f}) |\n"
+            )
 
         f.write("\n## 3. LoRA Fine-Tuning\n\n")
-        f.write("| Stack | Optimizer Details | GPU Step Latency (ms) | Wall-Clock Latency (ms) | GPU Throughput (tok/s) | Peak VRAM (MB) | Loss Trajectory (Untrained -> 25 steps) |\n")
+        f.write(
+            "| Stack | Optimizer Details | GPU Step Latency (ms) | Wall-Clock Latency (ms) | GPU Throughput (tok/s) | Peak VRAM (MB) | Loss Trajectory (Untrained -> 25 steps) |\n"
+        )
         f.write("| :--- | :--- | :---: | :---: | :---: | :---: | :---: |\n")
         for r in lora_results:
-            opt_detail = "CentroidSteerOptimizer (Batched Muon Newton-Schulz)" if r['stack'] == "Triune" else ("bitsandbytes 8-bit AdamW" if r['stack'] == "Unsloth" else "PyTorch Standard AdamW")
-            f.write(f"| **{r['stack']}** | {opt_detail} | **{r['gpu_median_latency_ms']} ms** | **{r['wall_median_latency_ms']} ms** | **{r['throughput_tokens_sec']}** | **{r['peak_vram_mb']} MB** | Untrained {r['untrained_loss']} -> {r['initial_loss']} -> {r['final_loss']} (Δ {r['loss_delta']:+.4f}) |\n")
+            opt_detail = (
+                "CentroidSteerOptimizer (Batched Muon Newton-Schulz)"
+                if r["stack"] == "Triune"
+                else ("bitsandbytes 8-bit AdamW" if r["stack"] == "Unsloth" else "PyTorch Standard AdamW")
+            )
+            f.write(
+                f"| **{r['stack']}** | {opt_detail} | **{r['gpu_median_latency_ms']} ms** | **{r['wall_median_latency_ms']} ms** | **{r['throughput_tokens_sec']}** | **{r['peak_vram_mb']} MB** | Untrained {r['untrained_loss']} -> {r['initial_loss']} -> {r['final_loss']} (Δ {r['loss_delta']:+.4f}) |\n"
+            )
 
         f.write(f"\n## 4. Pure Optimizer Microbenchmark ({shape_desc})\n\n")
-        f.write("| Optimizer | GPU Latency (ms) | Wall-Clock Latency (ms) | Persistent State VRAM (MB) | Peak Step Scratch (MB) | State Reduction vs AdamW |\n")
+        f.write(
+            "| Optimizer | GPU Latency (ms) | Wall-Clock Latency (ms) | Persistent State VRAM (MB) | Peak Step Scratch (MB) | State Reduction vs AdamW |\n"
+        )
         f.write("| :--- | :---: | :---: | :---: | :---: | :---: |\n")
-        base_ram = opt_results[0]['state_vram_mb']
+        base_ram = opt_results[0]["state_vram_mb"]
         for r in opt_results:
-            reduc = f"-{round((1.0 - r['state_vram_mb'] / base_ram) * 100, 1)}%" if r['state_vram_mb'] < base_ram else "Baseline"
-            f.write(f"| **{r['optimizer']}** | **{r['gpu_latency_ms']} ms** | **{r['wall_latency_ms']} ms** | **{r['state_vram_mb']} MB** | **{r['peak_step_vram_mb']} MB** | **{reduc}** |\n")
+            reduc = (
+                f"-{round((1.0 - r['state_vram_mb'] / base_ram) * 100, 1)}%"
+                if r["state_vram_mb"] < base_ram
+                else "Baseline"
+            )
+            f.write(
+                f"| **{r['optimizer']}** | **{r['gpu_latency_ms']} ms** | **{r['wall_latency_ms']} ms** | **{r['state_vram_mb']} MB** | **{r['peak_step_vram_mb']} MB** | **{reduc}** |\n"
+            )
 
     print(f"\n[SUCCESS] Extensive Benchmark Report saved to: {report_file}")
 

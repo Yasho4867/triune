@@ -14,16 +14,18 @@ from __future__ import annotations
 
 import copy
 import unittest
+
 import torch
-import torch.nn as nn
 
 from triune.model.transformer import TriuneTransformer
-from triune.runtime.streaming import LayerStreamingEngine, StreamingConfig
 from triune.optim.centroid import CentroidSteerOptimizer
 from triune.optim.muon import Muon
+from triune.runtime.streaming import LayerStreamingEngine, StreamingConfig
 
 
-def create_paired_models(device: torch.device, seed: int = 42) -> tuple[TriuneTransformer, TriuneTransformer, LayerStreamingEngine]:
+def create_paired_models(
+    device: torch.device, seed: int = 42
+) -> tuple[TriuneTransformer, TriuneTransformer, LayerStreamingEngine]:
     """Creates two models with identical initial weights and detaches non-deterministic routing."""
     torch.manual_seed(seed)
     if device.type == "cuda":

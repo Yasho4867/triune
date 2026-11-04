@@ -55,6 +55,7 @@ class TestUnifiedEngineParity(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         from pathlib import Path
+
         cls._session_file = Path("checkpoints/session_state.json")
         cls._session_backup = cls._session_file.read_bytes() if cls._session_file.is_file() else None
 
@@ -71,7 +72,9 @@ class TestUnifiedEngineParity(unittest.TestCase):
         state.model = selected_model
         state.weights_loaded = False
 
-        with patch.object(state, "load_model_checkpoint", side_effect=AssertionError("must not auto-replace the selected model")):
+        with patch.object(
+            state, "load_model_checkpoint", side_effect=AssertionError("must not auto-replace the selected model")
+        ):
             state.lazy_init_model()
 
         self.assertIs(state.model, selected_model)

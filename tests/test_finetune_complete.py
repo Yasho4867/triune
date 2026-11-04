@@ -1,9 +1,9 @@
 """Comprehensive Unit Tests for Triune LoRA/QLoRA Fine-Tuning Engine and API Routes."""
 
-import json
 import tempfile
 import unittest
 from pathlib import Path
+
 import torch
 import torch.nn as nn
 from fastapi.testclient import TestClient
@@ -80,7 +80,9 @@ class TestFineTuneCore(unittest.TestCase):
             out_path = Path(tmpdir) / "test_lora_ckpt"
             tuner.save_adapter(out_path)
             self.assertTrue((out_path / "adapter_config.json").is_file())
-            has_weights = (out_path / "adapter_model.safetensors").is_file() or (out_path / "adapter_model.pt").is_file()
+            has_weights = (out_path / "adapter_model.safetensors").is_file() or (
+                out_path / "adapter_model.pt"
+            ).is_file()
             self.assertTrue(has_weights)
 
             # Detach
@@ -120,13 +122,16 @@ class TestFineTuneApiEndpoints(unittest.TestCase):
         self.assertIsInstance(data["adapters"], list)
 
     def test_finetune_adapter_attach_detach(self):
-        attach_res = self.client.post("/v1/finetune/adapter", json={
-            "action": "attach",
-            "name": "Test-Adapter-Attach",
-            "rank": 8,
-            "alpha": 16.0,
-            "quantization": "4-bit NF4"
-        })
+        attach_res = self.client.post(
+            "/v1/finetune/adapter",
+            json={
+                "action": "attach",
+                "name": "Test-Adapter-Attach",
+                "rank": 8,
+                "alpha": 16.0,
+                "quantization": "4-bit NF4",
+            },
+        )
         self.assertEqual(attach_res.status_code, 200)
         attach_data = attach_res.json()
         self.assertEqual(attach_data["status"], "success")

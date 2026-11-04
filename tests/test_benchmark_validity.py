@@ -13,9 +13,9 @@ from __future__ import annotations
 
 import json
 import math
-import os
 import unittest
 from pathlib import Path
+
 import torch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -115,7 +115,9 @@ class BenchmarkValidityTest(unittest.TestCase):
 
         decode_entries = data["decode_benchmarks"]
         state_sizes = [d["gla_state_kb"] for d in decode_entries]
-        self.assertTrue(all(s == state_sizes[0] for s in state_sizes), f"GLA state size must remain constant: {state_sizes}")
+        self.assertTrue(
+            all(s == state_sizes[0] for s in state_sizes), f"GLA state size must remain constant: {state_sizes}"
+        )
 
         # SDPA KV-cache must increase strictly with prompt length
         kv_sizes = [d["sdpa_kv_cache_kb"] for d in decode_entries]
@@ -140,9 +142,11 @@ class BenchmarkValidityTest(unittest.TestCase):
     def test_competitor_execution_integrity(self):
         """Verifies that AdamW and Unsloth are genuine real baselines."""
         import torch.optim as optim
+
         self.assertTrue(hasattr(optim, "AdamW"), "PyTorch standard AdamW must exist")
         try:
             import bitsandbytes as bnb
+
             self.assertTrue(hasattr(bnb.optim, "AdamW8bit"), "BitsAndBytes AdamW8bit must exist")
         except ImportError:
             self.fail("BitsAndBytes must be installed and functional for Unsloth baselines")
@@ -234,6 +238,51 @@ class BenchmarkValidityTest(unittest.TestCase):
         parity = data["parity_validation"]
         self.assertLessEqual(parity["max_observed_weight_drift"], 1e-4)
         self.assertLessEqual(parity["max_observed_loss_diff"], 1e-4)
+
+    def test_long_context_scaling_results_validity(self):
+        """Verifies long-context scaling benchmark schema, O(1) decode memory, and O(T) speedups."""
+        fpath = BENCHMARK_DIR / "long_context_scaling_results.json"
+        if not fpath.is_file():
+            self.skipTest("long_context_scaling_results.json not found")
+
+        with open(fpath, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        self.assertIn("provenance", data)
+        self.assertIn("training_scaling", data)
+        self.assertIn("autoregressive_decoding", data)
+
+        # Autoregressive decoding recurrent state memory must be constant
+        decode_entries = data["autoregressive_decoding"]
+        gla_states = [d["gla_state_kb"] for d in decode_entries]
+        self.assertTrue(
+            all(s == gla_states[0] for s in gla_states), f"GLA recurrent state must remain O(1) constant: {gla_states}"
+        )
+
+        # SDPA KV cache must grow monotonically
+        sdpa_caches = [d["sdpa_kv_cache_kb"] for d in decode_entries]
+        self.assertEqual(sdpa_caches, sorted(sdpa_caches), "SDPA KV cache must scale monotonically with prompt length")
+
+    def test_convergence_100_steps_results_validity(self):
+        """Verifies 100-step real text convergence benchmark schema, non-negative losses, and loss reduction."""
+        fpath = BENCHMARK_DIR / "convergence_100_steps_results.json"
+        if not fpath.is_file():
+            self.skipTest("convergence_100_steps_results.json not found")
+
+        with open(fpath, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        self.assertIn("provenance", data)
+        self.assertIn("results", data)
+        results = data["results"]
+        self.assertEqual(len(results), 3, "Must have 3 optimizer regimes: adamw, bnb_8bit, triune")
+
+        for r in results:
+            self.assertGreater(
+                r["val_loss_reduction"], 0.0, f"Regime {r['regime_name']} failed to reduce validation loss"
+            )
+            self.assertGreater(r["throughput_tok_s"], 0.0)
+            self.assertEqual(len(r["step_records"]), 100, "Must record all 100 training steps")
 
 
 if __name__ == "__main__":

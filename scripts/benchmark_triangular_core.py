@@ -16,11 +16,10 @@ Measures:
 """
 
 import gc
-import json
 import os
 import sys
-import time
-from typing import Any, Dict, List
+from typing import Any, Dict
+
 import torch
 import torch.nn as nn
 
@@ -28,8 +27,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from triune.model.transformer import TriuneTransformer
 from triune.model.moe import MoE_FFN
+from triune.model.transformer import TriuneTransformer
 from triune.optim.centroid import CentroidSteerOptimizer
 
 
@@ -46,20 +45,21 @@ def get_gpu_info() -> Dict[str, Any]:
 
 def benchmark_expert_microbenchmark(device: torch.device):
     """Microbenchmark on real MoE expert layers with Centroid Steering."""
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("MICROBENCHMARK 1: Pure MoE Expert Optimizer Step (16 Expert Weights)")
-    print("="*80)
+    print("=" * 80)
 
     # 4 layers of MoE, 4 experts each = 16 expert pairs (up-proj and down-proj = 32 matrices)
     dim = 256
     num_experts = 4
     moe_layers = [MoE_FFN(dim=dim, num_experts=num_experts).to(device=device, dtype=torch.bfloat16) for _ in range(4)]
-    
+
     # Dummy wrapper model
     class ExpertCluster(nn.Module):
         def __init__(self, layers):
             super().__init__()
             self.layers = nn.ModuleList(layers)
+
         def forward(self, x):
             out = x
             for l in self.layers:
@@ -77,8 +77,14 @@ def benchmark_expert_microbenchmark(device: torch.device):
 
     configs = [
         ("PyTorch Standard AdamW", lambda m: torch.optim.AdamW(m.parameters(), lr=1e-4)),
-        ("CentroidSteer (Legacy BMM)", lambda m: CentroidSteerOptimizer(m, lr=1e-4, rank=16, use_triangular_core=False)),
-        ("CentroidSteer (Universal Triangular Core)", lambda m: CentroidSteerOptimizer(m, lr=1e-4, rank=16, use_triangular_core=True)),
+        (
+            "CentroidSteer (Legacy BMM)",
+            lambda m: CentroidSteerOptimizer(m, lr=1e-4, rank=16, use_triangular_core=False),
+        ),
+        (
+            "CentroidSteer (Universal Triangular Core)",
+            lambda m: CentroidSteerOptimizer(m, lr=1e-4, rank=16, use_triangular_core=True),
+        ),
     ]
 
     results = []
@@ -125,12 +131,14 @@ def benchmark_expert_microbenchmark(device: torch.device):
         mean_ms = sum(times) / len(times)
 
         print(f"  {name:42s} | Latency: {median_ms:6.2f} ms | State RAM: {state_ram:5.2f} MB")
-        results.append({
-            "name": name,
-            "median_ms": round(median_ms, 2),
-            "mean_ms": round(mean_ms, 2),
-            "state_ram_mb": round(state_ram, 2),
-        })
+        results.append(
+            {
+                "name": name,
+                "median_ms": round(median_ms, 2),
+                "mean_ms": round(mean_ms, 2),
+                "state_ram_mb": round(state_ram, 2),
+            }
+        )
 
         del opt
         torch.cuda.empty_cache()
@@ -141,9 +149,9 @@ def benchmark_expert_microbenchmark(device: torch.device):
 
 def benchmark_end_to_end_training(device: torch.device):
     """End-to-end benchmark of full TriuneTransformer training step."""
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("MICROBENCHMARK 2: End-to-End Training Step (Forward + Backward + Optimizer)")
-    print("="*80)
+    print("=" * 80)
 
     cfg = dict(
         vocab_size=2048,
@@ -161,8 +169,14 @@ def benchmark_end_to_end_training(device: torch.device):
 
     configs = [
         ("PyTorch Standard AdamW", lambda m: torch.optim.AdamW(m.parameters(), lr=1e-4)),
-        ("CentroidSteer (Legacy BMM)", lambda m: CentroidSteerOptimizer(m, lr=1e-4, rank=16, use_triangular_core=False)),
-        ("CentroidSteer (Universal Triangular Core)", lambda m: CentroidSteerOptimizer(m, lr=1e-4, rank=16, use_triangular_core=True)),
+        (
+            "CentroidSteer (Legacy BMM)",
+            lambda m: CentroidSteerOptimizer(m, lr=1e-4, rank=16, use_triangular_core=False),
+        ),
+        (
+            "CentroidSteer (Universal Triangular Core)",
+            lambda m: CentroidSteerOptimizer(m, lr=1e-4, rank=16, use_triangular_core=True),
+        ),
     ]
 
     results = []
@@ -211,26 +225,30 @@ def benchmark_end_to_end_training(device: torch.device):
         times = [starts[i].elapsed_time(ends[i]) for i in range(steps)]
         times.sort()
         median_step_ms = times[len(times) // 2]
-        
+
         # Compute grad norm
         total_grad_norm = 0.0
         for p in model.parameters():
             if p.grad is not None:
                 total_grad_norm += p.grad.norm().item() ** 2
-        total_grad_norm = total_grad_norm ** 0.5
+        total_grad_norm = total_grad_norm**0.5
 
         loss_delta = losses[0] - losses[-1]
 
-        print(f"  {name:42s} | Step: {median_step_ms:6.2f} ms | Peak VRAM: {peak_vram_mb:6.1f} MB | Loss: {losses[0]:.4f} -> {losses[-1]:.4f} (Δ {loss_delta:+.4f})")
-        results.append({
-            "name": name,
-            "median_step_ms": round(median_step_ms, 2),
-            "peak_vram_mb": round(peak_vram_mb, 1),
-            "initial_loss": round(losses[0], 4),
-            "final_loss": round(losses[-1], 4),
-            "loss_delta": round(loss_delta, 4),
-            "final_grad_norm": round(total_grad_norm, 4),
-        })
+        print(
+            f"  {name:42s} | Step: {median_step_ms:6.2f} ms | Peak VRAM: {peak_vram_mb:6.1f} MB | Loss: {losses[0]:.4f} -> {losses[-1]:.4f} (Δ {loss_delta:+.4f})"
+        )
+        results.append(
+            {
+                "name": name,
+                "median_step_ms": round(median_step_ms, 2),
+                "peak_vram_mb": round(peak_vram_mb, 1),
+                "initial_loss": round(losses[0], 4),
+                "final_loss": round(losses[-1], 4),
+                "loss_delta": round(loss_delta, 4),
+                "final_grad_norm": round(total_grad_norm, 4),
+            }
+        )
 
         del model
         del opt
@@ -266,7 +284,9 @@ def main():
         f.write("| Optimizer | Step Latency (ms) | Peak VRAM (MB) | Loss (0 -> 20) | Final Grad Norm |\n")
         f.write("| :--- | :---: | :---: | :---: | :---: |\n")
         for r in res2:
-            f.write(f"| {r['name']} | **{r['median_step_ms']} ms** | **{r['peak_vram_mb']} MB** | {r['initial_loss']} -> {r['final_loss']} | {r['final_grad_norm']} |\n")
+            f.write(
+                f"| {r['name']} | **{r['median_step_ms']} ms** | **{r['peak_vram_mb']} MB** | {r['initial_loss']} -> {r['final_loss']} | {r['final_grad_norm']} |\n"
+            )
 
     print(f"\n[SUCCESS] Benchmark report saved to: {report_path}")
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import inspect
-from typing import Any, Callable, Dict, List, Optional, Type
+from typing import Any, Callable, Dict, List, Optional
 
 from triune.plugins.node_schema import NodeExecutionType, PortType
 
@@ -14,26 +14,32 @@ def _normalize_ports(ports: Optional[List[Any]]) -> List[Dict[str, Any]]:
     res = []
     for p in ports:
         if isinstance(p, dict):
-            res.append({
-                "name": str(p.get("name", "port")),
-                "type": str(p.get("type", PortType.ANY.value)),
-                "description": str(p.get("description", "")),
-                "required": bool(p.get("required", True)),
-            })
+            res.append(
+                {
+                    "name": str(p.get("name", "port")),
+                    "type": str(p.get("type", PortType.ANY.value)),
+                    "description": str(p.get("description", "")),
+                    "required": bool(p.get("required", True)),
+                }
+            )
         elif isinstance(p, str):
-            res.append({
-                "name": p,
-                "type": PortType.ANY.value,
-                "description": "",
-                "required": True,
-            })
+            res.append(
+                {
+                    "name": p,
+                    "type": PortType.ANY.value,
+                    "description": "",
+                    "required": True,
+                }
+            )
         elif hasattr(p, "name") and hasattr(p, "type"):
-            res.append({
-                "name": str(p.name),
-                "type": str(p.type),
-                "description": getattr(p, "description", ""),
-                "required": bool(getattr(p, "required", True)),
-            })
+            res.append(
+                {
+                    "name": str(p.name),
+                    "type": str(p.type),
+                    "description": getattr(p, "description", ""),
+                    "required": bool(getattr(p, "required", True)),
+                }
+            )
     return res
 
 
@@ -70,7 +76,7 @@ class NodeRegistry:
                         continue
                     params[param_name] = {
                         "type": str(param.annotation) if param.annotation != inspect.Parameter.empty else "Any",
-                        "default": param.default if param.default != inspect.Parameter.empty else None
+                        "default": param.default if param.default != inspect.Parameter.empty else None,
                     }
 
             norm_inputs = _normalize_ports(inputs or ["in"])
@@ -132,17 +138,19 @@ class NodeRegistry:
             raw_outputs = meta.get("outputs", [])
             norm_in = _normalize_ports(raw_inputs)
             norm_out = _normalize_ports(raw_outputs)
-            res.append({
-                "name": meta["name"],
-                "category": meta["category"],
-                "execution_type": meta.get("execution_type", NodeExecutionType.EXECUTION.value),
-                "description": meta["description"],
-                "inputs": [p["name"] for p in norm_in],
-                "outputs": [p["name"] for p in norm_out],
-                "typed_inputs": norm_in,
-                "typed_outputs": norm_out,
-                "parameters": meta["parameters"],
-            })
+            res.append(
+                {
+                    "name": meta["name"],
+                    "category": meta["category"],
+                    "execution_type": meta.get("execution_type", NodeExecutionType.EXECUTION.value),
+                    "description": meta["description"],
+                    "inputs": [p["name"] for p in norm_in],
+                    "outputs": [p["name"] for p in norm_out],
+                    "typed_inputs": norm_in,
+                    "typed_outputs": norm_out,
+                    "parameters": meta["parameters"],
+                }
+            )
         return res
 
     def get_catalog(self) -> List[Dict[str, Any]]:
@@ -153,16 +161,18 @@ class NodeRegistry:
             raw_outputs = meta.get("outputs", [])
             norm_in = _normalize_ports(raw_inputs)
             norm_out = _normalize_ports(raw_outputs)
-            res.append({
-                "id": meta["name"],
-                "name": meta["name"],
-                "category": meta["category"],
-                "execution_type": meta.get("execution_type", NodeExecutionType.EXECUTION.value),
-                "description": meta["description"],
-                "inputs": norm_in,
-                "outputs": norm_out,
-                "parameters": meta.get("parameters", {}),
-            })
+            res.append(
+                {
+                    "id": meta["name"],
+                    "name": meta["name"],
+                    "category": meta["category"],
+                    "execution_type": meta.get("execution_type", NodeExecutionType.EXECUTION.value),
+                    "description": meta["description"],
+                    "inputs": norm_in,
+                    "outputs": norm_out,
+                    "parameters": meta.get("parameters", {}),
+                }
+            )
         return res
 
     def register_builtin_nodes(self) -> None:
@@ -176,10 +186,24 @@ class NodeRegistry:
                 "description": "Streams training batches directly from any Hugging Face Hub dataset (e.g. roneneldan/TinyStories, HuggingFaceFW/fineweb-edu, wikitext) with zero disk footprint.",
                 "inputs": [],
                 "outputs": [
-                    {"name": "dataset_stream", "type": PortType.DATASET_STREAM.value, "description": "Continuous stream iterator"},
-                    {"name": "text_sample", "type": PortType.TEXT.value, "description": "Raw string text sample preview"}
+                    {
+                        "name": "dataset_stream",
+                        "type": PortType.DATASET_STREAM.value,
+                        "description": "Continuous stream iterator",
+                    },
+                    {
+                        "name": "text_sample",
+                        "type": PortType.TEXT.value,
+                        "description": "Raw string text sample preview",
+                    },
                 ],
-                "parameters": {"dataset_name": "roneneldan/TinyStories", "split": "train", "config": "", "text_column": "text", "buffer_size": 20},
+                "parameters": {
+                    "dataset_name": "roneneldan/TinyStories",
+                    "split": "train",
+                    "config": "",
+                    "text_column": "text",
+                    "buffer_size": 20,
+                },
             },
             {
                 "name": "URLDatasetStreamer",
@@ -188,8 +212,12 @@ class NodeRegistry:
                 "description": "Streams remote .jsonl, .parquet, .csv, or .txt corpus directly over HTTP/HTTPS with live buffer prefetching.",
                 "inputs": [],
                 "outputs": [
-                    {"name": "dataset_stream", "type": PortType.DATASET_STREAM.value, "description": "HTTP stream iterator"},
-                    {"name": "text_sample", "type": PortType.TEXT.value, "description": "Raw string text sample"}
+                    {
+                        "name": "dataset_stream",
+                        "type": PortType.DATASET_STREAM.value,
+                        "description": "HTTP stream iterator",
+                    },
+                    {"name": "text_sample", "type": PortType.TEXT.value, "description": "Raw string text sample"},
                 ],
                 "parameters": {"url": "https://example.com/corpus.jsonl", "text_column": "text", "buffer_size": 20},
             },
@@ -201,22 +229,37 @@ class NodeRegistry:
                 "inputs": [],
                 "outputs": [
                     {"name": "dataset", "type": PortType.DATASET_STREAM.value, "description": "Local dataset stream"},
-                    {"name": "dataset_stream", "type": PortType.DATASET_STREAM.value, "description": "Configured local dataset consumed by the shared training engine"},
+                    {
+                        "name": "dataset_stream",
+                        "type": PortType.DATASET_STREAM.value,
+                        "description": "Configured local dataset consumed by the shared training engine",
+                    },
                     {"name": "text_samples", "type": PortType.TEXT.value, "description": "Corpus text samples"},
-                    {"name": "text_sample", "type": PortType.TEXT.value, "description": "Single corpus text sample preview"}
+                    {
+                        "name": "text_sample",
+                        "type": PortType.TEXT.value,
+                        "description": "Single corpus text sample preview",
+                    },
                 ],
-                "parameters": {"file_path": "data/fineweb_sample.jsonl", "batch_size": 4, "seq_len": 64, "configure_runtime": True},
+                "parameters": {
+                    "file_path": "data/fineweb_sample.jsonl",
+                    "batch_size": 4,
+                    "seq_len": 64,
+                    "configure_runtime": True,
+                },
             },
             {
                 "name": "BPETokenizer",
                 "category": "Data",
                 "execution_type": NodeExecutionType.EXECUTION.value,
                 "description": "Byte-Pair Encoding tokenizer with 32,000 vocabulary, fast encode/decode, and vocabulary mapping.",
-                "inputs": [
-                    {"name": "text", "type": PortType.TEXT.value, "description": "Input raw string text"}
-                ],
+                "inputs": [{"name": "text", "type": PortType.TEXT.value, "description": "Input raw string text"}],
                 "outputs": [
-                    {"name": "tokens", "type": PortType.TENSOR.value, "description": "Token ID tensor of shape [batch, seq_len]"}
+                    {
+                        "name": "tokens",
+                        "type": PortType.TENSOR.value,
+                        "description": "Token ID tensor of shape [batch, seq_len]",
+                    }
                 ],
                 "parameters": {"vocab_size": 32000, "pad_token": "[PAD]", "eos_token": "[EOS]"},
             },
@@ -225,16 +268,21 @@ class NodeRegistry:
                 "category": "Data",
                 "execution_type": NodeExecutionType.EXECUTION.value,
                 "description": "Continuous micro-batch generator with sequence padding and micro-batch accumulation.",
-                "inputs": [
-                    {"name": "tokens", "type": PortType.TENSOR.value, "description": "Token stream tensor"}
-                ],
+                "inputs": [{"name": "tokens", "type": PortType.TENSOR.value, "description": "Token stream tensor"}],
                 "outputs": [
-                    {"name": "input_ids", "type": PortType.TENSOR.value, "description": "Input IDs tensor [batch, seq_len]"},
-                    {"name": "targets", "type": PortType.TENSOR.value, "description": "Next-token target tensor [batch, seq_len]"}
+                    {
+                        "name": "input_ids",
+                        "type": PortType.TENSOR.value,
+                        "description": "Input IDs tensor [batch, seq_len]",
+                    },
+                    {
+                        "name": "targets",
+                        "type": PortType.TENSOR.value,
+                        "description": "Next-token target tensor [batch, seq_len]",
+                    },
                 ],
                 "parameters": {"batch_size": 4, "seq_len": 64, "shuffle": True},
             },
-
             # Model Architecture & Layers
             {
                 "name": "TriuneTransformer",
@@ -242,18 +290,58 @@ class NodeRegistry:
                 "execution_type": NodeExecutionType.EXECUTION.value,
                 "description": "Runs a forward pass on the active Studio model; set use_node_config=true to build a separate graph model.",
                 "inputs": [
-                    {"name": "input_ids", "type": PortType.TENSOR.value, "description": "Input sequence tokens [batch, seq_len]"},
-                    {"name": "model_handle", "type": PortType.MODEL_HANDLE.value, "description": "Optional upstream live Triune model"}
+                    {
+                        "name": "input_ids",
+                        "type": PortType.TENSOR.value,
+                        "description": "Input sequence tokens [batch, seq_len]",
+                    },
+                    {
+                        "name": "model_handle",
+                        "type": PortType.MODEL_HANDLE.value,
+                        "description": "Optional upstream live Triune model",
+                    },
                 ],
                 "outputs": [
-                    {"name": "logits", "type": PortType.TENSOR.value, "description": "Output logits tensor [batch, seq_len, vocab_size]"},
-                    {"name": "model_handle", "type": PortType.MODEL_HANDLE.value, "description": "Active PyTorch TriuneTransformer nn.Module"},
-                    {"name": "exit_logits", "type": PortType.TENSOR_TUPLE.value, "description": "Tuple of Reflex, Limbic, and Cortex logits"},
-                    {"name": "router_logits", "type": PortType.TENSOR.value, "description": "Router logits used by RouterZLoss"},
-                    {"name": "balance_loss", "type": PortType.LOSS.value, "description": "MoE router load-balancing objective"},
-                    {"name": "selected_depth", "type": PortType.CONFIG.value, "description": "Per-sequence dynamic depth choice"}
+                    {
+                        "name": "logits",
+                        "type": PortType.TENSOR.value,
+                        "description": "Output logits tensor [batch, seq_len, vocab_size]",
+                    },
+                    {
+                        "name": "model_handle",
+                        "type": PortType.MODEL_HANDLE.value,
+                        "description": "Active PyTorch TriuneTransformer nn.Module",
+                    },
+                    {
+                        "name": "exit_logits",
+                        "type": PortType.TENSOR_TUPLE.value,
+                        "description": "Tuple of Reflex, Limbic, and Cortex logits",
+                    },
+                    {
+                        "name": "router_logits",
+                        "type": PortType.TENSOR.value,
+                        "description": "Router logits used by RouterZLoss",
+                    },
+                    {
+                        "name": "balance_loss",
+                        "type": PortType.LOSS.value,
+                        "description": "MoE router load-balancing objective",
+                    },
+                    {
+                        "name": "selected_depth",
+                        "type": PortType.CONFIG.value,
+                        "description": "Per-sequence dynamic depth choice",
+                    },
                 ],
-                "parameters": {"vocab_size": 32000, "hidden_dim": 256, "num_layers": 6, "num_heads": 4, "num_experts": 4, "use_fp4": False, "initialize_only": False},
+                "parameters": {
+                    "vocab_size": 32000,
+                    "hidden_dim": 256,
+                    "num_layers": 6,
+                    "num_heads": 4,
+                    "num_experts": 4,
+                    "use_fp4": False,
+                    "initialize_only": False,
+                },
             },
             {
                 "name": "VectorisedGLA",
@@ -347,9 +435,13 @@ class NodeRegistry:
                 "description": "Parameter-Efficient Low-Rank Adaptation (LoRA) injection layer for fine-tuning.",
                 "inputs": [{"name": "base_layer", "type": PortType.MODEL_HANDLE.value}],
                 "outputs": [{"name": "adapted_layer", "type": PortType.MODEL_HANDLE.value}],
-                "parameters": {"rank": 16, "alpha": 32.0, "dropout": 0.05, "target_modules": ["q_proj", "v_proj", "out_proj"]},
+                "parameters": {
+                    "rank": 16,
+                    "alpha": 32.0,
+                    "dropout": 0.05,
+                    "target_modules": ["q_proj", "v_proj", "out_proj"],
+                },
             },
-
             # Optimizers & Schedulers
             {
                 "name": "CentroidSteerOptimizer",
@@ -358,13 +450,19 @@ class NodeRegistry:
                 "description": "GaLore low-rank SVD projection combined with dynamic centroid steering and orthogonal complement updates.",
                 "inputs": [
                     {"name": "model_handle", "type": PortType.MODEL_HANDLE.value},
-                    {"name": "loss", "type": PortType.LOSS.value}
+                    {"name": "loss", "type": PortType.LOSS.value},
                 ],
                 "outputs": [
                     {"name": "optimizer_handle", "type": PortType.OPTIMIZER_HANDLE.value},
-                    {"name": "metrics", "type": PortType.METRICS.value}
+                    {"name": "metrics", "type": PortType.METRICS.value},
                 ],
-                "parameters": {"lr": 1e-4, "betas": [0.9, 0.95], "weight_decay": 0.01, "steer_scale": 0.20, "galore_rank": 128},
+                "parameters": {
+                    "lr": 1e-4,
+                    "betas": [0.9, 0.95],
+                    "weight_decay": 0.01,
+                    "steer_scale": 0.20,
+                    "galore_rank": 128,
+                },
             },
             {
                 "name": "MuonOptimizer",
@@ -373,11 +471,11 @@ class NodeRegistry:
                 "description": "Newton-Schulz iteration orthogonal matrix momentum optimizer for high-throughput parameter updates.",
                 "inputs": [
                     {"name": "model_handle", "type": PortType.MODEL_HANDLE.value},
-                    {"name": "loss", "type": PortType.LOSS.value}
+                    {"name": "loss", "type": PortType.LOSS.value},
                 ],
                 "outputs": [
                     {"name": "optimizer_handle", "type": PortType.OPTIMIZER_HANDLE.value},
-                    {"name": "metrics", "type": PortType.METRICS.value}
+                    {"name": "metrics", "type": PortType.METRICS.value},
                 ],
                 "parameters": {"lr": 0.02, "momentum": 0.95, "ns_steps": 5},
             },
@@ -388,11 +486,11 @@ class NodeRegistry:
                 "description": "Standard AdamW optimizer with decoupled weight decay for 1D parameters, biases, and normalization weights.",
                 "inputs": [
                     {"name": "model_handle", "type": PortType.MODEL_HANDLE.value},
-                    {"name": "loss", "type": PortType.LOSS.value}
+                    {"name": "loss", "type": PortType.LOSS.value},
                 ],
                 "outputs": [
                     {"name": "optimizer_handle", "type": PortType.OPTIMIZER_HANDLE.value},
-                    {"name": "metrics", "type": PortType.METRICS.value}
+                    {"name": "metrics", "type": PortType.METRICS.value},
                 ],
                 "parameters": {"lr": 1e-4, "betas": [0.9, 0.999], "eps": 1e-8, "weight_decay": 0.01},
             },
@@ -405,7 +503,6 @@ class NodeRegistry:
                 "outputs": [{"name": "scheduled_lr", "type": PortType.CONFIG.value}],
                 "parameters": {"warmup_steps": 200, "total_steps": 50000, "min_lr_ratio": 0.1},
             },
-
             # Loss Functions & Kernels
             {
                 "name": "FastCrossEntropy",
@@ -416,13 +513,19 @@ class NodeRegistry:
                     {"name": "logits", "type": PortType.TENSOR.value},
                     {"name": "targets", "type": PortType.TENSOR.value},
                     {"name": "balance_loss", "type": PortType.LOSS.value},
-                    {"name": "router_logits", "type": PortType.TENSOR.value}
+                    {"name": "router_logits", "type": PortType.TENSOR.value},
                 ],
                 "outputs": [
                     {"name": "loss", "type": PortType.LOSS.value},
-                    {"name": "lm_loss", "type": PortType.LOSS.value}
+                    {"name": "lm_loss", "type": PortType.LOSS.value},
                 ],
-                "parameters": {"ignore_index": -100, "chunk_size": 2048, "label_smoothing": 0.0, "balance_loss_weight": 0.3, "router_z_loss_weight": 1e-3},
+                "parameters": {
+                    "ignore_index": -100,
+                    "chunk_size": 2048,
+                    "label_smoothing": 0.0,
+                    "balance_loss_weight": 0.3,
+                    "router_z_loss_weight": 1e-3,
+                },
             },
             {
                 "name": "JointExitLoss",
@@ -432,13 +535,18 @@ class NodeRegistry:
                 "inputs": [
                     {"name": "exit_logits", "type": PortType.TENSOR_TUPLE.value},
                     {"name": "targets", "type": PortType.TENSOR.value},
-                    {"name": "z_loss", "type": PortType.LOSS.value}
+                    {"name": "z_loss", "type": PortType.LOSS.value},
                 ],
                 "outputs": [
                     {"name": "joint_loss", "type": PortType.LOSS.value},
-                    {"name": "per_exit_loss", "type": PortType.METRICS.value}
+                    {"name": "per_exit_loss", "type": PortType.METRICS.value},
                 ],
-                "parameters": {"lambda_reflex": 0.20, "lambda_limbic": 0.30, "lambda_cortex": 0.50, "label_smoothing": 0.0},
+                "parameters": {
+                    "lambda_reflex": 0.20,
+                    "lambda_limbic": 0.30,
+                    "lambda_cortex": 0.50,
+                    "label_smoothing": 0.0,
+                },
             },
             {
                 "name": "RouterZLoss",
@@ -455,7 +563,10 @@ class NodeRegistry:
                 "execution_type": NodeExecutionType.EXECUTION.value,
                 "description": "Vectorized Rotary Position Embedding with Triton GPU acceleration and rotate_half fallback.",
                 "inputs": [{"name": "q", "type": PortType.TENSOR.value}, {"name": "k", "type": PortType.TENSOR.value}],
-                "outputs": [{"name": "q_rot", "type": PortType.TENSOR.value}, {"name": "k_rot", "type": PortType.TENSOR.value}],
+                "outputs": [
+                    {"name": "q_rot", "type": PortType.TENSOR.value},
+                    {"name": "k_rot", "type": PortType.TENSOR.value},
+                ],
                 "parameters": {"dim": 64, "max_seq_len": 4096, "base": 10000.0},
             },
             {
@@ -463,11 +574,13 @@ class NodeRegistry:
                 "category": "Kernel",
                 "execution_type": NodeExecutionType.EXECUTION.value,
                 "description": "High-throughput fused RMSNorm Triton kernel with epsilon stabilization.",
-                "inputs": [{"name": "x", "type": PortType.TENSOR.value}, {"name": "weight", "type": PortType.TENSOR.value}],
+                "inputs": [
+                    {"name": "x", "type": PortType.TENSOR.value},
+                    {"name": "weight", "type": PortType.TENSOR.value},
+                ],
                 "outputs": [{"name": "norm_out", "type": PortType.TENSOR.value}],
                 "parameters": {"eps": 1e-6},
             },
-
             # Runtime & System
             {
                 "name": "GradientAccumulator",
@@ -485,7 +598,7 @@ class NodeRegistry:
                 "description": "Atomically saves the connected model and active optimizer state, with retention of recent checkpoints.",
                 "inputs": [
                     {"name": "model_handle", "type": PortType.MODEL_HANDLE.value},
-                    {"name": "optimizer_handle", "type": PortType.OPTIMIZER_HANDLE.value}
+                    {"name": "optimizer_handle", "type": PortType.OPTIMIZER_HANDLE.value},
                 ],
                 "outputs": [{"name": "checkpoint_path", "type": PortType.TEXT.value}],
                 "parameters": {"save_dir": "checkpoints", "keep_last_n": 5},
@@ -506,13 +619,19 @@ class NodeRegistry:
                 "description": "Runs cached autoregressive generation with temperature, top-k sampling, and repetition penalty on the connected live model.",
                 "inputs": [
                     {"name": "model_handle", "type": PortType.MODEL_HANDLE.value},
-                    {"name": "prompt", "type": PortType.TEXT.value}
+                    {"name": "prompt", "type": PortType.TEXT.value},
                 ],
                 "outputs": [
                     {"name": "generated_text", "type": PortType.TEXT.value},
-                    {"name": "tokens_per_sec", "type": PortType.METRICS.value}
+                    {"name": "tokens_per_sec", "type": PortType.METRICS.value},
                 ],
-                "parameters": {"max_tokens": 128, "temperature": 0.7, "top_k": 50, "repetition_penalty": 1.2, "force_depth": None},
+                "parameters": {
+                    "max_tokens": 128,
+                    "temperature": 0.7,
+                    "top_k": 50,
+                    "repetition_penalty": 1.2,
+                    "force_depth": None,
+                },
             },
             {
                 "name": "BYOKChatRouter",
@@ -521,7 +640,12 @@ class NodeRegistry:
                 "description": "Provider configuration placeholder only; this node does not authenticate or dispatch remote requests.",
                 "inputs": [{"name": "prompt", "type": PortType.TEXT.value}],
                 "outputs": [{"name": "provider_config", "type": PortType.CONFIG.value}],
-                "parameters": {"provider": "triune-local", "model": "triune-base", "temperature": 0.7, "max_tokens": 256},
+                "parameters": {
+                    "provider": "triune-local",
+                    "model": "triune-base",
+                    "temperature": 0.7,
+                    "max_tokens": 256,
+                },
             },
             {
                 "name": "LayerStreamingEngine",
@@ -549,7 +673,7 @@ class NodeRegistry:
                 "inputs": [{"name": "code", "type": PortType.TEXT.value}],
                 "outputs": [
                     {"name": "result", "type": PortType.TEXT.value},
-                    {"name": "stdout", "type": PortType.TEXT.value}
+                    {"name": "stdout", "type": PortType.TEXT.value},
                 ],
                 "parameters": {"timeout": 10, "max_memory_mb": 256},
             },
@@ -562,7 +686,6 @@ class NodeRegistry:
                 "outputs": [{"name": "log_status", "type": PortType.METRICS.value}],
                 "parameters": {"step": None},
             },
-
             # Evaluation & Fine-Tuning
             {
                 "name": "TrainingStep",
@@ -570,15 +693,23 @@ class NodeRegistry:
                 "execution_type": NodeExecutionType.EXECUTION.value,
                 "description": "Executes one autograd training step with gradient accumulation, clipping, and telemetry.",
                 "inputs": [
-                    {"name": "dataset_stream", "type": PortType.DATASET_STREAM.value, "description": "Connected live dataset configured by the source node"},
+                    {
+                        "name": "dataset_stream",
+                        "type": PortType.DATASET_STREAM.value,
+                        "description": "Connected live dataset configured by the source node",
+                    },
                     {"name": "model_handle", "type": PortType.MODEL_HANDLE.value},
                     {"name": "optimizer_handle", "type": PortType.OPTIMIZER_HANDLE.value},
-                    {"name": "tokens", "type": PortType.TENSOR.value}
+                    {"name": "tokens", "type": PortType.TENSOR.value},
                 ],
                 "outputs": [
                     {"name": "step_metrics", "type": PortType.METRICS.value},
                     {"name": "loss", "type": PortType.LOSS.value},
-                    {"name": "model_handle", "type": PortType.MODEL_HANDLE.value, "description": "The model updated by this step"}
+                    {
+                        "name": "model_handle",
+                        "type": PortType.MODEL_HANDLE.value,
+                        "description": "The model updated by this step",
+                    },
                 ],
                 "parameters": {"grad_accum_steps": 4, "max_grad_norm": 1.0},
             },
@@ -591,12 +722,12 @@ class NodeRegistry:
                     {"name": "model_handle", "type": PortType.MODEL_HANDLE.value},
                     {"name": "tokens", "type": PortType.TENSOR.value},
                     {"name": "targets", "type": PortType.TENSOR.value},
-                    {"name": "exit_logits", "type": PortType.TENSOR_TUPLE.value}
+                    {"name": "exit_logits", "type": PortType.TENSOR_TUPLE.value},
                 ],
                 "outputs": [
                     {"name": "perplexity", "type": PortType.METRICS.value},
                     {"name": "val_loss", "type": PortType.LOSS.value},
-                    {"name": "per_exit_metrics", "type": PortType.METRICS.value}
+                    {"name": "per_exit_metrics", "type": PortType.METRICS.value},
                 ],
                 "parameters": {},
             },
@@ -607,15 +738,14 @@ class NodeRegistry:
                 "description": "Attaches LoRA adapters and performs one real optimizer update on the connected token batch.",
                 "inputs": [
                     {"name": "model_handle", "type": PortType.MODEL_HANDLE.value},
-                    {"name": "tokens", "type": PortType.TENSOR.value}
+                    {"name": "tokens", "type": PortType.TENSOR.value},
                 ],
                 "outputs": [
                     {"name": "finetuned_adapter", "type": PortType.MODEL_HANDLE.value},
-                    {"name": "final_loss", "type": PortType.LOSS.value}
+                    {"name": "final_loss", "type": PortType.LOSS.value},
                 ],
                 "parameters": {"rank": 16, "alpha": 32.0, "lr": 2e-4, "max_grad_norm": 1.0},
             },
-
             # Export & Deployment
             {
                 "name": "SafeTensorsExport",

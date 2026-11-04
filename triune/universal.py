@@ -9,31 +9,26 @@ capable of training, fine-tuning (LoRA/QLoRA), and serving:
 
 from __future__ import annotations
 
-import math
-import time
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Dict, List, Literal, Optional, Tuple, Union
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from triune.kernels import (
-    FastChunkedCrossEntropyLoss,
     FastGELU,
-    FastRMSNorm,
-    FastSwiGLU,
     chunked_cross_entropy_from_hidden,
     fast_chunk_gla,
     fast_cross_entropy,
+    fast_fused_add_rmsnorm,
     fast_gate_up_lora_linear,
-    fast_gelu,
-    fast_lora_forward,
     fast_lora_linear,
     fast_qkv_lora_linear,
     fast_rmsnorm,
     fast_swiglu,
 )
 from triune.optim.centroid import CentroidSteerOptimizer
-from triune.trainer.finetune import LoRAConfig, LoRALayer, TriuneFineTuner
+from triune.trainer.finetune import LoRAConfig, TriuneFineTuner
 
 
 def _extract_lora_components(mod: nn.Module):
@@ -43,7 +38,13 @@ def _extract_lora_components(mod: nn.Module):
         w = getattr(orig, "weight", None)
         b = getattr(orig, "bias", None)
         return w, b, mod.lora_A, mod.lora_B, float(getattr(mod, "scaling", 2.0))
-    elif type(mod) is nn.Linear and hasattr(mod, "lora_A") and hasattr(mod, "lora_B") and mod.lora_A is not None and mod.lora_B is not None:
+    elif (
+        type(mod) is nn.Linear
+        and hasattr(mod, "lora_A")
+        and hasattr(mod, "lora_B")
+        and mod.lora_A is not None
+        and mod.lora_B is not None
+    ):
         return mod.weight, mod.bias, mod.lora_A, mod.lora_B, float(getattr(mod, "lora_scaling", 2.0))
     return None
 
@@ -228,12 +229,18 @@ class DenseAttention(nn.Module):
             if can_fuse_lora:
                 qkv = fast_qkv_lora_linear(
                     x,
-                    lora_q[0], lora_q[1],
-                    lora_k[0], lora_k[1],
-                    lora_v[0], lora_v[1],
-                    lora_q[2], lora_q[3],
-                    lora_k[2], lora_k[3],
-                    lora_v[2], lora_v[3],
+                    lora_q[0],
+                    lora_q[1],
+                    lora_k[0],
+                    lora_k[1],
+                    lora_v[0],
+                    lora_v[1],
+                    lora_q[2],
+                    lora_q[3],
+                    lora_k[2],
+                    lora_k[3],
+                    lora_v[2],
+                    lora_v[3],
                     scaling=lora_q[4],
                 )
                 if self.num_kv_heads == self.num_heads:
@@ -289,10 +296,14 @@ class DenseMLP(nn.Module):
             if can_fuse_gu_lora:
                 gu = fast_gate_up_lora_linear(
                     x,
-                    lora_g[0], lora_g[1],
-                    lora_u[0], lora_u[1],
-                    lora_g[2], lora_g[3],
-                    lora_u[2], lora_u[3],
+                    lora_g[0],
+                    lora_g[1],
+                    lora_u[0],
+                    lora_u[1],
+                    lora_g[2],
+                    lora_g[3],
+                    lora_u[2],
+                    lora_u[3],
                     scaling=lora_g[4],
                 )
                 gate, up = gu.chunk(2, dim=-1)
@@ -327,9 +338,9 @@ class DenseTransformerBlock(nn.Module):
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         h1 = fast_rmsnorm(x, self.norm1_w)
         attn_out, new_state = self.attn(h1, state=state)
-        x = x + attn_out
-        h2 = fast_rmsnorm(x, self.norm2_w)
-        x = x + self.mlp(h2)
+        h2, x = fast_fused_add_rmsnorm(attn_out, x, self.norm2_w)
+        mlp_out = self.mlp(h2)
+        x = x + mlp_out
         return x, new_state
 
 
@@ -353,16 +364,18 @@ class UniversalDenseTransformer(nn.Module):
         self.num_heads = num_heads
         self.num_kv_heads = num_kv_heads or num_heads
         self.embed = nn.Embedding(vocab_size, dim)
-        self.layers = nn.ModuleList([
-            DenseTransformerBlock(
-                dim,
-                num_heads,
-                hidden_dim=hidden_dim,
-                num_kv_heads=num_kv_heads,
-                use_gla=use_gla,
-            )
-            for _ in range(num_layers)
-        ])
+        self.layers = nn.ModuleList(
+            [
+                DenseTransformerBlock(
+                    dim,
+                    num_heads,
+                    hidden_dim=hidden_dim,
+                    num_kv_heads=num_kv_heads,
+                    use_gla=use_gla,
+                )
+                for _ in range(num_layers)
+            ]
+        )
         self.final_norm_w = nn.Parameter(torch.ones(dim))
         self.lm_head = nn.Linear(dim, vocab_size, bias=False)
 
@@ -407,6 +420,7 @@ class UniversalMoETransformer(nn.Module):
     ):
         super().__init__()
         from triune.model.transformer import TriuneTransformer
+
         self.core = TriuneTransformer(
             vocab_size=vocab_size,
             hidden_dim=dim,
@@ -423,7 +437,9 @@ class UniversalMoETransformer(nn.Module):
         self.num_layers = num_layers
         self.num_experts = num_experts
 
-    def forward(self, input_ids: torch.Tensor, force_depth: Optional[int] = None) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+    def forward(
+        self, input_ids: torch.Tensor, force_depth: Optional[int] = None
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         return self.core(input_ids, force_depth=force_depth)
 
 
@@ -432,7 +448,7 @@ class UniversalMoETransformer(nn.Module):
 # =========================================================================
 class TriuneUniversalEngine:
     """The One-Shoe-Fits-All Universal Training, Fine-Tuning & Serving Engine.
-    
+
     Accepts ANY Dense Transformer, MoE Transformer, or user-provided PyTorch module.
     """
 
@@ -449,7 +465,9 @@ class TriuneUniversalEngine:
         dtype: Optional[torch.dtype] = None,
     ):
         self.device = device or torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        self.dtype = dtype or (torch.bfloat16 if (self.device.type == "cuda" and torch.cuda.is_bf16_supported()) else torch.float32)
+        self.dtype = dtype or (
+            torch.bfloat16 if (self.device.type == "cuda" and torch.cuda.is_bf16_supported()) else torch.float32
+        )
         self.model = model.to(device=self.device, dtype=self.dtype)
         self.mode = mode
         self.lr = lr
@@ -458,7 +476,7 @@ class TriuneUniversalEngine:
 
         # Detect whether architecture is MoE or Dense
         self.is_moe = any("expert" in name.lower() for name, _ in self.model.named_modules())
-        
+
         # Fine-Tuning Setup
         self.finetuner: Optional[TriuneFineTuner] = None
         if self.mode == "finetune":
@@ -596,6 +614,7 @@ def upgrade_model(
             and not isinstance(mod, DenseMLP)
             and not getattr(mod, "_triune_upgraded_swiglu", False)
         ):
+
             def _fast_swiglu_mlp_fwd(self_mod, x: torch.Tensor) -> torch.Tensor:
                 return _linear_or_lora(
                     self_mod.down_proj,
@@ -611,6 +630,7 @@ def upgrade_model(
 
     if streaming:
         from triune.runtime.streaming import LayerStreamingEngine, StreamingConfig
+
         dev = next((p.device for p in model.parameters()), torch.device("cuda" if torch.cuda.is_available() else "cpu"))
         if dev.type == "cpu" and torch.cuda.is_available():
             dev = torch.device("cuda:0")

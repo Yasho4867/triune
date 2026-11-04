@@ -33,13 +33,16 @@ def load_checkpoint_model(
     saved_config = checkpoint.get("config") or {}
     if not isinstance(saved_config, dict):
         saved_config = {}
-    use_fp4 = saved_config.get(
-        "use_fp4", any(".ffn.experts." in key and ".linear.weight" in key for key in state_dict)
-    )
+    use_fp4 = saved_config.get("use_fp4", any(".ffn.experts." in key and ".linear.weight" in key for key in state_dict))
 
     import re
+
     embed_weight = state_dict.get("token_embed.weight")
-    inferred_vocab = int(embed_weight.shape[0]) if embed_weight is not None and embed_weight.ndim == 2 else tokenizer.get_vocab_size()
+    inferred_vocab = (
+        int(embed_weight.shape[0])
+        if embed_weight is not None and embed_weight.ndim == 2
+        else tokenizer.get_vocab_size()
+    )
     inferred_dim = int(embed_weight.shape[1]) if embed_weight is not None and embed_weight.ndim == 2 else None
     layer_ids = [int(m.group(1)) for k in state_dict if (m := re.match(r"layers\.(\d+)\.", str(k)))]
     expert_ids = [int(m.group(1)) for k in state_dict if (m := re.match(r"layers\.\d+\.ffn\.experts\.(\d+)\.", str(k)))]
@@ -49,29 +52,36 @@ def load_checkpoint_model(
 
     hidden_dim = saved_config.get("hidden_dim") or inferred_dim
     num_layers = saved_config.get("num_layers") or inferred_layers
-    head_dim = saved_config.get("head_dim") or (64 if hidden_dim and hidden_dim % 64 == 0 and hidden_dim < 1536 else 128)
+    head_dim = saved_config.get("head_dim") or (
+        64 if hidden_dim and hidden_dim % 64 == 0 and hidden_dim < 1536 else 128
+    )
     num_heads = saved_config.get("num_heads") or (hidden_dim // head_dim if hidden_dim and head_dim else None)
     reflex_exit = saved_config.get("reflex_exit_layer") or (min(exit_ids) if len(exit_ids) >= 2 else None)
     limbic_exit = saved_config.get("limbic_exit_layer") or (max(exit_ids) if len(exit_ids) >= 2 else None)
-    prefix_layers = saved_config.get("router_prefix_layers") or (1 if reflex_exit is not None and reflex_exit <= 3 else None)
+    prefix_layers = saved_config.get("router_prefix_layers") or (
+        1 if reflex_exit is not None and reflex_exit <= 3 else None
+    )
 
-    config = build_config({
-        "vocab_size": saved_config.get("vocab_size", inferred_vocab),
-        "hidden_dim": hidden_dim,
-        "num_layers": num_layers,
-        "num_heads": num_heads,
-        "head_dim": head_dim,
-        "num_experts": saved_config.get("num_experts") or inferred_experts,
-        "router_prefix_layers": prefix_layers,
-        "reflex_exit_layer": reflex_exit,
-        "limbic_exit_layer": limbic_exit,
-        "use_fp4": use_fp4,
-    })
+    config = build_config(
+        {
+            "vocab_size": saved_config.get("vocab_size", inferred_vocab),
+            "hidden_dim": hidden_dim,
+            "num_layers": num_layers,
+            "num_heads": num_heads,
+            "head_dim": head_dim,
+            "num_experts": saved_config.get("num_experts") or inferred_experts,
+            "router_prefix_layers": prefix_layers,
+            "reflex_exit_layer": reflex_exit,
+            "limbic_exit_layer": limbic_exit,
+            "use_fp4": use_fp4,
+        }
+    )
     model = build_model(config)
     model.load_state_dict(state_dict)
     model = model.to(device).bfloat16().eval()
     if adapter_path is not None and Path(adapter_path).exists():
         from triune.trainer.finetune import LoRAConfig, TriuneFineTuner
+
         cfg = LoRAConfig()
         tuner = TriuneFineTuner(model, cfg)
         tuner.load_adapter(adapter_path)
@@ -107,6 +117,7 @@ def generate_response(
     if max_new_tokens <= 0:
         raise ValueError("max_new_tokens must be positive")
     import time
+
     formatted = prompt if prompt_is_formatted else f"User: {prompt}\nAssistant:"
     token_ids = tokenizer.encode(formatted).ids
     if not token_ids:

@@ -5,7 +5,6 @@ from __future__ import annotations
 import torch
 import torch.nn.functional as F
 
-
 TIER_REFLEX = 0
 TIER_LIMBIC = 1
 TIER_CORTEX = 2
@@ -31,6 +30,7 @@ def route_tiers(
         (probs, selected_tiers)
     """
     from ._c_bridge import c_route_tiers_f32
+
     c_res = c_route_tiers_f32(logits, reflex_threshold=reflex_threshold)
     if c_res is not None:
         return c_res

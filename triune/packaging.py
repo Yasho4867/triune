@@ -8,13 +8,12 @@ Builds native desktop executables and application bundles across:
 
 from __future__ import annotations
 
-import os
 import shutil
 import stat
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any, Dict
 
 WORKSPACE_ROOT = Path(__file__).resolve().parent.parent
 
@@ -52,11 +51,15 @@ def build_windows_native(workspace: Path = WORKSPACE_ROOT) -> Dict[str, Any]:
 
     print("[Native Build - Windows] Building TriuneStudio.Windows (Release)...")
     subprocess.run(["dotnet", "build", str(app_proj), "-c", "Release"], check=True)
-    subprocess.run(["dotnet", "publish", str(app_proj), "-c", "Release", "-o", str(publish_dir), "--no-restore"], check=True)
+    subprocess.run(
+        ["dotnet", "publish", str(app_proj), "-c", "Release", "-o", str(publish_dir), "--no-restore"], check=True
+    )
 
     print("[Native Build - Windows] Building TriuneStudio.Installer (Release)...")
     subprocess.run(["dotnet", "build", str(setup_proj), "-c", "Release"], check=True)
-    subprocess.run(["dotnet", "publish", str(setup_proj), "-c", "Release", "-o", str(publish_dir), "--no-restore"], check=True)
+    subprocess.run(
+        ["dotnet", "publish", str(setup_proj), "-c", "Release", "-o", str(publish_dir), "--no-restore"], check=True
+    )
 
     app_exe = publish_dir / "TriuneStudio.exe"
     setup_exe = publish_dir / "TriuneStudioSetup.exe"

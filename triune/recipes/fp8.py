@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import logging
+
 import torch
 
-from triune.runtime.capabilities import PrecisionCapabilities
 from triune.model.fp8 import convert_to_fp8
-from .bf16 import bf16_autocast
+from triune.runtime.capabilities import PrecisionCapabilities
 
 logger = logging.getLogger(__name__)
 
@@ -69,4 +69,3 @@ def build_fp8_precision_context(*, device, use_te: bool = True) -> callable:
     ctx_fn = lambda: torch.amp.autocast("cuda", dtype=torch.bfloat16)
     ctx_fn.description = msg
     return ctx_fn
-

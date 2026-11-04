@@ -3,17 +3,18 @@ and zero-dummy-phrase training steps with RealPyTorchEngineState and FastAPI rou
 """
 
 import os
+
 os.environ["TRIUNE_TESTING"] = "1"
 import sys
 import unittest
-import asyncio
 
 # Ensure project root is in sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from triune.api.routes import pytorch_state, router
-from fastapi.testclient import TestClient
 from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from triune.api.routes import pytorch_state, router
 
 
 class TestLiveApiStreaming(unittest.TestCase):
@@ -46,11 +47,10 @@ class TestLiveApiStreaming(unittest.TestCase):
     def test_02_stream_connect_hf_dataset(self):
         """Verify connecting to a real Hugging Face dataset (TinyStories) streams real tokens."""
         # We test with roneneldan/TinyStories which is fast and public
-        res = self.client.post("/v1/datasets/stream/connect", json={
-            "dataset_name": "roneneldan/TinyStories",
-            "split": "train",
-            "text_column": "text"
-        })
+        res = self.client.post(
+            "/v1/datasets/stream/connect",
+            json={"dataset_name": "roneneldan/TinyStories", "split": "train", "text_column": "text"},
+        )
         self.assertEqual(res.status_code, 200)
         data = res.json()
         print("\n[HF Stream Connect Result]:", data)
@@ -60,7 +60,11 @@ class TestLiveApiStreaming(unittest.TestCase):
         self.assertGreaterEqual(data["buffered_chunks"], 1)
         self.assertTrue(len(data["sample_preview"]) > 0)
         # Ensure it's not any of the hardcoded dummy sentences!
-        dummy_markers = ["Triune transformer achieves state-of-the-art", "Synthetic text generation", "Vectorised GLA attention"]
+        dummy_markers = [
+            "Triune transformer achieves state-of-the-art",
+            "Synthetic text generation",
+            "Vectorised GLA attention",
+        ]
         for marker in dummy_markers:
             self.assertNotIn(marker, data["sample_preview"])
 
@@ -96,4 +100,5 @@ if __name__ == "__main__":
     res = unittest.main(exit=False)
     pytorch_state.stop_prefetch_worker()
     import os
+
     os._exit(0 if res.result.wasSuccessful() else 1)

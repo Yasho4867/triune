@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+
 import torch
 import torch.nn as nn
 
@@ -53,6 +54,9 @@ def rotate_half(x: torch.Tensor) -> torch.Tensor:
     return torch.cat((-x2, x1), dim=-1)
 
 
-def apply_rotary(q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+def apply_rotary(
+    q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
     from triune.kernels import fast_rope
+
     return fast_rope(q, k, cos, sin)

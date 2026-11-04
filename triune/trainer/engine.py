@@ -24,11 +24,7 @@ class TrainingEngine:
         )
         self.depth_usage_ema = self.target_depth_dist.clone()
         self.vram_monitor = LiveVRAMMonitor(trainer.device)
-        self.cuda_graph = (
-            CUDAGraphEngine(trainer.device)
-            if trainer.config.get("cuda_graph", False)
-            else None
-        )
+        self.cuda_graph = CUDAGraphEngine(trainer.device) if trainer.config.get("cuda_graph", False) else None
         self.sync_streaming_engine()
 
     def sync_streaming_engine(self) -> None:
@@ -75,7 +71,9 @@ class TrainingEngine:
             losses = []
             pad_id = getattr(self.trainer, "pad_token_id", -100) or -100
             for logits in (reflex, limbic, cortex):
-                token_loss = F.cross_entropy(logits.reshape(-1, self.trainer.vocab_size), y_flat, ignore_index=pad_id, reduction="none")
+                token_loss = F.cross_entropy(
+                    logits.reshape(-1, self.trainer.vocab_size), y_flat, ignore_index=pad_id, reduction="none"
+                )
                 losses.append((token_loss * valid_mask.float()).reshape(x.size(0), -1).sum(dim=1) / valid_per_sample)
             all_losses = torch.stack(losses, dim=1)
             if self.target_depth_dist.device != all_losses.device:
@@ -119,7 +117,9 @@ class TrainingEngine:
                 del reflex, limbic, cortex
                 return labels
 
-    def _log_training(self, *, loss, lm_loss, router_loss, balance_loss, lr, exploration_rate, overflow, labels, route_logits):
+    def _log_training(
+        self, *, loss, lm_loss, router_loss, balance_loss, lr, exploration_rate, overflow, labels, route_logits
+    ):
         if self.step % self.config["log_every"]:
             return
         telemetry = self.vram_monitor.format_telemetry()
@@ -135,7 +135,7 @@ class TrainingEngine:
             f"| Usage: {usage} | LR: {lr:.2e} "
             f"| {telemetry} "
             f"| Best Eval: {self.best_eval_loss:.4f} | Overflow: {overflow}",
-            flush=True
+            flush=True,
         )
         self.trainer.logger.log(
             {
@@ -162,7 +162,9 @@ class TrainingEngine:
         lr = self.trainer.lr_schedule(self.config, self.step)
         explicit_expert_lr = getattr(self.trainer, "centroid_lr", getattr(self.trainer, "expert_lr", None))
         if explicit_expert_lr is not None:
-            peak_lr = max(1e-12, float(self.config.get("lr", self.config.get("lr_peak", getattr(self.trainer, "current_lr", lr)))))
+            peak_lr = max(
+                1e-12, float(self.config.get("lr", self.config.get("lr_peak", getattr(self.trainer, "current_lr", lr))))
+            )
             scheduled_expert_lr = float(explicit_expert_lr) * (lr / peak_lr)
         else:
             scheduled_expert_lr = None
@@ -218,7 +220,11 @@ class TrainingEngine:
                         if sub_route_logits is not None:
                             route_chunks.append(sub_route_logits.detach())
                     lm_loss = lm_sum / num_sub
-                    route_logits = torch.cat(route_chunks, dim=0) if route_chunks else torch.zeros((x.size(0), 3), device=self.trainer.device)
+                    route_logits = (
+                        torch.cat(route_chunks, dim=0)
+                        if route_chunks
+                        else torch.zeros((x.size(0), 3), device=self.trainer.device)
+                    )
                     router_loss = torch.tensor(0.0, device=self.trainer.device)
                     z_loss = torch.tensor(0.0, device=self.trainer.device)
                     balance_loss = torch.tensor(0.0, device=self.trainer.device)
@@ -246,18 +252,26 @@ class TrainingEngine:
                     sub_xs = x.split(max_slice)
                     sub_ys = y.split(max_slice)
                     num_sub = len(sub_xs)
-                    component_sums = [torch.zeros((), device=self.trainer.device, dtype=torch.float32) for _ in range(4)]
+                    component_sums = [
+                        torch.zeros((), device=self.trainer.device, dtype=torch.float32) for _ in range(4)
+                    ]
                     labels_chunks = []
                     route_chunks = []
                     for sub_x, sub_y in zip(sub_xs, sub_ys):
                         sub_y_flat = sub_y.reshape(-1)
                         with self.trainer.model_autocast():
-                            reflex_l, limbic_l, cortex_l, route_l = self.model.forward_all_exits(sub_x, update_stats=True)
+                            reflex_l, limbic_l, cortex_l, route_l = self.model.forward_all_exits(
+                                sub_x, update_stats=True
+                            )
                         sub_lbls = self._router_labels_from_logits(reflex_l, limbic_l, cortex_l, sub_x, sub_y)
                         l_ref = self._compute_lm_loss(reflex_l, sub_y_flat, vocab_size)
                         l_limb = self._compute_lm_loss(limbic_l, sub_y_flat, vocab_size)
                         l_cort = self._compute_lm_loss(cortex_l, sub_y_flat, vocab_size)
-                        sub_lm = (0.22 * l_ref + 0.23 * l_limb + 0.55 * l_cort) if l_cort.detach() > l_limb.detach() else (0.25 * l_ref + 0.30 * l_limb + 0.45 * l_cort)
+                        sub_lm = (
+                            (0.22 * l_ref + 0.23 * l_limb + 0.55 * l_cort)
+                            if l_cort.detach() > l_limb.detach()
+                            else (0.25 * l_ref + 0.30 * l_limb + 0.45 * l_cort)
+                        )
                         rf = route_l.float()
                         sub_r_loss = self.trainer.router_loss_fn(rf, sub_lbls)
                         sub_z = torch.logsumexp(rf, dim=-1).pow(2).mean()
@@ -294,7 +308,9 @@ class TrainingEngine:
                     z_loss = torch.logsumexp(route_f, dim=-1).pow(2).mean()
                     balance_loss = getattr(self.model, "last_balance_loss", None)
                     if balance_loss is None:
-                        balance_loss = (torch.softmax(route_f, dim=-1).mean(dim=0) - self.target_depth_dist).pow(2).mean()
+                        balance_loss = (
+                            (torch.softmax(route_f, dim=-1).mean(dim=0) - self.target_depth_dist).pow(2).mean()
+                        )
                     micro_loss = lm_loss + 0.5 * router_loss + z_loss_coef * z_loss + balance_coef * balance_loss
                     (micro_loss / grad_accum).backward()
             else:
@@ -306,7 +322,9 @@ class TrainingEngine:
                     sub_ys = y.split(max_slice)
                     sub_lbls = labels.split(max_slice)
                     num_sub = len(sub_xs)
-                    component_sums = [torch.zeros((), device=self.trainer.device, dtype=torch.float32) for _ in range(4)]
+                    component_sums = [
+                        torch.zeros((), device=self.trainer.device, dtype=torch.float32) for _ in range(4)
+                    ]
                     route_chunks = []
                     for sub_x, sub_y, sub_lbl in zip(sub_xs, sub_ys, sub_lbls):
                         sub_y_flat = sub_y.reshape(-1)
@@ -318,7 +336,9 @@ class TrainingEngine:
                         sub_z = torch.logsumexp(sub_route_f, dim=-1).pow(2).mean()
                         sub_bal = getattr(self.model, "last_balance_loss", None)
                         if sub_bal is None:
-                            sub_bal = (torch.softmax(sub_route_f, dim=-1).mean(dim=0) - self.target_depth_dist).pow(2).mean()
+                            sub_bal = (
+                                (torch.softmax(sub_route_f, dim=-1).mean(dim=0) - self.target_depth_dist).pow(2).mean()
+                            )
                         sub_micro = sub_lm_loss + 0.5 * sub_r_loss + z_loss_coef * sub_z + balance_coef * sub_bal
                         (sub_micro / (grad_accum * num_sub)).backward()
                         component_sums[0] += sub_lm_loss.detach().float()
@@ -345,9 +365,7 @@ class TrainingEngine:
                             self.model.last_route_logits = route_logits
                             self.model.last_depth_choice = last_choice
                             self.model.last_balance_loss = saved_balance
-                            cortex_anchor_loss = self._compute_lm_loss(
-                                c_logits, y[:1].reshape(-1), vocab_size
-                            )
+                            cortex_anchor_loss = self._compute_lm_loss(c_logits, y[:1].reshape(-1), vocab_size)
                     route_f = route_logits.float()
                     lm_loss = self._compute_lm_loss(logits, y_flat, vocab_size)
                     if cortex_anchor_loss is not None:
@@ -356,7 +374,9 @@ class TrainingEngine:
                     z_loss = torch.logsumexp(route_f, dim=-1).pow(2).mean()
                     balance_loss = getattr(self.model, "last_balance_loss", None)
                     if balance_loss is None:
-                        balance_loss = (torch.softmax(route_f, dim=-1).mean(dim=0) - self.target_depth_dist).pow(2).mean()
+                        balance_loss = (
+                            (torch.softmax(route_f, dim=-1).mean(dim=0) - self.target_depth_dist).pow(2).mean()
+                        )
                     micro_loss = lm_loss + 0.5 * router_loss + z_loss_coef * z_loss + balance_coef * balance_loss
                     (micro_loss / grad_accum).backward()
 
@@ -420,19 +440,31 @@ class TrainingEngine:
                         self.best_eval_loss = cortex_loss
                         self.trainer.save_best(self.step, cortex_loss)
                     sample = self.trainer.run_sample()
-                    print(f"Eval cortex: {cortex_loss:.4f} | dynamic: {dynamic_loss:.4f} | perplexity: {math.exp(min(cortex_loss, 20)):.2f}")
+                    print(
+                        f"Eval cortex: {cortex_loss:.4f} | dynamic: {dynamic_loss:.4f} | perplexity: {math.exp(min(cortex_loss, 20)):.2f}"
+                    )
                     print(f"Sample: {self.trainer.sample_prompt}{sample}\n")
                     self.trainer.logger.log(
-                        {"eval/loss": cortex_loss, "eval/dynamic_loss": dynamic_loss, "eval/perplexity": math.exp(min(cortex_loss, 20))},
+                        {
+                            "eval/loss": cortex_loss,
+                            "eval/dynamic_loss": dynamic_loss,
+                            "eval/perplexity": math.exp(min(cortex_loss, 20)),
+                        },
                         step=self.step,
                     )
 
                 if self.step and self.step % self.config["save_every"] == 0:
                     self.trainer.save_latest(self.step, step_stats["loss"])
                 self._log_training(
-                    loss=step_stats["loss"], lm_loss=step_stats["lm_loss"], router_loss=step_stats["router_loss"],
-                    balance_loss=step_stats["balance_loss"], lr=step_stats["lr"], exploration_rate=step_stats["exploration_rate"],
-                    overflow=step_stats["overflow"], labels=step_stats["labels"], route_logits=step_stats["route_logits"],
+                    loss=step_stats["loss"],
+                    lm_loss=step_stats["lm_loss"],
+                    router_loss=step_stats["router_loss"],
+                    balance_loss=step_stats["balance_loss"],
+                    lr=step_stats["lr"],
+                    exploration_rate=step_stats["exploration_rate"],
+                    overflow=step_stats["overflow"],
+                    labels=step_stats["labels"],
+                    route_logits=step_stats["route_logits"],
                 )
                 self.step += 1
         except BaseException:

@@ -16,14 +16,13 @@ on consumer GPUs with limited VRAM (e.g. 8GB RTX 5070) by virtualizing memory:
 from __future__ import annotations
 
 from dataclasses import dataclass
-import gc
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
+
 import torch
 import torch.nn as nn
 
 from .capabilities import PrecisionCapabilities
-from .staging import FP8StagingBuffer, ParameterStager, StagingBuffer
-
+from .staging import FP8StagingBuffer, ParameterStager
 
 
 @dataclass
@@ -178,7 +177,11 @@ class LayerStreamingEngine:
         self.prefetch_stream: Optional[torch.cuda.Stream] = None
         self.d2h_stream: Optional[torch.cuda.Stream] = None
         all_layers: list[nn.Module] = self._resolve_layers()
-        res_count = max(0, min(len(all_layers), int(getattr(self.config, "resident_gpu_layers", 0) or 0))) if self.device.type == "cuda" else 0
+        res_count = (
+            max(0, min(len(all_layers), int(getattr(self.config, "resident_gpu_layers", 0) or 0)))
+            if self.device.type == "cuda"
+            else 0
+        )
         self.all_layers: list[nn.Module] = all_layers
         self.resident_layers: list[nn.Module] = all_layers[:res_count]
         self.layers: list[nn.Module] = all_layers[res_count:]
@@ -194,7 +197,11 @@ class LayerStreamingEngine:
                 use_hw_fp8 = self.caps.native_scaled_mm and self.config.fp8_weights
                 if isinstance(buf, FP8StagingBuffer):
                     return buf.stage_to_gpu(
-                        self.device, stream=None, target_dtype=target_dtype, non_blocking=True, use_hardware_fp8=use_hw_fp8
+                        self.device,
+                        stream=None,
+                        target_dtype=target_dtype,
+                        non_blocking=True,
+                        use_hardware_fp8=use_hw_fp8,
                     )
                 return buf.stage_to_gpu(self.device, stream=None, target_dtype=target_dtype, non_blocking=True)
         return p.to(self.device)
@@ -208,9 +215,15 @@ class LayerStreamingEngine:
                 use_hw_fp8 = self.caps.native_scaled_mm and self.config.fp8_weights
                 if isinstance(buf, FP8StagingBuffer):
                     return buf.stage_to_gpu(
-                        self.device, stream=self.prefetch_stream, target_dtype=target_dtype, non_blocking=True, use_hardware_fp8=use_hw_fp8
+                        self.device,
+                        stream=self.prefetch_stream,
+                        target_dtype=target_dtype,
+                        non_blocking=True,
+                        use_hardware_fp8=use_hw_fp8,
                     )
-                return buf.stage_to_gpu(self.device, stream=self.prefetch_stream, target_dtype=target_dtype, non_blocking=True)
+                return buf.stage_to_gpu(
+                    self.device, stream=self.prefetch_stream, target_dtype=target_dtype, non_blocking=True
+                )
         return p.to(self.device)
 
     def _unpack_prefetched(self, staged_item: Any) -> torch.Tensor:
@@ -220,7 +233,7 @@ class LayerStreamingEngine:
             if self.caps.native_scaled_mm:
                 return fp8_t
             else:
-                return (fp8_t.to(target_dtype) * inv_scale)
+                return fp8_t.to(target_dtype) * inv_scale
         return staged_item
 
     def _resolve_layers(self) -> list[nn.Module]:
@@ -232,19 +245,35 @@ class LayerStreamingEngine:
                 for part in self.config.layers_path.split("."):
                     curr = getattr(curr, part)
             except AttributeError as e:
-                raise ValueError(f"Specified layers_path '{self.config.layers_path}' could not be resolved on model: {e}") from e
+                raise ValueError(
+                    f"Specified layers_path '{self.config.layers_path}' could not be resolved on model: {e}"
+                ) from e
             if isinstance(curr, (nn.ModuleList, list, tuple)):
                 return list(curr)
-            raise ValueError(f"Specified layers_path '{self.config.layers_path}' does not resolve to ModuleList or sequence.")
+            raise ValueError(
+                f"Specified layers_path '{self.config.layers_path}' does not resolve to ModuleList or sequence."
+            )
 
         # 2. Standard transformer structural paths
         if hasattr(self.model, "layers") and isinstance(self.model.layers, (nn.ModuleList, list, tuple)):
             return list(self.model.layers)
-        if hasattr(self.model, "model") and hasattr(self.model.model, "layers") and isinstance(self.model.model.layers, (nn.ModuleList, list, tuple)):
+        if (
+            hasattr(self.model, "model")
+            and hasattr(self.model.model, "layers")
+            and isinstance(self.model.model.layers, (nn.ModuleList, list, tuple))
+        ):
             return list(self.model.model.layers)
-        if hasattr(self.model, "transformer") and hasattr(self.model.transformer, "h") and isinstance(self.model.transformer.h, (nn.ModuleList, list, tuple)):
+        if (
+            hasattr(self.model, "transformer")
+            and hasattr(self.model.transformer, "h")
+            and isinstance(self.model.transformer.h, (nn.ModuleList, list, tuple))
+        ):
             return list(self.model.transformer.h)
-        if hasattr(self.model, "transformer") and hasattr(self.model.transformer, "layers") and isinstance(self.model.transformer.layers, (nn.ModuleList, list, tuple)):
+        if (
+            hasattr(self.model, "transformer")
+            and hasattr(self.model.transformer, "layers")
+            and isinstance(self.model.transformer.layers, (nn.ModuleList, list, tuple))
+        ):
             return list(self.model.transformer.layers)
 
         # 3. Generic search across named submodules with strict ambiguity checking
@@ -291,7 +320,9 @@ class LayerStreamingEngine:
         all_layer_list = getattr(self, "all_layers", self.layers)
         layer_ids = {id(l) for l in all_layer_list}
         for name, child in self.model.named_children():
-            if id(child) not in layer_ids and not any(id(l) in {id(c) for c in child.modules()} for l in all_layer_list):
+            if id(child) not in layer_ids and not any(
+                id(l) in {id(c) for c in child.modules()} for l in all_layer_list
+            ):
                 child.to(self.device)
             elif hasattr(child, "embed_tokens"):
                 child.embed_tokens.to(self.device)
@@ -327,10 +358,11 @@ class LayerStreamingEngine:
         if should_pin is None:
             try:
                 import psutil
-                avail_ram_gb = psutil.virtual_memory().available / (1024 ** 3)
+
+                avail_ram_gb = psutil.virtual_memory().available / (1024**3)
                 total_param_bytes = sum(p.numel() * p.element_size() for p in self.model.parameters())
-                model_gb = total_param_bytes / (1024 ** 3)
-                should_pin = (avail_ram_gb >= model_gb * 2.0)
+                model_gb = total_param_bytes / (1024**3)
+                should_pin = avail_ram_gb >= model_gb * 2.0
             except Exception:
                 should_pin = False
 
@@ -395,7 +427,9 @@ class LayerStreamingEngine:
                 else:
                     p._grad_norm_sq = None
 
-                use_async_d2h = bool(dev.type == "cuda" and d2h_stream is not None and getattr(self, "is_pinned", False))
+                use_async_d2h = bool(
+                    dev.type == "cuda" and d2h_stream is not None and getattr(self, "is_pinned", False)
+                )
                 if use_async_d2h:
                     try:
                         gpu_grad = p.grad.detach()
@@ -439,12 +473,15 @@ class LayerStreamingEngine:
                     if hasattr(p, "register_post_accumulate_grad_hook"):
                         self._hooks.append(p.register_post_accumulate_grad_hook(make_post_accum_hook(p)))
                     else:
+
                         def make_res_legacy_hook(param_ref):
                             def legacy_hook(grad):
                                 if grad is not None:
                                     param_ref.grad = grad
                                     make_post_accum_hook(param_ref)(param_ref)
+
                             return legacy_hook
+
                         self._hooks.append(p.register_hook(make_res_legacy_hook(p)))
 
         for idx, layer in enumerate(self.layers):
@@ -453,12 +490,15 @@ class LayerStreamingEngine:
                     if hasattr(p, "register_post_accumulate_grad_hook"):
                         self._hooks.append(p.register_post_accumulate_grad_hook(make_post_accum_hook(p)))
                     else:
+
                         def make_legacy_hook(param_ref):
                             def legacy_hook(grad):
                                 if grad is not None:
                                     param_ref.grad = grad
                                     make_post_accum_hook(param_ref)(param_ref)
+
                             return legacy_hook
+
                         self._hooks.append(p.register_hook(make_legacy_hook(p)))
 
             def make_bwd_pre_hook(l: nn.Module, b_idx: int):
@@ -473,7 +513,13 @@ class LayerStreamingEngine:
                             self.stager.apply_staged_tensors(l)
                             l._is_bwd_prefetched = False
                         else:
-                            self.stager.stage_layer(l, stream=None, target_dtype=target_dtype, use_hardware_fp8=use_hw_fp8, _from_backward=True)
+                            self.stager.stage_layer(
+                                l,
+                                stream=None,
+                                target_dtype=target_dtype,
+                                use_hardware_fp8=use_hw_fp8,
+                                _from_backward=True,
+                            )
                             self.stager.apply_staged_tensors(l)
 
                         if prefetch_stream is not None and b_idx > 0:
@@ -491,14 +537,18 @@ class LayerStreamingEngine:
                         l._in_backward = False
                         self.cleanup_resident_layers()
                         raise
+
                 return bwd_pre_hook
+
             self._hooks.append(layer.register_full_backward_pre_hook(make_bwd_pre_hook(layer, idx)))
 
             def make_bwd_post_hook(l: nn.Module):
                 def bwd_post_hook(module, grad_input, grad_output):
                     l._in_backward = False
                     self.stager.release_layer(l)
+
                 return bwd_post_hook
+
             self._hooks.append(layer.register_full_backward_hook(make_bwd_post_hook(layer)))
 
         # 7. Forward execution path
@@ -513,7 +563,12 @@ class LayerStreamingEngine:
                         return orig_forward_block(layer, x, return_exit, cache=cache, update_stats=update_stats)
                     in_bwd = getattr(layer, "_in_backward", False)
 
-                    if torch.is_grad_enabled() and isinstance(x, torch.Tensor) and x.is_floating_point() and not x.requires_grad:
+                    if (
+                        torch.is_grad_enabled()
+                        and isinstance(x, torch.Tensor)
+                        and x.is_floating_point()
+                        and not x.requires_grad
+                    ):
                         x = x.detach().requires_grad_(True)
 
                     if getattr(layer, "_is_prefetched", False) and not in_bwd:
@@ -524,14 +579,26 @@ class LayerStreamingEngine:
                     else:
                         target_dtype = None
                         use_hw_fp8 = self.caps.native_scaled_mm and self.config.fp8_weights
-                        self.stager.stage_layer(layer, stream=None, target_dtype=target_dtype, use_hardware_fp8=use_hw_fp8, _from_backward=in_bwd)
+                        self.stager.stage_layer(
+                            layer,
+                            stream=None,
+                            target_dtype=target_dtype,
+                            use_hardware_fp8=use_hw_fp8,
+                            _from_backward=in_bwd,
+                        )
                         self.stager.apply_staged_tensors(layer)
 
                     if not in_bwd and prefetch_stream is not None and idx is not None and idx + 1 < num_layers:
                         next_layer = self.layers[idx + 1]
                         target_dtype = None
                         use_hw_fp8 = self.caps.native_scaled_mm and self.config.fp8_weights
-                        self.stager.stage_layer(next_layer, stream=prefetch_stream, target_dtype=target_dtype, use_hardware_fp8=use_hw_fp8, _from_backward=False)
+                        self.stager.stage_layer(
+                            next_layer,
+                            stream=prefetch_stream,
+                            target_dtype=target_dtype,
+                            use_hardware_fp8=use_hw_fp8,
+                            _from_backward=False,
+                        )
                         next_layer._is_prefetched = True
 
                     try:
@@ -544,6 +611,7 @@ class LayerStreamingEngine:
                 self.model._forward_block = streaming_forward_block
             else:
                 for idx, layer in enumerate(self.layers):
+
                     def make_fwd_pre_hook(l: nn.Module, i: int):
                         def fwd_pre_hook(module, args, kwargs):
                             in_bwd = getattr(l, "_in_backward", False)
@@ -555,22 +623,54 @@ class LayerStreamingEngine:
                             else:
                                 target_dtype = None
                                 use_hw_fp8 = self.caps.native_scaled_mm and self.config.fp8_weights
-                                self.stager.stage_layer(l, stream=None, target_dtype=target_dtype, use_hardware_fp8=use_hw_fp8, _from_backward=in_bwd)
+                                self.stager.stage_layer(
+                                    l,
+                                    stream=None,
+                                    target_dtype=target_dtype,
+                                    use_hardware_fp8=use_hw_fp8,
+                                    _from_backward=in_bwd,
+                                )
                                 self.stager.apply_staged_tensors(l)
 
                             if not in_bwd and prefetch_stream is not None and i + 1 < num_layers:
                                 next_layer = self.layers[i + 1]
                                 target_dtype = None
                                 use_hw_fp8 = self.caps.native_scaled_mm and self.config.fp8_weights
-                                self.stager.stage_layer(next_layer, stream=prefetch_stream, target_dtype=target_dtype, use_hardware_fp8=use_hw_fp8, _from_backward=False)
+                                self.stager.stage_layer(
+                                    next_layer,
+                                    stream=prefetch_stream,
+                                    target_dtype=target_dtype,
+                                    use_hardware_fp8=use_hw_fp8,
+                                    _from_backward=False,
+                                )
                                 next_layer._is_prefetched = True
 
-                            new_args = tuple(a.to(dev) if isinstance(a, torch.Tensor) and a.device != dev else a for a in args) if isinstance(args, tuple) else args
-                            if torch.is_grad_enabled() and isinstance(new_args, tuple) and new_args and isinstance(new_args[0], torch.Tensor) and new_args[0].is_floating_point() and not new_args[0].requires_grad:
+                            new_args = (
+                                tuple(a.to(dev) if isinstance(a, torch.Tensor) and a.device != dev else a for a in args)
+                                if isinstance(args, tuple)
+                                else args
+                            )
+                            if (
+                                torch.is_grad_enabled()
+                                and isinstance(new_args, tuple)
+                                and new_args
+                                and isinstance(new_args[0], torch.Tensor)
+                                and new_args[0].is_floating_point()
+                                and not new_args[0].requires_grad
+                            ):
                                 new_args = (new_args[0].detach().requires_grad_(True),) + new_args[1:]
-                            new_kwargs = {k: v.to(dev) if isinstance(v, torch.Tensor) and v.device != dev else v for k, v in kwargs.items()} if kwargs else kwargs
+                            new_kwargs = (
+                                {
+                                    k: v.to(dev) if isinstance(v, torch.Tensor) and v.device != dev else v
+                                    for k, v in kwargs.items()
+                                }
+                                if kwargs
+                                else kwargs
+                            )
                             return new_args, new_kwargs
+
                         return fwd_pre_hook
+
                     self._hooks.append(layer.register_forward_pre_hook(make_fwd_pre_hook(layer, idx), with_kwargs=True))
 
                     def make_fwd_post_hook(l: nn.Module):
@@ -578,7 +678,9 @@ class LayerStreamingEngine:
                             if not getattr(l, "_in_backward", False):
                                 self.stager.release_layer(l)
                             return output
+
                         return fwd_post_hook
+
                     try:
                         self._hooks.append(layer.register_forward_hook(make_fwd_post_hook(layer), always_call=True))
                     except TypeError:
@@ -591,7 +693,9 @@ class LayerStreamingEngine:
                             self.stager.release_layer(l)
                             l._is_prefetched = False
                     return output
+
                 return model_forward_hook
+
             try:
                 self._hooks.append(self.model.register_forward_hook(make_model_forward_hook(), always_call=True))
             except TypeError:
@@ -600,7 +704,7 @@ class LayerStreamingEngine:
         self.model._streaming_engine = self
         self.model._layer_streaming_active = True
         self.is_attached = True
-        allocated_mb = torch.cuda.memory_allocated(self.device) / (1024 ** 2) if self.device.type == "cuda" else 0.0
+        allocated_mb = torch.cuda.memory_allocated(self.device) / (1024**2) if self.device.type == "cuda" else 0.0
         res_n = len(getattr(self, "resident_layers", []))
         print(
             f"[Layer Streaming] Active. GPU Resident: {res_n} layers + root ({allocated_mb:.1f} MB VRAM); "
@@ -767,7 +871,9 @@ class LayerStreamingEngine:
 
         _move_param_states_to_device(opt, root_params, dev)
         try:
-            _step_optimizer_parameters(opt, root_params, is_global_step_end=(len(resident_layers) == 0 and len(self.layers) == 0))
+            _step_optimizer_parameters(
+                opt, root_params, is_global_step_end=(len(resident_layers) == 0 and len(self.layers) == 0)
+            )
         finally:
             _move_param_states_to_cpu(opt, root_params)
 
@@ -789,7 +895,7 @@ class LayerStreamingEngine:
                     p._grad_norm_sq = None
             _move_param_states_to_device(opt, layer_params, dev)
             try:
-                is_last = (total_stream == 0 and res_idx == total_res - 1)
+                is_last = total_stream == 0 and res_idx == total_res - 1
                 _step_optimizer_parameters(opt, layer_params, is_global_step_end=is_last)
             finally:
                 _move_param_states_to_cpu(opt, layer_params)
@@ -800,7 +906,11 @@ class LayerStreamingEngine:
         try:
             for layer_idx, layer in enumerate(self.layers):
                 layer_params = list(layer.parameters())
-                target_dtype = torch.bfloat16 if any(getattr(p, "_cpu_data", p.data).dtype == torch.float8_e4m3fn for p in layer_params) else None
+                target_dtype = (
+                    torch.bfloat16
+                    if any(getattr(p, "_cpu_data", p.data).dtype == torch.float8_e4m3fn for p in layer_params)
+                    else None
+                )
                 self.stager.stage_layer(layer, stream=None, target_dtype=target_dtype, use_hardware_fp8=False)
                 self.stager.apply_staged_tensors(layer)
 
@@ -817,7 +927,7 @@ class LayerStreamingEngine:
                 _move_param_states_to_device(opt, layer_params, dev)
 
                 try:
-                    is_last = (layer_idx == total_stream - 1)
+                    is_last = layer_idx == total_stream - 1
                     _step_optimizer_parameters(opt, layer_params, is_global_step_end=is_last)
                 finally:
                     # Offload updated optimizer states back to CPU to prevent VRAM accumulation

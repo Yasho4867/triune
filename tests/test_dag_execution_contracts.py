@@ -1,7 +1,7 @@
 """Fast DAG contract tests that do not require the optional torch runtime."""
 
-import unittest
 import threading
+import unittest
 from types import SimpleNamespace
 
 from triune.execution.dag import DAGParser, ExecutionEngine, NodeExecutionError
@@ -76,7 +76,12 @@ class TestDAGExecutionContracts(unittest.TestCase):
                 {"id": "step", "type": "Evaluation", "title": "Autograd Training Step"},
             ],
             "edges": [
-                {"source": "stream", "source_port": "dataset_stream", "target": "step", "target_port": "dataset_stream"},
+                {
+                    "source": "stream",
+                    "source_port": "dataset_stream",
+                    "target": "step",
+                    "target_port": "dataset_stream",
+                },
             ],
         }
         self.assertEqual(DAGParser.parse(graph)["execution_order"], ["stream", "step"])
@@ -112,9 +117,17 @@ class TestDAGExecutionContracts(unittest.TestCase):
         runtime = object()
         observed = []
         engine = ExecutionEngine()
-        engine.register_handler("RuntimeAware", lambda node, context: observed.append(context.get("_runtime_training_state")) or {
-            "status": "completed", "execution_type": "execution", "real_computation": True,
-        })
+        engine.register_handler(
+            "RuntimeAware",
+            lambda node, context: (
+                observed.append(context.get("_runtime_training_state"))
+                or {
+                    "status": "completed",
+                    "execution_type": "execution",
+                    "real_computation": True,
+                }
+            ),
+        )
 
         result = engine.execute_graph(
             {"nodes": [{"id": "runtime", "type": "RuntimeAware", "title": "RuntimeAware"}], "edges": []},
@@ -136,18 +149,23 @@ class TestDAGExecutionContracts(unittest.TestCase):
             return {"result": value * factor}
 
         engine = ExecutionEngine()
-        engine.register_handler("DAGContractSource", lambda node, context: (
-            context.setdefault("port_data", {}).setdefault(node["id"], {}).update({"value": 7})
-            or {"status": "completed", "execution_type": "execution", "real_computation": True}
-        ))
+        engine.register_handler(
+            "DAGContractSource",
+            lambda node, context: (
+                context.setdefault("port_data", {}).setdefault(node["id"], {}).update({"value": 7})
+                or {"status": "completed", "execution_type": "execution", "real_computation": True}
+            ),
+        )
         try:
-            result = engine.execute_graph({
-                "nodes": [
-                    {"id": "source", "type": "DAGContractSource", "title": "DAGContractSource"},
-                    {"id": "plugin", "type": name, "title": name, "params": {"factor": 6}},
-                ],
-                "edges": [{"source": "source", "source_port": "value", "target": "plugin", "target_port": "value"}],
-            })
+            result = engine.execute_graph(
+                {
+                    "nodes": [
+                        {"id": "source", "type": "DAGContractSource", "title": "DAGContractSource"},
+                        {"id": "plugin", "type": name, "title": name, "params": {"factor": 6}},
+                    ],
+                    "edges": [{"source": "source", "source_port": "value", "target": "plugin", "target_port": "value"}],
+                }
+            )
             self.assertEqual(result["status"], "success")
             self.assertEqual(result["context"]["port_data"]["plugin"]["result"], 42)
             self.assertEqual(result["results"]["plugin"]["output"]["result"], 42)
@@ -166,10 +184,12 @@ class TestDAGExecutionContracts(unittest.TestCase):
             return {"status": "completed"}
 
         try:
-            result = ExecutionEngine().execute_graph({
-                "nodes": [{"id": "plugin", "type": name, "title": name, "params": {"value": 1}}],
-                "edges": [],
-            })
+            result = ExecutionEngine().execute_graph(
+                {
+                    "nodes": [{"id": "plugin", "type": name, "title": name, "params": {"value": 1}}],
+                    "edges": [],
+                }
+            )
             self.assertEqual(result["status"], "failed")
             self.assertIn("required output", result["error"])
         finally:
@@ -187,10 +207,12 @@ class TestDAGExecutionContracts(unittest.TestCase):
             return {"result": value + 1}
 
         try:
-            result = ExecutionEngine().execute_graph({
-                "nodes": [{"id": "plugin", "type": name, "title": name}],
-                "edges": [],
-            })
+            result = ExecutionEngine().execute_graph(
+                {
+                    "nodes": [{"id": "plugin", "type": name, "title": name}],
+                    "edges": [],
+                }
+            )
             self.assertEqual(result["status"], "failed")
             self.assertIn("missing required input", result["error"])
         finally:
@@ -202,45 +224,61 @@ class TestDAGExecutionContracts(unittest.TestCase):
     def test_subgraph_exposes_inputs_and_outputs_as_reusable_ports(self):
         engine = ExecutionEngine()
         observed = []
-        engine.register_handler("SubgraphContractSource", lambda node, context: (
-            context.setdefault("port_data", {}).setdefault(node["id"], {}).update({"value": 23})
-            or {"status": "completed", "execution_type": "execution", "real_computation": True}
-        ))
-        engine.register_handler("SubgraphContractSink", lambda node, context: (
-            observed.append(context.get("current_inputs", {}).get("answer"))
-            or {"status": "completed", "execution_type": "execution", "real_computation": True}
-        ))
+        engine.register_handler(
+            "SubgraphContractSource",
+            lambda node, context: (
+                context.setdefault("port_data", {}).setdefault(node["id"], {}).update({"value": 23})
+                or {"status": "completed", "execution_type": "execution", "real_computation": True}
+            ),
+        )
+        engine.register_handler(
+            "SubgraphContractSink",
+            lambda node, context: (
+                observed.append(context.get("current_inputs", {}).get("answer"))
+                or {"status": "completed", "execution_type": "execution", "real_computation": True}
+            ),
+        )
         subgraph = {
-            "nodes": [{
-                "id": "public_value",
-                "type": "SubgraphInput",
-                "title": "Input: value",
-                "params": {"public_name": "value"},
-                "outputs": [{"name": "value", "type": "tensor"}],
-            }],
+            "nodes": [
+                {
+                    "id": "public_value",
+                    "type": "SubgraphInput",
+                    "title": "Input: value",
+                    "params": {"public_name": "value"},
+                    "outputs": [{"name": "value", "type": "tensor"}],
+                }
+            ],
             "edges": [],
             "inputs": [{"name": "value", "type": "tensor"}],
-            "outputs": [{
-                "name": "result", "type": "tensor",
-                "source_node": "public_value", "source_port": "value",
-            }],
-        }
-        result = engine.execute_graph({
-            "nodes": [
-                {"id": "source", "type": "SubgraphContractSource", "title": "Source"},
+            "outputs": [
                 {
-                    "id": "group", "type": "Subgraph", "title": "Reusable Group",
-                    "inputs": [{"name": "value", "type": "tensor"}],
-                    "outputs": [{"name": "result", "type": "tensor"}],
-                    "subgraph": subgraph,
-                },
-                {"id": "sink", "type": "SubgraphContractSink", "title": "Sink"},
+                    "name": "result",
+                    "type": "tensor",
+                    "source_node": "public_value",
+                    "source_port": "value",
+                }
             ],
-            "edges": [
-                {"source": "source", "source_port": "value", "target": "group", "target_port": "value"},
-                {"source": "group", "source_port": "result", "target": "sink", "target_port": "answer"},
-            ],
-        })
+        }
+        result = engine.execute_graph(
+            {
+                "nodes": [
+                    {"id": "source", "type": "SubgraphContractSource", "title": "Source"},
+                    {
+                        "id": "group",
+                        "type": "Subgraph",
+                        "title": "Reusable Group",
+                        "inputs": [{"name": "value", "type": "tensor"}],
+                        "outputs": [{"name": "result", "type": "tensor"}],
+                        "subgraph": subgraph,
+                    },
+                    {"id": "sink", "type": "SubgraphContractSink", "title": "Sink"},
+                ],
+                "edges": [
+                    {"source": "source", "source_port": "value", "target": "group", "target_port": "value"},
+                    {"source": "group", "source_port": "result", "target": "sink", "target_port": "answer"},
+                ],
+            }
+        )
 
         self.assertEqual(result["status"], "success")
         self.assertEqual(observed, [23])
@@ -251,16 +289,22 @@ class TestDAGExecutionContracts(unittest.TestCase):
             "nodes": [
                 {"id": "tokenizer", "type": "BPETokenizer", "title": "BPETokenizer"},
                 {
-                    "id": "group", "type": "Subgraph", "title": "Typed Group",
+                    "id": "group",
+                    "type": "Subgraph",
+                    "title": "Typed Group",
                     "inputs": [{"name": "model", "type": "model_handle"}],
                     "outputs": [],
                     "subgraph": {"nodes": [], "edges": [], "inputs": [], "outputs": []},
                 },
             ],
-            "edges": [{
-                "source": "tokenizer", "source_port": "tokens",
-                "target": "group", "target_port": "model",
-            }],
+            "edges": [
+                {
+                    "source": "tokenizer",
+                    "source_port": "tokens",
+                    "target": "group",
+                    "target_port": "model",
+                }
+            ],
         }
         with self.assertRaisesRegex(NodeExecutionError, "Type mismatch"):
             DAGParser.parse(graph)
@@ -371,9 +415,20 @@ class TestDAGExecutionContracts(unittest.TestCase):
 
     def test_tensor_operator_nodes_are_catalogued_as_executable(self):
         executable_nodes = {
-            "VectorisedGLA", "HybridAttention", "MoE_FFN", "DepthRouter",
-            "FP8Linear", "FP4Linear", "RMSNorm", "FastRoPE", "FastRMSNorm",
-            "LoRAAdapter", "TokenBatchInspector", "CosineLRScheduler", "CheckpointManager", "DynamicResourceManager",
+            "VectorisedGLA",
+            "HybridAttention",
+            "MoE_FFN",
+            "DepthRouter",
+            "FP8Linear",
+            "FP4Linear",
+            "RMSNorm",
+            "FastRoPE",
+            "FastRMSNorm",
+            "LoRAAdapter",
+            "TokenBatchInspector",
+            "CosineLRScheduler",
+            "CheckpointManager",
+            "DynamicResourceManager",
         }
         for name in executable_nodes:
             with self.subTest(node=name):

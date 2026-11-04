@@ -1,6 +1,6 @@
 import unittest
+
 import torch
-import torch.nn as nn
 
 from triune.model.transformer import TriuneTransformer
 from triune.runtime.streaming import LayerStreamingEngine, StreamingConfig
@@ -55,7 +55,9 @@ class TestStreamingExceptionCleanup(unittest.TestCase):
             self.assertFalse(getattr(layer, "_is_prefetched", False), f"Layer {layer_idx} left prefetched")
             for p in layer.parameters():
                 self.assertEqual(p.device.type, "cpu", f"Layer {layer_idx} parameter stranded on GPU")
-                self.assertEqual(p.data.data_ptr(), p._cpu_data.data_ptr(), f"Layer {layer_idx} parameter not restored to CPU master")
+                self.assertEqual(
+                    p.data.data_ptr(), p._cpu_data.data_ptr(), f"Layer {layer_idx} parameter not restored to CPU master"
+                )
                 self.assertIsNone(getattr(p, "_fp8_tensor", None))
                 self.assertIsNone(getattr(p, "_fp8_scale", None))
 

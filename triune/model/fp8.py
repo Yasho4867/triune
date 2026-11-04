@@ -8,14 +8,11 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-
 
 from triune.runtime.capabilities import PrecisionCapabilities
 
 # Check if hardware FP8 scaled_mm is available at import time
 _HAS_SCALED_MM = hasattr(torch, "_scaled_mm") and hasattr(torch, "float8_e4m3fn")
-
 
 
 def _quantize_to_fp8(tensor: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -27,7 +24,7 @@ def _quantize_to_fp8(tensor: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     amax = tensor.abs().amax().clamp_min(1e-12)
     scale = (448.0 / amax).to(dtype=tensor.dtype)
     tensor_fp8 = (tensor * scale).to(torch.float8_e4m3fn)
-    scale_inv = (1.0 / scale.float())
+    scale_inv = 1.0 / scale.float()
     return tensor_fp8, scale_inv
 
 
@@ -83,11 +80,13 @@ class _FP8MatmulFn(torch.autograd.Function):
 
         # Fallback path: FP8-weight compute with dequantization
         if weight_fp8 is not None and weight_inv_scale is not None:
-            inv = weight_inv_scale.to(x.dtype) if isinstance(weight_inv_scale, torch.Tensor) else float(weight_inv_scale)
-            w_compute = (weight_fp8.to(x.dtype) * inv)
+            inv = (
+                weight_inv_scale.to(x.dtype) if isinstance(weight_inv_scale, torch.Tensor) else float(weight_inv_scale)
+            )
+            w_compute = weight_fp8.to(x.dtype) * inv
         else:
             w_fp8, inv = _quantize_to_fp8(weight_master)
-            w_compute = (w_fp8.to(x.dtype) * inv.to(x.dtype))
+            w_compute = w_fp8.to(x.dtype) * inv.to(x.dtype)
 
         out = flat_x @ w_compute.t()
         if bias is not None:
@@ -177,4 +176,3 @@ def convert_to_fp8(module: nn.Module, target_classes=(nn.Linear,)) -> nn.Module:
         else:
             convert_to_fp8(child, target_classes=target_classes)
     return module
-

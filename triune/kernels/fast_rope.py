@@ -15,12 +15,25 @@ if is_triton_available():
 
     @triton.jit
     def _rope_kernel(
-        Q, K, Cos, Sin,
-        stride_qb, stride_qh, stride_qt, stride_qd,
-        stride_kb, stride_kh, stride_kt, stride_kd,
-        stride_cost, stride_cosd,
-        stride_sint, stride_sind,
-        H, T, D,
+        Q,
+        K,
+        Cos,
+        Sin,
+        stride_qb,
+        stride_qh,
+        stride_qt,
+        stride_qd,
+        stride_kb,
+        stride_kh,
+        stride_kt,
+        stride_kd,
+        stride_cost,
+        stride_cosd,
+        stride_sint,
+        stride_sind,
+        H,
+        T,
+        D,
         BLOCK_SIZE: tl.constexpr,
     ):
         # Each program processes one (batch, head, token) vector
@@ -66,10 +79,11 @@ if is_triton_available():
         tl.store(k1_ptr, out_k1.to(K.dtype.element_ty), mask=mask)
         tl.store(k2_ptr, out_k2.to(K.dtype.element_ty), mask=mask)
 
-
     class _FastRoPEFunction(torch.autograd.Function):
         @staticmethod
-        def forward(ctx, q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        def forward(
+            ctx, q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
+        ) -> tuple[torch.Tensor, torch.Tensor]:
             B, H, T, D = q.shape
             half_d = D // 2
             cos_2d = cos.reshape(-1, cos.size(-1)).contiguous()
@@ -78,12 +92,25 @@ if is_triton_available():
             out_k = k.clone()
             BLOCK_SIZE = triton.next_power_of_2(half_d)
             _rope_kernel[(B * H, T)](
-                out_q, out_k, cos_2d, sin_2d,
-                out_q.stride(0), out_q.stride(1), out_q.stride(2), out_q.stride(3),
-                out_k.stride(0), out_k.stride(1), out_k.stride(2), out_k.stride(3),
-                cos_2d.stride(0), cos_2d.stride(1),
-                sin_2d.stride(0), sin_2d.stride(1),
-                H, T, D,
+                out_q,
+                out_k,
+                cos_2d,
+                sin_2d,
+                out_q.stride(0),
+                out_q.stride(1),
+                out_q.stride(2),
+                out_q.stride(3),
+                out_k.stride(0),
+                out_k.stride(1),
+                out_k.stride(2),
+                out_k.stride(3),
+                cos_2d.stride(0),
+                cos_2d.stride(1),
+                sin_2d.stride(0),
+                sin_2d.stride(1),
+                H,
+                T,
+                D,
                 BLOCK_SIZE=BLOCK_SIZE,
             )
             ctx.save_for_backward(cos_2d, sin_2d)
@@ -91,7 +118,9 @@ if is_triton_available():
             return out_q, out_k
 
         @staticmethod
-        def backward(ctx, grad_q: torch.Tensor, grad_k: torch.Tensor) -> tuple[Optional[torch.Tensor], Optional[torch.Tensor], None, None]:
+        def backward(
+            ctx, grad_q: torch.Tensor, grad_k: torch.Tensor
+        ) -> tuple[torch.Tensor | None, torch.Tensor | None, None, None]:
             cos_2d, sin_2d = ctx.saved_tensors
             B, H, T, D = ctx.dims
             half_d = D // 2
@@ -101,18 +130,33 @@ if is_triton_available():
             if out_gq is not None and out_gk is not None:
                 # The inverse of a 2D rotation R(theta) is R(-theta), which corresponds to -sin
                 _rope_kernel[(B * H, T)](
-                    out_gq, out_gk, cos_2d, -sin_2d,
-                    out_gq.stride(0), out_gq.stride(1), out_gq.stride(2), out_gq.stride(3),
-                    out_gk.stride(0), out_gk.stride(1), out_gk.stride(2), out_gk.stride(3),
-                    cos_2d.stride(0), cos_2d.stride(1),
-                    sin_2d.stride(0), sin_2d.stride(1),
-                    H, T, D,
+                    out_gq,
+                    out_gk,
+                    cos_2d,
+                    -sin_2d,
+                    out_gq.stride(0),
+                    out_gq.stride(1),
+                    out_gq.stride(2),
+                    out_gq.stride(3),
+                    out_gk.stride(0),
+                    out_gk.stride(1),
+                    out_gk.stride(2),
+                    out_gk.stride(3),
+                    cos_2d.stride(0),
+                    cos_2d.stride(1),
+                    sin_2d.stride(0),
+                    sin_2d.stride(1),
+                    H,
+                    T,
+                    D,
                     BLOCK_SIZE=BLOCK_SIZE,
                 )
             return out_gq, out_gk, None, None
 
 
-def fast_rope(q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+def fast_rope(
+    q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Applies rotary position embeddings using fused Triton or vectorized PyTorch.
 
     Args:

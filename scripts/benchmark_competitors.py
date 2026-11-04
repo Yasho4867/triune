@@ -16,12 +16,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
-import os
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, Tuple
 
 import torch
 import torch.nn as nn
@@ -34,16 +32,13 @@ if str(REPO_ROOT) not in sys.path:
 
 from triune.kernels import (
     chunked_cross_entropy_from_hidden,
-    fast_cross_entropy,
     fast_chunk_gla,
     fast_rmsnorm,
     fast_swiglu,
-    fast_gelu,
     fast_zeropower_via_newtonschulz5,
-    get_kernel_telemetry,
 )
-from triune.optim.centroid import CentroidSteerOptimizer, fast_subspace_projection
-from triune.model import TriuneTransformer, CANONICAL_MODEL_SPECS
+from triune.model import TriuneTransformer
+from triune.optim.centroid import fast_subspace_projection
 
 
 def get_cuda_device() -> torch.device:
@@ -68,7 +63,7 @@ def benchmark_call(fn, warmup: int = 4, reps: int = 10, device: torch.device = N
     """Execute fn for warmup iterations, then measure mean execution time (ms) and peak VRAM (MB)."""
     if device is None:
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    
+
     # Warmup
     for _ in range(warmup):
         fn()
@@ -98,7 +93,7 @@ def run_cross_entropy_benchmark(device: torch.device, dtype: torch.dtype) -> Dic
     print(" [BENCHMARK 1] Fused Chunked Cross-Entropy vs Standard PyTorch CE (Unsloth/Liger)")
     print("=" * 78)
     results = []
-    
+
     # Test configurations: sequence lengths N tokens, vocab V = 32,000, hidden D = 384
     seq_configs = [2048, 4096, 8192]
     hidden_dim = 384
@@ -107,13 +102,13 @@ def run_cross_entropy_benchmark(device: torch.device, dtype: torch.dtype) -> Dic
 
     for N in seq_configs:
         print(f"\nEvaluating sequence length N = {N:,} tokens, Vocab = {vocab_size:,}...")
-        
+
         # 1. Standard PyTorch baseline (materializes full [N, V] logits in memory)
         torch.manual_seed(42)
         head_std = nn.Linear(hidden_dim, vocab_size, bias=False, device=device, dtype=dtype)
         h_std = torch.randn(N, hidden_dim, device=device, dtype=dtype, requires_grad=True)
         y_std = torch.randint(0, vocab_size, (N,), device=device, dtype=torch.long)
-        
+
         def run_standard():
             head_std.zero_grad(set_to_none=True)
             if h_std.grad is not None:
@@ -123,13 +118,13 @@ def run_cross_entropy_benchmark(device: torch.device, dtype: torch.dtype) -> Dic
             loss.backward()
 
         std_time, std_vram = benchmark_call(run_standard, warmup=3, reps=8, device=device)
-        
+
         # 2. Triune Chunked Fused Cross-Entropy (Zero [N, V] logits allocation)
         torch.manual_seed(42)
         head_triune = nn.Linear(hidden_dim, vocab_size, bias=False, device=device, dtype=dtype)
         h_triune = torch.randn(N, hidden_dim, device=device, dtype=dtype, requires_grad=True)
         y_triune = torch.randint(0, vocab_size, (N,), device=device, dtype=torch.long)
-        
+
         def run_triune():
             head_triune.zero_grad(set_to_none=True)
             if h_triune.grad is not None:
@@ -156,20 +151,24 @@ def run_cross_entropy_benchmark(device: torch.device, dtype: torch.dtype) -> Dic
         vram_saved_pct = round(((std_vram - triune_vram) / max(std_vram, 1e-6)) * 100.0, 1)
         speedup = round(std_time / max(triune_time, 1e-6), 2)
 
-        results.append({
-            "tokens": N,
-            "vocab": vocab_size,
-            "standard_time_ms": round(std_time, 2),
-            "triune_time_ms": round(triune_time, 2),
-            "speedup": speedup,
-            "standard_vram_mb": round(std_vram, 1),
-            "triune_vram_mb": round(triune_vram, 1),
-            "vram_saved_pct": vram_saved_pct,
-            "loss_parity_diff": f"{loss_diff:.2e}",
-            "grad_parity_diff": f"{grad_diff:.2e}",
-        })
+        results.append(
+            {
+                "tokens": N,
+                "vocab": vocab_size,
+                "standard_time_ms": round(std_time, 2),
+                "triune_time_ms": round(triune_time, 2),
+                "speedup": speedup,
+                "standard_vram_mb": round(std_vram, 1),
+                "triune_vram_mb": round(triune_vram, 1),
+                "vram_saved_pct": vram_saved_pct,
+                "loss_parity_diff": f"{loss_diff:.2e}",
+                "grad_parity_diff": f"{grad_diff:.2e}",
+            }
+        )
         print(f"  Standard PyTorch: {std_time:.2f} ms | Peak VRAM: {std_vram:.1f} MB")
-        print(f"  Triune Chunked:  {triune_time:.2f} ms | Peak VRAM: {triune_vram:.1f} MB ({vram_saved_pct}% saved, {speedup}x speed)")
+        print(
+            f"  Triune Chunked:  {triune_time:.2f} ms | Peak VRAM: {triune_vram:.1f} MB ({vram_saved_pct}% saved, {speedup}x speed)"
+        )
         print(f"  Numerical Parity: Loss diff = {loss_diff:.2e}, Max grad diff = {grad_diff:.2e}")
 
     return {"benchmark": "cross_entropy", "results": results}
@@ -192,12 +191,12 @@ def run_attention_benchmark(device: torch.device, dtype: torch.dtype) -> Dict[st
 
     for T in seq_lens:
         print(f"\nEvaluating Sequence Length T = {T:,} (Batch = {B}, Heads = {H}, Dim = {HD})...")
-        
+
         # 1. Standard PyTorch Scaled Dot-Product Attention (SDPA / Softmax)
         q = torch.randn(B, H, T, HD, device=device, dtype=dtype)
         k = torch.randn(B, H, T, HD, device=device, dtype=dtype)
         v = torch.randn(B, H, T, HD, device=device, dtype=dtype)
-        
+
         def run_standard_sdpa():
             return F.scaled_dot_product_attention(q, k, v, is_causal=True)
 
@@ -220,19 +219,23 @@ def run_attention_benchmark(device: torch.device, dtype: torch.dtype) -> Dict[st
         speedup = round(std_time / max(triune_time, 1e-6), 2)
         vram_saved_pct = round(((std_vram - triune_vram) / max(std_vram, 1e-6)) * 100.0, 1) if std_vram > 0 else 0.0
 
-        results.append({
-            "seq_len": T,
-            "standard_time_ms": round(std_time, 2),
-            "triune_gla_time_ms": round(triune_time, 2),
-            "standard_throughput_tok_s": std_thru,
-            "triune_throughput_tok_s": triune_thru,
-            "speedup": speedup,
-            "standard_vram_mb": round(std_vram, 1),
-            "triune_vram_mb": round(triune_vram, 1),
-            "vram_saved_pct": vram_saved_pct,
-        })
+        results.append(
+            {
+                "seq_len": T,
+                "standard_time_ms": round(std_time, 2),
+                "triune_gla_time_ms": round(triune_time, 2),
+                "standard_throughput_tok_s": std_thru,
+                "triune_throughput_tok_s": triune_thru,
+                "speedup": speedup,
+                "standard_vram_mb": round(std_vram, 1),
+                "triune_vram_mb": round(triune_vram, 1),
+                "vram_saved_pct": vram_saved_pct,
+            }
+        )
         print(f"  Standard Softmax SDPA: {std_time:.2f} ms ({std_thru:,.0f} tok/s) | VRAM: {std_vram:.1f} MB")
-        print(f"  Triune Chunked GLA:   {triune_time:.2f} ms ({triune_thru:,.0f} tok/s) | VRAM: {triune_vram:.1f} MB ({speedup}x speed)")
+        print(
+            f"  Triune Chunked GLA:   {triune_time:.2f} ms ({triune_thru:,.0f} tok/s) | VRAM: {triune_vram:.1f} MB ({speedup}x speed)"
+        )
 
     # 3. Single-Token Autoregressive Generation Decode Benchmark (O(1) vs KV-Cache O(T))
     print("\n--- Autoregressive Single-Token Decode Scaling (O(1) Recurrent vs KV-Cache O(L)) ---")
@@ -244,7 +247,7 @@ def run_attention_benchmark(device: torch.device, dtype: torch.dtype) -> Dict[st
         q_std = torch.randn(b_dec, H, 1, HD, device=device, dtype=dtype)
         k_cache = torch.randn(b_dec, H, L, HD, device=device, dtype=dtype)
         v_cache = torch.randn(b_dec, H, L, HD, device=device, dtype=dtype)
-        
+
         def run_sdpa_decode():
             return F.scaled_dot_product_attention(q_std, k_cache, v_cache)
 
@@ -268,16 +271,20 @@ def run_attention_benchmark(device: torch.device, dtype: torch.dtype) -> Dict[st
         mem_saved_pct = round((1.0 - (gla_state_kb / kv_cache_kb)) * 100.0, 1)
         speedup = round(sdpa_dec_time / max(gla_dec_time, 1e-6), 2)
 
-        autoregressive_results.append({
-            "context_length": L,
-            "softmax_kv_time_ms": round(sdpa_dec_time, 4),
-            "triune_gla_time_ms": round(gla_dec_time, 4),
-            "speedup": speedup,
-            "softmax_kv_cache_kb": kv_cache_kb,
-            "triune_gla_state_kb": gla_state_kb,
-            "memory_saved_pct": mem_saved_pct,
-        })
-        print(f"  Context L = {L:5d} | Softmax KV: {sdpa_dec_time:.4f} ms ({kv_cache_kb} KB) | Triune GLA: {gla_dec_time:.4f} ms ({gla_state_kb} KB) | {mem_saved_pct}% Cache Saved ({speedup}x speed)")
+        autoregressive_results.append(
+            {
+                "context_length": L,
+                "softmax_kv_time_ms": round(sdpa_dec_time, 4),
+                "triune_gla_time_ms": round(gla_dec_time, 4),
+                "speedup": speedup,
+                "softmax_kv_cache_kb": kv_cache_kb,
+                "triune_gla_state_kb": gla_state_kb,
+                "memory_saved_pct": mem_saved_pct,
+            }
+        )
+        print(
+            f"  Context L = {L:5d} | Softmax KV: {sdpa_dec_time:.4f} ms ({kv_cache_kb} KB) | Triune GLA: {gla_dec_time:.4f} ms ({gla_state_kb} KB) | {mem_saved_pct}% Cache Saved ({speedup}x speed)"
+        )
 
     return {"benchmark": "attention_scaling", "results": results, "autoregressive_decode": autoregressive_results}
 
@@ -301,7 +308,7 @@ def run_optimizer_benchmark(device: torch.device, dtype: torch.dtype) -> Dict[st
     # Each linear expert has weight [1536, 384] and [384, 1536]
     expert_params_per_layer = 2 * (dim * hidden_dim) * num_experts
     total_expert_params = expert_params_per_layer * num_layers  # ~37.7M parameters in experts
-    
+
     # Standard FP32 AdamW: stores 2 states (m, v) in FP32 = 8 bytes/param
     adamw_fp32_bytes = total_expert_params * 8
     adamw_fp32_mb = adamw_fp32_bytes / (1024 * 1024)
@@ -341,12 +348,13 @@ def run_optimizer_benchmark(device: torch.device, dtype: torch.dtype) -> Dict[st
     svd_time, _ = benchmark_call(run_svd_fallback, warmup=5, reps=20, device=device)
     algo_speedup = round(svd_time / max(subspace_time, 1e-6), 2)
 
-    print(f"\nSubspace Projection Latency:")
+    print("\nSubspace Projection Latency:")
     print(f"  Classical SVD (torch.linalg.svd):       {svd_time:.3f} ms")
     print(f"  Triune Fast Cholesky-QR Subspace Iter: {subspace_time:.3f} ms ({algo_speedup}x faster)")
 
     # 3. Muon 5th-Order Newton Schulz Orthogonalization
     attn_weight_grad = torch.randn(dim, dim, device=device, dtype=dtype)
+
     def run_muon_ns():
         return fast_zeropower_via_newtonschulz5(attn_weight_grad, steps=5)
 
@@ -377,17 +385,21 @@ def run_early_exit_benchmark(device: torch.device, dtype: torch.dtype) -> Dict[s
     print("=" * 78)
 
     # Build Triune-Base model (8 layers, 384 dim, 4 experts, exits at L2 and L5)
-    model = TriuneTransformer(
-        vocab_size=32000,
-        hidden_dim=384,
-        num_layers=8,
-        num_heads=6,
-        head_dim=64,
-        num_experts=4,
-        router_prefix_layers=1,
-        reflex_exit_layer=2,
-        limbic_exit_layer=5,
-    ).to(device=device, dtype=dtype).eval()
+    model = (
+        TriuneTransformer(
+            vocab_size=32000,
+            hidden_dim=384,
+            num_layers=8,
+            num_heads=6,
+            head_dim=64,
+            num_experts=4,
+            router_prefix_layers=1,
+            reflex_exit_layer=2,
+            limbic_exit_layer=5,
+        )
+        .to(device=device, dtype=dtype)
+        .eval()
+    )
 
     B = 1
     seq_len = 128
@@ -432,10 +444,14 @@ def run_early_exit_benchmark(device: torch.device, dtype: torch.dtype) -> Dict[s
 
     print(f"\nInference Decode Latency (Batch = {B}, SeqLen = {seq_len}):")
     print(f"  Fixed 100% Depth Baseline (Cortex / Layer 8): {cortex_time:.2f} ms ({cortex_tok_s:,.0f} tok/s)")
-    print(f"  Limbic Exit Head (Layer 5 / 62.5% depth):     {limbic_time:.2f} ms ({limbic_tok_s:,.0f} tok/s, {round(cortex_time/limbic_time, 2)}x speed)")
-    print(f"  Reflex Exit Head (Layer 2 / 25.0% depth):     {reflex_time:.2f} ms ({reflex_tok_s:,.0f} tok/s, {round(cortex_time/reflex_time, 2)}x speed)")
-    print(f"  ---------------------------------------------------------------------")
-    print(f"  Empirical Dynamic Mixture (46.5% R / 18.6% L / 34.9% C):")
+    print(
+        f"  Limbic Exit Head (Layer 5 / 62.5% depth):     {limbic_time:.2f} ms ({limbic_tok_s:,.0f} tok/s, {round(cortex_time / limbic_time, 2)}x speed)"
+    )
+    print(
+        f"  Reflex Exit Head (Layer 2 / 25.0% depth):     {reflex_time:.2f} ms ({reflex_tok_s:,.0f} tok/s, {round(cortex_time / reflex_time, 2)}x speed)"
+    )
+    print("  ---------------------------------------------------------------------")
+    print("  Empirical Dynamic Mixture (46.5% R / 18.6% L / 34.9% C):")
     print(f"    Average Latency:  {blended_time:.2f} ms ({blended_tok_s:,.0f} tok/s)")
     print(f"    Effective Speedup vs Fixed Models: {effective_speedup}x")
     print(f"    Compute / Latency Reduction:      {flpop_reduction_pct}%")
@@ -464,7 +480,7 @@ def run_fused_activations_benchmark(device: torch.device, dtype: torch.dtype) ->
     print("=" * 78)
 
     B, T, D = 4, 1024, 384
-    
+
     # 1. Standard PyTorch RMSNorm (allocates variance tensor for backward)
     class StandardRMSNorm(nn.Module):
         def __init__(self, dim: int, eps: float = 1e-6):
@@ -508,7 +524,9 @@ def run_fused_activations_benchmark(device: torch.device, dtype: torch.dtype) ->
 
     print(f"\nRMSNorm Forward+Backward (B={B}, T={T}, D={D}):")
     print(f"  Standard PyTorch RMSNorm: {std_norm_time:.3f} ms | VRAM: {std_norm_vram:.2f} MB")
-    print(f"  Triune In-Place RMSNorm:  {triune_norm_time:.3f} ms | VRAM: {triune_norm_vram:.2f} MB ({norm_speedup}x speed, {norm_vram_saved}% VRAM saved)")
+    print(
+        f"  Triune In-Place RMSNorm:  {triune_norm_time:.3f} ms | VRAM: {triune_norm_vram:.2f} MB ({norm_speedup}x speed, {norm_vram_saved}% VRAM saved)"
+    )
 
     # 3. Fast SwiGLU / GELU vs PyTorch
     gate = torch.randn(B, T, D * 2, device=device, dtype=dtype, requires_grad=True)
@@ -536,7 +554,7 @@ def run_fused_activations_benchmark(device: torch.device, dtype: torch.dtype) ->
     fast_swiglu_time, _ = benchmark_call(run_fast_swiglu, warmup=5, reps=25, device=device)
     swiglu_speedup = round(std_swiglu_time / max(fast_swiglu_time, 1e-6), 2)
 
-    print(f"\nSwiGLU Activation Forward+Backward:")
+    print("\nSwiGLU Activation Forward+Backward:")
     print(f"  Standard PyTorch F.silu * up: {std_swiglu_time:.3f} ms")
     print(f"  Triune Fused fast_swiglu:     {fast_swiglu_time:.3f} ms ({swiglu_speedup}x speed)")
 
@@ -568,7 +586,7 @@ def generate_markdown_report(all_benchmarks: Dict[str, Any], output_path: Path):
 
 **Benchmarked Hardware**: `{device_name}`  
 **Precision**: `bfloat16` with native CUDA Tensor Cores  
-**Timestamp**: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}  
+**Timestamp**: {time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())}  
 **Architecture Target**: Triune Multi-Exit Hybrid GLA-MoE vs Industry Standards (Vanilla PyTorch, Unsloth, Liger, SmolLM/TinyLlama)
 
 ---
@@ -578,8 +596,8 @@ def generate_markdown_report(all_benchmarks: Dict[str, Any], output_path: Path):
 Triune combines three foundational breakthroughs to enable full pre-training and high-speed serving on consumer hardware:
 1. **Streaming Chunked Cross-Entropy**: Eliminates the multi-gigabyte $[N, V]$ logits allocation, saving up to **85% VRAM** during language model loss calculation.
 2. **$O(N)$ Gated Linear Attention (GLA)**: Achieves strictly linear sequence complexity, sustaining high throughput up to 8k+ context where quadratic softmax attention slows down.
-3. **3-Tier Partitioned Optimizer (CentroidSteer + Muon + AdamW)**: Compresses MoE optimizer states by **{opt.get('memory_reduction_vs_fp32_pct', 80)}%** through low-rank SVD projections ($r=16$) with active Gram-Schmidt centroid steering to prevent expert representation collapse.
-4. **Hierarchical Dynamic Exits (Reflex, Limbic, Cortex)**: Delivers an empirical **{exit_bench.get('effective_speedup_vs_fixed', 1.8)}x inference decode speedup** ({exit_bench.get('compute_reduction_pct', 45)}% compute reduction) by resolving common tokens early at Layer 2.
+3. **3-Tier Partitioned Optimizer (CentroidSteer + Muon + AdamW)**: Compresses MoE optimizer states by **{opt.get("memory_reduction_vs_fp32_pct", 80)}%** through low-rank SVD projections ($r=16$) with active Gram-Schmidt centroid steering to prevent expert representation collapse.
+4. **Hierarchical Dynamic Exits (Reflex, Limbic, Cortex)**: Delivers an empirical **{exit_bench.get("effective_speedup_vs_fixed", 1.8)}x inference decode speedup** ({exit_bench.get("compute_reduction_pct", 45)}% compute reduction) by resolving common tokens early at Layer 2.
 
 ---
 
@@ -624,12 +642,12 @@ During continuous token generation, standard models (Llama, Mistral, SmolLM, Qwe
 
 | Optimizer Architecture | MoE Expert State Memory | Memory Reduction vs FP32 AdamW | Anti-Collapse Subspace Steering | Update Matrix Geometry |
 | :--- | :---: | :---: | :---: | :---: |
-| **Standard FP32 AdamW** | {opt.get('adamw_fp32_state_mb', 0):.1f} MB | 0.0% (Baseline) | None (Susceptible to expert collapse) | Coordinate-wise scalar |
-| **8-bit AdamW (Unsloth)** | {opt.get('adamw_8bit_state_mb', 0):.1f} MB | {round((1 - (opt.get('adamw_8bit_state_mb', 1)/max(opt.get('adamw_fp32_state_mb', 1), 1e-6))) * 100, 1)}% | None | Element-wise quantized |
-| **Triune CentroidSteer (Rank {16})** | **{opt.get('centroid_steer_state_mb', 0):.1f} MB** | **{opt.get('memory_reduction_vs_fp32_pct', 0)}%** | **Gram-Schmidt ($P^T c_\\text{{orth}} = 0$)** | **Subspace Transport SVD** |
+| **Standard FP32 AdamW** | {opt.get("adamw_fp32_state_mb", 0):.1f} MB | 0.0% (Baseline) | None (Susceptible to expert collapse) | Coordinate-wise scalar |
+| **8-bit AdamW (Unsloth)** | {opt.get("adamw_8bit_state_mb", 0):.1f} MB | {round((1 - (opt.get("adamw_8bit_state_mb", 1) / max(opt.get("adamw_fp32_state_mb", 1), 1e-6))) * 100, 1)}% | None | Element-wise quantized |
+| **Triune CentroidSteer (Rank {16})** | **{opt.get("centroid_steer_state_mb", 0):.1f} MB** | **{opt.get("memory_reduction_vs_fp32_pct", 0)}%** | **Gram-Schmidt ($P^T c_\\text{{orth}} = 0$)** | **Subspace Transport SVD** |
 
-- **Subspace Iteration Speed**: Triune Fast Cholesky-QR computes rank-{16} SVD updates in **{opt.get('cholesky_subspace_ms', 0)} ms** ({opt.get('subspace_algo_speedup', 1)}x faster than `torch.linalg.svd`).
-- **Muon Newton-Schulz 5th-Order**: Attn orthogonalization completes in **{opt.get('muon_step_ms', 0)} ms** with polar decomposition.
+- **Subspace Iteration Speed**: Triune Fast Cholesky-QR computes rank-{16} SVD updates in **{opt.get("cholesky_subspace_ms", 0)} ms** ({opt.get("subspace_algo_speedup", 1)}x faster than `torch.linalg.svd`).
+- **Muon Newton-Schulz 5th-Order**: Attn orthogonalization completes in **{opt.get("muon_step_ms", 0)} ms** with polar decomposition.
 
 ---
 
@@ -637,19 +655,19 @@ During continuous token generation, standard models (Llama, Mistral, SmolLM, Qwe
 
 | Exit Head | Architectural Depth | Latency per Batch | Decode Throughput | Speedup vs 100% Depth |
 | :--- | :---: | :---: | :---: | :---: |
-| **Reflex Exit** | Layer 2 of 8 (25.0%) | **{exit_bench.get('reflex_time_ms', 0)} ms** | **{exit_bench.get('reflex_tok_s', 0):,.0f} tok/s** | **{round(exit_bench.get('fixed_cortex_time_ms', 1) / max(exit_bench.get('reflex_time_ms', 1), 1e-6), 2)}x** |
-| **Limbic Exit** | Layer 5 of 8 (62.5%) | {exit_bench.get('limbic_time_ms', 0)} ms | {exit_bench.get('limbic_tok_s', 0):,.0f} tok/s | {round(exit_bench.get('fixed_cortex_time_ms', 1) / max(exit_bench.get('limbic_time_ms', 1), 1e-6), 2)}x |
-| **Cortex Exit (Fixed Baseline)** | Layer 8 of 8 (100.0%) | {exit_bench.get('fixed_cortex_time_ms', 0)} ms | {exit_bench.get('fixed_cortex_tok_s', 0):,.0f} tok/s | 1.00x (Baseline) |
-| **Empirical Dynamic Mixture** | **Weighted Average** | **{exit_bench.get('dynamic_blended_time_ms', 0)} ms** | **{exit_bench.get('dynamic_blended_tok_s', 0):,.0f} tok/s** | **{exit_bench.get('effective_speedup_vs_fixed', 0)}x** |
+| **Reflex Exit** | Layer 2 of 8 (25.0%) | **{exit_bench.get("reflex_time_ms", 0)} ms** | **{exit_bench.get("reflex_tok_s", 0):,.0f} tok/s** | **{round(exit_bench.get("fixed_cortex_time_ms", 1) / max(exit_bench.get("reflex_time_ms", 1), 1e-6), 2)}x** |
+| **Limbic Exit** | Layer 5 of 8 (62.5%) | {exit_bench.get("limbic_time_ms", 0)} ms | {exit_bench.get("limbic_tok_s", 0):,.0f} tok/s | {round(exit_bench.get("fixed_cortex_time_ms", 1) / max(exit_bench.get("limbic_time_ms", 1), 1e-6), 2)}x |
+| **Cortex Exit (Fixed Baseline)** | Layer 8 of 8 (100.0%) | {exit_bench.get("fixed_cortex_time_ms", 0)} ms | {exit_bench.get("fixed_cortex_tok_s", 0):,.0f} tok/s | 1.00x (Baseline) |
+| **Empirical Dynamic Mixture** | **Weighted Average** | **{exit_bench.get("dynamic_blended_time_ms", 0)} ms** | **{exit_bench.get("dynamic_blended_tok_s", 0):,.0f} tok/s** | **{exit_bench.get("effective_speedup_vs_fixed", 0)}x** |
 
-*Takeaway*: In standard fixed-depth LLMs (SmolLM, TinyLlama, Qwen2.5), 100% of compute is paid for every token. Triune's calibrated exit heads resolve easy tokens at Reflex (Layer 2), providing an **empirical {exit_bench.get('effective_speedup_vs_fixed', 0)}x inference speedup** with uniform RMSNorm scale.
+*Takeaway*: In standard fixed-depth LLMs (SmolLM, TinyLlama, Qwen2.5), 100% of compute is paid for every token. Triune's calibrated exit heads resolve easy tokens at Reflex (Layer 2), providing an **empirical {exit_bench.get("effective_speedup_vs_fixed", 0)}x inference speedup** with uniform RMSNorm scale.
 
 ---
 
 ## 5. Fused Kernel Accelerators (RMSNorm & Activations)
 
-- **RMSNorm In-Place**: {act.get('norm_speedup', 1)}x faster forward+backward, saving **{act.get('norm_vram_saved_pct', 0)}% VRAM** by recomputing variance on backward.
-- **Fast SwiGLU / GELU**: {act.get('swiglu_speedup', 1)}x speedup over PyTorch `F.silu * up`.
+- **RMSNorm In-Place**: {act.get("norm_speedup", 1)}x faster forward+backward, saving **{act.get("norm_vram_saved_pct", 0)}% VRAM** by recomputing variance on backward.
+- **Fast SwiGLU / GELU**: {act.get("swiglu_speedup", 1)}x speedup over PyTorch `F.silu * up`.
 
 ---
 
@@ -658,7 +676,7 @@ During continuous token generation, standard models (Llama, Mistral, SmolLM, Qwe
 Triune directly outperforms standard PyTorch and Unsloth/Liger baselines across four vital dimensions:
 1. **Pre-training Memory Cap**: Can pre-train full 76M-2.5B architectures on consumer laptops with $< 1.95$ GB VRAM.
 2. **MoE Stability**: Eliminates expert representation collapse via CentroidSteer.
-3. **Inference Decode**: ~{exit_bench.get('effective_speedup_vs_fixed', 1.8)}x higher tokens/sec decode throughput via dynamic Reflex/Limbic exits.
+3. **Inference Decode**: ~{exit_bench.get("effective_speedup_vs_fixed", 1.8)}x higher tokens/sec decode throughput via dynamic Reflex/Limbic exits.
 4. **Attention Scalability**: Linear scaling without quadratic memory wall at long contexts.
 """
     output_path.write_text(md, encoding="utf-8")
@@ -669,7 +687,9 @@ def main():
     parser = argparse.ArgumentParser(description="Triune Competitive Benchmark Suite")
     parser.add_argument("--device", default="auto", help="Compute device ('cuda', 'cpu', 'auto')")
     parser.add_argument("--output-json", default="benchmarks/benchmark_results.json", help="Path to save JSON results")
-    parser.add_argument("--output-md", default="benchmarks/COMPETITIVE_BENCHMARK_REPORT.md", help="Path to save Markdown report")
+    parser.add_argument(
+        "--output-md", default="benchmarks/COMPETITIVE_BENCHMARK_REPORT.md", help="Path to save Markdown report"
+    )
     args = parser.parse_args()
 
     device = get_cuda_device() if args.device == "auto" else torch.device(args.device)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import torch
+
 from triune.kernels.fast_muon import fast_zeropower_via_newtonschulz5
 
 

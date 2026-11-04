@@ -13,7 +13,6 @@ import math
 import time
 from typing import Any, Callable, Dict, List, Optional
 
-
 _NODE_TITLE_ALIASES = {
     "triunemoettransformer": "TriuneTransformer",
     "huggingfacestreamer": "HuggingFaceStreamer",
@@ -33,6 +32,7 @@ _NODE_TITLE_ALIASES = {
 
 class NodeExecutionError(Exception):
     """Raised when a DAG node fails execution."""
+
     pass
 
 
@@ -47,6 +47,7 @@ class DAGParser:
         # declared schemas to the same parser path used for built-in/plugin nodes
         # so typed edges are checked before any nested graph is executed.
         if node_type == "Subgraph" or node_type == "SubgraphInput":
+
             def typed_ports(value: Any) -> list[Dict[str, Any]]:
                 if not isinstance(value, list):
                     return []
@@ -55,11 +56,13 @@ class DAGParser:
                     if isinstance(item, str):
                         ports.append({"name": item, "type": "any", "required": True})
                     elif isinstance(item, dict) and isinstance(item.get("name"), str) and item["name"]:
-                        ports.append({
-                            "name": item["name"],
-                            "type": item.get("type", "any"),
-                            "required": item.get("required", True),
-                        })
+                        ports.append(
+                            {
+                                "name": item["name"],
+                                "type": item.get("type", "any"),
+                                "required": item.get("required", True),
+                            }
+                        )
                 return ports
 
             return {
@@ -80,12 +83,16 @@ class DAGParser:
         if normalized:
             for name in registry._nodes:
                 candidate = "".join(ch.lower() for ch in name if ch.isalnum())
-                if candidate and (normalized == candidate or normalized.startswith(candidate) or candidate in normalized):
+                if candidate and (
+                    normalized == candidate or normalized.startswith(candidate) or candidate in normalized
+                ):
                     return registry.get_node(name)
         return registry.get_node(node_type) if isinstance(node_type, str) else None
 
     @classmethod
-    def _validate_graph(cls, graph_json: Dict[str, Any]) -> tuple[list[Dict[str, Any]], list[Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+    def _validate_graph(
+        cls, graph_json: Dict[str, Any]
+    ) -> tuple[list[Dict[str, Any]], list[Dict[str, Any]], Dict[str, Dict[str, Any]]]:
         if not isinstance(graph_json, dict):
             raise NodeExecutionError("A DAG must be an object containing nodes and edges.")
         nodes = graph_json.get("nodes", [])
@@ -122,7 +129,9 @@ class DAGParser:
             src_port, target_port = edge.get("source_port"), edge.get("target_port")
             if (src_port is None) != (target_port is None):
                 raise NodeExecutionError(f"Edge {index + 1} must specify both source_port and target_port, or neither.")
-            if src_port is not None and (not isinstance(src_port, str) or not src_port or not isinstance(target_port, str) or not target_port):
+            if src_port is not None and (
+                not isinstance(src_port, str) or not src_port or not isinstance(target_port, str) or not target_port
+            ):
                 raise NodeExecutionError(f"Edge {index + 1} port names must be non-empty strings.")
             signature = (src, src_port, target, target_port)
             if signature in seen_edges:
@@ -145,7 +154,9 @@ class DAGParser:
             if src_port not in src_outputs:
                 raise NodeExecutionError(f"Node '{node_map[src].get('title', src)}' has no output port '{src_port}'.")
             if target_port not in tgt_inputs:
-                raise NodeExecutionError(f"Node '{node_map[target].get('title', target)}' has no input port '{target_port}'.")
+                raise NodeExecutionError(
+                    f"Node '{node_map[target].get('title', target)}' has no input port '{target_port}'."
+                )
             if is_port_compatible and not is_port_compatible(src_outputs[src_port], tgt_inputs[target_port]):
                 raise NodeExecutionError(
                     f"Type mismatch: cannot connect '{src_port}' ({src_outputs[src_port]}) on "
@@ -201,17 +212,14 @@ class DAGParser:
         if len(execution_order) != len(nodes):
             raise NodeExecutionError("Cycle detected in DAG node graph!")
 
-        return {
-            "execution_order": execution_order,
-            "node_map": node_map,
-            "adj": dict(adj)
-        }
+        return {"execution_order": execution_order, "node_map": node_map, "adj": dict(adj)}
 
 
 def _sanitize_for_json(val: Any) -> Any:
     """Recursively converts PyTorch Tensors, Modules, and non-serializable objects into JSON-safe representations."""
     try:
         import torch
+
         if isinstance(val, torch.Tensor):
             if val.numel() == 1:
                 return round(float(val.item()), 6)
@@ -230,6 +238,7 @@ def _sanitize_for_json(val: Any) -> Any:
     elif isinstance(val, (int, float, bool, type(None))):
         if isinstance(val, float):
             import math
+
             if math.isnan(val) or math.isinf(val):
                 return str(val)
         return val
@@ -254,7 +263,8 @@ def _accepted_kwargs(signature: inspect.Signature, values: Dict[str, Any]) -> Di
     return {
         name: values[name]
         for name, parameter in signature.parameters.items()
-        if name in values and parameter.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+        if name in values
+        and parameter.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
     }
 
 
@@ -331,12 +341,14 @@ class ExecutionEngine:
             params = self._node_params(node_value)
             wired_inputs = context.get("current_inputs", {})
             if not isinstance(wired_inputs, dict):
-                return {"status": "failed", "error": "Plugin inputs must be a port-name mapping.", "execution_type": execution_type, "real_computation": False}
+                return {
+                    "status": "failed",
+                    "error": "Plugin inputs must be a port-name mapping.",
+                    "execution_type": execution_type,
+                    "real_computation": False,
+                }
             values = {**params, **wired_inputs}
-            required_inputs = {
-                port["name"] for port in schema.get("typed_inputs", [])
-                if port.get("required", True)
-            }
+            required_inputs = {port["name"] for port in schema.get("typed_inputs", []) if port.get("required", True)}
             missing_inputs = required_inputs.difference(values)
             if missing_inputs:
                 return {
@@ -348,10 +360,13 @@ class ExecutionEngine:
             try:
                 is_class = inspect.isclass(target)
                 instance = target(**_accepted_kwargs(inspect.signature(target), params)) if is_class else target
-                callable_target = instance.forward if is_class and callable(getattr(instance, "forward", None)) else instance
+                callable_target = (
+                    instance.forward if is_class and callable(getattr(instance, "forward", None)) else instance
+                )
                 signature = inspect.signature(callable_target)
                 names = [
-                    name for name, parameter in signature.parameters.items()
+                    name
+                    for name, parameter in signature.parameters.items()
                     if parameter.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
                 ]
                 if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values()):
@@ -361,9 +376,16 @@ class ExecutionEngine:
                 else:
                     call_kwargs = {name: values[name] for name in names if name in values}
                 missing = [
-                    name for name, parameter in signature.parameters.items()
-                    if parameter.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
-                    and parameter.default is inspect.Parameter.empty and name not in call_kwargs
+                    name
+                    for name, parameter in signature.parameters.items()
+                    if parameter.kind
+                    in (
+                        inspect.Parameter.POSITIONAL_ONLY,
+                        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                        inspect.Parameter.KEYWORD_ONLY,
+                    )
+                    and parameter.default is inspect.Parameter.empty
+                    and name not in call_kwargs
                 ]
                 if missing:
                     # Preserve simple legacy plugins whose one-argument callable
@@ -375,10 +397,19 @@ class ExecutionEngine:
                 else:
                     result = callable_target(**call_kwargs)
             except Exception as exc:
-                return {"status": "failed", "error": f"Plugin '{schema['name']}' failed: {exc}", "execution_type": execution_type, "real_computation": False}
+                return {
+                    "status": "failed",
+                    "error": f"Plugin '{schema['name']}' failed: {exc}",
+                    "execution_type": execution_type,
+                    "real_computation": False,
+                }
 
             if isinstance(result, dict) and result.get("status") in {"failed", "error"}:
-                return {**result, "execution_type": result.get("execution_type", execution_type), "real_computation": False}
+                return {
+                    **result,
+                    "execution_type": result.get("execution_type", execution_type),
+                    "real_computation": False,
+                }
 
             declared_values: Dict[str, Any] = {}
             if isinstance(result, dict):
@@ -386,8 +417,7 @@ class ExecutionEngine:
                 if not declared_values and len(output_names) == 1 and "status" not in result:
                     declared_values[output_names[0]] = result
                 required_outputs = {
-                    port["name"] for port in schema.get("typed_outputs", [])
-                    if port.get("required", True)
+                    port["name"] for port in schema.get("typed_outputs", []) if port.get("required", True)
                 }
                 missing_outputs = required_outputs.difference(declared_values)
                 if missing_outputs:
@@ -400,18 +430,25 @@ class ExecutionEngine:
             elif len(output_names) == 1:
                 declared_values[output_names[0]] = result
             elif result is not None:
-                return {"status": "failed", "error": f"Plugin '{schema['name']}' must return a mapping for its {len(output_names)} declared outputs.", "execution_type": execution_type, "real_computation": False}
+                return {
+                    "status": "failed",
+                    "error": f"Plugin '{schema['name']}' must return a mapping for its {len(output_names)} declared outputs.",
+                    "execution_type": execution_type,
+                    "real_computation": False,
+                }
 
             node_id = node_value.get("id", schema["name"])
             context.setdefault("port_data", {}).setdefault(node_id, {}).update(declared_values)
             payload = dict(result) if isinstance(result, dict) else {}
             payload.update(declared_values)
-            payload.update({
-                "status": payload.get("status", "completed" if execution_type == "execution" else "configured"),
-                "plugin": schema["name"],
-                "execution_type": execution_type,
-                "real_computation": execution_type == "execution",
-            })
+            payload.update(
+                {
+                    "status": payload.get("status", "completed" if execution_type == "execution" else "configured"),
+                    "plugin": schema["name"],
+                    "execution_type": execution_type,
+                    "real_computation": execution_type == "execution",
+                }
+            )
             return payload
 
         return _invoke_plugin
@@ -529,10 +566,12 @@ class ExecutionEngine:
         context["data_source"] = d_name
         context["is_streaming"] = True
         node_id = node.get("id", "hf_stream")
-        context.setdefault("port_data", {}).setdefault(node_id, {}).update({
-            "dataset_stream": d_name,
-            "text_sample": preview,
-        })
+        context.setdefault("port_data", {}).setdefault(node_id, {}).update(
+            {
+                "dataset_stream": d_name,
+                "text_sample": preview,
+            }
+        )
         return {
             "status": "connected",
             "source": f"Hugging Face: {d_name}",
@@ -566,10 +605,12 @@ class ExecutionEngine:
         context["data_source"] = url
         context["is_streaming"] = True
         node_id = node.get("id", "url_stream")
-        context.setdefault("port_data", {}).setdefault(node_id, {}).update({
-            "dataset_stream": url,
-            "text_sample": preview,
-        })
+        context.setdefault("port_data", {}).setdefault(node_id, {}).update(
+            {
+                "dataset_stream": url,
+                "text_sample": preview,
+            }
+        )
         return {
             "status": "connected",
             "source": f"Remote URL: {url}",
@@ -587,7 +628,10 @@ class ExecutionEngine:
         # Read text from input port, context, or default sample
         text = _first_not_none(context.get("current_inputs", {}).get("text"), context.get("text"))
         if text is None or text == "":
-            return {"status": "failed", "error": "Tokenizer has no text input. Connect a text-producing node or provide input explicitly."}
+            return {
+                "status": "failed",
+                "error": "Tokenizer has no text input. Connect a text-producing node or provide input explicitly.",
+            }
         if isinstance(text, list):
             text = text[0] if text else ""
         if not isinstance(text, str) or not text.strip():
@@ -600,7 +644,9 @@ class ExecutionEngine:
             tokenizer = runtime_state.load_tokenizer()
         if tokenizer is None:
             from pathlib import Path
+
             from triune.data.tokenizer import load_tokenizer
+
             project_root = Path(__file__).resolve().parents[2]
             tok_file = Path(str(params.get("tokenizer_path", project_root / "triune_tokenizer.json"))).expanduser()
             if not tok_file.is_absolute():
@@ -638,9 +684,13 @@ class ExecutionEngine:
     @staticmethod
     def _handle_dataloader_node(node: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         import torch
+
         tokens = _first_not_none(context.get("current_inputs", {}).get("tokens"), context.get("tokens"))
         if tokens is None or not isinstance(tokens, torch.Tensor) or tokens.ndim != 2 or tokens.size(1) < 2:
-            return {"status": "failed", "error": "DataLoader requires a rank-2 token tensor with at least two tokens per sequence."}
+            return {
+                "status": "failed",
+                "error": "DataLoader requires a rank-2 token tensor with at least two tokens per sequence.",
+            }
 
         params = ExecutionEngine._node_params(node)
         seq_len = params.get("seq_len")
@@ -648,7 +698,7 @@ class ExecutionEngine:
             seq_len = int(seq_len)
             if seq_len < 1:
                 return {"status": "failed", "error": "DataLoader seq_len must be positive."}
-            tokens = tokens[:, :seq_len + 1]
+            tokens = tokens[:, : seq_len + 1]
         if tokens.size(1) < 2:
             return {"status": "failed", "error": "DataLoader input is too short to create next-token targets."}
 
@@ -673,134 +723,290 @@ class ExecutionEngine:
     @staticmethod
     def _handle_attention_node(node: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         import torch
+
         params = ExecutionEngine._node_params(node)
-        hidden_states = _first_not_none(context.get("current_inputs", {}).get("hidden_states"), context.get("hidden_states"))
-        if not isinstance(hidden_states, torch.Tensor) or hidden_states.ndim != 3 or not hidden_states.is_floating_point():
-            return {"status": "failed", "execution_type": "execution", "error": "GLA attention requires floating hidden_states shaped [batch, sequence, hidden_dim].", "real_computation": False}
+        hidden_states = _first_not_none(
+            context.get("current_inputs", {}).get("hidden_states"), context.get("hidden_states")
+        )
+        if (
+            not isinstance(hidden_states, torch.Tensor)
+            or hidden_states.ndim != 3
+            or not hidden_states.is_floating_point()
+        ):
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": "GLA attention requires floating hidden_states shaped [batch, sequence, hidden_dim].",
+                "real_computation": False,
+            }
         dim = int(params.get("hidden_dim", hidden_states.size(-1)))
         heads = int(params.get("num_heads", 4))
         if dim != hidden_states.size(-1) or heads <= 0:
-            return {"status": "failed", "execution_type": "execution", "error": "Attention hidden_dim must match the input tensor and num_heads must be positive.", "real_computation": False}
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": "Attention hidden_dim must match the input tensor and num_heads must be positive.",
+                "real_computation": False,
+            }
         try:
             from triune.model.attention import HybridAttention
+
             layer = HybridAttention(dim=dim, heads=heads).to(device=hidden_states.device, dtype=hidden_states.dtype)
             output, cache = layer(hidden_states)
         except Exception as exc:
-            return {"status": "failed", "execution_type": "execution", "error": f"GLA attention failed: {exc}", "real_computation": False}
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": f"GLA attention failed: {exc}",
+                "real_computation": False,
+            }
         node_id = node.get("id", "attention")
         context["attention_layer"] = layer
         context.setdefault("port_data", {}).setdefault(node_id, {}).update({"attention_out": output})
-        return {"status": "computed", "execution_type": "execution", "layer": node.get("title", "VectorisedGLA"), "heads": heads, "head_dim": dim // heads if dim % heads == 0 else None, "output_shape": list(output.shape), "cache_initialized": cache is not None, "real_computation": True}
+        return {
+            "status": "computed",
+            "execution_type": "execution",
+            "layer": node.get("title", "VectorisedGLA"),
+            "heads": heads,
+            "head_dim": dim // heads if dim % heads == 0 else None,
+            "output_shape": list(output.shape),
+            "cache_initialized": cache is not None,
+            "real_computation": True,
+        }
 
     @staticmethod
     def _handle_moe_node(node: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         import torch
+
         params = ExecutionEngine._node_params(node)
-        hidden_states = _first_not_none(context.get("current_inputs", {}).get("hidden_states"), context.get("hidden_states"))
-        if not isinstance(hidden_states, torch.Tensor) or hidden_states.ndim != 3 or not hidden_states.is_floating_point():
-            return {"status": "failed", "execution_type": "execution", "error": "MoE_FFN requires floating hidden_states shaped [batch, sequence, hidden_dim].", "real_computation": False}
+        hidden_states = _first_not_none(
+            context.get("current_inputs", {}).get("hidden_states"), context.get("hidden_states")
+        )
+        if (
+            not isinstance(hidden_states, torch.Tensor)
+            or hidden_states.ndim != 3
+            or not hidden_states.is_floating_point()
+        ):
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": "MoE_FFN requires floating hidden_states shaped [batch, sequence, hidden_dim].",
+                "real_computation": False,
+            }
         num_experts = int(params.get("num_experts", 8))
         top_k = int(params.get("top_k", 2))
         if num_experts <= 0 or top_k <= 0 or top_k > num_experts:
-            return {"status": "failed", "execution_type": "execution", "error": "MoE requires 1 <= top_k <= num_experts.", "real_computation": False}
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": "MoE requires 1 <= top_k <= num_experts.",
+                "real_computation": False,
+            }
         try:
             from triune.model.moe import MoE_FFN
+
             layer = MoE_FFN(
-                dim=hidden_states.size(-1), num_experts=num_experts, top_k=top_k,
-                use_fp4=bool(params.get("use_fp4", False)), use_fp8=bool(params.get("use_fp8", False)),
+                dim=hidden_states.size(-1),
+                num_experts=num_experts,
+                top_k=top_k,
+                use_fp4=bool(params.get("use_fp4", False)),
+                use_fp8=bool(params.get("use_fp8", False)),
                 shared_expert=bool(params.get("shared_expert", True)),
             ).to(device=hidden_states.device, dtype=hidden_states.dtype)
             output = layer(hidden_states)
         except Exception as exc:
-            return {"status": "failed", "execution_type": "execution", "error": f"MoE_FFN execution failed: {exc}", "real_computation": False}
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": f"MoE_FFN execution failed: {exc}",
+                "real_computation": False,
+            }
         node_id = node.get("id", "moe")
         context["moe_layer"] = layer
         context.setdefault("port_data", {}).setdefault(node_id, {}).update({"moe_out": output})
-        return {"status": "computed", "execution_type": "execution", "num_experts": num_experts, "top_k": top_k, "output_shape": list(output.shape), "real_computation": True}
+        return {
+            "status": "computed",
+            "execution_type": "execution",
+            "num_experts": num_experts,
+            "top_k": top_k,
+            "output_shape": list(output.shape),
+            "real_computation": True,
+        }
 
     @staticmethod
     def _handle_router_node(node: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         import torch
+
         params = ExecutionEngine._node_params(node)
-        hidden_states = _first_not_none(context.get("current_inputs", {}).get("hidden_states"), context.get("hidden_states"))
-        if not isinstance(hidden_states, torch.Tensor) or hidden_states.ndim != 3 or not hidden_states.is_floating_point():
-            return {"status": "failed", "execution_type": "execution", "error": "DepthRouter requires floating hidden_states shaped [batch, sequence, hidden_dim].", "real_computation": False}
+        hidden_states = _first_not_none(
+            context.get("current_inputs", {}).get("hidden_states"), context.get("hidden_states")
+        )
+        if (
+            not isinstance(hidden_states, torch.Tensor)
+            or hidden_states.ndim != 3
+            or not hidden_states.is_floating_point()
+        ):
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": "DepthRouter requires floating hidden_states shaped [batch, sequence, hidden_dim].",
+                "real_computation": False,
+            }
         try:
             from triune.model.router import GumbelSoftmaxRouter
+
             target_dist = params.get("target_depth_dist", (0.34, 0.33, 0.33))
-            router = GumbelSoftmaxRouter(hidden_states.size(-1), target_depth_dist=target_dist).to(device=hidden_states.device, dtype=hidden_states.dtype)
+            router = GumbelSoftmaxRouter(hidden_states.size(-1), target_depth_dist=target_dist).to(
+                device=hidden_states.device, dtype=hidden_states.dtype
+            )
             logits, routes, balance_loss = router(
                 hidden_states,
                 temperature=float(params.get("temperature", 1.0)),
                 force_depth=params.get("force_depth"),
             )
         except Exception as exc:
-            return {"status": "failed", "execution_type": "execution", "error": f"DepthRouter execution failed: {exc}", "real_computation": False}
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": f"DepthRouter execution failed: {exc}",
+                "real_computation": False,
+            }
         choices = routes.argmax(dim=-1)
         node_id = node.get("id", "router")
         context["router_layer"] = router
-        context.setdefault("port_data", {}).setdefault(node_id, {}).update({"exit_choice": choices, "router_logits": logits, "balance_loss": balance_loss})
-        return {"status": "routed", "execution_type": "execution", "choices": choices.detach().cpu().tolist(), "target_depth_dist": [float(value) for value in target_dist], "balance_loss": float(balance_loss.detach().item()), "real_computation": True}
+        context.setdefault("port_data", {}).setdefault(node_id, {}).update(
+            {"exit_choice": choices, "router_logits": logits, "balance_loss": balance_loss}
+        )
+        return {
+            "status": "routed",
+            "execution_type": "execution",
+            "choices": choices.detach().cpu().tolist(),
+            "target_depth_dist": [float(value) for value in target_dist],
+            "balance_loss": float(balance_loss.detach().item()),
+            "real_computation": True,
+        }
 
     @staticmethod
     def _handle_fp8_node(node: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         import torch
+
         params = ExecutionEngine._node_params(node)
         x = _first_not_none(context.get("current_inputs", {}).get("x"), context.get("x"))
         if not isinstance(x, torch.Tensor) or x.ndim < 1 or not x.is_floating_point():
-            return {"status": "failed", "execution_type": "execution", "error": "FP8Linear requires a floating input tensor with at least one dimension.", "real_computation": False}
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": "FP8Linear requires a floating input tensor with at least one dimension.",
+                "real_computation": False,
+            }
         in_features = int(params["in_features"]) if params.get("in_features") is not None else x.shape[-1]
         out_features = int(params["out_features"]) if params.get("out_features") is not None else in_features
         if in_features != x.shape[-1] or out_features <= 0:
-            return {"status": "failed", "execution_type": "execution", "error": "FP8Linear feature dimensions do not match the input tensor.", "real_computation": False}
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": "FP8Linear feature dimensions do not match the input tensor.",
+                "real_computation": False,
+            }
         try:
             from triune.model.fp8 import FP8Linear
-            layer = FP8Linear(in_features, out_features, bias=bool(params.get("bias", False)), device=x.device, dtype=x.dtype)
+
+            layer = FP8Linear(
+                in_features, out_features, bias=bool(params.get("bias", False)), device=x.device, dtype=x.dtype
+            )
             output = layer(x)
         except Exception as exc:
-            return {"status": "failed", "execution_type": "execution", "error": f"FP8Linear execution failed: {exc}", "real_computation": False}
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": f"FP8Linear execution failed: {exc}",
+                "real_computation": False,
+            }
         node_id = node.get("id", "fp8")
         context["fp8_layer"] = layer
         context.setdefault("port_data", {}).setdefault(node_id, {})["linear_out"] = output
-        return {"status": "computed", "execution_type": "execution", "precision": "FP8-aware linear", "output_shape": list(output.shape), "real_computation": True}
+        return {
+            "status": "computed",
+            "execution_type": "execution",
+            "precision": "FP8-aware linear",
+            "output_shape": list(output.shape),
+            "real_computation": True,
+        }
 
     @staticmethod
     def _handle_fp4_node(node: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         import torch
+
         params = ExecutionEngine._node_params(node)
         x = _first_not_none(context.get("current_inputs", {}).get("x"), context.get("x"))
         if not isinstance(x, torch.Tensor) or x.ndim < 1 or not x.is_floating_point():
-            return {"status": "failed", "execution_type": "execution", "error": "FP4Linear requires a floating input tensor with at least one dimension.", "real_computation": False}
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": "FP4Linear requires a floating input tensor with at least one dimension.",
+                "real_computation": False,
+            }
         in_features = int(params["in_features"]) if params.get("in_features") is not None else x.shape[-1]
         out_features = int(params["out_features"]) if params.get("out_features") is not None else in_features
         if in_features != x.shape[-1] or out_features <= 0:
-            return {"status": "failed", "execution_type": "execution", "error": "FP4Linear feature dimensions do not match the input tensor.", "real_computation": False}
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": "FP4Linear feature dimensions do not match the input tensor.",
+                "real_computation": False,
+            }
         try:
-            from triune.model.fp4 import FP4Linear
             from contextlib import nullcontext
+
+            from triune.model.fp4 import FP4Linear
+
             compute_dtype = torch.bfloat16 if x.dtype not in (torch.bfloat16, torch.float16) else x.dtype
-            layer = FP4Linear(in_features, out_features, bias=bool(params.get("bias", True))).to(device=x.device, dtype=compute_dtype)
+            layer = FP4Linear(in_features, out_features, bias=bool(params.get("bias", True))).to(
+                device=x.device, dtype=compute_dtype
+            )
             runtime_state = context.get("_runtime_training_state")
             precision_context = runtime_state.model_autocast() if runtime_state is not None else nullcontext()
             with precision_context:
                 output = layer(x.to(dtype=compute_dtype)).to(dtype=x.dtype)
         except Exception as exc:
-            return {"status": "failed", "execution_type": "execution", "error": f"FP4Linear execution failed: {exc}", "real_computation": False}
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": f"FP4Linear execution failed: {exc}",
+                "real_computation": False,
+            }
         node_id = node.get("id", "fp4")
         context["fp4_layer"] = layer
         context.setdefault("port_data", {}).setdefault(node_id, {})["linear_out"] = output
-        return {"status": "computed", "execution_type": "execution", "precision": "NVFP4 recipe when active; supported BF16 fallback otherwise", "output_shape": list(output.shape), "real_computation": True}
+        return {
+            "status": "computed",
+            "execution_type": "execution",
+            "precision": "NVFP4 recipe when active; supported BF16 fallback otherwise",
+            "output_shape": list(output.shape),
+            "real_computation": True,
+        }
 
     @staticmethod
     def _handle_tensor_inspector_node(node: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         import torch
+
         tensor = _first_not_none(context.get("current_inputs", {}).get("x"), context.get("x"))
         if not isinstance(tensor, torch.Tensor) or tensor.numel() == 0 or not tensor.is_floating_point():
-            return {"status": "failed", "execution_type": "execution", "error": "TensorInspector requires a non-empty floating tensor on input port 'x'.", "real_computation": False}
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": "TensorInspector requires a non-empty floating tensor on input port 'x'.",
+                "real_computation": False,
+            }
         finite_mask = torch.isfinite(tensor)
         finite_count = int(finite_mask.sum().item())
         if finite_count == 0:
-            return {"status": "failed", "execution_type": "execution", "error": "TensorInspector received no finite values.", "real_computation": False}
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": "TensorInspector received no finite values.",
+                "real_computation": False,
+            }
         finite_values = tensor[finite_mask].float()
         metrics = {
             "shape": list(tensor.shape),
@@ -825,9 +1031,19 @@ class ExecutionEngine:
 
         tokens = _first_not_none(context.get("current_inputs", {}).get("tokens"), context.get("tokens"))
         if not isinstance(tokens, torch.Tensor) or tokens.numel() == 0:
-            return {"status": "failed", "execution_type": "execution", "error": "Token Batch Inspector requires a non-empty integer tensor on input port 'tokens'.", "real_computation": False}
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": "Token Batch Inspector requires a non-empty integer tensor on input port 'tokens'.",
+                "real_computation": False,
+            }
         if tokens.dtype not in (torch.uint8, torch.int8, torch.int16, torch.int32, torch.int64):
-            return {"status": "failed", "execution_type": "execution", "error": f"Token IDs must use an integer tensor dtype, received {tokens.dtype}.", "real_computation": False}
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": f"Token IDs must use an integer tensor dtype, received {tokens.dtype}.",
+                "real_computation": False,
+            }
         metrics = {
             "shape": list(tokens.shape),
             "dtype": str(tokens.dtype),
@@ -846,13 +1062,24 @@ class ExecutionEngine:
     @staticmethod
     def _handle_rmsnorm_node(node: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         import torch
+
         params = ExecutionEngine._node_params(node)
         x = _first_not_none(context.get("current_inputs", {}).get("x"), context.get("x"))
         if not isinstance(x, torch.Tensor) or x.ndim < 1 or not x.is_floating_point():
-            return {"status": "failed", "execution_type": "execution", "error": "RMSNorm requires a floating input tensor.", "real_computation": False}
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": "RMSNorm requires a floating input tensor.",
+                "real_computation": False,
+            }
         dim = int(params["dim"]) if params.get("dim") is not None else x.shape[-1]
         if dim != x.shape[-1]:
-            return {"status": "failed", "execution_type": "execution", "error": f"RMSNorm dim {dim} does not match input width {x.shape[-1]}.", "real_computation": False}
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": f"RMSNorm dim {dim} does not match input width {x.shape[-1]}.",
+                "real_computation": False,
+            }
         try:
             eps = float(params.get("eps", 1e-6))
             weight = context.get("current_inputs", {}).get("weight")
@@ -862,28 +1089,52 @@ class ExecutionEngine:
                 if not isinstance(weight, torch.Tensor) or weight.shape != (dim,):
                     raise ValueError(f"RMSNorm weight must be a tensor shaped [{dim}].")
                 from triune.kernels import fast_rmsnorm
+
                 output = fast_rmsnorm(x, weight.to(device=x.device, dtype=x.dtype), eps)
                 layer = None
             else:
                 from triune.model.norms import RMSNorm
+
                 layer = RMSNorm(dim, eps=eps).to(device=x.device, dtype=x.dtype)
                 output = layer(x)
         except Exception as exc:
-            return {"status": "failed", "execution_type": "execution", "error": f"RMSNorm execution failed: {exc}", "real_computation": False}
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": f"RMSNorm execution failed: {exc}",
+                "real_computation": False,
+            }
         node_id = node.get("id", "rmsnorm")
         if layer is not None:
             context["rmsnorm_layer"] = layer
         context.setdefault("port_data", {}).setdefault(node_id, {})["norm_out"] = output
-        return {"status": "computed", "execution_type": "execution", "kernel": "Triune RMSNorm", "output_shape": list(output.shape), "real_computation": True}
+        return {
+            "status": "computed",
+            "execution_type": "execution",
+            "kernel": "Triune RMSNorm",
+            "output_shape": list(output.shape),
+            "real_computation": True,
+        }
 
     @staticmethod
     def _handle_lora_node(node: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         import torch
+
         from triune.trainer.finetune import LoRALayer
+
         params = ExecutionEngine._node_params(node)
-        base = _first_not_none(context.get("current_inputs", {}).get("base_layer"), context.get("current_inputs", {}).get("model_handle"), context.get("model"))
+        base = _first_not_none(
+            context.get("current_inputs", {}).get("base_layer"),
+            context.get("current_inputs", {}).get("model_handle"),
+            context.get("model"),
+        )
         if not isinstance(base, torch.nn.Module):
-            return {"status": "failed", "execution_type": "execution", "error": "LoRAAdapter requires a connected model or base_layer.", "real_computation": False}
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": "LoRAAdapter requires a connected model or base_layer.",
+                "real_computation": False,
+            }
         rank = int(params.get("rank", 16))
         alpha = float(params.get("alpha", 32.0))
         dropout = float(params.get("dropout", 0.05))
@@ -892,13 +1143,16 @@ class ExecutionEngine:
             targets = (targets,)
         try:
             if isinstance(base, torch.nn.Linear):
-                adapted = base if isinstance(base, LoRALayer) else LoRALayer(base, rank=rank, alpha=alpha, dropout=dropout)
+                adapted = (
+                    base if isinstance(base, LoRALayer) else LoRALayer(base, rank=rank, alpha=alpha, dropout=dropout)
+                )
                 if adapted is not base:
                     context["adapted_layer"] = adapted
             else:
                 modules = dict(base.named_modules())
                 targets_to_wrap = [
-                    (name, module) for name, module in modules.items()
+                    (name, module)
+                    for name, module in modules.items()
                     if name and any(str(target) in name for target in targets) and isinstance(module, torch.nn.Linear)
                 ]
                 if not targets_to_wrap and not any(isinstance(module, LoRALayer) for module in base.modules()):
@@ -913,9 +1167,21 @@ class ExecutionEngine:
                 context["model"] = base
             node_id = node.get("id", "lora_adapter")
             context.setdefault("port_data", {}).setdefault(node_id, {})["adapted_layer"] = adapted
-            return {"status": "attached", "execution_type": "execution", "rank": rank, "alpha": alpha, "adapter_count": sum(1 for module in adapted.modules() if isinstance(module, LoRALayer)), "real_computation": True}
+            return {
+                "status": "attached",
+                "execution_type": "execution",
+                "rank": rank,
+                "alpha": alpha,
+                "adapter_count": sum(1 for module in adapted.modules() if isinstance(module, LoRALayer)),
+                "real_computation": True,
+            }
         except Exception as exc:
-            return {"status": "failed", "execution_type": "execution", "error": f"LoRA attachment failed: {exc}", "real_computation": False}
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": f"LoRA attachment failed: {exc}",
+                "real_computation": False,
+            }
 
     @staticmethod
     def _handle_centroid_node(node: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
@@ -939,7 +1205,12 @@ class ExecutionEngine:
         min_lr_ratio = float(params.get("min_lr_ratio", 0.1))
         total_steps = int(params.get("total_steps", 25000))
         if step < 0 or warmup_steps < 0 or total_steps <= 0 or peak_lr < 0 or not 0 <= min_lr_ratio <= 1:
-            return {"status": "failed", "execution_type": "execution", "error": "Scheduler parameters are outside valid ranges.", "real_computation": False}
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": "Scheduler parameters are outside valid ranges.",
+                "real_computation": False,
+            }
         min_lr = peak_lr * min_lr_ratio
         if warmup_steps and step < warmup_steps:
             lr = peak_lr * (step + 1) / warmup_steps
@@ -947,17 +1218,36 @@ class ExecutionEngine:
             decay_steps = max(1, total_steps - warmup_steps)
             progress = min(1.0, max(0.0, (step - warmup_steps) / decay_steps))
             lr = min_lr + (peak_lr - min_lr) * 0.5 * (1.0 + math.cos(math.pi * progress))
-        optimizer = _first_not_none(context.get("current_inputs", {}).get("optimizer_handle"), context.get("current_inputs", {}).get("optimizer"), context.get("optimizer"))
+        optimizer = _first_not_none(
+            context.get("current_inputs", {}).get("optimizer_handle"),
+            context.get("current_inputs", {}).get("optimizer"),
+            context.get("optimizer"),
+        )
         if optimizer is not None:
             groups = getattr(optimizer, "param_groups", None)
             if not isinstance(groups, list) or not groups:
-                return {"status": "failed", "execution_type": "execution", "error": "Connected optimizer does not expose parameter groups.", "real_computation": False}
+                return {
+                    "status": "failed",
+                    "execution_type": "execution",
+                    "error": "Connected optimizer does not expose parameter groups.",
+                    "real_computation": False,
+                }
             for group in groups:
                 group["lr"] = lr
         node_id = node.get("id", "scheduler")
         context.setdefault("port_data", {}).setdefault(node_id, {})["learning_rate"] = lr
         context["port_data"][node_id]["scheduled_lr"] = lr
-        return {"status": "applied" if optimizer is not None else "computed", "execution_type": "execution", "schedule": "cosine_with_warmup", "step": step, "learning_rate": lr, "warmup_steps": warmup_steps, "total_steps": total_steps, "optimizer_updated": optimizer is not None, "real_computation": True}
+        return {
+            "status": "applied" if optimizer is not None else "computed",
+            "execution_type": "execution",
+            "schedule": "cosine_with_warmup",
+            "step": step,
+            "learning_rate": lr,
+            "warmup_steps": warmup_steps,
+            "total_steps": total_steps,
+            "optimizer_updated": optimizer is not None,
+            "real_computation": True,
+        }
 
     @staticmethod
     def _handle_loss_node(node: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
@@ -968,9 +1258,15 @@ class ExecutionEngine:
         targets = _first_not_none(context.get("current_inputs", {}).get("targets"), context.get("targets"))
 
         if not isinstance(logits, torch.Tensor) or logits.ndim != 3:
-            return {"status": "failed", "error": "Cross-entropy requires connected logits shaped [batch, sequence, vocabulary]."}
+            return {
+                "status": "failed",
+                "error": "Cross-entropy requires connected logits shaped [batch, sequence, vocabulary].",
+            }
         if not isinstance(targets, torch.Tensor) or targets.ndim != 2:
-            return {"status": "failed", "error": "Cross-entropy requires connected token targets shaped [batch, sequence]."}
+            return {
+                "status": "failed",
+                "error": "Cross-entropy requires connected token targets shaped [batch, sequence].",
+            }
         if logits.shape[:2] != targets.shape:
             return {
                 "status": "failed",
@@ -1020,7 +1316,10 @@ class ExecutionEngine:
     @staticmethod
     def _handle_zloss_node(node: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         import torch
-        router_logits = _first_not_none(context.get("current_inputs", {}).get("router_logits"), context.get("exit_logits"))
+
+        router_logits = _first_not_none(
+            context.get("current_inputs", {}).get("router_logits"), context.get("exit_logits")
+        )
         if not isinstance(router_logits, torch.Tensor):
             return {"status": "failed", "error": "RouterZLoss requires connected router logits."}
         params = ExecutionEngine._node_params(node)
@@ -1041,10 +1340,23 @@ class ExecutionEngine:
     @staticmethod
     def _handle_runtime_node(node: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         runtime_state = context.get("_runtime_training_state")
-        model = _first_not_none(context.get("current_inputs", {}).get("model_handle"), context.get("model"), getattr(runtime_state, "model", None))
+        model = _first_not_none(
+            context.get("current_inputs", {}).get("model_handle"),
+            context.get("model"),
+            getattr(runtime_state, "model", None),
+        )
         if runtime_state is None and model is None:
-            return {"status": "unavailable", "execution_type": "execution", "error": "Runtime status requires an active Studio runtime or connected model.", "real_computation": False}
-        streaming_engine = getattr(runtime_state, "streaming_engine", None) if runtime_state is not None else getattr(model, "_streaming_engine", None)
+            return {
+                "status": "unavailable",
+                "execution_type": "execution",
+                "error": "Runtime status requires an active Studio runtime or connected model.",
+                "real_computation": False,
+            }
+        streaming_engine = (
+            getattr(runtime_state, "streaming_engine", None)
+            if runtime_state is not None
+            else getattr(model, "_streaming_engine", None)
+        )
         return {
             "status": "active",
             "execution_type": "execution",
@@ -1058,24 +1370,47 @@ class ExecutionEngine:
     @staticmethod
     def _handle_streaming_engine_node(node: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         import torch
+
         params = ExecutionEngine._node_params(node)
         runtime_state = context.get("_runtime_training_state")
         if runtime_state is not None and getattr(runtime_state, "is_training", False):
-            return {"status": "failed", "execution_type": "execution", "error": "Pause background training before changing the active model's layer-streaming configuration.", "real_computation": False}
-        model = _first_not_none(context.get("current_inputs", {}).get("model_handle"), context.get("model"), getattr(runtime_state, "model", None))
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": "Pause background training before changing the active model's layer-streaming configuration.",
+                "real_computation": False,
+            }
+        model = _first_not_none(
+            context.get("current_inputs", {}).get("model_handle"),
+            context.get("model"),
+            getattr(runtime_state, "model", None),
+        )
         if model is None and runtime_state is not None:
             try:
                 runtime_state.lazy_init_model()
                 model = runtime_state.model
             except Exception as exc:
-                return {"status": "failed", "execution_type": "execution", "error": f"Could not load the active Studio model: {exc}", "real_computation": False}
+                return {
+                    "status": "failed",
+                    "execution_type": "execution",
+                    "error": f"Could not load the active Studio model: {exc}",
+                    "real_computation": False,
+                }
         if not isinstance(model, torch.nn.Module):
-            return {"status": "failed", "execution_type": "execution", "error": "LayerStreamingEngine requires a connected live model_handle.", "real_computation": False}
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": "LayerStreamingEngine requires a connected live model_handle.",
+                "real_computation": False,
+            }
         current = getattr(model, "_streaming_engine", None) or getattr(runtime_state, "streaming_engine", None)
         if current is None:
             try:
                 from triune.runtime.streaming import enable_layer_streaming
-                optimizer = getattr(runtime_state, "optimizer", None) if runtime_state is not None else context.get("optimizer")
+
+                optimizer = (
+                    getattr(runtime_state, "optimizer", None) if runtime_state is not None else context.get("optimizer")
+                )
                 current = enable_layer_streaming(
                     model,
                     device=next(model.parameters()).device,
@@ -1085,32 +1420,55 @@ class ExecutionEngine:
                     optimizer=optimizer,
                 )
             except Exception as exc:
-                return {"status": "failed", "execution_type": "execution", "error": f"Could not enable layer streaming: {exc}", "real_computation": False}
+                return {
+                    "status": "failed",
+                    "execution_type": "execution",
+                    "error": f"Could not enable layer streaming: {exc}",
+                    "real_computation": False,
+                }
         if runtime_state is not None:
             runtime_state.streaming_engine = current
         node_id = node.get("id", "streaming")
         context.setdefault("port_data", {}).setdefault(node_id, {})["streaming_model"] = model
-        return {"status": "enabled", "execution_type": "execution", "engine": type(current).__name__, "device": str(getattr(current, "device", next(model.parameters()).device)), "real_computation": True}
+        return {
+            "status": "enabled",
+            "execution_type": "execution",
+            "engine": type(current).__name__,
+            "device": str(getattr(current, "device", next(model.parameters()).device)),
+            "real_computation": True,
+        }
 
     @staticmethod
     def _handle_vram_node(node: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         try:
             import torch
+
             params = ExecutionEngine._node_params(node)
             requested_device = torch.device(str(params.get("device", "cuda:0")))
             if requested_device.type != "cuda" or not torch.cuda.is_available():
-                return {"status": "unavailable", "execution_type": "execution", "device": str(requested_device), "error": "CUDA VRAM metrics require an available CUDA device.", "real_computation": False}
+                return {
+                    "status": "unavailable",
+                    "execution_type": "execution",
+                    "device": str(requested_device),
+                    "error": "CUDA VRAM metrics require an available CUDA device.",
+                    "real_computation": False,
+                }
             device = requested_device.index if requested_device.index is not None else torch.cuda.current_device()
             props = torch.cuda.get_device_properties(device)
-            alloc = torch.cuda.memory_allocated(device) / (1024 ** 3)
-            res = torch.cuda.memory_reserved(device) / (1024 ** 3)
-            peak = torch.cuda.max_memory_allocated(device) / (1024 ** 3)
-            total = props.total_memory / (1024 ** 3)
+            alloc = torch.cuda.memory_allocated(device) / (1024**3)
+            res = torch.cuda.memory_reserved(device) / (1024**3)
+            peak = torch.cuda.max_memory_allocated(device) / (1024**3)
+            total = props.total_memory / (1024**3)
             threshold = float(params.get("alert_threshold_gb", 7.2))
             if threshold <= 0:
                 raise ValueError("alert_threshold_gb must be positive")
         except Exception as exc:
-            return {"status": "failed", "execution_type": "execution", "error": f"VRAM profiling failed: {exc}", "real_computation": False}
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": f"VRAM profiling failed: {exc}",
+                "real_computation": False,
+            }
         output = {
             "status": "healthy",
             "execution_type": "execution",
@@ -1122,7 +1480,9 @@ class ExecutionEngine:
             "oom_risk": alloc >= threshold or res >= threshold,
             "real_computation": True,
         }
-        context.setdefault("port_data", {}).setdefault(node.get("id", "vram"), {})["vram_stats"] = {key: value for key, value in output.items() if key not in {"execution_type", "real_computation"}}
+        context.setdefault("port_data", {}).setdefault(node.get("id", "vram"), {})["vram_stats"] = {
+            key: value for key, value in output.items() if key not in {"execution_type", "real_computation"}
+        }
         return output
 
     @staticmethod
@@ -1130,33 +1490,81 @@ class ExecutionEngine:
         params = ExecutionEngine._node_params(node)
         code = _first_not_none(context.get("current_inputs", {}).get("code"), params.get("code"))
         if not isinstance(code, str) or not code.strip():
-            return {"status": "failed", "execution_type": "execution", "error": "PythonSandbox requires connected code text.", "real_computation": False}
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": "PythonSandbox requires connected code text.",
+                "real_computation": False,
+            }
         try:
             from triune.runtime.sandbox import PythonSandbox
-            sandbox = PythonSandbox(timeout=int(params.get("timeout", 10)), max_memory_mb=int(params.get("max_memory_mb", 256)))
+
+            sandbox = PythonSandbox(
+                timeout=int(params.get("timeout", 10)), max_memory_mb=int(params.get("max_memory_mb", 256))
+            )
             result = sandbox.execute_code(code, params.get("inputs") if isinstance(params.get("inputs"), dict) else {})
         except Exception as exc:
-            return {"status": "failed", "execution_type": "execution", "error": f"Sandbox execution failed: {exc}", "real_computation": False}
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": f"Sandbox execution failed: {exc}",
+                "real_computation": False,
+            }
         if not result.get("success"):
-            return {"status": "failed", "execution_type": "execution", "error": result.get("error", "Sandbox execution failed."), "real_computation": False}
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": result.get("error", "Sandbox execution failed."),
+                "real_computation": False,
+            }
         node_id = node.get("id", "sandbox")
-        context.setdefault("port_data", {}).setdefault(node_id, {}).update({"result": json.dumps(result, ensure_ascii=False), "stdout": result.get("stdout", "")})
-        return {"status": "completed", "execution_type": "execution", "sandbox": "PythonSandbox", "result": result, "real_computation": True}
+        context.setdefault("port_data", {}).setdefault(node_id, {}).update(
+            {"result": json.dumps(result, ensure_ascii=False), "stdout": result.get("stdout", "")}
+        )
+        return {
+            "status": "completed",
+            "execution_type": "execution",
+            "sandbox": "PythonSandbox",
+            "result": result,
+            "real_computation": True,
+        }
 
     @staticmethod
     def _handle_wandb_node(node: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         params = ExecutionEngine._node_params(node)
         metrics = _first_not_none(context.get("current_inputs", {}).get("metrics"), context.get("metrics"))
         if not isinstance(metrics, dict) or not metrics:
-            return {"status": "failed", "execution_type": "execution", "error": "WandbLogger requires a connected non-empty metrics object.", "real_computation": False}
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": "WandbLogger requires a connected non-empty metrics object.",
+                "real_computation": False,
+            }
         try:
             import wandb
+
             if wandb.run is None:
-                return {"status": "failed", "execution_type": "execution", "error": "No active Weights & Biases run. Start/log in to a run before using this node.", "real_computation": False}
+                return {
+                    "status": "failed",
+                    "execution_type": "execution",
+                    "error": "No active Weights & Biases run. Start/log in to a run before using this node.",
+                    "real_computation": False,
+                }
             wandb.log(metrics, step=params.get("step"))
         except Exception as exc:
-            return {"status": "failed", "execution_type": "execution", "error": f"Weights & Biases logging failed: {exc}", "real_computation": False}
-        output = {"status": "logged", "execution_type": "execution", "project": wandb.run.project, "metrics_logged": list(metrics), "real_computation": True}
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": f"Weights & Biases logging failed: {exc}",
+                "real_computation": False,
+            }
+        output = {
+            "status": "logged",
+            "execution_type": "execution",
+            "project": wandb.run.project,
+            "metrics_logged": list(metrics),
+            "real_computation": True,
+        }
         context.setdefault("port_data", {}).setdefault(node.get("id", "wandb"), {})["log_status"] = output
         return output
 
@@ -1164,23 +1572,35 @@ class ExecutionEngine:
     def _handle_joint_loss_node(node: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         import torch
         import torch.nn.functional as F
+
         params = ExecutionEngine._node_params(node)
-        weights = [float(params.get(key, default)) for key, default in (
-            ("lambda_reflex", 0.20), ("lambda_limbic", 0.30), ("lambda_cortex", 0.50)
-        )]
+        weights = [
+            float(params.get(key, default))
+            for key, default in (("lambda_reflex", 0.20), ("lambda_limbic", 0.30), ("lambda_cortex", 0.50))
+        ]
         weight_sum = sum(weights)
         if any(weight < 0 for weight in weights) or weight_sum <= 0:
             return {"status": "failed", "error": "Joint exit loss weights must be non-negative with a positive sum."}
         exit_logits = context.get("current_inputs", {}).get("exit_logits")
         targets = context.get("current_inputs", {}).get("targets")
-        if not isinstance(exit_logits, (list, tuple)) or len(exit_logits) != 3 or not all(isinstance(item, torch.Tensor) for item in exit_logits):
-            return {"status": "failed", "error": "JointExitLoss requires all three connected exit logits from the model node."}
+        if (
+            not isinstance(exit_logits, (list, tuple))
+            or len(exit_logits) != 3
+            or not all(isinstance(item, torch.Tensor) for item in exit_logits)
+        ):
+            return {
+                "status": "failed",
+                "error": "JointExitLoss requires all three connected exit logits from the model node.",
+            }
         if not isinstance(targets, torch.Tensor) or targets.ndim != 2:
             return {"status": "failed", "error": "JointExitLoss requires connected next-token targets."}
         per_exit = []
         for index, logits in enumerate(exit_logits):
             if logits.ndim != 3 or logits.shape[:2] != targets.shape:
-                return {"status": "failed", "error": f"Exit {index + 1} logits do not match target shape {tuple(targets.shape)}."}
+                return {
+                    "status": "failed",
+                    "error": f"Exit {index + 1} logits do not match target shape {tuple(targets.shape)}.",
+                }
             per_exit.append(F.cross_entropy(logits.reshape(-1, logits.size(-1)), targets.reshape(-1)))
         joint_loss = sum((weight / weight_sum) * loss for weight, loss in zip(weights, per_exit))
         z_loss = context.get("current_inputs", {}).get("z_loss")
@@ -1201,7 +1621,11 @@ class ExecutionEngine:
             "status": "computed",
             "execution_type": "execution",
             "loss": loss_val,
-            "weights": {"reflex": weights[0] / weight_sum, "limbic": weights[1] / weight_sum, "cortex": weights[2] / weight_sum},
+            "weights": {
+                "reflex": weights[0] / weight_sum,
+                "limbic": weights[1] / weight_sum,
+                "cortex": weights[2] / weight_sum,
+            },
             "per_exit_loss": [round(float(loss.detach().item()), 4) for loss in per_exit],
             "z_loss_included": z_loss is not None,
             "real_computation": True,
@@ -1213,9 +1637,16 @@ class ExecutionEngine:
         accum_steps = int(params.get("grad_accum_steps", 4))
         batch_size = context.get("batch_size")
         seq_len = context.get("seq_len")
-        eff_tokens = int(batch_size) * int(seq_len) * accum_steps if batch_size is not None and seq_len is not None else None
+        eff_tokens = (
+            int(batch_size) * int(seq_len) * accum_steps if batch_size is not None and seq_len is not None else None
+        )
         if accum_steps < 1:
-            return {"status": "failed", "execution_type": "specification", "error": "grad_accum_steps must be positive.", "real_computation": False}
+            return {
+                "status": "failed",
+                "execution_type": "specification",
+                "error": "grad_accum_steps must be positive.",
+                "real_computation": False,
+            }
         context["grad_accum_steps"] = accum_steps
         node_id = node.get("id", "gradient_accumulator")
         accum_status = {"grad_accum_steps": accum_steps, "effective_batch_tokens": eff_tokens, "configured_only": True}
@@ -1233,8 +1664,11 @@ class ExecutionEngine:
     @staticmethod
     def _handle_checkpoint_manager_node(node: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         from pathlib import Path
+
         import torch
+
         from triune.trainer.checkpoint import _atomic_save_checkpoint, compute_checkpoint_fingerprint
+
         params = ExecutionEngine._node_params(node)
         model = _first_not_none(context.get("current_inputs", {}).get("model_handle"), context.get("model"))
         runtime_state = context.get("_runtime_training_state")
@@ -1242,7 +1676,12 @@ class ExecutionEngine:
             runtime_state.lazy_init_model()
             model = runtime_state.model
         if not isinstance(model, torch.nn.Module):
-            return {"status": "failed", "execution_type": "execution", "error": "CheckpointManager requires a live model_handle.", "real_computation": False}
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": "CheckpointManager requires a live model_handle.",
+                "real_computation": False,
+            }
         save_dir = Path(str(params.get("save_dir", "checkpoints"))).expanduser()
         save_dir.mkdir(parents=True, exist_ok=True)
         step = int(getattr(runtime_state, "step", context.get("step", 0)))
@@ -1271,7 +1710,12 @@ class ExecutionEngine:
         try:
             _atomic_save_checkpoint(payload, target)
         except Exception as exc:
-            return {"status": "failed", "execution_type": "execution", "error": f"Checkpoint save failed: {exc}", "real_computation": False}
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": f"Checkpoint save failed: {exc}",
+                "real_computation": False,
+            }
         keep_last_n = max(1, int(params.get("keep_last_n", 5)))
         checkpoints = sorted(save_dir.glob("triune_step_*.pt"), key=lambda path: path.stat().st_mtime, reverse=True)
         for old_path in checkpoints[keep_last_n:]:
@@ -1296,9 +1740,16 @@ class ExecutionEngine:
         params = ExecutionEngine._node_params(node)
         try:
             import torch
+
             requested_device = str(params.get("target_device", "cuda:0"))
             if requested_device.startswith("cuda") and not torch.cuda.is_available():
-                return {"status": "unavailable", "execution_type": "execution", "device": "cpu", "error": "CUDA was requested but is unavailable.", "real_computation": False}
+                return {
+                    "status": "unavailable",
+                    "execution_type": "execution",
+                    "device": "cpu",
+                    "error": "CUDA was requested but is unavailable.",
+                    "real_computation": False,
+                }
             device = torch.device(requested_device if requested_device.startswith("cuda") else "cpu")
             if device.type == "cuda":
                 index = device.index if device.index is not None else torch.cuda.current_device()
@@ -1319,7 +1770,12 @@ class ExecutionEngine:
                 safety_margin = float(params.get("safety_margin_gb", 1.0))
                 headroom = None
         except Exception as exc:
-            return {"status": "failed", "execution_type": "execution", "error": f"Resource probe failed: {exc}", "real_computation": False}
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": f"Resource probe failed: {exc}",
+                "real_computation": False,
+            }
         output = {
             "status": "probed",
             "execution_type": "execution",
@@ -1333,7 +1789,9 @@ class ExecutionEngine:
             "safety_margin_met": headroom >= 0 if headroom is not None else None,
             "real_computation": True,
         }
-        context.setdefault("port_data", {}).setdefault(node.get("id", "resource_manager"), {})["feasibility_report"] = {key: value for key, value in output.items() if key not in {"execution_type", "real_computation"}}
+        context.setdefault("port_data", {}).setdefault(node.get("id", "resource_manager"), {})["feasibility_report"] = {
+            key: value for key, value in output.items() if key not in {"execution_type", "real_computation"}
+        }
         return output
 
     @staticmethod
@@ -1341,10 +1799,17 @@ class ExecutionEngine:
         params = ExecutionEngine._node_params(node)
         prompt = _first_not_none(context.get("current_inputs", {}).get("prompt"), params.get("prompt"))
         if not isinstance(prompt, str) or not prompt.strip():
-            return {"status": "failed", "execution_type": "execution", "error": "AutoregressiveGenerator requires a non-empty connected prompt.", "real_computation": False}
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": "AutoregressiveGenerator requires a non-empty connected prompt.",
+                "real_computation": False,
+            }
         try:
             import torch
+
             from triune.inference import generate_response
+
             model = _first_not_none(context.get("current_inputs", {}).get("model_handle"), context.get("model"))
             runtime_state = context.get("_runtime_training_state")
             if model is None and runtime_state is not None:
@@ -1355,8 +1820,12 @@ class ExecutionEngine:
             tokenizer = runtime_state.load_tokenizer() if runtime_state is not None else None
             if tokenizer is None:
                 from pathlib import Path
+
                 from triune.data.tokenizer import load_tokenizer
-                tokenizer_path = Path(str(params.get("tokenizer_path", Path(__file__).resolve().parents[2] / "triune_tokenizer.json"))).expanduser()
+
+                tokenizer_path = Path(
+                    str(params.get("tokenizer_path", Path(__file__).resolve().parents[2] / "triune_tokenizer.json"))
+                ).expanduser()
                 if not tokenizer_path.is_absolute():
                     tokenizer_path = Path(__file__).resolve().parents[2] / tokenizer_path
                 if not tokenizer_path.is_file():
@@ -1370,21 +1839,38 @@ class ExecutionEngine:
             started_at = time.perf_counter()
             max_tokens = int(params.get("max_tokens", 128))
             from contextlib import nullcontext
-            model_context = runtime_state.model_autocast() if runtime_state is not None and model is runtime_state.model else nullcontext()
+
+            model_context = (
+                runtime_state.model_autocast()
+                if runtime_state is not None and model is runtime_state.model
+                else nullcontext()
+            )
             with model_context:
                 output_text = generate_response(
-                    model, tokenizer, prompt, device=device, pad_token_id=int(pad_token_id), eos_token_id=int(eos_token_id),
-                    max_new_tokens=max_tokens, temperature=float(params.get("temperature", 0.7)),
+                    model,
+                    tokenizer,
+                    prompt,
+                    device=device,
+                    pad_token_id=int(pad_token_id),
+                    eos_token_id=int(eos_token_id),
+                    max_new_tokens=max_tokens,
+                    temperature=float(params.get("temperature", 0.7)),
                     top_k=int(params.get("top_k", 50)),
-                    repetition_penalty=float(params.get("repetition_penalty", 1.2)), force_depth=params.get("force_depth"),
+                    repetition_penalty=float(params.get("repetition_penalty", 1.2)),
+                    force_depth=params.get("force_depth"),
                 )
             generated_tokens = len(tokenizer.encode(output_text).ids) if output_text else 0
             elapsed = max(time.perf_counter() - started_at, 1e-9)
             node_id = node.get("id", "generator")
-            context.setdefault("port_data", {}).setdefault(node_id, {}).update({
-                "generated_text": output_text,
-                "tokens_per_sec": {"tokens_per_sec": generated_tokens / elapsed, "tokens_generated": generated_tokens},
-            })
+            context.setdefault("port_data", {}).setdefault(node_id, {}).update(
+                {
+                    "generated_text": output_text,
+                    "tokens_per_sec": {
+                        "tokens_per_sec": generated_tokens / elapsed,
+                        "tokens_generated": generated_tokens,
+                    },
+                }
+            )
             return {
                 "status": "completed",
                 "execution_type": "execution",
@@ -1407,16 +1893,35 @@ class ExecutionEngine:
     @staticmethod
     def _handle_rope_node(node: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         import torch
+
         params = ExecutionEngine._node_params(node)
         q = _first_not_none(context.get("current_inputs", {}).get("q"), context.get("q"))
         k = _first_not_none(context.get("current_inputs", {}).get("k"), context.get("k"))
-        if not isinstance(q, torch.Tensor) or not isinstance(k, torch.Tensor) or q.shape != k.shape or q.ndim != 4 or not q.is_floating_point() or not k.is_floating_point():
-            return {"status": "failed", "execution_type": "execution", "error": "FastRoPE requires matching q and k tensors shaped [batch, heads, sequence, head_dim].", "real_computation": False}
+        if (
+            not isinstance(q, torch.Tensor)
+            or not isinstance(k, torch.Tensor)
+            or q.shape != k.shape
+            or q.ndim != 4
+            or not q.is_floating_point()
+            or not k.is_floating_point()
+        ):
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": "FastRoPE requires matching q and k tensors shaped [batch, heads, sequence, head_dim].",
+                "real_computation": False,
+            }
         dim = int(params.get("dim", q.shape[-1]))
         if dim != q.shape[-1] or dim % 2:
-            return {"status": "failed", "execution_type": "execution", "error": "FastRoPE dim must match the even final dimension of q and k.", "real_computation": False}
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": "FastRoPE dim must match the even final dimension of q and k.",
+                "real_computation": False,
+            }
         try:
             from triune.model.rotary import RotaryEmbedding, apply_rotary
+
             rotary = RotaryEmbedding(
                 dim,
                 max_seq_len=int(params.get("max_seq_len", 4096)),
@@ -1425,10 +1930,20 @@ class ExecutionEngine:
             cos, sin = rotary(q.shape[-2], q.device)
             q_rot, k_rot = apply_rotary(q, k, cos, sin)
         except Exception as exc:
-            return {"status": "failed", "execution_type": "execution", "error": f"FastRoPE execution failed: {exc}", "real_computation": False}
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": f"FastRoPE execution failed: {exc}",
+                "real_computation": False,
+            }
         node_id = node.get("id", "rope")
         context.setdefault("port_data", {}).setdefault(node_id, {}).update({"q_rot": q_rot, "k_rot": k_rot})
-        return {"status": "computed", "execution_type": "execution", "output_shape": list(q_rot.shape), "real_computation": True}
+        return {
+            "status": "computed",
+            "execution_type": "execution",
+            "output_shape": list(q_rot.shape),
+            "real_computation": True,
+        }
 
     @staticmethod
     def _handle_byok_router_node(node: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
@@ -1473,9 +1988,15 @@ class ExecutionEngine:
         )
         if runtime_state is not None and not has_explicit_training_inputs:
             if not context.get("current_inputs", {}).get("dataset_stream"):
-                return {"status": "failed", "error": "Connect a dataset source before running the shared TrainingEngine step."}
+                return {
+                    "status": "failed",
+                    "error": "Connect a dataset source before running the shared TrainingEngine step.",
+                }
             if getattr(runtime_state, "is_training", False):
-                return {"status": "failed", "error": "A background training run is active. Pause it before running a DAG training step."}
+                return {
+                    "status": "failed",
+                    "error": "A background training run is active. Pause it before running a DAG training step.",
+                }
             params = ExecutionEngine._node_params(node)
             try:
                 if "grad_accum_steps" in params:
@@ -1497,15 +2018,27 @@ class ExecutionEngine:
                 metrics = {
                     key: step.get(key)
                     for key in (
-                        "step", "loss", "lm_loss", "router_loss", "balance_loss", "z_loss",
-                        "lr", "throughput", "vram_gb", "tokens_in_step", "tokens_trained", "overflow",
+                        "step",
+                        "loss",
+                        "lm_loss",
+                        "router_loss",
+                        "balance_loss",
+                        "z_loss",
+                        "lr",
+                        "throughput",
+                        "vram_gb",
+                        "tokens_in_step",
+                        "tokens_trained",
+                        "overflow",
                     )
                 }
-                context.setdefault("port_data", {}).setdefault(node_id, {}).update({
-                    "step_metrics": metrics,
-                    "loss": torch.tensor(float(step["loss"]), dtype=torch.float32),
-                    "model_handle": runtime_state.model,
-                })
+                context.setdefault("port_data", {}).setdefault(node_id, {}).update(
+                    {
+                        "step_metrics": metrics,
+                        "loss": torch.tensor(float(step["loss"]), dtype=torch.float32),
+                        "model_handle": runtime_state.model,
+                    }
+                )
                 return {
                     "status": "completed",
                     "execution_type": "execution",
@@ -1523,11 +2056,21 @@ class ExecutionEngine:
                     "real_computation": True,
                 }
             except Exception as exc:
-                return {"status": "failed", "execution_type": "execution", "error": f"Shared training step failed: {exc}", "real_computation": False}
+                return {
+                    "status": "failed",
+                    "execution_type": "execution",
+                    "error": f"Shared training step failed: {exc}",
+                    "real_computation": False,
+                }
 
         model = _first_not_none(context.get("current_inputs", {}).get("model_handle"), context.get("model"))
         optimizer = _first_not_none(context.get("current_inputs", {}).get("optimizer_handle"), context.get("optimizer"))
-        tokens = _first_not_none(context.get("current_inputs", {}).get("tokens"), context.get("current_inputs", {}).get("input_ids"), context.get("tokens"), context.get("input_ids"))
+        tokens = _first_not_none(
+            context.get("current_inputs", {}).get("tokens"),
+            context.get("current_inputs", {}).get("input_ids"),
+            context.get("tokens"),
+            context.get("input_ids"),
+        )
         if not isinstance(model, torch.nn.Module):
             return {"status": "failed", "error": "TrainingStep requires a connected model_handle."}
         if not isinstance(optimizer, torch.optim.Optimizer) and not callable(getattr(optimizer, "step", None)):
@@ -1541,21 +2084,30 @@ class ExecutionEngine:
         result = model(input_ids)
         logits = result[0] if isinstance(result, tuple) else result
         if logits.ndim != 3 or logits.shape[:2] != targets.shape:
-            return {"status": "failed", "error": f"TrainingStep output/target shape mismatch: {tuple(logits.shape[:2])} vs {tuple(targets.shape)}."}
+            return {
+                "status": "failed",
+                "error": f"TrainingStep output/target shape mismatch: {tuple(logits.shape[:2])} vs {tuple(targets.shape)}.",
+            }
         loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
         max_grad_norm = float(params.get("max_grad_norm", 1.0))
-        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm) if max_grad_norm > 0 else torch.nn.utils.clip_grad_norm_(model.parameters(), float("inf"))
+        grad_norm = (
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+            if max_grad_norm > 0
+            else torch.nn.utils.clip_grad_norm_(model.parameters(), float("inf"))
+        )
         optimizer.step()
         loss_value = float(loss.detach().item())
         node_id = node.get("id", "training_step")
         context["loss"] = loss
-        context.setdefault("port_data", {}).setdefault(node_id, {}).update({
-            "step_metrics": {"loss": loss_value, "grad_norm": float(grad_norm.detach().item()), "step": 1},
-            "loss": loss,
-            "model_handle": model,
-        })
+        context.setdefault("port_data", {}).setdefault(node_id, {}).update(
+            {
+                "step_metrics": {"loss": loss_value, "grad_norm": float(grad_norm.detach().item()), "step": 1},
+                "loss": loss,
+                "model_handle": model,
+            }
+        )
         return {
             "status": "completed",
             "execution_type": "execution",
@@ -1581,7 +2133,11 @@ class ExecutionEngine:
     def _handle_subgraph_node(self, node: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         """Execute an encapsulated graph and publish its declared output ports."""
         definition = node.get("subgraph")
-        if not isinstance(definition, dict) or not isinstance(definition.get("nodes"), list) or not isinstance(definition.get("edges"), list):
+        if (
+            not isinstance(definition, dict)
+            or not isinstance(definition.get("nodes"), list)
+            or not isinstance(definition.get("edges"), list)
+        ):
             return {"status": "failed", "error": "Subgraph node requires a valid nested nodes/edges graph."}
         depth = int(context.get("_runtime_subgraph_depth", 0))
         if depth >= 8:
@@ -1590,7 +2146,8 @@ class ExecutionEngine:
         parent_inputs = context.get("current_inputs", {})
         declared_inputs = definition.get("inputs", [])
         missing_inputs = [
-            item.get("name", "?") for item in declared_inputs
+            item.get("name", "?")
+            for item in declared_inputs
             if item.get("required", True) and item.get("name") not in parent_inputs
         ]
         if missing_inputs:
@@ -1625,11 +2182,17 @@ class ExecutionEngine:
             source_node = item.get("source_node")
             source_port = item.get("source_port")
             if not public_name or not source_node or not source_port:
-                return {"status": "failed", "error": "Each subgraph output must declare name, source_node, and source_port."}
+                return {
+                    "status": "failed",
+                    "error": "Each subgraph output must declare name, source_node, and source_port.",
+                }
             source_ports = child_ports.get(source_node, {})
             if source_port not in source_ports:
                 if item.get("required", True):
-                    return {"status": "failed", "error": f"Subgraph output '{public_name}' has no value from {source_node}:{source_port}."}
+                    return {
+                        "status": "failed",
+                        "error": f"Subgraph output '{public_name}' has no value from {source_node}:{source_port}.",
+                    }
                 continue
             exposed_outputs[public_name] = source_ports[source_port]
 
@@ -1649,9 +2212,11 @@ class ExecutionEngine:
     @staticmethod
     def _handle_evaluator_node(node: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         import math
+
         try:
             import torch
             import torch.nn.functional as F
+
             model = _first_not_none(context.get("current_inputs", {}).get("model_handle"), context.get("model"))
             runtime_state = context.get("_runtime_training_state")
             if model is None and runtime_state is not None:
@@ -1659,13 +2224,22 @@ class ExecutionEngine:
                 model = runtime_state.model
             if not isinstance(model, torch.nn.Module):
                 raise RuntimeError("PerplexityEvaluator requires a connected model_handle or an active Studio model.")
-            tokens = _first_not_none(context.get("current_inputs", {}).get("tokens"), context.get("current_inputs", {}).get("input_ids"), context.get("tokens"), context.get("input_ids"))
+            tokens = _first_not_none(
+                context.get("current_inputs", {}).get("tokens"),
+                context.get("current_inputs", {}).get("input_ids"),
+                context.get("tokens"),
+                context.get("input_ids"),
+            )
             targets = context.get("current_inputs", {}).get("targets")
             if tokens is not None and (not isinstance(tokens, torch.Tensor) or tokens.ndim != 2 or tokens.numel() == 0):
                 raise ValueError("Evaluation input_ids must be a non-empty rank-2 token tensor.")
             if targets is None and (not isinstance(tokens, torch.Tensor) or tokens.size(1) < 2):
-                raise RuntimeError("PerplexityEvaluator requires connected targets or a token batch with at least two tokens.")
-            if targets is not None and (not isinstance(targets, torch.Tensor) or targets.ndim != 2 or targets.numel() == 0):
+                raise RuntimeError(
+                    "PerplexityEvaluator requires connected targets or a token batch with at least two tokens."
+                )
+            if targets is not None and (
+                not isinstance(targets, torch.Tensor) or targets.ndim != 2 or targets.numel() == 0
+            ):
                 raise ValueError("Evaluation targets must be a non-empty rank-2 token tensor.")
             vocab_size = int(getattr(model, "vocab_size", 0))
             if vocab_size <= 0:
@@ -1691,28 +2265,54 @@ class ExecutionEngine:
                     per_exit_metrics = None
                     if isinstance(exits, (tuple, list)):
                         if len(exits) != 3:
-                            raise ValueError("Multi-exit evaluation requires exactly Reflex, Limbic, and Cortex logits.")
+                            raise ValueError(
+                                "Multi-exit evaluation requires exactly Reflex, Limbic, and Cortex logits."
+                            )
                         per_exit_metrics = []
                         for name, exit_output in zip(("reflex", "limbic", "cortex"), exits):
-                            if not isinstance(exit_output, torch.Tensor) or exit_output.ndim != 3 or exit_output.shape[:2] != eval_targets.shape:
-                                raise ValueError(f"{name} exit logits must match token targets shaped {tuple(eval_targets.shape)}.")
+                            if (
+                                not isinstance(exit_output, torch.Tensor)
+                                or exit_output.ndim != 3
+                                or exit_output.shape[:2] != eval_targets.shape
+                            ):
+                                raise ValueError(
+                                    f"{name} exit logits must match token targets shaped {tuple(eval_targets.shape)}."
+                                )
                             if exit_output.size(-1) != vocab_size:
-                                raise ValueError(f"{name} exit vocabulary size {exit_output.size(-1)} does not match {vocab_size}.")
+                                raise ValueError(
+                                    f"{name} exit vocabulary size {exit_output.size(-1)} does not match {vocab_size}."
+                                )
                             exit_loss = F.cross_entropy(exit_output.reshape(-1, vocab_size), eval_targets.reshape(-1))
                             exit_loss_value = float(exit_loss.item())
-                            per_exit_metrics.append({"exit": name, "val_loss": round(exit_loss_value, 4), "perplexity": round(math.exp(min(exit_loss_value, 20.0)), 2)})
+                            per_exit_metrics.append(
+                                {
+                                    "exit": name,
+                                    "val_loss": round(exit_loss_value, 4),
+                                    "perplexity": round(math.exp(min(exit_loss_value, 20.0)), 2),
+                                }
+                            )
                         val_loss_t = torch.tensor(per_exit_metrics[-1]["val_loss"], device=device)
                     else:
                         if tokens is None:
-                            raise ValueError("A model_handle and tokens are required when no exit_logits are connected.")
+                            raise ValueError(
+                                "A model_handle and tokens are required when no exit_logits are connected."
+                            )
                         res = model(tokens)
                         logits = res[0] if isinstance(res, tuple) else res
                         if logits.ndim != 3 or logits.shape[:2] not in (tokens.shape, eval_targets.shape):
-                            raise ValueError(f"Model logits must match the token input or target shape, got {tuple(logits.shape)}.")
-                        eval_logits = logits[:, :-1, :].contiguous() if logits.shape[:2] == tokens.shape and logits.shape[:2] != eval_targets.shape else logits
+                            raise ValueError(
+                                f"Model logits must match the token input or target shape, got {tuple(logits.shape)}."
+                            )
+                        eval_logits = (
+                            logits[:, :-1, :].contiguous()
+                            if logits.shape[:2] == tokens.shape and logits.shape[:2] != eval_targets.shape
+                            else logits
+                        )
                         vocab_s = eval_logits.size(-1)
                         if vocab_s != vocab_size or eval_logits.shape[:2] != eval_targets.shape:
-                            raise ValueError(f"Model output vocabulary size {vocab_s} does not match model token vocabulary size {vocab_size}.")
+                            raise ValueError(
+                                f"Model output vocabulary size {vocab_s} does not match model token vocabulary size {vocab_size}."
+                            )
                         val_loss_t = F.cross_entropy(eval_logits.reshape(-1, vocab_s), eval_targets.reshape(-1))
                     val_loss = round(float(val_loss_t.item()), 4)
                     perplexity = round(math.exp(min(val_loss, 20.0)), 2)
@@ -1720,11 +2320,13 @@ class ExecutionEngine:
                 model.train(was_training)
 
             node_id = node.get("id", "evaluator")
-            context.setdefault("port_data", {}).setdefault(node_id, {}).update({
-                "val_loss": val_loss,
-                "perplexity": {"perplexity": perplexity, "tokens_evaluated": int(eval_targets.numel())},
-                "per_exit_metrics": per_exit_metrics,
-            })
+            context.setdefault("port_data", {}).setdefault(node_id, {}).update(
+                {
+                    "val_loss": val_loss,
+                    "perplexity": {"perplexity": perplexity, "tokens_evaluated": int(eval_targets.numel())},
+                    "per_exit_metrics": per_exit_metrics,
+                }
+            )
 
             return {
                 "status": "completed",
@@ -1753,17 +2355,26 @@ class ExecutionEngine:
         try:
             import torch
             import torch.nn.functional as F
+
             params = ExecutionEngine._node_params(node)
             model = _first_not_none(context.get("current_inputs", {}).get("model_handle"), context.get("model"))
             if not isinstance(model, torch.nn.Module):
                 raise RuntimeError("LoRAFineTuner requires a connected live model_handle.")
-            tokens = _first_not_none(context.get("current_inputs", {}).get("tokens"), context.get("current_inputs", {}).get("input_ids"), context.get("tokens"), context.get("input_ids"))
+            tokens = _first_not_none(
+                context.get("current_inputs", {}).get("tokens"),
+                context.get("current_inputs", {}).get("input_ids"),
+                context.get("tokens"),
+                context.get("input_ids"),
+            )
             if not isinstance(tokens, torch.Tensor) or tokens.ndim != 2 or tokens.size(1) < 2:
-                raise RuntimeError("LoRAFineTuner requires real token input shaped [batch, sequence] with sequence length >= 2.")
+                raise RuntimeError(
+                    "LoRAFineTuner requires real token input shaped [batch, sequence] with sequence length >= 2."
+                )
             vocab_size = int(getattr(model, "vocab_size", 0))
             if vocab_size <= 0 or torch.any(tokens < 0) or torch.any(tokens >= vocab_size):
                 raise ValueError(f"Fine-tuning token IDs must be within the model vocabulary [0, {vocab_size - 1}].")
             from triune.trainer.finetune import LoRALayer
+
             rank = int(params.get("rank", 16))
             alpha = float(params.get("alpha", 32.0))
             targets = params.get("target_modules", ("q_proj", "v_proj", "out_proj"))
@@ -1773,7 +2384,8 @@ class ExecutionEngine:
             if existing_adapters == 0:
                 modules = dict(model.named_modules())
                 target_layers = [
-                    (name, module) for name, module in modules.items()
+                    (name, module)
+                    for name, module in modules.items()
                     if name and any(str(target) in name for target in targets) and isinstance(module, torch.nn.Linear)
                 ]
                 if not target_layers:
@@ -1784,7 +2396,12 @@ class ExecutionEngine:
                     parent_name, attr_name = name.rsplit(".", 1) if "." in name else ("", name)
                     parent = modules[parent_name] if parent_name else model
                     setattr(parent, attr_name, LoRALayer(module, rank=rank, alpha=alpha))
-            adapter_params = [parameter for module in model.modules() if isinstance(module, LoRALayer) for parameter in (module.lora_A, module.lora_B)]
+            adapter_params = [
+                parameter
+                for module in model.modules()
+                if isinstance(module, LoRALayer)
+                for parameter in (module.lora_A, module.lora_B)
+            ]
             if not adapter_params:
                 raise RuntimeError(f"No supported linear target modules found for LoRA targets {list(targets)}.")
             # A graph may connect a separately executed LoRAAdapter node first.
@@ -1813,7 +2430,9 @@ class ExecutionEngine:
             final_loss = round(float(loss.item()), 4)
             node_id = node.get("id", "lora_finetune")
             context["model"] = model
-            context.setdefault("port_data", {}).setdefault(node_id, {}).update({"finetuned_adapter": model, "final_loss": final_loss})
+            context.setdefault("port_data", {}).setdefault(node_id, {}).update(
+                {"finetuned_adapter": model, "final_loss": final_loss}
+            )
             return {
                 "status": "completed",
                 "execution_type": "execution",
@@ -1865,8 +2484,8 @@ class ExecutionEngine:
     def _handle_data_node(node: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         title = node.get("title", "DataLoader")
         params = ExecutionEngine._node_params(node)
-        from pathlib import Path
         import json
+        from pathlib import Path
 
         project_root = Path(__file__).resolve().parents[2]
         requested_path = Path(str(params.get("file_path", "data/fineweb_sample.jsonl"))).expanduser()
@@ -1886,7 +2505,9 @@ class ExecutionEngine:
                     if len(sample_texts) < 5:
                         try:
                             data = json.loads(line)
-                            text = (data.get("text", "") or data.get("input", "")) if isinstance(data, dict) else str(data)
+                            text = (
+                                (data.get("text", "") or data.get("input", "")) if isinstance(data, dict) else str(data)
+                            )
                             if str(text).strip():
                                 sample_texts.append(str(text)[:1000].strip())
                         except json.JSONDecodeError:
@@ -1947,7 +2568,8 @@ class ExecutionEngine:
     def _handle_model_node(node: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         title = node.get("title") or node.get("name") or "TriuneTransformer"
         import torch
-        from triune.model.base import get_model_spec, build_model_from_spec
+
+        from triune.model.base import build_model_from_spec, get_model_spec
 
         params = ExecutionEngine._node_params(node)
         preset_id = str(params.get("model_id") or params.get("preset") or "triune-small")
@@ -1963,9 +2585,19 @@ class ExecutionEngine:
         else:
             overrides: Dict[str, Any] = {"name": str(title)}
             for key in (
-                "vocab_size", "hidden_dim", "num_layers", "num_heads", "head_dim",
-                "router_prefix_layers", "reflex_exit_layer", "limbic_exit_layer",
-                "depth_mode", "precision", "use_fp4", "use_fp8", "streaming",
+                "vocab_size",
+                "hidden_dim",
+                "num_layers",
+                "num_heads",
+                "head_dim",
+                "router_prefix_layers",
+                "reflex_exit_layer",
+                "limbic_exit_layer",
+                "depth_mode",
+                "precision",
+                "use_fp4",
+                "use_fp8",
+                "streaming",
             ):
                 if key in params and params[key] is not None:
                     overrides[key] = params[key]
@@ -1997,7 +2629,9 @@ class ExecutionEngine:
             }
 
         # Real forward pass
-        tokens = _first_not_none(context.get("current_inputs", {}).get("input_ids"), context.get("input_ids"), context.get("tokens"))
+        tokens = _first_not_none(
+            context.get("current_inputs", {}).get("input_ids"), context.get("input_ids"), context.get("tokens")
+        )
         if tokens is None or not isinstance(tokens, torch.Tensor) or tokens.ndim != 2 or tokens.numel() == 0:
             return {"status": "failed", "error": "Model node requires connected input_ids shaped [batch, sequence]."}
         if torch.any(tokens < 0) or torch.any(tokens >= model.vocab_size):
@@ -2010,12 +2644,22 @@ class ExecutionEngine:
         balance_loss = None
         try:
             from contextlib import nullcontext
-            model_context = runtime_state.model_autocast() if runtime_state is not None and model is runtime_state.model else nullcontext()
+
+            model_context = (
+                runtime_state.model_autocast()
+                if runtime_state is not None and model is runtime_state.model
+                else nullcontext()
+            )
             with model_context:
                 if params.get("return_all_exits"):
                     if not hasattr(model, "forward_all_exits"):
-                        return {"status": "failed", "error": "This model does not expose forward_all_exits for JointExitLoss."}
-                    reflex_logits, limbic_logits, cortex_logits, route_logits = model.forward_all_exits(tokens, update_stats=True)
+                        return {
+                            "status": "failed",
+                            "error": "This model does not expose forward_all_exits for JointExitLoss.",
+                        }
+                    reflex_logits, limbic_logits, cortex_logits, route_logits = model.forward_all_exits(
+                        tokens, update_stats=True
+                    )
                     logits = cortex_logits
                     exit_logits = (reflex_logits, limbic_logits, cortex_logits)
                 else:
@@ -2029,7 +2673,12 @@ class ExecutionEngine:
                         route_logits = None
                     exit_logits = None
         except Exception as exc:
-            return {"status": "failed", "execution_type": "execution", "error": f"Model forward pass failed: {exc}", "real_computation": False}
+            return {
+                "status": "failed",
+                "execution_type": "execution",
+                "error": f"Model forward pass failed: {exc}",
+                "real_computation": False,
+            }
         finally:
             if bool(params.get("evaluation_mode", False)):
                 model.train(was_training)
@@ -2068,6 +2717,7 @@ class ExecutionEngine:
     @staticmethod
     def _handle_optimizer_node(node: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         import torch
+
         from triune.optim import CentroidSteerOptimizer, Muon
 
         title = str(node.get("title") or node.get("type") or "Optimizer")
@@ -2077,13 +2727,19 @@ class ExecutionEngine:
         if not isinstance(model, torch.nn.Module):
             return {"status": "failed", "error": "Optimizer requires a connected model_handle."}
         if not isinstance(loss, torch.Tensor) or not loss.requires_grad:
-            return {"status": "failed", "error": "Optimizer requires a differentiable loss input; no synthetic batch is generated."}
+            return {
+                "status": "failed",
+                "error": "Optimizer requires a differentiable loss input; no synthetic batch is generated.",
+            }
 
         kind = "".join(ch.lower() for ch in title if ch.isalnum())
         lr = float(params.get("lr", params.get("learning_rate", 1e-4)))
         weight_decay = float(params.get("weight_decay", 0.01))
         if lr <= 0 or weight_decay < 0:
-            return {"status": "failed", "error": "Optimizer learning rate must be positive and weight decay non-negative."}
+            return {
+                "status": "failed",
+                "error": "Optimizer learning rate must be positive and weight decay non-negative.",
+            }
 
         if "centroid" in kind or "galore" in kind:
             optimizer = CentroidSteerOptimizer(
@@ -2119,7 +2775,10 @@ class ExecutionEngine:
                 weight_decay=weight_decay,
             )
         else:
-            return {"status": "failed", "error": f"Unsupported optimizer node '{title}'. Choose CentroidSteer, Muon, or AdamW."}
+            return {
+                "status": "failed",
+                "error": f"Unsupported optimizer node '{title}'. Choose CentroidSteer, Muon, or AdamW.",
+            }
 
         model.train()
         optimizer.zero_grad(set_to_none=True)
@@ -2128,7 +2787,11 @@ class ExecutionEngine:
             aux_optimizer.zero_grad(set_to_none=True)
         loss.backward()
         max_grad_norm = float(params.get("max_grad_norm", 1.0))
-        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm) if max_grad_norm > 0 else torch.nn.utils.clip_grad_norm_(model.parameters(), float("inf"))
+        grad_norm = (
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+            if max_grad_norm > 0
+            else torch.nn.utils.clip_grad_norm_(model.parameters(), float("inf"))
+        )
         optimizer.step()
         if aux_optimizer is not None:
             aux_optimizer.step()
@@ -2154,21 +2817,32 @@ class ExecutionEngine:
     @staticmethod
     def _handle_export_node(node: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         title = node.get("title", "SafeTensors")
-        from pathlib import Path
         import re
+        from pathlib import Path
 
         project_root = Path(__file__).resolve().parents[2]
         params = ExecutionEngine._node_params(node)
         export_dir = project_root / "exports"
         filename = str(params.get("filename", "dag_pipeline_model.safetensors"))
-        if not filename.lower().endswith(".safetensors") or Path(filename).name != filename or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\.safetensors", filename, re.IGNORECASE):
-            return {"status": "failed", "error": "Export filename must be a simple .safetensors filename without a directory path."}
+        if (
+            not filename.lower().endswith(".safetensors")
+            or Path(filename).name != filename
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\.safetensors", filename, re.IGNORECASE)
+        ):
+            return {
+                "status": "failed",
+                "error": "Export filename must be a simple .safetensors filename without a directory path.",
+            }
         export_file = export_dir / filename
         if export_file.exists() and not params.get("overwrite", False):
-            return {"status": "failed", "error": f"Export already exists: {export_file.name}. Set overwrite=True to replace it."}
+            return {
+                "status": "failed",
+                "error": f"Export already exists: {export_file.name}. Set overwrite=True to replace it.",
+            }
         model = _first_not_none(context.get("current_inputs", {}).get("model_handle"), context.get("model"))
         try:
             import torch
+
             if not isinstance(model, torch.nn.Module):
                 return {"status": "failed", "error": "SafeTensors export requires a connected model_handle."}
             export_dir.mkdir(parents=True, exist_ok=True)
@@ -2177,6 +2851,7 @@ class ExecutionEngine:
 
         try:
             from triune.export.exporter import export_lora_safetensors, export_safetensors
+
             adapter_only = bool(params.get("adapter_only", False))
             if adapter_only:
                 export_lora_safetensors(model, export_file)
@@ -2210,7 +2885,9 @@ class ExecutionEngine:
     def register_handler(self, node_type: str, handler: Callable):
         self.node_registry[node_type] = handler
 
-    def execute_node(self, node_or_name: Any, inputs: Optional[Dict[str, Any]] = None, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def execute_node(
+        self, node_or_name: Any, inputs: Optional[Dict[str, Any]] = None, context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         """Execute a single DAG node by name or node dictionary."""
         if context is None:
             context = {"inputs": inputs or {}, "outputs": {}, "port_data": collections.defaultdict(dict)}
@@ -2234,7 +2911,10 @@ class ExecutionEngine:
         if handler:
             return handler(node, context)
 
-        return {"status": "failed", "error": f"No execution handler is registered for node '{node.get('title', node_type)}' ({node_type})."}
+        return {
+            "status": "failed",
+            "error": f"No execution handler is registered for node '{node.get('title', node_type)}' ({node_type}).",
+        }
 
     def run(self, graph_json: Dict[str, Any]) -> Dict[str, Any]:
         res = self.execute_graph(graph_json)
@@ -2260,12 +2940,7 @@ class ExecutionEngine:
                 incoming_edges[tgt].append(edge)
 
         results = {}
-        context = {
-            "inputs": {},
-            "outputs": {},
-            "port_data": collections.defaultdict(dict),
-            "current_inputs": {}
-        }
+        context = {"inputs": {}, "outputs": {}, "port_data": collections.defaultdict(dict), "current_inputs": {}}
         if initial_context:
             context.update(initial_context)
         context.setdefault("inputs", {})
@@ -2361,13 +3036,15 @@ class ExecutionEngine:
                     handler = self._handle_data_node
 
             start_time = time.time()
-            self._emit_event({
-                "event": "node_started",
-                "node_id": node_id,
-                "node_name": node_name,
-                "node_type": node_type,
-                "timestamp": start_time,
-            })
+            self._emit_event(
+                {
+                    "event": "node_started",
+                    "node_id": node_id,
+                    "node_name": node_name,
+                    "node_type": node_type,
+                    "timestamp": start_time,
+                }
+            )
 
             try:
                 if handler:
@@ -2380,7 +3057,10 @@ class ExecutionEngine:
 
                 elapsed = time.time() - start_time
                 if not isinstance(output, dict):
-                    output = {"status": "failed", "error": f"Node returned unsupported output type: {type(output).__name__}."}
+                    output = {
+                        "status": "failed",
+                        "error": f"Node returned unsupported output type: {type(output).__name__}.",
+                    }
                 node_failed = output.get("status") in {"failed", "error"} or (
                     output.get("execution_type") == "execution" and output.get("real_computation") is False
                 )
@@ -2390,24 +3070,28 @@ class ExecutionEngine:
                 context["outputs"][node_id] = output
                 sanitized_output = _sanitize_for_json(output)
                 output_kind = output.get("execution_type") if isinstance(output, dict) else None
-                result_status = "failed" if node_failed else ("specification" if output_kind == "specification" else "completed")
+                result_status = (
+                    "failed" if node_failed else ("specification" if output_kind == "specification" else "completed")
+                )
                 results[node_id] = {
                     "status": result_status,
                     "elapsed_sec": round(elapsed, 4),
-                    "output": sanitized_output
+                    "output": sanitized_output,
                 }
                 if node_failed:
                     results[node_id]["error"] = output.get("error", "Node reported failure")
 
-                self._emit_event({
-                    "event": "node_failed" if node_failed else "node_finished",
-                    "node_id": node_id,
-                    "node_name": node_name,
-                    "node_type": node_type,
-                    "elapsed_sec": round(elapsed, 4),
-                    "output": sanitized_output,
-                    "timestamp": time.time(),
-                })
+                self._emit_event(
+                    {
+                        "event": "node_failed" if node_failed else "node_finished",
+                        "node_id": node_id,
+                        "node_name": node_name,
+                        "node_type": node_type,
+                        "elapsed_sec": round(elapsed, 4),
+                        "output": sanitized_output,
+                        "timestamp": time.time(),
+                    }
+                )
                 if node_failed:
                     print(f"  [FAIL] Node [{node_name}] ({node_type}) reported failure: {output.get('error')}")
                     break
@@ -2417,18 +3101,22 @@ class ExecutionEngine:
                 elapsed = time.time() - start_time
                 print(f"  [FAIL] Node [{node_name}] failed: {err}")
                 results[node_id] = {"status": "failed", "error": str(err), "elapsed_sec": round(elapsed, 4)}
-                self._emit_event({
-                    "event": "node_failed",
-                    "node_id": node_id,
-                    "node_name": node_name,
-                    "node_type": node_type,
-                    "elapsed_sec": round(elapsed, 4),
-                    "error": str(err),
-                    "timestamp": time.time(),
-                })
+                self._emit_event(
+                    {
+                        "event": "node_failed",
+                        "node_id": node_id,
+                        "node_name": node_name,
+                        "node_type": node_type,
+                        "elapsed_sec": round(elapsed, 4),
+                        "error": str(err),
+                        "timestamp": time.time(),
+                    }
+                )
                 break
 
-        safe_context = _sanitize_for_json({key: value for key, value in context.items() if not key.startswith("_runtime_")})
+        safe_context = _sanitize_for_json(
+            {key: value for key, value in context.items() if not key.startswith("_runtime_")}
+        )
         failed_entry = next(((nid, res) for nid, res in results.items() if res.get("status") == "failed"), None)
         specification_nodes = [nid for nid, res in results.items() if res.get("status") == "specification"]
         if failed_entry:
@@ -2511,13 +3199,15 @@ class ExecutionEngine:
                 handler = self._handle_data_node
 
         start_time = time.time()
-        self._emit_event({
-            "event": "node_started",
-            "node_id": node_id,
-            "node_name": node_name,
-            "node_type": node_type,
-            "timestamp": start_time,
-        })
+        self._emit_event(
+            {
+                "event": "node_started",
+                "node_id": node_id,
+                "node_name": node_name,
+                "node_type": node_type,
+                "timestamp": start_time,
+            }
+        )
         try:
             if handler:
                 output = handler(node, ctx)
@@ -2528,47 +3218,56 @@ class ExecutionEngine:
                 }
             elapsed = round(time.time() - start_time, 4)
             if not isinstance(output, dict):
-                output = {"status": "failed", "error": f"Node returned unsupported output type: {type(output).__name__}."}
+                output = {
+                    "status": "failed",
+                    "error": f"Node returned unsupported output type: {type(output).__name__}.",
+                }
             node_failed = output.get("status") in {"failed", "error"} or (
                 output.get("execution_type") == "execution" and output.get("real_computation") is False
             )
             sanitized_output = _sanitize_for_json(output)
             res = {
-                "status": "failed" if node_failed else ("specification" if output.get("execution_type") == "specification" else "completed"),
-                "node_id": node_id,
-                "node_name": node_name,
-                "node_type": node_type,
-                "elapsed_sec": elapsed,
-                "output": sanitized_output
-            }
-            if node_failed:
-                res["error"] = output.get("error", "Node reported failure")
-            self._emit_event({
-                "event": "node_failed" if node_failed else "node_finished",
+                "status": "failed"
+                if node_failed
+                else ("specification" if output.get("execution_type") == "specification" else "completed"),
                 "node_id": node_id,
                 "node_name": node_name,
                 "node_type": node_type,
                 "elapsed_sec": elapsed,
                 "output": sanitized_output,
-                "timestamp": time.time(),
-            })
+            }
+            if node_failed:
+                res["error"] = output.get("error", "Node reported failure")
+            self._emit_event(
+                {
+                    "event": "node_failed" if node_failed else "node_finished",
+                    "node_id": node_id,
+                    "node_name": node_name,
+                    "node_type": node_type,
+                    "elapsed_sec": elapsed,
+                    "output": sanitized_output,
+                    "timestamp": time.time(),
+                }
+            )
             return res
         except Exception as err:
             elapsed = round(time.time() - start_time, 4)
-            self._emit_event({
-                "event": "node_failed",
-                "node_id": node_id,
-                "node_name": node_name,
-                "node_type": node_type,
-                "elapsed_sec": elapsed,
-                "error": str(err),
-                "timestamp": time.time(),
-            })
+            self._emit_event(
+                {
+                    "event": "node_failed",
+                    "node_id": node_id,
+                    "node_name": node_name,
+                    "node_type": node_type,
+                    "elapsed_sec": elapsed,
+                    "error": str(err),
+                    "timestamp": time.time(),
+                }
+            )
             return {
                 "status": "failed",
                 "node_id": node_id,
                 "node_name": node_name,
                 "node_type": node_type,
                 "elapsed_sec": elapsed,
-                "error": str(err)
+                "error": str(err),
             }

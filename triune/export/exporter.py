@@ -6,9 +6,10 @@ converter for Triune's custom architecture is implemented.
 
 from __future__ import annotations
 
-from pathlib import Path
 import json
 import struct
+from pathlib import Path
+
 import torch
 
 _TORCH_TO_SAFETENSORS_DTYPE = {
@@ -78,6 +79,7 @@ def export_safetensors(model: torch.nn.Module, output_path: str | Path) -> Path:
             deduped[key] = tensor
     try:
         from safetensors.torch import save_file
+
         save_file(deduped, str(output_path))
     except ImportError:
         _save_safetensors_fallback(deduped, output_path)
@@ -97,6 +99,7 @@ def export_lora_safetensors(model: torch.nn.Module, output_path: str | Path) -> 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         from safetensors.torch import save_file
+
         save_file(adapters, str(output_path))
     except ImportError:
         _save_safetensors_fallback(adapters, output_path)
@@ -138,6 +141,7 @@ def export_model(model: torch.nn.Module, output_path: str | Path, fmt: str = "sa
         return export_onnx(model, output_path)
     elif fmt_lower in ("hf", "huggingface"):
         from .hf_compat import export_to_huggingface
+
         return export_to_huggingface(model, output_path)
     else:
         return export_safetensors(model, output_path)

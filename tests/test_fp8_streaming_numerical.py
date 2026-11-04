@@ -1,12 +1,11 @@
 import unittest
+
 import torch
 import torch.nn as nn
 
-from triune.model.fp8 import FP8Linear, _FP8MatmulFn
-from triune.runtime.staging import ParameterStager, StagingBuffer, FP8StagingBuffer
+from triune.model.fp8 import FP8Linear
 from triune.runtime.capabilities import PrecisionCapabilities
-from triune.model.transformer import TriuneTransformer
-from triune.runtime.streaming import LayerStreamingEngine, StreamingConfig
+from triune.runtime.staging import FP8StagingBuffer, ParameterStager, StagingBuffer
 
 
 class TestFP8StreamingNumerical(unittest.TestCase):
@@ -16,6 +15,7 @@ class TestFP8StreamingNumerical(unittest.TestCase):
 
     def test_ordinary_linear_not_staged_as_fp8(self):
         """Ordinary nn.Linear must NEVER receive an FP8 staging buffer or _fp8_tensor."""
+
         class MixedModule(nn.Module):
             def __init__(self):
                 super().__init__()
@@ -43,15 +43,20 @@ class TestFP8StreamingNumerical(unittest.TestCase):
         stager.apply_staged_tensors(mod)
 
         # Ordinary linear must NOT have FP8 attributes
-        self.assertFalse(hasattr(mod.ordinary.weight, "_fp8_tensor") and mod.ordinary.weight._fp8_tensor is not None,
-                         "Ordinary linear must never receive _fp8_tensor")
-        self.assertFalse(hasattr(mod.ordinary.weight, "_fp8_inv_scale") and mod.ordinary.weight._fp8_inv_scale is not None,
-                         "Ordinary linear must never receive _fp8_inv_scale")
+        self.assertFalse(
+            hasattr(mod.ordinary.weight, "_fp8_tensor") and mod.ordinary.weight._fp8_tensor is not None,
+            "Ordinary linear must never receive _fp8_tensor",
+        )
+        self.assertFalse(
+            hasattr(mod.ordinary.weight, "_fp8_inv_scale") and mod.ordinary.weight._fp8_inv_scale is not None,
+            "Ordinary linear must never receive _fp8_inv_scale",
+        )
         self.assertEqual(mod.ordinary.weight.data.dtype, torch.bfloat16)
 
         # FP8 module receives _fp8_tensor and scale metadata if hardware fp8 is active
-        self.assertEqual(mod.fp8_mod.weight.data.dtype, torch.bfloat16,
-                         "Master weight data pointer on GPU must remain BF16")
+        self.assertEqual(
+            mod.fp8_mod.weight.data.dtype, torch.bfloat16, "Master weight data pointer on GPU must remain BF16"
+        )
         if self.caps.native_scaled_mm:
             self.assertIsNotNone(getattr(mod.fp8_mod.weight, "_fp8_tensor", None))
             self.assertIsNotNone(getattr(mod.fp8_mod.weight, "_fp8_inv_scale", None))
@@ -72,7 +77,7 @@ class TestFP8StreamingNumerical(unittest.TestCase):
         torch.manual_seed(42)
         in_features, out_features = 64, 64
         fp8_layer = FP8Linear(in_features, out_features, bias=True).to(torch.bfloat16)
-        
+
         cpu_master_weight = fp8_layer.weight.clone()
         cpu_master_bias = fp8_layer.bias.clone()
 
@@ -118,7 +123,7 @@ class TestFP8StreamingNumerical(unittest.TestCase):
         in_features, out_features = 128, 128
         ref_linear = nn.Linear(in_features, out_features, bias=False, dtype=torch.bfloat16, device=self.device)
         fp8_linear = FP8Linear(in_features, out_features, bias=False, dtype=torch.bfloat16, device=self.device)
-        
+
         with torch.no_grad():
             fp8_linear.weight.copy_(ref_linear.weight)
 

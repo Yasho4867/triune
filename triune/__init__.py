@@ -20,18 +20,19 @@ if sys.platform == "win32":
 
 # Eager core imports (fast, zero heavy web/agent/export dependencies)
 try:
+    from . import ops
     from .configs.config import build_config, default_config, validate_config
     from .kernels import (
+        FastGELU,
+        FastSwiGLU,
+        fast_chunk_gla,
         fast_cross_entropy,
+        fast_gelu,
+        fast_lora_forward,
         fast_rmsnorm,
         fast_rope,
         fast_swiglu,
-        fast_gelu,
-        FastSwiGLU,
-        FastGELU,
-        fast_chunk_gla,
         fast_zeropower_via_newtonschulz5,
-        fast_lora_forward,
         get_kernel_telemetry,
         is_turbo_mode_enabled,
         set_turbo_mode,
@@ -45,7 +46,6 @@ try:
         register_model,
     )
     from .optim import CentroidSteerOptimizer, Muon, build_optimizer
-    from . import ops
 
     # Minimalist Public API
     Model = build_model

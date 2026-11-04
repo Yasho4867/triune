@@ -8,10 +8,11 @@ Verifies:
 """
 
 import unittest
+
 import torch
 import torch.nn as nn
 
-from triune.runtime.staging import ParameterStager, StagingBuffer, FP8StagingBuffer
+from triune.runtime.staging import ParameterStager
 
 
 class DummyLayer(nn.Module):
@@ -94,7 +95,7 @@ class TestStagingInvariants(unittest.TestCase):
 
         # Reference forward + backward with weight A
         out_ref = ref_layer(x_ref)
-        (out_ref ** 2).sum().backward()
+        (out_ref**2).sum().backward()
 
         # Staged forward with weight A
         stager = ParameterStager(device=torch.device("cpu"), use_fp8=False)
@@ -110,7 +111,7 @@ class TestStagingInvariants(unittest.TestCase):
             p._cpu_data.mul_(-3.5).add_(42.0)
 
         # Backward must restage from forward snapshot A, not mutated B
-        (out_staged ** 2).sum().backward()
+        (out_staged**2).sum().backward()
 
         self.assertTrue(torch.allclose(x_ref.grad, x_staged.grad, atol=1e-6))
         for (name, p_ref), (_, p_staged) in zip(ref_layer.named_parameters(), staged_layer.named_parameters()):
@@ -210,21 +211,15 @@ class TestStagingInvariants(unittest.TestCase):
 
     def test_streaming_mutation_invariance_adaptive_early_exit(self):
         """Verify forward-snapshot isolation under adaptive early exit (force_depth=None)."""
-        self._assert_streaming_mutation_invariance(
-            force_depth=None, use_checkpointing=False, use_fp8=False
-        )
+        self._assert_streaming_mutation_invariance(force_depth=None, use_checkpointing=False, use_fp8=False)
 
     def test_streaming_mutation_invariance_with_checkpointing(self):
         """Verify forward-snapshot isolation with gradient checkpointing enabled."""
-        self._assert_streaming_mutation_invariance(
-            force_depth=2, use_checkpointing=True, use_fp8=False
-        )
+        self._assert_streaming_mutation_invariance(force_depth=2, use_checkpointing=True, use_fp8=False)
 
     def test_streaming_mutation_invariance_with_fp8(self):
         """Verify forward-snapshot isolation with FP8 linear layers and FP8 staging."""
-        self._assert_streaming_mutation_invariance(
-            force_depth=2, use_checkpointing=False, use_fp8=True
-        )
+        self._assert_streaming_mutation_invariance(force_depth=2, use_checkpointing=False, use_fp8=True)
 
     def test_deferred_mode_zero_snapshot_memory_savings(self):
         """Verify Mode 2 (capture_forward_snapshots=False) eliminates forward snapshot memory and matches gradients."""

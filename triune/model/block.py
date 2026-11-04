@@ -5,13 +5,14 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
+from triune.kernels.fast_swiglu import FastGELU
+
 from .attention import HybridAttention
 from .config import NUM_EXPERTS, checkpoint_bwd_ctx, checkpoint_fwd_ctx
 from .fp4 import FP4Linear
 from .fp8 import FP8Linear
 from .moe import MoE_FFN
 from .norms import RMSNorm
-from triune.kernels.fast_swiglu import FastGELU
 
 
 class TransformerBlock(nn.Module):
@@ -33,9 +34,7 @@ class TransformerBlock(nn.Module):
             self.ffn = MoE_FFN(dim, num_experts=num_experts, use_fp4=use_fp4, use_fp8=use_fp8)
         else:
             DenseLinear = FP8Linear if use_fp8 else (FP4Linear if use_fp4 else nn.Linear)
-            self.ffn = nn.Sequential(
-                DenseLinear(dim, dim * 4), FastGELU(), DenseLinear(dim * 4, dim)
-            )
+            self.ffn = nn.Sequential(DenseLinear(dim, dim * 4), FastGELU(), DenseLinear(dim * 4, dim))
         self.norm1 = RMSNorm(dim)
         self.norm2 = RMSNorm(dim)
         self.layer_idx = layer_idx

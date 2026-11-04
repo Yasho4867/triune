@@ -58,10 +58,11 @@ class Trainer:
         self._train_batches = CyclingDataLoader(train_loader)
         print(f"[Trainer] Materializing {self.config.get('eval_batches', 1)} evaluation batch(es)...", flush=True)
         self.eval_batches = self._materialize_eval_batches()
-        print(f"[Trainer] Evaluation batch(es) ready.", flush=True)
+        print("[Trainer] Evaluation batch(es) ready.", flush=True)
         self.engine = TrainingEngine(self)
         try:
             from .callbacks import install_checkpoint_signal_handlers
+
             install_checkpoint_signal_handlers(self)
         except Exception:
             pass

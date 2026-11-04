@@ -10,7 +10,8 @@ forward-time weights, preventing CPU master mutations from corrupting backward g
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Iterable, List, Optional
+from typing import Any, List, Optional
+
 import torch
 import torch.nn as nn
 
@@ -24,7 +25,9 @@ class StagingBuffer:
     gpu_tensor: Optional[torch.Tensor] = None
     event: Optional[torch.cuda.Event] = None
     forward_snapshot: Optional[torch.Tensor] = None
-    capture_forward_snapshots: bool = True  # Mode 1 (True: immediate with snapshots) vs Mode 2 (False: deferred zero-snapshot)
+    capture_forward_snapshots: bool = (
+        True  # Mode 1 (True: immediate with snapshots) vs Mode 2 (False: deferred zero-snapshot)
+    )
 
     @property
     def cpu_master_bytes(self) -> int:
@@ -61,8 +64,10 @@ class StagingBuffer:
         else:
             source = self.cpu_master
 
-        dtype = target_dtype if target_dtype is not None else (
-            torch.bfloat16 if source.dtype == torch.float8_e4m3fn else source.dtype
+        dtype = (
+            target_dtype
+            if target_dtype is not None
+            else (torch.bfloat16 if source.dtype == torch.float8_e4m3fn else source.dtype)
         )
         can_non_blocking = bool(non_blocking and getattr(source, "is_pinned", lambda: False)())
         if stream is not None and device.type == "cuda":
@@ -145,8 +150,10 @@ class FP8StagingBuffer(StagingBuffer):
         else:
             source = self.cpu_master
 
-        compute_dtype = target_dtype if target_dtype is not None else (
-            torch.bfloat16 if source.dtype == torch.float8_e4m3fn else source.dtype
+        compute_dtype = (
+            target_dtype
+            if target_dtype is not None
+            else (torch.bfloat16 if source.dtype == torch.float8_e4m3fn else source.dtype)
         )
 
         can_non_blocking = bool(non_blocking and getattr(source, "is_pinned", lambda: False)())
@@ -165,7 +172,7 @@ class FP8StagingBuffer(StagingBuffer):
                 amax = gpu_master.abs().amax().clamp_min(1e-12)
                 scale = (448.0 / amax).to(dtype=compute_dtype)
                 fp8_t = (gpu_master * scale).to(torch.float8_e4m3fn)
-                inv_scale = (1.0 / scale.float())
+                inv_scale = 1.0 / scale.float()
 
                 self.amax = amax
                 self.scale = scale
@@ -291,8 +298,15 @@ class ParameterStager:
                 )
 
         if register_backward_hooks and not getattr(module, "_stager_hooks_registered", False):
+
             def _fwd_pre_hook(mod: nn.Module, args: tuple):
-                if torch.is_grad_enabled() and args and isinstance(args[0], torch.Tensor) and args[0].is_floating_point() and not args[0].requires_grad:
+                if (
+                    torch.is_grad_enabled()
+                    and args
+                    and isinstance(args[0], torch.Tensor)
+                    and args[0].is_floating_point()
+                    and not args[0].requires_grad
+                ):
                     return (args[0].detach().requires_grad_(True),) + args[1:]
                 return args
 
@@ -340,7 +354,7 @@ class ParameterStager:
                         non_blocking=True,
                         is_backward=is_backward,
                     )
-                
+
                 # Telemetry tracking for host-to-device transfers
                 if gpu_tensor is not None:
                     nbytes = gpu_tensor.numel() * gpu_tensor.element_size()

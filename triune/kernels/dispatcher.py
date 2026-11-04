@@ -11,8 +11,8 @@ both dense and sparse MoE architectures.
 from __future__ import annotations
 
 import os
-import sys
 from typing import Any, Dict
+
 import torch
 
 _TRITON_AVAILABLE: bool | None = None
@@ -37,7 +37,6 @@ def is_triton_available() -> bool:
         return False
 
     try:
-        import triton
         import triton.language as tl  # noqa: F401
 
         _TRITON_AVAILABLE = True

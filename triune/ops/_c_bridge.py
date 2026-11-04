@@ -2,6 +2,7 @@
 Triune Native C/C++/CUDA Bridge (`ctypes` FFI to `triune_core.dll` / `libtriune_core.so`).
 Provides direct zero-overhead access to the compiled AVX2 + CUDA Runtime C engine (`csrc/`).
 """
+
 from __future__ import annotations
 
 import ctypes

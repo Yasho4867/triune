@@ -62,24 +62,26 @@ class RepoSearchClient:
                     else:
                         mod_type = "model"
 
-                    results.append({
-                        "id": f"gh-{item['id']}",
-                        "name": item["name"],
-                        "author": item["owner"]["login"],
-                        "source": "github",
-                        "type": mod_type,
-                        "version": "latest",
-                        "description": item.get("description") or "No description provided.",
-                        "repo_url": item["html_url"],
-                        "clone_url": item.get("clone_url") or f"{item['html_url']}.git",
-                        "download_url": f"{item['html_url']}/archive/refs/heads/{item.get('default_branch', 'main')}.zip",
-                        "stars": item.get("stargazers_count", 0),
-                        "forks": item.get("forks_count", 0),
-                        "default_branch": item.get("default_branch", "main"),
-                        "updated_at": item.get("updated_at", ""),
-                        "tags": [item.get("language") or "Python", f"★ {item.get('stargazers_count', 0)}"],
-                        "requires_cuda": False
-                    })
+                    results.append(
+                        {
+                            "id": f"gh-{item['id']}",
+                            "name": item["name"],
+                            "author": item["owner"]["login"],
+                            "source": "github",
+                            "type": mod_type,
+                            "version": "latest",
+                            "description": item.get("description") or "No description provided.",
+                            "repo_url": item["html_url"],
+                            "clone_url": item.get("clone_url") or f"{item['html_url']}.git",
+                            "download_url": f"{item['html_url']}/archive/refs/heads/{item.get('default_branch', 'main')}.zip",
+                            "stars": item.get("stargazers_count", 0),
+                            "forks": item.get("forks_count", 0),
+                            "default_branch": item.get("default_branch", "main"),
+                            "updated_at": item.get("updated_at", ""),
+                            "tags": [item.get("language") or "Python", f"★ {item.get('stargazers_count', 0)}"],
+                            "requires_cuda": False,
+                        }
+                    )
                 return results
         except Exception as err:
             print(f"[GitHub API] Search fallback: {err}")
@@ -109,24 +111,26 @@ class RepoSearchClient:
                     if likes:
                         tags.append(f"♥ {likes}")
 
-                    results.append({
-                        "id": f"hf-m-{model_id.replace('/', '--')}",
-                        "name": model_id,
-                        "display_name": name,
-                        "author": author,
-                        "source": "huggingface",
-                        "type": "model",
-                        "version": "main",
-                        "description": f"Hugging Face Model: {model_id} ({pipeline})",
-                        "repo_url": f"https://huggingface.co/{model_id}",
-                        "clone_url": f"https://huggingface.co/{model_id}",
-                        "download_url": f"https://huggingface.co/{model_id}/resolve/main/model.safetensors",
-                        "stars": likes,
-                        "downloads": downloads,
-                        "pipeline_tag": pipeline,
-                        "tags": tags,
-                        "requires_cuda": False
-                    })
+                    results.append(
+                        {
+                            "id": f"hf-m-{model_id.replace('/', '--')}",
+                            "name": model_id,
+                            "display_name": name,
+                            "author": author,
+                            "source": "huggingface",
+                            "type": "model",
+                            "version": "main",
+                            "description": f"Hugging Face Model: {model_id} ({pipeline})",
+                            "repo_url": f"https://huggingface.co/{model_id}",
+                            "clone_url": f"https://huggingface.co/{model_id}",
+                            "download_url": f"https://huggingface.co/{model_id}/resolve/main/model.safetensors",
+                            "stars": likes,
+                            "downloads": downloads,
+                            "pipeline_tag": pipeline,
+                            "tags": tags,
+                            "requires_cuda": False,
+                        }
+                    )
                 return results
         except Exception as err:
             print(f"[HuggingFace Models API] Search fallback: {err}")
@@ -155,23 +159,25 @@ class RepoSearchClient:
                     if likes:
                         tags.append(f"♥ {likes}")
 
-                    results.append({
-                        "id": f"hf-d-{ds_id.replace('/', '--')}",
-                        "name": ds_id,
-                        "display_name": name,
-                        "author": author,
-                        "source": "huggingface",
-                        "type": "dataset",
-                        "version": "main",
-                        "description": f"Hugging Face Dataset: {ds_id}",
-                        "repo_url": f"https://huggingface.co/datasets/{ds_id}",
-                        "clone_url": f"https://huggingface.co/datasets/{ds_id}",
-                        "download_url": f"https://huggingface.co/datasets/{ds_id}",
-                        "stars": likes,
-                        "downloads": downloads,
-                        "tags": tags,
-                        "requires_cuda": False
-                    })
+                    results.append(
+                        {
+                            "id": f"hf-d-{ds_id.replace('/', '--')}",
+                            "name": ds_id,
+                            "display_name": name,
+                            "author": author,
+                            "source": "huggingface",
+                            "type": "dataset",
+                            "version": "main",
+                            "description": f"Hugging Face Dataset: {ds_id}",
+                            "repo_url": f"https://huggingface.co/datasets/{ds_id}",
+                            "clone_url": f"https://huggingface.co/datasets/{ds_id}",
+                            "download_url": f"https://huggingface.co/datasets/{ds_id}",
+                            "stars": likes,
+                            "downloads": downloads,
+                            "tags": tags,
+                            "requires_cuda": False,
+                        }
+                    )
                 return results
         except Exception as err:
             print(f"[HuggingFace Datasets API] Search fallback: {err}")

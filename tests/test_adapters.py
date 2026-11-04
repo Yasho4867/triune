@@ -1,15 +1,15 @@
 """Unit tests for Triune Universal Early Exit Adapters and Dynamic Confidence Decoding."""
 
 import unittest
+
 import torch
 import torch.nn as nn
 
 from triune.configs import build_config
 from triune.model import (
     TriuneTransformer,
-    attach_early_exits,
-    generate_adaptive,
     WeightTiedExitProjection,
+    attach_early_exits,
 )
 
 
@@ -20,14 +20,16 @@ class MockHFCausalLM(nn.Module):
         super().__init__()
         self.model = nn.Module()
         self.model.embed = nn.Embedding(vocab_size, hidden_dim)
-        self.model.layers = nn.ModuleList([
-            nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim),
-                nn.ReLU(),
-                nn.Linear(hidden_dim, hidden_dim),
-            )
-            for _ in range(num_layers)
-        ])
+        self.model.layers = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Linear(hidden_dim, hidden_dim),
+                    nn.ReLU(),
+                    nn.Linear(hidden_dim, hidden_dim),
+                )
+                for _ in range(num_layers)
+            ]
+        )
         self.lm_head = nn.Linear(hidden_dim, vocab_size, bias=False)
 
     def forward(self, input_ids: torch.Tensor):
@@ -79,18 +81,20 @@ class TestEarlyExitAdapters(unittest.TestCase):
         self.assertEqual(res["output_ids"].size(1), 13)  # 3 prompt + 10 generated
 
     def test_attach_early_exits_to_triune_transformer(self):
-        config = build_config({
-            "vocab_size": 500,
-            "hidden_dim": 256,
-            "num_layers": 18,
-            "num_heads": 2,
-            "num_experts": 2,
-            "router_prefix_layers": 3,
-            "reflex_exit_layer": 5,
-            "limbic_exit_layer": 13,
-            "use_fp4": False,
-            "use_fp8": False,
-        })
+        config = build_config(
+            {
+                "vocab_size": 500,
+                "hidden_dim": 256,
+                "num_layers": 18,
+                "num_heads": 2,
+                "num_experts": 2,
+                "router_prefix_layers": 3,
+                "reflex_exit_layer": 5,
+                "limbic_exit_layer": 13,
+                "use_fp4": False,
+                "use_fp8": False,
+            }
+        )
         model = TriuneTransformer(
             vocab_size=config["vocab_size"],
             hidden_dim=config["hidden_dim"],

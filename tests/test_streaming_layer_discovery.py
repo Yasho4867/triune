@@ -1,4 +1,5 @@
 import unittest
+
 import torch
 import torch.nn as nn
 
@@ -11,6 +12,7 @@ class TestStreamingLayerDiscovery(unittest.TestCase):
 
     def test_standard_model_discovery(self):
         """Standard model with model.layers ModuleList is discovered automatically."""
+
         class DummyTransformer(nn.Module):
             def __init__(self):
                 super().__init__()
@@ -26,6 +28,7 @@ class TestStreamingLayerDiscovery(unittest.TestCase):
 
     def test_explicit_layers_path_resolution(self):
         """Explicit layers_path in config resolves target nested ModuleList."""
+
         class CustomModel(nn.Module):
             def __init__(self):
                 super().__init__()
@@ -41,6 +44,7 @@ class TestStreamingLayerDiscovery(unittest.TestCase):
 
     def test_ambiguous_module_list_raises_value_error(self):
         """Model with multiple competing ModuleLists of equal length raises ValueError."""
+
         class AmbiguousModel(nn.Module):
             def __init__(self):
                 super().__init__()
@@ -55,6 +59,7 @@ class TestStreamingLayerDiscovery(unittest.TestCase):
 
     def test_invalid_layers_path_raises_value_error(self):
         """Invalid layers_path raises ValueError."""
+
         class SimpleModel(nn.Module):
             def __init__(self):
                 super().__init__()
@@ -68,6 +73,7 @@ class TestStreamingLayerDiscovery(unittest.TestCase):
 
     def test_chunk_size_greater_than_one_raises_not_implemented(self):
         """chunk_size > 1 raises NotImplementedError as specified by design."""
+
         class DummyTransformer(nn.Module):
             def __init__(self):
                 super().__init__()

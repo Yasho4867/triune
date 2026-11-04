@@ -1,10 +1,10 @@
 import unittest
+
 import torch
-import torch.nn as nn
 
 from triune.model.transformer import TriuneTransformer
-from triune.runtime.streaming import LayerStreamingEngine, StreamingConfig
 from triune.optim.centroid import CentroidSteerOptimizer
+from triune.runtime.streaming import LayerStreamingEngine, StreamingConfig
 
 
 class TestStreamingMoE(unittest.TestCase):

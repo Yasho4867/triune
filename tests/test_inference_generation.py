@@ -105,4 +105,3 @@ class TestSharedGeneration(unittest.TestCase):
             prompt_is_formatted=True,
         )
         self.assertEqual(tokenizer.prompts, ["System: concise\nUser: hello\nAssistant:"])
-

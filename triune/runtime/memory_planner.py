@@ -7,6 +7,7 @@ and gradient accumulation buffers to fit models cleanly on consumer GPUs (e.g. R
 from __future__ import annotations
 
 from dataclasses import dataclass
+
 import torch
 
 
@@ -26,7 +27,7 @@ class MemoryEstimate:
 
 class MemoryPlanner:
     """Hardware-aware VRAM Memory Planner.
-    
+
     Accurately models the Triune architecture:
     - Embedding: vocab_size * hidden_dim
     - Per-layer attention: 4 projections (Q,K,V,G) + output = 5 * hidden_dim^2
@@ -68,7 +69,7 @@ class MemoryPlanner:
         total_layer_params = 0
         for i in range(num_layers):
             # Attention: Q, K, V, gate, out projections + 2 RMSNorms
-            attn_params = 5 * (hidden_dim ** 2) + 2 * hidden_dim
+            attn_params = 5 * (hidden_dim**2) + 2 * hidden_dim
 
             # FFN: MoE layers (after reflex_exit_layer) vs dense prefix layers
             if i > reflex_exit_layer:
@@ -94,11 +95,11 @@ class MemoryPlanner:
 
         # ── Bytes Per Parameter ──────────────────────────────
         if use_fp4:
-            bytes_per_param = 0.5   # 4-bit (0.5 bytes per parameter)
+            bytes_per_param = 0.5  # 4-bit (0.5 bytes per parameter)
         elif use_fp8:
-            bytes_per_param = 1.0   # 8-bit (1.0 byte per parameter)
+            bytes_per_param = 1.0  # 8-bit (1.0 byte per parameter)
         else:
-            bytes_per_param = 2.0   # 16-bit BF16 (2.0 bytes per parameter)
+            bytes_per_param = 2.0  # 16-bit BF16 (2.0 bytes per parameter)
 
         param_memory_gb = (total_params * bytes_per_param) / (1024**3)
 
@@ -112,9 +113,7 @@ class MemoryPlanner:
         optimizer_bytes_per_param = optimizer_2d_bytes + projection_bytes
 
         norm_params = num_layers * 2 * hidden_dim
-        optimizer_memory_gb = (
-            (total_params - norm_params) * optimizer_bytes_per_param + norm_params * 8.0
-        ) / (1024**3)
+        optimizer_memory_gb = ((total_params - norm_params) * optimizer_bytes_per_param + norm_params * 8.0) / (1024**3)
 
         # ── Activation Memory (with Gradient Checkpointing) ───
         # With selective gradient checkpointing, only layer boundary activations are stored
@@ -157,7 +156,9 @@ class MemoryPlanner:
             recommended_precision = "bf16"
 
         activation_memory_gb = recommended_batch_size * activation_per_sample_gb
-        total_vram_gb = param_memory_gb + optimizer_memory_gb + activation_memory_gb + gradient_memory_gb + cuda_context_gb
+        total_vram_gb = (
+            param_memory_gb + optimizer_memory_gb + activation_memory_gb + gradient_memory_gb + cuda_context_gb
+        )
 
         return MemoryEstimate(
             total_params=total_params,

@@ -140,7 +140,7 @@ class CUDAGraphEngine:
         fallback_fn: Optional[Callable[[torch.Tensor, Optional[torch.Tensor]], Any]] = None,
     ) -> torch.Tensor | float:
         """Replay the hardware CUDA graph with new batch inputs at zero CPU latency.
-        
+
         Args:
             input_tokens: New input token tensor [B, T].
             target_tokens: Optional target token tensor [B, T].
@@ -214,4 +214,3 @@ class CUDAGraphEngine:
         self.static_input.copy_(input_tokens, non_blocking=True)
         self.graph.replay()
         return self.static_output
-

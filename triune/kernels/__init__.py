@@ -16,10 +16,12 @@ from .dispatcher import (
     set_turbo_mode,
 )
 from .fast_cross_entropy import FastChunkedCrossEntropyLoss, chunked_cross_entropy_from_hidden, fast_cross_entropy
+from .fast_fp8 import FastFP8Linear, fast_fp8_linear, is_fp8_available
 from .fast_gla import fast_chunk_gla
 from .fast_lora import fast_gate_up_lora_linear, fast_lora_forward, fast_lora_linear, fast_qkv_lora_linear
 from .fast_muon import fast_zeropower_via_newtonschulz5
-from .fast_rmsnorm import FastRMSNorm, fast_rmsnorm
+from .fast_nvfp4 import NVFP4Linear, nvfp4_dequantize, nvfp4_quantize
+from .fast_rmsnorm import FastRMSNorm, fast_fused_add_rmsnorm, fast_rmsnorm
 from .fast_rope import fast_rope
 from .fast_swiglu import FastGELU, FastSwiGLU, fast_gelu, fast_swiglu
 
@@ -33,6 +35,7 @@ __all__ = [
     "get_kernel_telemetry",
     # Normalization & Embeddings
     "fast_rmsnorm",
+    "fast_fused_add_rmsnorm",
     "FastRMSNorm",
     "fast_rope",
     # Activations
@@ -51,4 +54,11 @@ __all__ = [
     "fast_lora_linear",
     "fast_qkv_lora_linear",
     "fast_gate_up_lora_linear",
+    # Blackwell FP8 & NVFP4
+    "is_fp8_available",
+    "fast_fp8_linear",
+    "FastFP8Linear",
+    "nvfp4_quantize",
+    "nvfp4_dequantize",
+    "NVFP4Linear",
 ]

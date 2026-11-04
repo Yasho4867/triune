@@ -78,3 +78,15 @@ triune = "triune.cli:main"
 where = ["."]
 include = ["triune", "triune.*", "scripts", "scripts.*"]
 exclude = ["tests*", "studio*", "models*", "triune_fast*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501", "F403", "F405", "E402", "E741", "F841", "W291", "E731"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import torch
+
 from triune.kernels.fast_gla import fast_chunk_gla
 
 
@@ -29,6 +30,7 @@ def gla(
     """
     if q.shape[1] == 1 and initial_state is not None and q.device.type == "cpu" and q.dtype == torch.float32:
         from ._c_bridge import c_gla_recurrent_step_f32
+
         c_res = c_gla_recurrent_step_f32(
             q.squeeze(1).contiguous(),
             k.squeeze(1).contiguous(),
@@ -40,8 +42,4 @@ def gla(
             out_step, next_state = c_res
             return out_step.unsqueeze(1), next_state
 
-    return fast_chunk_gla(
-        q, k, v, g,
-        initial_state=initial_state,
-        chunk_size=chunk_size
-    )
+    return fast_chunk_gla(q, k, v, g, initial_state=initial_state, chunk_size=chunk_size)

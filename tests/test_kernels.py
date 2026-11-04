@@ -1,18 +1,19 @@
 """Unit tests for Triune High-Performance Kernel Acceleration Suite."""
 
 import unittest
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from triune.kernels import (
-    is_triton_available,
-    get_kernel_backend,
-    fast_rmsnorm,
     FastRMSNorm,
-    fast_rope,
-    fast_cross_entropy,
     chunked_cross_entropy_from_hidden,
+    fast_cross_entropy,
+    fast_rmsnorm,
+    fast_rope,
+    get_kernel_backend,
+    is_triton_available,
 )
 
 
@@ -21,7 +22,9 @@ class TestKernelSuite(unittest.TestCase):
         avail = is_triton_available()
         self.assertIsInstance(avail, bool)
         backend = get_kernel_backend()
-        self.assertIn(backend, ("triton", "pytorch", "native-cuda-analytical", "triton-hardware-fused", "vectorized-cpu"))
+        self.assertIn(
+            backend, ("triton", "pytorch", "native-cuda-analytical", "triton-hardware-fused", "vectorized-cpu")
+        )
 
     def test_fast_rmsnorm_forward_and_backward(self):
         B, T, D = 2, 8, 64
@@ -133,7 +136,8 @@ class TestKernelSuite(unittest.TestCase):
         self.assertEqual(out2.item(), 0.0)
 
     def test_fast_swiglu_and_gelu(self):
-        from triune.kernels import fast_swiglu, fast_gelu, FastSwiGLU, FastGELU
+        from triune.kernels import FastGELU, fast_swiglu
+
         gate = torch.randn(4, 16, 64, requires_grad=True)
         up = torch.randn(4, 16, 64, requires_grad=True)
 
@@ -159,11 +163,12 @@ class TestKernelSuite(unittest.TestCase):
 
     def test_fast_muon_newton_schulz(self):
         from triune.kernels import fast_zeropower_via_newtonschulz5
+
         # 64x128 matrix
         G = torch.randn(64, 128)
         X = fast_zeropower_via_newtonschulz5(G, steps=5)
         self.assertEqual(X.shape, (64, 128))
-        
+
         # Verify semi-orthogonality: X @ X.T should be close to identity
         gram = X @ X.t()
         eye = torch.eye(64, device=X.device, dtype=X.dtype)
@@ -172,6 +177,7 @@ class TestKernelSuite(unittest.TestCase):
 
     def test_fast_lora_forward(self):
         from triune.kernels import fast_lora_forward
+
         B, T, D_in, D_out, rank = 2, 8, 32, 48, 8
         x = torch.randn(B, T, D_in, requires_grad=True)
         lora_A = torch.randn(rank, D_in, requires_grad=True)
@@ -189,6 +195,7 @@ class TestKernelSuite(unittest.TestCase):
 
     def test_fast_chunk_gla(self):
         from triune.kernels import fast_chunk_gla
+
         B, T, H, HD = 2, 64, 4, 32
         q = torch.randn(B, T, H, HD)
         k = torch.randn(B, T, H, HD)
@@ -201,6 +208,7 @@ class TestKernelSuite(unittest.TestCase):
 
     def test_kernel_telemetry_and_turbo_mode(self):
         from triune.kernels import get_kernel_telemetry, is_turbo_mode_enabled, set_turbo_mode
+
         self.assertTrue(is_turbo_mode_enabled())
         telem = get_kernel_telemetry()
         self.assertIn("kernels", telem)
@@ -233,8 +241,62 @@ class TestKernelSuite(unittest.TestCase):
         loss.backward()
         torch.cuda.synchronize()
         peak_extra = torch.cuda.max_memory_allocated() - base
-        self.assertLess(peak_extra, full_logits_bytes * 0.25,
-                        f"peak extra {peak_extra/1e6:.1f} MB vs full logits {full_logits_bytes/1e6:.1f} MB")
+        self.assertLess(
+            peak_extra,
+            full_logits_bytes * 0.25,
+            f"peak extra {peak_extra / 1e6:.1f} MB vs full logits {full_logits_bytes / 1e6:.1f} MB",
+        )
+
+    def test_fast_fused_add_rmsnorm(self):
+        from triune.kernels import fast_fused_add_rmsnorm
+
+        B, T, D = 2, 8, 64
+        x = torch.randn(B, T, D, requires_grad=True)
+        residual = torch.randn(B, T, D, requires_grad=True)
+        weight = torch.ones(D, requires_grad=True)
+
+        normed, res_out = fast_fused_add_rmsnorm(x, residual, weight, eps=1e-6)
+        self.assertEqual(normed.shape, (B, T, D))
+        self.assertEqual(res_out.shape, (B, T, D))
+
+        loss = normed.sum() + res_out.sum()
+        loss.backward()
+        self.assertIsNotNone(x.grad)
+        self.assertIsNotNone(residual.grad)
+        self.assertIsNotNone(weight.grad)
+
+    def test_fast_fp8_linear(self):
+        from triune.kernels import FastFP8Linear
+
+        mod = FastFP8Linear(64, 32)
+        x = torch.randn(2, 8, 64, requires_grad=True)
+        out = mod(x)
+        self.assertEqual(out.shape, (2, 8, 32))
+        loss = out.sum()
+        loss.backward()
+        self.assertIsNotNone(x.grad)
+        self.assertIsNotNone(mod.weight.grad)
+
+    def test_nvfp4_roundtrip(self):
+        from triune.kernels import NVFP4Linear, nvfp4_dequantize, nvfp4_quantize
+
+        rows, cols = 32, 64
+        w = torch.randn(rows, cols, dtype=torch.bfloat16)
+        packed, scale = nvfp4_quantize(w)
+        self.assertEqual(packed.shape, (rows, cols // 2))
+        self.assertEqual(scale.shape, (rows, cols // 16))
+
+        recon = nvfp4_dequantize(packed, scale, dtype=torch.bfloat16)
+        self.assertEqual(recon.shape, (rows, cols))
+        cos_sim = torch.nn.functional.cosine_similarity(w.float().view(-1), recon.float().view(-1), dim=0).item()
+        self.assertGreater(cos_sim, 0.95)
+
+        # Test NVFP4Linear
+        linear = nn.Linear(64, 32, bias=True, dtype=torch.bfloat16)
+        nv_linear = NVFP4Linear.from_linear(linear)
+        x = torch.randn(2, 4, 64, dtype=torch.bfloat16)
+        out = nv_linear(x)
+        self.assertEqual(out.shape, (2, 4, 32))
 
 
 if __name__ == "__main__":

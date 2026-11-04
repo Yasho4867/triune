@@ -6,7 +6,6 @@ import ast
 import base64
 import hashlib
 import importlib.util
-import inspect
 import json
 import keyword
 import os
@@ -20,7 +19,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
 from .github_client import RepoSearchClient
 
@@ -133,12 +132,14 @@ sys.stdout.write(json.dumps(result))
         self.python_executable = python_executable
 
     def _call(self, op: str, service: str, username: str, password: str = "") -> str:
-        payload = json.dumps({
-            "op": op,
-            "service": service,
-            "username": username,
-            "password": password,
-        })
+        payload = json.dumps(
+            {
+                "op": op,
+                "service": service,
+                "username": username,
+                "password": password,
+            }
+        )
         try:
             result = subprocess.run(
                 [self.python_executable, "-c", self._HELPER],
@@ -181,7 +182,11 @@ def _verified_plugin_entrypoints(module_dir: Path) -> tuple[list[Path], str | No
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except Exception:
         return [], "A valid triune_plugin.json manifest is required."
-    if not isinstance(manifest, dict) or type(manifest.get("manifest_version")) is not int or manifest["manifest_version"] != 1:
+    if (
+        not isinstance(manifest, dict)
+        or type(manifest.get("manifest_version")) is not int
+        or manifest["manifest_version"] != 1
+    ):
         return [], "Unsupported plugin manifest version; expected manifest_version 1."
     if not isinstance(manifest.get("name"), str) or not manifest["name"].strip():
         return [], "Plugin manifest must include a name."
@@ -193,8 +198,10 @@ def _verified_plugin_entrypoints(module_dir: Path) -> tuple[list[Path], str | No
     if not isinstance(entrypoints, list) or not entrypoints or len(entrypoints) > 32:
         return [], "Plugin manifest must declare between 1 and 32 Python entrypoints."
     permissions = manifest.get("permissions", [])
-    if not isinstance(permissions, list) or len(permissions) > 32 or not all(
-        isinstance(item, str) and re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", item) for item in permissions
+    if (
+        not isinstance(permissions, list)
+        or len(permissions) > 32
+        or not all(isinstance(item, str) and re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", item) for item in permissions)
     ):
         return [], "Plugin manifest permissions must be a list of simple permission names."
 
@@ -441,17 +448,22 @@ class ModuleManager:
             return _WindowsCredentialStoreBridge(sys.executable)
 
         if os.environ.get("TRIUNE_TESTING") == "1":
+
             class _InMemoryTestKeyring:
                 _vault: dict[str, str] = {}
+
                 @classmethod
                 def get_password(cls, service: str, username: str) -> Optional[str]:
                     return cls._vault.get(f"{service}:{username}", "")
+
                 @classmethod
                 def set_password(cls, service: str, username: str, password: str) -> None:
                     cls._vault[f"{service}:{username}"] = password
+
                 @classmethod
                 def delete_password(cls, service: str, username: str) -> None:
                     cls._vault.pop(f"{service}:{username}", None)
+
             return _InMemoryTestKeyring
 
         try:
@@ -512,7 +524,6 @@ class ModuleManager:
             except Exception:
                 pass
 
-
     def _load_curated_registry(self) -> list[dict[str, Any]]:
         reg_file = Path(__file__).parent / "registry.json"
         if reg_file.exists():
@@ -537,7 +548,7 @@ class ModuleManager:
                 "download_url": "builtin://custom-loss-nodes",
                 "size_mb": 2.5,
                 "tags": ["DAG Nodes", "Plugin", "Loss Functions", "Verified"],
-                "requires_cuda": False
+                "requires_cuda": False,
             },
             {
                 "id": "code-assistant-lora",
@@ -550,7 +561,7 @@ class ModuleManager:
                 "download_url": "builtin://code-assistant-lora",
                 "size_mb": 48.0,
                 "tags": ["LoRA", "Coding", "r=16", "Adapter"],
-                "requires_cuda": False
+                "requires_cuda": False,
             },
             {
                 "id": "fineweb-sample-10k",
@@ -563,7 +574,7 @@ class ModuleManager:
                 "download_url": "builtin://fineweb-sample-10k",
                 "size_mb": 14.5,
                 "tags": ["Dataset", "Pre-tokenized", "BPE", "Streaming"],
-                "requires_cuda": False
+                "requires_cuda": False,
             },
             {
                 "id": "triune-base-weights",
@@ -576,7 +587,7 @@ class ModuleManager:
                 "download_url": "builtin://triune-base-weights",
                 "size_mb": 191.6,
                 "tags": ["MoE", "2.5B", "Recommended", "Native"],
-                "requires_cuda": False
+                "requires_cuda": False,
             },
             {
                 "id": "bitsandbytes-quant",
@@ -590,7 +601,7 @@ class ModuleManager:
                 "package_name": "bitsandbytes",
                 "size_mb": 85.0,
                 "tags": ["Quantization", "NF4", "VRAM Saver"],
-                "requires_cuda": False
+                "requires_cuda": False,
             },
             {
                 "id": "flash-attn-package",
@@ -604,8 +615,8 @@ class ModuleManager:
                 "package_name": "flash-attn",
                 "size_mb": 240.0,
                 "tags": ["CUDA", "GPU Only", "Speedup"],
-                "requires_cuda": True
-            }
+                "requires_cuda": True,
+            },
         ]
 
     # -------------------------------------------------------------------------
@@ -639,12 +650,13 @@ class ModuleManager:
         torch_mod = None
         try:
             import torch as _torch
+
             torch_mod = _torch
             if _torch.cuda.is_available():
                 has_cuda = True
                 props = _torch.cuda.get_device_properties(0)
                 gpu_name = props.name
-                vram_total_gb = round(props.total_memory / (1024 ** 3), 2)
+                vram_total_gb = round(props.total_memory / (1024**3), 2)
                 compute_cap_str = f"SM {props.major}.{props.minor}"
                 if _torch.version.cuda:
                     cuda_version = str(_torch.version.cuda)
@@ -718,7 +730,12 @@ class ModuleManager:
             ("torch", "torch", "Core Engine", "PyTorch CUDA Autograd, BF16/FP8 AMP & Tensor Cores"),
             ("triton", "triton", "CUDA Kernels", "OpenAI Triton Compiler for Fused RMSNorm, RoPE, GLA & MoE"),
             ("flash_attn", "flash-attn", "Attention Kernels", "Hardware-Fused FlashAttention-2 & cuDNN SDPA Kernels"),
-            ("transformer_engine", "transformer-engine", "FP8 Precision", "FP8 E4M3/E5M2 Scaled GEMM & Tensor Core Engine"),
+            (
+                "transformer_engine",
+                "transformer-engine",
+                "FP8 Precision",
+                "FP8 E4M3/E5M2 Scaled GEMM & Tensor Core Engine",
+            ),
             ("bitsandbytes", "bitsandbytes", "Quantization", "8-bit & 4-bit NF4 Quantized Linear & Optimizer Kernels"),
             ("transformers", "transformers", "Model Hub", "Hugging Face Model Architectures & Pretrained Interop"),
             ("accelerate", "accelerate", "Offload & AMP", "Hugging Face Device Offloading & Mixed-Precision Runtime"),
@@ -751,6 +768,7 @@ class ModuleManager:
             elif pkg_key == "transformer_engine" and not installed:
                 try:
                     import triune.precision.fp8  # noqa: F401
+
                     installed = True
                     ver = "Triune Native FP8 (E4M3/E5M2)"
                     status_label = "Native FP8"
@@ -1020,23 +1038,15 @@ class ModuleManager:
         if (folder / ".git").exists():
             try:
                 commit = subprocess.run(
-                    ["git", "rev-parse", "--short", "HEAD"],
-                    cwd=folder, capture_output=True, text=True, timeout=2.0
+                    ["git", "rev-parse", "--short", "HEAD"], cwd=folder, capture_output=True, text=True, timeout=2.0
                 ).stdout.strip()
                 branch = subprocess.run(
-                    ["git", "branch", "--show-current"],
-                    cwd=folder, capture_output=True, text=True, timeout=2.0
+                    ["git", "branch", "--show-current"], cwd=folder, capture_output=True, text=True, timeout=2.0
                 ).stdout.strip()
                 msg = subprocess.run(
-                    ["git", "log", "-1", "--pretty=%s"],
-                    cwd=folder, capture_output=True, text=True, timeout=2.0
+                    ["git", "log", "-1", "--pretty=%s"], cwd=folder, capture_output=True, text=True, timeout=2.0
                 ).stdout.strip()
-                git_info = {
-                    "is_git": True,
-                    "commit": commit,
-                    "branch": branch or "main",
-                    "commit_msg": msg
-                }
+                git_info = {"is_git": True, "commit": commit, "branch": branch or "main", "commit_msg": msg}
             except Exception:
                 git_info = {"is_git": True, "commit": "local", "branch": "main", "commit_msg": "Local Git Repository"}
 
@@ -1044,6 +1054,7 @@ class ModuleManager:
         registered_nodes = []
         try:
             from triune.plugins.registry import global_registry
+
             for n_name, meta in global_registry._nodes.items():
                 if meta.get("module_source") == str(folder):
                     registered_nodes.append(n_name)
@@ -1061,7 +1072,7 @@ class ModuleManager:
                 "datasets": dataset_files[:5],
                 "adapters": adapter_files[:5],
             },
-            "registered_nodes": registered_nodes
+            "registered_nodes": registered_nodes,
         }
 
     # -------------------------------------------------------------------------
@@ -1076,7 +1087,11 @@ class ModuleManager:
             for item in self.registry:
                 if module_type != "all" and item["type"] != module_type:
                     continue
-                if query and query.lower() not in item["name"].lower() and query.lower() not in item["description"].lower():
+                if (
+                    query
+                    and query.lower() not in item["name"].lower()
+                    and query.lower() not in item["description"].lower()
+                ):
                     continue
 
                 entry = dict(item)
@@ -1119,11 +1134,7 @@ class ModuleManager:
     # Real Git Clone & Repository Import
     # -------------------------------------------------------------------------
     def clone_repository(
-        self,
-        repo_url: str,
-        module_type: str = "auto",
-        branch: str = "main",
-        custom_name: Optional[str] = None
+        self, repo_url: str, module_type: str = "auto", branch: str = "main", custom_name: Optional[str] = None
     ) -> dict[str, Any]:
         """Clone any Git or Hugging Face repository, inspect contents, and register DAG nodes."""
         url = repo_url.strip()
@@ -1197,7 +1208,7 @@ class ModuleManager:
             return {
                 "success": False,
                 "message": f"Failed to clone repository: {error_msg}",
-                "installed_path": str(target_folder)
+                "installed_path": str(target_folder),
             }
 
         # Inspect cloned folder contents
@@ -1237,16 +1248,20 @@ class ModuleManager:
             "size_mb": inspection["size_mb"],
             "git_info": inspection["git_info"],
             "artifacts": inspection["artifacts"],
-            "registered_nodes": registered_nodes
+            "registered_nodes": registered_nodes,
         }
         installed.append(record)
         self._save_installed_modules(installed)
 
-        node_note = " Plugin code was not run; review and explicitly activate it in Studio." if detected_type == "plugin" else ""
+        node_note = (
+            " Plugin code was not run; review and explicitly activate it in Studio."
+            if detected_type == "plugin"
+            else ""
+        )
         return {
             "success": True,
             "message": f"Cloned {clean_name} successfully ({detected_type}).{node_note}",
-            "module": record
+            "module": record,
         }
 
     # -------------------------------------------------------------------------
@@ -1273,6 +1288,7 @@ class ModuleManager:
             registered_nodes: list[str] = []
             try:
                 from triune.plugins.registry import global_registry
+
                 for node_name, metadata in list(global_registry._nodes.items()):
                     if metadata.get("module_source") == str(target_folder):
                         del global_registry._nodes[node_name]
@@ -1298,7 +1314,7 @@ class ModuleManager:
                 "success": True,
                 "message": f"Updated {module_id}: {pull_output}. Plugin code was not re-run; review and activate it in Studio if needed.",
                 "git_info": inspection["git_info"],
-                "registered_nodes": registered_nodes
+                "registered_nodes": registered_nodes,
             }
         except Exception as e:
             return {"success": False, "message": f"Failed to pull repository: {e}"}
@@ -1387,7 +1403,11 @@ class ModuleManager:
                         schema = getattr(obj, "_triune_node_schema", None)
                         if schema and isinstance(schema, dict) and "name" in schema:
                             raw_node_name = schema["name"]
-                            core_names = global_registry.get_core_node_names() if hasattr(global_registry, "get_core_node_names") else set()
+                            core_names = (
+                                global_registry.get_core_node_names()
+                                if hasattr(global_registry, "get_core_node_names")
+                                else set()
+                            )
                             if raw_node_name in core_names and not is_internal:
                                 clean_mod = py_file.parent.name or py_file.stem
                                 node_name = f"community.{clean_mod}.{raw_node_name}"
@@ -1466,10 +1486,12 @@ class ModuleManager:
             "scanned_paths": scanned_paths,
             "discovered_nodes": all_discovered,
             "total_registered_nodes": total_registered,
-            "message": f"Scanned workspace: {len(all_discovered)} custom node(s) discovered across {len(scanned_paths)} path(s)."
+            "message": f"Scanned workspace: {len(all_discovered)} custom node(s) discovered across {len(scanned_paths)} path(s).",
         }
 
-    def create_custom_plugin_template(self, name: str, category: str = "Custom", destination_dir: Optional[str] = None) -> dict[str, Any]:
+    def create_custom_plugin_template(
+        self, name: str, category: str = "Custom", destination_dir: Optional[str] = None
+    ) -> dict[str, Any]:
         """Create a non-overwriting boilerplate plugin within the Triune workspace."""
         raw_name = name.strip() if isinstance(name, str) else ""
         clean_name = "".join(c if c.isascii() and (c.isalnum() or c == "_") else "_" for c in raw_name)[:64]
@@ -1493,7 +1515,10 @@ class ModuleManager:
             return {"success": False, "message": f"Could not create plugin directory: {exc}"}
         target_file = target_dir / f"plugin_{clean_name.lower()}.py"
         if target_file.exists():
-            return {"success": False, "message": f"Plugin file already exists; it was left unchanged: {target_file.name}"}
+            return {
+                "success": False,
+                "message": f"Plugin file already exists; it was left unchanged: {target_file.name}",
+            }
         node_name_literal = json.dumps(clean_name)
         category_literal = json.dumps(str(category)[:80])
 
@@ -1532,7 +1557,10 @@ class {clean_name}:
             with target_file.open("x", encoding="utf-8", newline="\n") as plugin_file:
                 plugin_file.write(content)
         except FileExistsError:
-            return {"success": False, "message": f"Plugin file already exists; it was left unchanged: {target_file.name}"}
+            return {
+                "success": False,
+                "message": f"Plugin file already exists; it was left unchanged: {target_file.name}",
+            }
         except OSError as exc:
             return {"success": False, "message": f"Could not write plugin template: {exc}"}
 
@@ -1540,7 +1568,7 @@ class {clean_name}:
             "success": True,
             "node_name": clean_name,
             "file_path": str(target_file),
-            "message": f"Created {target_file.name}. Review the generated code, then scan the workspace to load it into Studio."
+            "message": f"Created {target_file.name}. Review the generated code, then scan the workspace to load it into Studio.",
         }
 
     # -------------------------------------------------------------------------
@@ -1602,7 +1630,7 @@ class {clean_name}:
                 workspace_ckpt = Path(__file__).resolve().parent.parent.parent / "checkpoints"
                 (target_folder / "README_WEIGHTS.txt").write_text(
                     "Triune-Base 2.5B MoE Weights initialized and mapped to live PyTorch engine checkpoints.\n",
-                    encoding="utf-8"
+                    encoding="utf-8",
                 )
 
             # Auto-discover any DAG nodes in the curated module
@@ -1686,6 +1714,7 @@ class {clean_name}:
         # Unregister DAG nodes from global_registry
         try:
             from triune.plugins.registry import global_registry
+
             to_del = [k for k, v in global_registry._nodes.items() if v.get("module_source") == str(target_folder)]
             for k in to_del:
                 del global_registry._nodes[k]
@@ -1712,13 +1741,15 @@ class {clean_name}:
             if mod_id in curated_map:
                 latest = curated_map[mod_id]
                 if latest["version"] != item.get("version"):
-                    updates_available.append({
-                        "id": mod_id,
-                        "name": item["name"],
-                        "current_version": item.get("version"),
-                        "latest_version": latest["version"],
-                        "description": latest["description"],
-                    })
+                    updates_available.append(
+                        {
+                            "id": mod_id,
+                            "name": item["name"],
+                            "current_version": item.get("version"),
+                            "latest_version": latest["version"],
+                            "description": latest["description"],
+                        }
+                    )
 
             # Check Git remote updates if it's a Git repo
             path_str = item.get("installed_at")
@@ -1726,15 +1757,19 @@ class {clean_name}:
                 try:
                     p = Path(path_str)
                     subprocess.run(["git", "fetch"], cwd=p, capture_output=True, timeout=5.0)
-                    status = subprocess.run(["git", "status", "-uno"], cwd=p, capture_output=True, text=True, timeout=3.0).stdout
+                    status = subprocess.run(
+                        ["git", "status", "-uno"], cwd=p, capture_output=True, text=True, timeout=3.0
+                    ).stdout
                     if "behind" in status:
-                        updates_available.append({
-                            "id": mod_id,
-                            "name": item["name"],
-                            "current_version": item.get("version", "local"),
-                            "latest_version": "upstream",
-                            "description": "Upstream Git commits available to pull.",
-                        })
+                        updates_available.append(
+                            {
+                                "id": mod_id,
+                                "name": item["name"],
+                                "current_version": item.get("version", "local"),
+                                "latest_version": "upstream",
+                                "description": "Upstream Git commits available to pull.",
+                            }
+                        )
                 except Exception:
                     pass
 

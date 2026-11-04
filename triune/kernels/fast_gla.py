@@ -9,6 +9,194 @@ from __future__ import annotations
 
 import torch
 
+from triune.kernels.dispatcher import is_triton_available
+
+try:
+    import triton
+    import triton.language as tl
+
+    HAS_TRITON = True
+except Exception:
+    HAS_TRITON = False
+    triton = None
+    tl = None
+
+if HAS_TRITON:
+
+    @triton.jit
+    def _recurrent_scan_fwd(
+        KV,
+        DECAY,
+        INIT_STATE,
+        S_OUT,
+        FINAL_STATE,
+        M,
+        N,
+        stride_kv_m,
+        stride_kv_n,
+        stride_dec_m,
+        stride_dec_n,
+        stride_s_m,
+        stride_s_n,
+        stride_init_m,
+        stride_fin_m,
+        BLOCK_M: tl.constexpr,
+    ):
+        pid = tl.program_id(0)
+        offs_m = pid * BLOCK_M + tl.arange(0, BLOCK_M)
+        mask_m = offs_m < M
+
+        s = tl.load(INIT_STATE + offs_m * stride_init_m, mask=mask_m, other=0.0).to(tl.float32)
+
+        for i in range(N):
+            tl.store(S_OUT + offs_m * stride_s_m + i * stride_s_n, s, mask=mask_m)
+            d = tl.load(DECAY + offs_m * stride_dec_m + i * stride_dec_n, mask=mask_m, other=1.0).to(tl.float32)
+            x = tl.load(KV + offs_m * stride_kv_m + i * stride_kv_n, mask=mask_m, other=0.0).to(tl.float32)
+            s = s * d + x
+
+        tl.store(FINAL_STATE + offs_m * stride_fin_m, s, mask=mask_m)
+
+    @triton.jit
+    def _recurrent_scan_bwd(
+        D_S_OUT,
+        D_FINAL,
+        DECAY,
+        S_OUT,
+        D_KV,
+        D_DECAY,
+        D_INIT,
+        M,
+        N,
+        stride_ds_m,
+        stride_ds_n,
+        stride_df_m,
+        stride_dec_m,
+        stride_dec_n,
+        stride_s_m,
+        stride_s_n,
+        stride_dkv_m,
+        stride_dkv_n,
+        stride_ddec_m,
+        stride_ddec_n,
+        stride_di_m,
+        BLOCK_M: tl.constexpr,
+    ):
+        pid = tl.program_id(0)
+        offs_m = pid * BLOCK_M + tl.arange(0, BLOCK_M)
+        mask_m = offs_m < M
+
+        d_s = tl.load(D_FINAL + offs_m * stride_df_m, mask=mask_m, other=0.0).to(tl.float32)
+
+        for i in range(N - 1, -1, -1):
+            d = tl.load(DECAY + offs_m * stride_dec_m + i * stride_dec_n, mask=mask_m, other=1.0).to(tl.float32)
+            s_prev = tl.load(S_OUT + offs_m * stride_s_m + i * stride_s_n, mask=mask_m, other=0.0).to(tl.float32)
+            d_out_val = tl.load(D_S_OUT + offs_m * stride_ds_m + i * stride_ds_n, mask=mask_m, other=0.0).to(tl.float32)
+
+            tl.store(D_KV + offs_m * stride_dkv_m + i * stride_dkv_n, d_s, mask=mask_m)
+            tl.store(D_DECAY + offs_m * stride_ddec_m + i * stride_ddec_n, d_s * s_prev, mask=mask_m)
+
+            d_s = d_out_val + d_s * d
+
+        tl.store(D_INIT + offs_m * stride_di_m, d_s, mask=mask_m)
+
+    class FusedRecurrentScan(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx, kv: torch.Tensor, decay_k: torch.Tensor, init_state: torch.Tensor):
+            B, H, N, Dk, Dv = kv.shape
+            M = B * H * Dk * Dv
+            decay = decay_k.expand(B, H, N, Dk, Dv).contiguous()
+
+            kv_flat = kv.permute(0, 1, 3, 4, 2).reshape(M, N).contiguous()
+            decay_flat = decay.permute(0, 1, 3, 4, 2).reshape(M, N).contiguous()
+            init_flat = init_state.reshape(M).contiguous()
+
+            s_out = torch.empty(M, N, device=kv.device, dtype=torch.float32)
+            final_state = torch.empty(M, device=kv.device, dtype=torch.float32)
+
+            BLOCK_M = 128
+            grid = ((M + BLOCK_M - 1) // BLOCK_M,)
+            _recurrent_scan_fwd[grid](
+                kv_flat,
+                decay_flat,
+                init_flat,
+                s_out,
+                final_state,
+                M,
+                N,
+                kv_flat.stride(0),
+                kv_flat.stride(1),
+                decay_flat.stride(0),
+                decay_flat.stride(1),
+                s_out.stride(0),
+                s_out.stride(1),
+                init_flat.stride(0),
+                final_state.stride(0),
+                BLOCK_M=BLOCK_M,
+            )
+            ctx.save_for_backward(decay_flat, s_out)
+            ctx.shapes = (B, H, N, Dk, Dv, M)
+            ctx.kv_dtype = kv.dtype
+
+            s_out_5d = s_out.reshape(B, H, Dk, Dv, N).permute(0, 1, 4, 2, 3).to(dtype=kv.dtype)
+            final_state_4d = final_state.reshape(B, H, Dk, Dv).to(dtype=kv.dtype)
+            return s_out_5d, final_state_4d
+
+        @staticmethod
+        def backward(ctx, d_s_out: torch.Tensor | None, d_final_state: torch.Tensor | None):
+            decay_flat, s_out = ctx.saved_tensors
+            B, H, N, Dk, Dv, M = ctx.shapes
+            device = decay_flat.device
+
+            if d_s_out is not None:
+                d_s_flat = d_s_out.permute(0, 1, 3, 4, 2).reshape(M, N).contiguous().float()
+            else:
+                d_s_flat = torch.zeros(M, N, device=device, dtype=torch.float32)
+
+            if d_final_state is not None:
+                d_fin_flat = d_final_state.reshape(M).contiguous().float()
+            else:
+                d_fin_flat = torch.zeros(M, device=device, dtype=torch.float32)
+
+            d_kv = torch.empty(M, N, device=device, dtype=torch.float32)
+            d_decay = torch.empty(M, N, device=device, dtype=torch.float32)
+            d_init = torch.empty(M, device=device, dtype=torch.float32)
+
+            BLOCK_M = 128
+            grid = ((M + BLOCK_M - 1) // BLOCK_M,)
+            _recurrent_scan_bwd[grid](
+                d_s_flat,
+                d_fin_flat,
+                decay_flat,
+                s_out,
+                d_kv,
+                d_decay,
+                d_init,
+                M,
+                N,
+                d_s_flat.stride(0),
+                d_s_flat.stride(1),
+                d_fin_flat.stride(0),
+                decay_flat.stride(0),
+                decay_flat.stride(1),
+                s_out.stride(0),
+                s_out.stride(1),
+                d_kv.stride(0),
+                d_kv.stride(1),
+                d_decay.stride(0),
+                d_decay.stride(1),
+                d_init.stride(0),
+                BLOCK_M=BLOCK_M,
+            )
+
+            d_kv_5d = d_kv.reshape(B, H, Dk, Dv, N).permute(0, 1, 4, 2, 3).to(dtype=ctx.kv_dtype)
+            d_decay_5d = (
+                d_decay.reshape(B, H, Dk, Dv, N).permute(0, 1, 4, 2, 3).sum(dim=-1, keepdim=True).to(dtype=ctx.kv_dtype)
+            )
+            d_init_4d = d_init.reshape(B, H, Dk, Dv).to(dtype=ctx.kv_dtype)
+            return d_kv_5d, d_decay_5d, d_init_4d
+else:
+    FusedRecurrentScan = None
+
 _CAUSAL_MASK_INV_CACHE: dict[tuple[torch.device, int], torch.Tensor] = {}
 
 
@@ -78,6 +266,10 @@ def _run_gla_chunks(
         out_inter = torch.matmul(q_exp, state.unsqueeze(2))
         kv_0 = torch.matmul(k_decayed_all[:, :, 0].transpose(-1, -2), v_c[:, :, 0])
         state = torch.addcmul(kv_0, state, chunk_decay[:, :, 0])
+    elif device.type == "cuda" and dtype != torch.float64 and FusedRecurrentScan is not None and is_triton_available():
+        kv_all = torch.matmul(k_decayed_all.transpose(-1, -2), v_c)
+        S_all, state = FusedRecurrentScan.apply(kv_all, chunk_decay, state)
+        out_inter = torch.matmul(q_exp, S_all)
     elif not torch.is_grad_enabled() and num_chunks >= 8:
         # Logarithmic Hillis-Steele parallel prefix scan in O(log2(num_chunks)) steps
         kv_all = torch.matmul(k_decayed_all.transpose(-1, -2), v_c)  # [B, H, num_chunks, HD, HD]

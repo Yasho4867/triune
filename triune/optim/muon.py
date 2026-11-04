@@ -7,6 +7,7 @@ Designed for 2D hidden linear weights in neural networks.
 from __future__ import annotations
 
 from typing import Any
+
 import torch
 from torch.optim import Optimizer
 
@@ -19,11 +20,12 @@ def zeropower_via_newtonschulz5(
     return_scratch: bool = False,
 ) -> torch.Tensor | tuple[torch.Tensor, Any]:
     """Newton-Schulz iteration to compute the approximate zeroth power (orthogonalization) of G.
-    
+
     Delegates to the fused Triune kernel for in-place buffer reuse and Tensor Core GEMM optimization.
     """
     try:
         from triune.kernels.fast_muon import fast_zeropower_via_newtonschulz5
+
         return fast_zeropower_via_newtonschulz5(
             G, steps=steps, eps=eps, scratch_buffer=scratch_buffer, return_scratch=return_scratch
         )
@@ -34,34 +36,34 @@ def zeropower_via_newtonschulz5(
         raise ValueError(
             f"zeropower_via_newtonschulz5 requires a 2D matrix, got ndim={G.ndim} with shape {tuple(G.shape)}"
         )
-    
+
     orig_device = G.device
     orig_dtype = G.dtype
     compute_device = orig_device
-    
+
     # Run in bfloat16 on CUDA Tensor Cores for speedup if supported
     if compute_device.type == "cuda" and torch.cuda.is_bf16_supported():
         X = G.to(device=compute_device, dtype=torch.bfloat16).clone()
     else:
         X = G.to(device=compute_device, dtype=torch.float32).clone()
-        
+
     norm = X.norm()
     X = X / (norm + eps)
-    
+
     transposed = False
     if X.size(0) > X.size(1):
         X = X.T
         transposed = True
-        
+
     a, b, c = (3.4445, -4.7750, 2.0315)
     for _ in range(steps):
         A = X @ X.T
         B = b * A + c * (A @ A)
         X = a * X + B @ X
-        
+
     if transposed:
         X = X.T
-        
+
     res = X.to(device=orig_device, dtype=orig_dtype)
     if return_scratch:
         return res, None
@@ -70,10 +72,10 @@ def zeropower_via_newtonschulz5(
 
 class Muon(Optimizer):
     """Muon optimizer for 2D parameter matrices in hidden layers.
-    
+
     Internally maintains standard SGD momentum and post-processes each update
     via Newton-Schulz orthogonalization with zero-allocation persistent scratch buffers.
-    
+
     Arguments:
         params: Iterable of parameters to optimize (should be 2D weight matrices).
         lr: Learning rate (units of spectral norm per update, default: 0.02).
@@ -82,6 +84,7 @@ class Muon(Optimizer):
         nesterov: Whether to use Nesterov-style momentum blending (default: True).
         ns_steps: Number of Newton-Schulz iterations (default: 5).
     """
+
     def __init__(
         self,
         params,
@@ -174,14 +177,12 @@ class Muon(Optimizer):
                         update_stack = mom_stack
                     try:
                         from triune.kernels.fast_muon import fast_zeropower_via_newtonschulz5_batched
-                        ortho_stack = fast_zeropower_via_newtonschulz5_batched(
-                            update_stack, steps=ns_steps
-                        )
+
+                        ortho_stack = fast_zeropower_via_newtonschulz5_batched(update_stack, steps=ns_steps)
                     except Exception:
-                        ortho_stack = torch.stack([
-                            zeropower_via_newtonschulz5(update_stack[i], steps=ns_steps)
-                            for i in range(K)
-                        ], dim=0)
+                        ortho_stack = torch.stack(
+                            [zeropower_via_newtonschulz5(update_stack[i], steps=ns_steps) for i in range(K)], dim=0
+                        )
 
                     ortho_stack = ortho_stack.to(dtype=dtype, device=device)
                     params_b = [p.data for p, _, _, _ in items]

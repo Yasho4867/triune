@@ -7,7 +7,6 @@ GEMM operations with fused scaling, outperforming naive PyTorch autograd by 2x-3
 from __future__ import annotations
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 
 
@@ -114,7 +113,9 @@ class _FusedLoRALinearFunction(torch.autograd.Function):
         return grad_x, grad_w, grad_b, grad_A, grad_B, None
 
 
-def fast_lora_forward(x: torch.Tensor, lora_A: torch.Tensor, lora_B: torch.Tensor, scaling: float = 2.0) -> torch.Tensor:
+def fast_lora_forward(
+    x: torch.Tensor, lora_A: torch.Tensor, lora_B: torch.Tensor, scaling: float = 2.0
+) -> torch.Tensor:
     """Execute fused low-rank adapter forward with analytical backward pass."""
     return _FusedLoRAFunction.apply(x, lora_A, lora_B, float(scaling))
 
@@ -234,7 +235,22 @@ class _FusedLoRAQKVFunction(torch.autograd.Function):
         grad_b_k = g_k.sum(0) if (has_bias and ctx.needs_input_grad[4]) else None
         grad_b_v = g_v.sum(0) if (has_bias and ctx.needs_input_grad[6]) else None
 
-        return grad_x, grad_W_q, grad_b_q, grad_W_k, grad_b_k, grad_W_v, grad_b_v, grad_A_q, grad_B_q, grad_A_k, grad_B_k, grad_A_v, grad_B_v, None
+        return (
+            grad_x,
+            grad_W_q,
+            grad_b_q,
+            grad_W_k,
+            grad_b_k,
+            grad_W_v,
+            grad_b_v,
+            grad_A_q,
+            grad_B_q,
+            grad_A_k,
+            grad_B_k,
+            grad_A_v,
+            grad_B_v,
+            None,
+        )
 
 
 def fast_qkv_lora_linear(
@@ -254,9 +270,7 @@ def fast_qkv_lora_linear(
     scaling: float = 2.0,
 ) -> torch.Tensor:
     """Execute fused QKV base linear + LoRA projection in a single GEMM pass."""
-    return _FusedLoRAQKVFunction.apply(
-        x, W_q, b_q, W_k, b_k, W_v, b_v, A_q, B_q, A_k, B_k, A_v, B_v, float(scaling)
-    )
+    return _FusedLoRAQKVFunction.apply(x, W_q, b_q, W_k, b_k, W_v, b_v, A_q, B_q, A_k, B_k, A_v, B_v, float(scaling))
 
 
 class _FusedLoRAGateUpFunction(torch.autograd.Function):
@@ -364,7 +378,4 @@ def fast_gate_up_lora_linear(
     scaling: float = 2.0,
 ) -> torch.Tensor:
     """Execute fused Gate-Up base linear + LoRA projection in a single GEMM pass."""
-    return _FusedLoRAGateUpFunction.apply(
-        x, W_g, b_g, W_u, b_u, A_g, B_g, A_u, B_u, float(scaling)
-    )
-
+    return _FusedLoRAGateUpFunction.apply(x, W_g, b_g, W_u, b_u, A_g, B_g, A_u, B_u, float(scaling))

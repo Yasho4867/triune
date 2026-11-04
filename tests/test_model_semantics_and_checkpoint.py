@@ -10,18 +10,15 @@ Verifies:
 
 from __future__ import annotations
 
-import math
 import tempfile
-from pathlib import Path
 import unittest
-import torch
-import torch.nn as nn
 
+import torch
+
+from triune.configs.config import default_config, validate_config
 from triune.model.transformer import TriuneTransformer
-from triune.configs.config import default_config, validate_config, build_config
 from triune.trainer.checkpoint import (
     compute_checkpoint_fingerprint,
-    extract_canonical_semantics,
     load_checkpoint,
     save_latest,
 )
@@ -105,9 +102,7 @@ class TestGLACacheAndModelSemantics(unittest.TestCase):
             prefix_logits, cache = self.model(prefix_tokens, cache=cache, force_depth=2)
 
             # Assert prefix logits match the first 5 steps of full_logits
-            torch.testing.assert_close(
-                prefix_logits, full_logits[:, :5], rtol=1e-4, atol=1e-4
-            )
+            torch.testing.assert_close(prefix_logits, full_logits[:, :5], rtol=1e-4, atol=1e-4)
 
             # 3. Autoregressive token-by-token decoding for tokens 5, 6, 7
             for t in range(5, 8):
@@ -116,32 +111,32 @@ class TestGLACacheAndModelSemantics(unittest.TestCase):
 
                 # Gate 5 Rule: strictly compare pre-sampling logits with bounded numerical tolerance
                 target_logit = full_logits[:, t : t + 1]
-                torch.testing.assert_close(
-                    step_logits, target_logit, rtol=1e-4, atol=1e-4
-                )
+                torch.testing.assert_close(step_logits, target_logit, rtol=1e-4, atol=1e-4)
 
     def test_dynamic_depth_cached_generation(self):
         """Gate 5: Cached generation maintains logit equivalence."""
         full_tokens = torch.randint(0, 100, (1, 8), device=self.device)
         prefix = full_tokens[:, :4]
         suffix = full_tokens[:, 4:]
-        
+
         with torch.no_grad():
             # Force deterministic depth for parity comparison
             full_logits, _ = self.model(full_tokens, force_depth=2)
-            
+
             cache = self.model.init_cache(1)
             prefix_logits, cache = self.model(prefix, cache=cache, force_depth=2)
-            
+
             for i in range(suffix.size(1)):
-                token = suffix[:, i:i+1]
+                token = suffix[:, i : i + 1]
                 step_logits, cache = self.model(token, cache=cache, force_depth=2)
-            
+
             # Fix C-9: unconditional assertion — always verify logit parity
             torch.testing.assert_close(
-                step_logits[:, -1, :], full_logits[:, -1, :],
-                rtol=1e-4, atol=1e-4,
-                msg="Cached single-step logits must match full-sequence logits"
+                step_logits[:, -1, :],
+                full_logits[:, -1, :],
+                rtol=1e-4,
+                atol=1e-4,
+                msg="Cached single-step logits must match full-sequence logits",
             )
 
 
@@ -265,9 +260,9 @@ class TestSchemaV2Checkpointing(unittest.TestCase):
     def test_weights_only_load_allows_optimizer_changes(self):
         """Fix H-2: weights_only load should succeed when only optimizer settings change."""
         ckpt_path = save_latest(self.trainer, None, step=42, loss=0.85)
-        
+
         # Change optimizer settings but keep model architecture identical
-        changed_config = dict(self.config, use_muon=not self.config.get('use_muon', False), galore_rank=512)
+        changed_config = dict(self.config, use_muon=not self.config.get("use_muon", False), galore_rank=512)
         new_model = TriuneTransformer(
             vocab_size=100,
             hidden_dim=64,
@@ -279,10 +274,10 @@ class TestSchemaV2Checkpointing(unittest.TestCase):
             limbic_exit_layer=3,
         ).to(self.device)
         new_trainer = DummyTrainer(new_model, changed_config, self.device)
-        
+
         # This should NOT raise — optimizer settings are irrelevant for weights-only load
         loaded = load_checkpoint(new_trainer, ckpt_path, load_optimizer=False)
-        self.assertEqual(loaded['step'], 42)
+        self.assertEqual(loaded["step"], 42)
 
 
 class TestConfigurationValidation(unittest.TestCase):
@@ -329,7 +324,6 @@ class TestConfigurationValidation(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             TriuneTransformer(target_depth_dist=(float("nan"), 0.5, 0.5))
-
 
 
 if __name__ == "__main__":

@@ -2,21 +2,20 @@
 
 from __future__ import annotations
 
-import math
 import tempfile
-from pathlib import Path
 import unittest
+
 import torch
 import torch.nn as nn
 
-from triune.model.transformer import TriuneTransformer
-from triune.model.router import GumbelSoftmaxRouter
-from triune.model.attention import VectorisedGLA
-from triune.model.moe import MoE_FFN, RoutingResult
-from triune.model.zoo import load_model
 from triune.data.dataloader import CyclingDataLoader
-from triune.trainer.checkpoint import save_latest, load_checkpoint
-from triune.runtime.staging import ParameterStager, StagingBuffer
+from triune.model.attention import VectorisedGLA
+from triune.model.moe import MoE_FFN
+from triune.model.router import GumbelSoftmaxRouter
+from triune.model.transformer import TriuneTransformer
+from triune.model.zoo import load_model
+from triune.runtime.staging import ParameterStager
+from triune.trainer.checkpoint import load_checkpoint, save_latest
 
 
 class ArchitecturalAuditInvariantsTest(unittest.TestCase):
@@ -25,28 +24,45 @@ class ArchitecturalAuditInvariantsTest(unittest.TestCase):
         # 1. Invalid layer ordering: reflex >= limbic
         with self.assertRaises(ValueError):
             TriuneTransformer(
-                vocab_size=100, hidden_dim=64, num_layers=8, num_heads=2, head_dim=32,
-                router_prefix_layers=2, reflex_exit_layer=5, limbic_exit_layer=4
+                vocab_size=100,
+                hidden_dim=64,
+                num_layers=8,
+                num_heads=2,
+                head_dim=32,
+                router_prefix_layers=2,
+                reflex_exit_layer=5,
+                limbic_exit_layer=4,
             )
 
         # 2. Invalid layer ordering: prefix >= reflex
         with self.assertRaises(ValueError):
             TriuneTransformer(
-                vocab_size=100, hidden_dim=64, num_layers=8, num_heads=2, head_dim=32,
-                router_prefix_layers=4, reflex_exit_layer=4, limbic_exit_layer=6
+                vocab_size=100,
+                hidden_dim=64,
+                num_layers=8,
+                num_heads=2,
+                head_dim=32,
+                router_prefix_layers=4,
+                reflex_exit_layer=4,
+                limbic_exit_layer=6,
             )
 
         # 3. Invalid target depth distribution (does not sum to 1.0)
         with self.assertRaises(ValueError):
             TriuneTransformer(
-                vocab_size=100, hidden_dim=64, num_layers=8, num_heads=2, head_dim=32,
-                target_depth_dist=(0.5, 0.5, 0.5)
+                vocab_size=100, hidden_dim=64, num_layers=8, num_heads=2, head_dim=32, target_depth_dist=(0.5, 0.5, 0.5)
             )
 
         # 4. Invalid force_depth in forward (early check)
         model = TriuneTransformer(
-            vocab_size=100, hidden_dim=64, num_layers=6, num_heads=2, head_dim=32,
-            router_prefix_layers=1, reflex_exit_layer=2, limbic_exit_layer=4
+            vocab_size=100,
+            hidden_dim=64,
+            num_layers=6,
+            num_heads=2,
+            head_dim=32,
+            router_prefix_layers=1,
+            reflex_exit_layer=2,
+            limbic_exit_layer=4,
         )
         x = torch.randint(0, 100, (2, 8))
         with self.assertRaises(ValueError):
@@ -67,9 +83,9 @@ class ArchitecturalAuditInvariantsTest(unittest.TestCase):
 
         # Non-finite temperature
         with self.assertRaises(ValueError):
-            router(x, temperature=float('nan'))
+            router(x, temperature=float("nan"))
         with self.assertRaises(ValueError):
-            router(x, temperature=float('inf'))
+            router(x, temperature=float("inf"))
 
         # Invalid target distribution on init
         with self.assertRaises(ValueError):
@@ -154,6 +170,7 @@ class ArchitecturalAuditInvariantsTest(unittest.TestCase):
         def empty_gen():
             if False:
                 yield 1
+
         with self.assertRaises(RuntimeError):
             cdl = CyclingDataLoader(empty_gen())
             cdl.next()

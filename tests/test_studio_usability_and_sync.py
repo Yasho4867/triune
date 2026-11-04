@@ -14,23 +14,18 @@ Verifies:
    - scripts/train.py and scripts/chat.py argument parser parity
 """
 
+from unittest.mock import patch
+
 import pytest
-import sys
-from unittest.mock import MagicMock, patch
-import torch
-import torch.nn as nn
 
 from triune.api import create_app
-from triune.api.routes import pytorch_state, RealPyTorchEngineState
-from triune.runtime.resource_manager import DynamicResourceManager, FeasibilityAssessment
-from triune.model.speculative import SelfSpeculativeGenerator
-from triune.configs import build_config
-from triune.model import build_model
+from triune.api.routes import RealPyTorchEngineState, pytorch_state
 
 
 @pytest.fixture(scope="module")
 def app_client():
     from fastapi.testclient import TestClient
+
     app = create_app()
     return TestClient(app)
 
@@ -170,8 +165,8 @@ def test_models_and_diagnostics_endpoints(app_client):
 
 def test_cli_argument_parsing():
     """Verify triune CLI parsers for new options."""
+
     from triune.cli import main
-    import argparse
 
     # Test running CLI help or models via sys.argv mock
     with patch("sys.argv", ["triune", "models"]):
@@ -201,12 +196,15 @@ def test_train_script_argument_parsing():
     from scripts.train import build_parser
 
     parser = build_parser()
-    args = parser.parse_args([
-        "--use_triangular_core",
-        "--use_8bit_base",
-        "--use_muon",
-        "--muon_lr", "0.01",
-    ])
+    args = parser.parse_args(
+        [
+            "--use_triangular_core",
+            "--use_8bit_base",
+            "--use_muon",
+            "--muon_lr",
+            "0.01",
+        ]
+    )
     assert args.use_triangular_core is True
     assert args.use_8bit_base is True
     assert args.use_muon is True

@@ -12,20 +12,37 @@ import torch
 try:
     import triton
     import triton.language as tl
+
     HAS_TRITON = True
 except ImportError:
     HAS_TRITON = False
 
 
 if HAS_TRITON:
+
     @triton.jit
     def _fused_triangular_adamw_kernel(
-        R_ptr, M_ptr, V_ptr, Delta_ptr, Bias1_ptr, Bias2_ptr,
-        beta1, beta2, eps,
-        stride_rn, stride_rm, stride_rk,
-        stride_mn, stride_mm, stride_mk,
-        stride_vn, stride_vm, stride_vk,
-        stride_dn, stride_dm, stride_dk,
+        R_ptr,
+        M_ptr,
+        V_ptr,
+        Delta_ptr,
+        Bias1_ptr,
+        Bias2_ptr,
+        beta1,
+        beta2,
+        eps,
+        stride_rn,
+        stride_rm,
+        stride_rk,
+        stride_mn,
+        stride_mm,
+        stride_mk,
+        stride_vn,
+        stride_vm,
+        stride_vk,
+        stride_dn,
+        stride_dm,
+        stride_dk,
         DR: tl.constexpr,
         BLOCK_SIZE: tl.constexpr,
     ):
@@ -101,8 +118,8 @@ def fast_triangular_adamw(
         step_view = step_vals.view(N, 1, 1)
         if step_view.dtype != torch.float32:
             step_view = step_view.to(torch.float32)
-        bias_c1 = 1.0 - (beta1 ** step_view)
-        bias_c2 = (1.0 - (beta2 ** step_view)).clamp_min(1e-7)
+        bias_c1 = 1.0 - (beta1**step_view)
+        bias_c2 = (1.0 - (beta2**step_view)).clamp_min(1e-7)
         denom = (batch_var / bias_c2).sqrt_().add_(eps)
         delta_f32 = (batch_mom / bias_c1).div_(denom).triu_()
         batch_delta.copy_(delta_f32)
@@ -111,18 +128,34 @@ def fast_triangular_adamw(
     # Calculate next power of 2 for Triton tile size
     block_size = triton.next_power_of_2(DR)
     step_view = step_vals.view(N).to(torch.float32)
-    bias_c1 = (1.0 - (beta1 ** step_view)).to(torch.float32)
-    bias_c2 = (1.0 - (beta2 ** step_view)).clamp_min(1e-7).to(torch.float32)
+    bias_c1 = (1.0 - (beta1**step_view)).to(torch.float32)
+    bias_c2 = (1.0 - (beta2**step_view)).clamp_min(1e-7).to(torch.float32)
 
     grid = (N,)
     _fused_triangular_adamw_kernel[grid](
-        R_batch, batch_mom, batch_var, batch_delta, bias_c1, bias_c2,
-        beta1, beta2, eps,
-        R_batch.stride(0), R_batch.stride(1), R_batch.stride(2),
-        batch_mom.stride(0), batch_mom.stride(1), batch_mom.stride(2),
-        batch_var.stride(0), batch_var.stride(1), batch_var.stride(2),
-        batch_delta.stride(0), batch_delta.stride(1), batch_delta.stride(2),
-        DR=DR, BLOCK_SIZE=block_size
+        R_batch,
+        batch_mom,
+        batch_var,
+        batch_delta,
+        bias_c1,
+        bias_c2,
+        beta1,
+        beta2,
+        eps,
+        R_batch.stride(0),
+        R_batch.stride(1),
+        R_batch.stride(2),
+        batch_mom.stride(0),
+        batch_mom.stride(1),
+        batch_mom.stride(2),
+        batch_var.stride(0),
+        batch_var.stride(1),
+        batch_var.stride(2),
+        batch_delta.stride(0),
+        batch_delta.stride(1),
+        batch_delta.stride(2),
+        DR=DR,
+        BLOCK_SIZE=block_size,
     )
 
     return batch_delta

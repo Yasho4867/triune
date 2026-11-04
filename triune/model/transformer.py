@@ -1,5 +1,6 @@
 import math
 from typing import Any, List, Optional
+
 import torch
 import torch.nn as nn
 
@@ -61,9 +62,7 @@ class TriuneTransformer(nn.Module):
 
         expected_hidden_dim = num_heads * head_dim
         if hidden_dim != expected_hidden_dim:
-            raise ValueError(
-                f"hidden_dim ({hidden_dim}) must equal num_heads * head_dim ({expected_hidden_dim})"
-            )
+            raise ValueError(f"hidden_dim ({hidden_dim}) must equal num_heads * head_dim ({expected_hidden_dim})")
         self.num_layers = num_layers
         self.hidden_dim = hidden_dim
         self.num_heads = num_heads
@@ -82,10 +81,22 @@ class TriuneTransformer(nn.Module):
 
         self.token_embed = nn.Embedding(vocab_size, hidden_dim)
         exit_layers = [reflex_exit_layer, limbic_exit_layer]
-        self.layers = nn.ModuleList([
-            TransformerBlock(hidden_dim, num_heads, i, vocab_size, exit_layers, num_experts=num_experts, use_moe=(i > reflex_exit_layer), use_fp4=use_fp4, use_fp8=use_fp8)
-            for i in range(num_layers)
-        ])
+        self.layers = nn.ModuleList(
+            [
+                TransformerBlock(
+                    hidden_dim,
+                    num_heads,
+                    i,
+                    vocab_size,
+                    exit_layers,
+                    num_experts=num_experts,
+                    use_moe=(i > reflex_exit_layer),
+                    use_fp4=use_fp4,
+                    use_fp8=use_fp8,
+                )
+                for i in range(num_layers)
+            ]
+        )
         self.router = GumbelSoftmaxRouter(hidden_dim, target_depth_dist=target_depth_dist, balance_coef=balance_coef)
         self.final_norm = RMSNorm(hidden_dim)
         self.final_head = nn.Linear(hidden_dim, vocab_size, bias=False)
@@ -121,6 +132,7 @@ class TriuneTransformer(nn.Module):
     ):
         """Enables AirLLM-style layer streaming, keeping layers in CPU RAM and streaming on-demand."""
         from triune.runtime.streaming import LayerStreamingEngine, StreamingConfig
+
         cfg = StreamingConfig(
             enabled=True,
             chunk_size=chunk_size,
@@ -173,14 +185,18 @@ class TriuneTransformer(nn.Module):
         x = self.token_embed(input_ids)
 
         x_prefix, new_cache = self._run_layers(x, 0, self.router_prefix_layers, cache=cache)
-        route_logits, y_route, depth_choice, balance_loss = self._route(x_prefix, force_depth, B, device, temperature=temperature)
+        route_logits, y_route, depth_choice, balance_loss = self._route(
+            x_prefix, force_depth, B, device, temperature=temperature
+        )
         self.last_route_logits = route_logits.detach()
         self.last_depth_choice = depth_choice.detach()
         self.last_balance_loss = balance_loss
 
         if force_depth is not None:
             if force_depth == 0:
-                x_out, new_cache = self._run_layers(x_prefix, self.router_prefix_layers, self.reflex_exit_layer, cache=new_cache)
+                x_out, new_cache = self._run_layers(
+                    x_prefix, self.router_prefix_layers, self.reflex_exit_layer, cache=new_cache
+                )
                 layer_c = new_cache[self.reflex_exit_layer] if new_cache is not None else None
                 if new_cache is not None and layer_c is None:
                     layer_c = (None, 0)
@@ -188,7 +204,9 @@ class TriuneTransformer(nn.Module):
                 if new_cache is not None:
                     new_cache[self.reflex_exit_layer] = new_c
             elif force_depth == 1:
-                x_out, new_cache = self._run_layers(x_prefix, self.router_prefix_layers, self.limbic_exit_layer, cache=new_cache)
+                x_out, new_cache = self._run_layers(
+                    x_prefix, self.router_prefix_layers, self.limbic_exit_layer, cache=new_cache
+                )
                 layer_c = new_cache[self.limbic_exit_layer] if new_cache is not None else None
                 if new_cache is not None and layer_c is None:
                     layer_c = (None, 0)
@@ -196,7 +214,9 @@ class TriuneTransformer(nn.Module):
                 if new_cache is not None:
                     new_cache[self.limbic_exit_layer] = new_c
             else:
-                x_out, new_cache = self._run_layers(x_prefix, self.router_prefix_layers, self.num_layers, cache=new_cache)
+                x_out, new_cache = self._run_layers(
+                    x_prefix, self.router_prefix_layers, self.num_layers, cache=new_cache
+                )
                 logits = self.final_head(self.final_norm(x_out))
 
             if cache is not None:
@@ -249,7 +269,11 @@ class TriuneTransformer(nn.Module):
                 for l_idx, entry in enumerate(d_cache):
                     if entry is not None and isinstance(entry, tuple) and entry[0] is not None:
                         s_d, off = entry
-                        if new_cache[l_idx] is not None and isinstance(new_cache[l_idx], tuple) and new_cache[l_idx][0] is not None:
+                        if (
+                            new_cache[l_idx] is not None
+                            and isinstance(new_cache[l_idx], tuple)
+                            and new_cache[l_idx][0] is not None
+                        ):
                             new_s, _ = new_cache[l_idx]
                             new_s = new_s.index_copy(0, idx, s_d.to(new_s.dtype))
                             new_cache[l_idx] = (new_s, off)
@@ -280,9 +304,7 @@ class TriuneTransformer(nn.Module):
 
         # Run every MoE block with the same update_stats value.  Label generation
         # must not alter routing statistics.
-        x6, _ = self._run_layers(
-            x_prefix, self.router_prefix_layers, self.reflex_exit_layer, update_stats=update_stats
-        )
+        x6, _ = self._run_layers(x_prefix, self.router_prefix_layers, self.reflex_exit_layer, update_stats=update_stats)
         reflex_out, reflex_logits, _ = self._forward_block(
             self.layers[self.reflex_exit_layer], x6, True, update_stats=update_stats
         )
@@ -296,9 +318,7 @@ class TriuneTransformer(nn.Module):
         )
 
         # Cortex: continue from limbic_out (layers 17-23)
-        x24, _ = self._run_layers(
-            limbic_out, self.limbic_exit_layer + 1, self.num_layers, update_stats=update_stats
-        )
+        x24, _ = self._run_layers(limbic_out, self.limbic_exit_layer + 1, self.num_layers, update_stats=update_stats)
         cortex_logits = self.final_head(self.final_norm(x24))
 
         return reflex_logits, limbic_logits, cortex_logits, route_logits

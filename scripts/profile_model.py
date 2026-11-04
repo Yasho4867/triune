@@ -22,11 +22,17 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--warmup_steps", type=int, default=5)
     parser.add_argument("--active_steps", type=int, default=10)
     args = parser.parse_args(argv)
-    print(profile_model(
-        checkpoint_path=args.checkpoint, tokenizer_path=args.tokenizer_path, output_path=args.output,
-        batch_size=args.batch_size, seq_len=args.seq_len, warmup_steps=args.warmup_steps,
-        active_steps=args.active_steps,
-    ))
+    print(
+        profile_model(
+            checkpoint_path=args.checkpoint,
+            tokenizer_path=args.tokenizer_path,
+            output_path=args.output,
+            batch_size=args.batch_size,
+            seq_len=args.seq_len,
+            warmup_steps=args.warmup_steps,
+            active_steps=args.active_steps,
+        )
+    )
 
 
 if __name__ == "__main__":

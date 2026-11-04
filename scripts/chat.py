@@ -41,12 +41,13 @@ def main(argv: list[str] | None = None) -> None:
         force_depth = None
         for command, depth in (("reflex ", 0), ("limbic ", 1), ("cortex ", 2)):
             if prompt.lower().startswith(command):
-                force_depth, prompt = depth, prompt[len(command):]
+                force_depth, prompt = depth, prompt[len(command) :]
                 break
         if prompt.lower().startswith("auto "):
             prompt = prompt[5:]
         if args.speculative:
             from triune.model.speculative import SelfSpeculativeGenerator
+
             spec_gen = SelfSpeculativeGenerator(
                 model,
                 tokenizer,
@@ -56,12 +57,21 @@ def main(argv: list[str] | None = None) -> None:
                 eos_token_id=eos_id,
             )
             spec_res = spec_gen.generate(prompt, max_new_tokens=args.max_new_tokens)
-            print(f"Assistant [Speculative K={args.k_draft}, acc={spec_res['acceptance_rate']:.1%}, speed={spec_res['tokens_per_second']} tok/s]: {spec_res['text']}")
+            print(
+                f"Assistant [Speculative K={args.k_draft}, acc={spec_res['acceptance_rate']:.1%}, speed={spec_res['tokens_per_second']} tok/s]: {spec_res['text']}"
+            )
         else:
             response = generate_response(
-                model, tokenizer, prompt, device=device, pad_token_id=pad_id, eos_token_id=eos_id,
-                force_depth=force_depth, temperature=args.temperature,
-                repetition_penalty=args.repetition_penalty, max_new_tokens=args.max_new_tokens,
+                model,
+                tokenizer,
+                prompt,
+                device=device,
+                pad_token_id=pad_id,
+                eos_token_id=eos_id,
+                force_depth=force_depth,
+                temperature=args.temperature,
+                repetition_penalty=args.repetition_penalty,
+                max_new_tokens=args.max_new_tokens,
             )
             print(f"Assistant: {response}")
 

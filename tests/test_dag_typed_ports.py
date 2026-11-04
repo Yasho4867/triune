@@ -2,16 +2,16 @@
 
 import math
 import unittest
+
 import torch
 
+from triune.execution.dag import DAGParser, ExecutionEngine, NodeExecutionError, _sanitize_for_json
 from triune.plugins.node_schema import (
     NodeExecutionType,
-    Port,
     PortType,
     is_port_compatible,
 )
 from triune.plugins.registry import global_registry
-from triune.execution.dag import DAGParser, ExecutionEngine, NodeExecutionError, _sanitize_for_json
 
 
 class TestTypedDAGSchema(unittest.TestCase):
@@ -62,16 +62,16 @@ class TestTypedDAGSchema(unittest.TestCase):
         graph = {
             "nodes": [
                 {"id": "node_text", "type": "Data", "title": "Data"},
-                {"id": "node_optim", "type": "CentroidSteerOptimizer", "title": "CentroidSteerOptimizer"}
+                {"id": "node_optim", "type": "CentroidSteerOptimizer", "title": "CentroidSteerOptimizer"},
             ],
             "edges": [
                 {
                     "source": "node_text",
                     "target": "node_optim",
                     "source_port": "text_sample",  # type: text
-                    "target_port": "loss"           # type: loss
+                    "target_port": "loss",  # type: loss
                 }
-            ]
+            ],
         }
 
         with self.assertRaises(NodeExecutionError) as ctx:
@@ -81,14 +81,8 @@ class TestTypedDAGSchema(unittest.TestCase):
     def test_dag_parser_cycle_detection(self):
         """Verify DAGParser detects cycles in execution order."""
         graph = {
-            "nodes": [
-                {"id": "n1", "type": "Data"},
-                {"id": "n2", "type": "Model"}
-            ],
-            "edges": [
-                {"source": "n1", "target": "n2"},
-                {"source": "n2", "target": "n1"}
-            ]
+            "nodes": [{"id": "n1", "type": "Data"}, {"id": "n2", "type": "Model"}],
+            "edges": [{"source": "n1", "target": "n2"}, {"source": "n2", "target": "n1"}],
         }
         with self.assertRaises(NodeExecutionError) as ctx:
             DAGParser.parse(graph)
@@ -104,10 +98,15 @@ class TestTypedDAGSchema(unittest.TestCase):
             "nodes": [
                 {"id": "tok", "type": "BPETokenizer", "title": "BPETokenizer"},
                 {"id": "dl", "type": "CyclingDataLoader", "title": "CyclingDataLoader"},
-                {"id": "mod", "type": "TriuneTransformer", "title": "TriuneTransformer", "params": {"hidden_dim": 64, "num_layers": 2, "vocab_size": 32000}},
+                {
+                    "id": "mod",
+                    "type": "TriuneTransformer",
+                    "title": "TriuneTransformer",
+                    "params": {"hidden_dim": 64, "num_layers": 2, "vocab_size": 32000},
+                },
                 {"id": "loss", "type": "FastCrossEntropy", "title": "FastCrossEntropy"},
                 {"id": "opt", "type": "CentroidSteerOptimizer", "title": "CentroidSteerOptimizer"},
-                {"id": "eval", "type": "PerplexityEvaluator", "title": "PerplexityEvaluator"}
+                {"id": "eval", "type": "PerplexityEvaluator", "title": "PerplexityEvaluator"},
             ],
             "edges": [
                 {"source": "tok", "target": "dl", "source_port": "tokens", "target_port": "tokens"},
@@ -116,11 +115,13 @@ class TestTypedDAGSchema(unittest.TestCase):
                 {"source": "dl", "target": "loss", "source_port": "targets", "target_port": "targets"},
                 {"source": "loss", "target": "opt", "source_port": "loss", "target_port": "loss"},
                 {"source": "mod", "target": "opt", "source_port": "model_handle", "target_port": "model_handle"},
-                {"source": "mod", "target": "eval", "source_port": "model_handle", "target_port": "model_handle"}
-            ]
+                {"source": "mod", "target": "eval", "source_port": "model_handle", "target_port": "model_handle"},
+            ],
         }
 
-        res = engine.execute_graph(graph, initial_context={"text": "Triune builds a modular transformer training pipeline."})
+        res = engine.execute_graph(
+            graph, initial_context={"text": "Triune builds a modular transformer training pipeline."}
+        )
         self.assertEqual(res["status"], "success")
 
         results = res["results"]
@@ -142,6 +143,7 @@ class TestTypedDAGSchema(unittest.TestCase):
 
         # Verify context is fully sanitized for JSON
         import json
+
         json_str = json.dumps(res["context"])
         self.assertIsInstance(json_str, str)
 
@@ -160,10 +162,11 @@ class TestTypedDAGSchema(unittest.TestCase):
             "module": torch.nn.Linear(10, 5),
             "nested": [torch.tensor(1.0), {"t": torch.zeros(1, 1)}],
             "primitive": "hello",
-            "num": 42
+            "num": 42,
         }
         sanitized = _sanitize_for_json(raw)
         import json
+
         serialized = json.dumps(sanitized)
         self.assertIsInstance(serialized, str)
         self.assertEqual(sanitized["num"], 42)
@@ -172,17 +175,17 @@ class TestTypedDAGSchema(unittest.TestCase):
         self.assertIn("<Tensor shape=[2, 3]", sanitized["tensor_multi"])
         self.assertIn("<Linear Module>", sanitized["module"])
 
-
     def test_dag_failure_propagation(self):
         """Verify that execute_graph returns status 'failed' when any node raises or reports failure."""
         engine = ExecutionEngine()
         graph = {
             "nodes": [
                 {"id": "fail_node", "type": "InvalidOrThrowingNode", "title": "ThrowingNode"},
-                {"id": "eval", "type": "PerplexityEvaluator", "title": "PerplexityEvaluator"}
+                {"id": "eval", "type": "PerplexityEvaluator", "title": "PerplexityEvaluator"},
             ],
-            "edges": []
+            "edges": [],
         }
+
         # Register a failing handler for ThrowingNode
         def _failing_handler(node, ctx):
             raise RuntimeError("Deliberate failure in test")
@@ -196,4 +199,3 @@ class TestTypedDAGSchema(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

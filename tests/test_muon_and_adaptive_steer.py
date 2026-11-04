@@ -1,17 +1,16 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
-from triune.optim.muon import zeropower_via_newtonschulz5, Muon
 from triune.model.moe import MoE_FFN
-from triune.optim.centroid import CentroidSteerOptimizer
 from triune.model.transformer import TriuneTransformer
+from triune.optim.centroid import CentroidSteerOptimizer
+from triune.optim.muon import Muon, zeropower_via_newtonschulz5
 
 
 def test_newtonschulz5_orthogonality():
     print("=== Testing Newton-Schulz Orthogonality ===")
     torch.manual_seed(42)
-    
+
     # 1. Square matrix
     G = torch.randn(128, 128)
     O = zeropower_via_newtonschulz5(G, steps=5)
@@ -43,7 +42,8 @@ def test_newtonschulz5_orthogonality():
 
 def test_newtonschulz5_batched_parity():
     print("=== Testing Batched Newton-Schulz Parity ===")
-    from triune.kernels.fast_muon import fast_zeropower_via_newtonschulz5_batched, fast_zeropower_via_newtonschulz5
+    from triune.kernels.fast_muon import fast_zeropower_via_newtonschulz5, fast_zeropower_via_newtonschulz5_batched
+
     torch.manual_seed(42)
 
     # 1. Parity between sequential and batched execution (with strict input immutability)
@@ -93,6 +93,7 @@ def test_newtonschulz5_batched_parity():
 def test_newtonschulz_input_immutability():
     """Verify that Newton-Schulz kernels never mutate caller input tensors in-place."""
     from triune.kernels.fast_muon import fast_zeropower_via_newtonschulz5, fast_zeropower_via_newtonschulz5_batched
+
     torch.manual_seed(42)
 
     devices = ["cpu"]
@@ -111,7 +112,7 @@ def test_newtonschulz_input_immutability():
                 G_clone = G.clone()
                 res1 = fast_zeropower_via_newtonschulz5(G, steps=5)
                 assert torch.equal(G, G_clone), f"Input mutated in-place on {dev} {dt} shape {shape}!"
-                
+
                 # Verify determinism on repeated call
                 res2 = fast_zeropower_via_newtonschulz5(G, steps=5)
                 assert torch.equal(res1, res2), "Repeated call produced different results!"
@@ -210,26 +211,25 @@ def test_adaptive_steer_scale_and_load_ratio():
     dim = 64
     num_experts = 4
     moe = MoE_FFN(dim=dim, num_experts=num_experts, top_k=1, shared_expert=False)
-    
-    assert hasattr(moe, 'expert_load_ratio'), "MoE_FFN must register expert_load_ratio buffer"
+
+    assert hasattr(moe, "expert_load_ratio"), "MoE_FFN must register expert_load_ratio buffer"
     assert moe.expert_load_ratio.shape == (num_experts,)
     print(f"Initial expert_load_ratio: {moe.expert_load_ratio.tolist()}")
 
     # Forward with input to trigger routing updates
-    x = torch.randn(2, 32, dim) # 64 tokens
+    x = torch.randn(2, 32, dim)  # 64 tokens
     _ = moe(x, update_stats=True)
     print(f"After step 1 expert_load_ratio: {moe.expert_load_ratio.tolist()}")
     print(f"Last counts: {moe.last_counts.tolist()}, target: {moe.last_target}")
-    
+
     # Check that expert_load_ratio is positive and deviates based on routing
     assert (moe.expert_load_ratio > 0).all()
 
     # Now verify CentroidSteerOptimizer adaptive scaling logic
     opt = CentroidSteerOptimizer(
-        moe, lr=1e-4, betas=(0.9, 0.95), weight_decay=0.01,
-        rank=16, update_gap=10, steer_scale=0.20, use_muon=True
+        moe, lr=1e-4, betas=(0.9, 0.95), weight_decay=0.01, rank=16, update_gap=10, steer_scale=0.20, use_muon=True
     )
-    
+
     # Check layer groups
     expert_groups = opt.layer_groups
     print(f"Number of MoE expert groups managed by CentroidSteer: {len(expert_groups)}")
@@ -246,7 +246,7 @@ def test_adaptive_steer_scale_and_load_ratio():
 def test_full_triune_3tier_optimizer():
     print("=== Testing Full Triune 3-Tier Parameter Partitioning ===")
     torch.manual_seed(42)
-    
+
     # Miniature TriuneTransformer
     model = TriuneTransformer(
         vocab_size=1000,
@@ -259,13 +259,19 @@ def test_full_triune_3tier_optimizer():
         reflex_exit_layer=2,
         limbic_exit_layer=4,
         use_fp4=False,
-        use_fp8=False
+        use_fp8=False,
     )
 
     opt = CentroidSteerOptimizer(
-        model, lr=1e-4, betas=(0.9, 0.95), weight_decay=0.01,
-        rank=16, update_gap=5, steer_scale=0.20,
-        use_muon=True, muon_lr=0.02
+        model,
+        lr=1e-4,
+        betas=(0.9, 0.95),
+        weight_decay=0.01,
+        rank=16,
+        update_gap=5,
+        steer_scale=0.20,
+        use_muon=True,
+        muon_lr=0.02,
     )
 
     print(f"CentroidSteer layer groups (MoE routed experts): {len(opt.layer_groups)}")
@@ -298,14 +304,20 @@ def test_full_triune_3tier_optimizer():
 
     # Test state_dict and load_state_dict
     sd = opt.state_dict()
-    assert 'muon_optimizer' in sd, "State dict should contain muon_optimizer"
-    assert 'base_optimizer' in sd, "State dict should contain base_optimizer"
+    assert "muon_optimizer" in sd, "State dict should contain muon_optimizer"
+    assert "base_optimizer" in sd, "State dict should contain base_optimizer"
 
     # Create new optimizer and load state dict
     opt2 = CentroidSteerOptimizer(
-        model, lr=1e-4, betas=(0.9, 0.95), weight_decay=0.01,
-        rank=16, update_gap=5, steer_scale=0.20,
-        use_muon=True, muon_lr=0.02
+        model,
+        lr=1e-4,
+        betas=(0.9, 0.95),
+        weight_decay=0.01,
+        rank=16,
+        update_gap=5,
+        steer_scale=0.20,
+        use_muon=True,
+        muon_lr=0.02,
     )
     opt2.load_state_dict(sd)
     assert opt2.step_count == opt.step_count, "Step count should match after load"
@@ -321,8 +333,7 @@ def test_centroid_steer_mathematical_invariants():
 
     moe = MoE_FFN(dim=dim, num_experts=num_experts, top_k=2, shared_expert=False)
     opt = CentroidSteerOptimizer(
-        moe, lr=1e-3, betas=(0.9, 0.95), weight_decay=0.0,
-        rank=rank, update_gap=2, steer_scale=0.25, use_muon=False
+        moe, lr=1e-3, betas=(0.9, 0.95), weight_decay=0.0, rank=rank, update_gap=2, steer_scale=0.25, use_muon=False
     )
 
     x = torch.randn(4, 16, dim)
@@ -334,22 +345,22 @@ def test_centroid_steer_mathematical_invariants():
         opt.step()
 
     for group in opt.layer_groups:
-        p = group['param']
+        p = group["param"]
         m, n = p.shape
-        proj = group['projection']
-        side = group['projection_side']
-        state = group['state']
+        proj = group["projection"]
+        side = group["projection_side"]
+        state = group["state"]
 
         # 1. GaLore Theorem 3.2: always project smaller dimension min(m, n) == dim
-        expected_side = 'left' if m <= n else 'right'
+        expected_side = "left" if m <= n else "right"
         assert side == expected_side, f"Expected side {expected_side} for shape {p.shape}, got {side}"
         assert proj.shape == (min(m, n), rank), f"Expected projection shape {(min(m, n), rank)}, got {proj.shape}"
 
         # 2. Subspace transport across update_gap=2: step count must reach 4 without resetting to 1
-        assert state['step'] == 4, f"Expected continuous step=4 across update_gap=2, got {state['step']}"
-        assert not torch.isnan(state['momentum']).any(), "Momentum contains NaNs after basis transport"
-        assert not torch.isnan(state['variance']).any(), "Variance contains NaNs after basis transport"
-        assert (state['variance'] >= 0).all(), "Variance must remain non-negative after basis transport"
+        assert state["step"] == 4, f"Expected continuous step=4 across update_gap=2, got {state['step']}"
+        assert not torch.isnan(state["momentum"]).any(), "Momentum contains NaNs after basis transport"
+        assert not torch.isnan(state["variance"]).any(), "Variance contains NaNs after basis transport"
+        assert (state["variance"] >= 0).all(), "Variance must remain non-negative after basis transport"
 
     # 3. Verify orthonormal forward projection vs scaled reconstruction on step 1
     torch.manual_seed(99)
@@ -358,22 +369,20 @@ def test_centroid_steer_mathematical_invariants():
     moe_b.load_state_dict(moe_a.state_dict())
 
     opt_small = CentroidSteerOptimizer(
-        moe_a, lr=1e-2, betas=(0.9, 0.95), weight_decay=0.0,
-        rank=rank, update_gap=10, steer_scale=0.10, use_muon=False
+        moe_a, lr=1e-2, betas=(0.9, 0.95), weight_decay=0.0, rank=rank, update_gap=10, steer_scale=0.10, use_muon=False
     )
     opt_large = CentroidSteerOptimizer(
-        moe_b, lr=1e-2, betas=(0.9, 0.95), weight_decay=0.0,
-        rank=rank, update_gap=10, steer_scale=0.80, use_muon=False
+        moe_b, lr=1e-2, betas=(0.9, 0.95), weight_decay=0.0, rank=rank, update_gap=10, steer_scale=0.80, use_muon=False
     )
 
     # Synchronize random initial orthogonal projections
     for ga, gb in zip(opt_small.layer_groups, opt_large.layer_groups):
         init_p = torch.empty(dim, rank)
         torch.nn.init.orthogonal_(init_p)
-        ga['projection'] = init_p.clone()
-        gb['projection'] = init_p.clone()
-        ga['projection_side'] = 'left' if ga['param'].shape[0] <= ga['param'].shape[1] else 'right'
-        gb['projection_side'] = ga['projection_side']
+        ga["projection"] = init_p.clone()
+        gb["projection"] = init_p.clone()
+        ga["projection_side"] = "left" if ga["param"].shape[0] <= ga["param"].shape[1] else "right"
+        gb["projection_side"] = ga["projection_side"]
 
     x_test = torch.randn(2, 16, dim)
     out_a = moe_a(x_test, update_stats=True)
@@ -386,9 +395,9 @@ def test_centroid_steer_mathematical_invariants():
 
     # Forward variance must be identical (uncorrupted by steer_scale^2), while parameter updates differ
     for ga, gb in zip(opt_small.layer_groups, opt_large.layer_groups):
-        var_diff = (ga['state']['variance'] - gb['state']['variance']).abs().max().item()
+        var_diff = (ga["state"]["variance"] - gb["state"]["variance"]).abs().max().item()
         assert var_diff < 1e-6, f"Second moment EMA was corrupted by steer_scale! Max diff: {var_diff}"
-        param_diff = (ga['param'].data - gb['param'].data).abs().max().item()
+        param_diff = (ga["param"].data - gb["param"].data).abs().max().item()
         assert param_diff > 1e-6, "Parameter reconstruction should scale with steer_scale!"
 
     print("✅ CentroidSteer mathematical invariants passed!\n")
@@ -398,13 +407,19 @@ def test_adaptive_subspace_refresh_and_rank_profiler():
     """Verify adaptive subspace refresh tracking and offline rank sensitivity profiler."""
     print("=== Testing Adaptive Subspace Refresh & Rank Sensitivity Profiler ===")
     from triune.optim.centroid import profile_rank_sensitivity
+
     torch.manual_seed(42)
 
     dim = 64
     moe = MoE_FFN(dim=dim, num_experts=2, top_k=2, shared_expert=False)
     opt = CentroidSteerOptimizer(
-        moe, lr=1e-3, rank=8, adaptive_subspace_refresh=True,
-        energy_threshold=0.50, min_subspace_gap=2, max_subspace_gap=10
+        moe,
+        lr=1e-3,
+        rank=8,
+        adaptive_subspace_refresh=True,
+        energy_threshold=0.50,
+        min_subspace_gap=2,
+        max_subspace_gap=10,
     )
 
     x = torch.randn(2, 8, dim)
@@ -416,7 +431,7 @@ def test_adaptive_subspace_refresh_and_rank_profiler():
 
     # Verify energy ratios were tracked for active groups
     for g in opt.layer_groups:
-        self_energy = g.get('last_energy_ratio')
+        self_energy = g.get("last_energy_ratio")
         assert self_energy is not None, "Group must record last_energy_ratio"
         assert 0.0 <= self_energy <= 1.5, f"Energy ratio out of bounds: {self_energy}"
 

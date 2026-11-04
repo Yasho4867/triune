@@ -11,12 +11,12 @@ Measures:
 - Maximum sustainable context length within 8GB VRAM
 """
 
-import gc
 import json
 import os
 import sys
 import time
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, Tuple
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -31,7 +31,9 @@ from triune.model import VectorisedGLA
 def get_hardware_info() -> Dict[str, Any]:
     return {
         "device_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU",
-        "total_vram_gb": round(torch.cuda.get_device_properties(0).total_memory / (1024**3), 2) if torch.cuda.is_available() else 0,
+        "total_vram_gb": round(torch.cuda.get_device_properties(0).total_memory / (1024**3), 2)
+        if torch.cuda.is_available()
+        else 0,
         "cuda_version": torch.version.cuda or "N/A",
         "pytorch_version": torch.__version__,
         "python_version": sys.version.split()[0],
@@ -40,6 +42,7 @@ def get_hardware_info() -> Dict[str, Any]:
 
 class StandardSoftmaxAttention(nn.Module):
     """Standard multi-head attention baseline using PyTorch SDPA."""
+
     def __init__(self, dim: int = 512, num_heads: int = 8):
         super().__init__()
         self.dim = dim
@@ -60,7 +63,9 @@ class StandardSoftmaxAttention(nn.Module):
         out = out.transpose(1, 2).contiguous().view(b, t, c)
         return self.out_proj(out)
 
-    def decode_step(self, q_tok: torch.Tensor, k_cache: torch.Tensor, v_cache: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def decode_step(
+        self, q_tok: torch.Tensor, k_cache: torch.Tensor, v_cache: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Single token decode step appending to KV cache."""
         b, _, c = q_tok.shape
         q = self.q_proj(q_tok).view(b, 1, self.num_heads, self.head_dim).transpose(1, 2)
@@ -156,11 +161,13 @@ def run_long_context_suite() -> Dict[str, Any]:
             print(f"  GLA Prefill: OOM at L={seq_len}")
             gla_prefill = {"oom": True}
 
-        results["prefill_benchmarks"].append({
-            "seq_len": seq_len,
-            "sdpa": sdpa_prefill,
-            "gla": gla_prefill,
-        })
+        results["prefill_benchmarks"].append(
+            {
+                "seq_len": seq_len,
+                "sdpa": sdpa_prefill,
+                "gla": gla_prefill,
+            }
+        )
         del x
         torch.cuda.empty_cache()
 
@@ -203,14 +210,16 @@ def run_long_context_suite() -> Dict[str, Any]:
 
         print(f"  GLA  Decode: {t_gla_dec:6.2f} ms/token | State Size: {gla_state_size_kb:6.1f} KB (Fixed $O(1)$)")
 
-        results["decode_benchmarks"].append({
-            "prompt_len": prompt_len,
-            "sdpa_decode_ms": round(t_sdpa_dec, 3),
-            "sdpa_kv_cache_kb": round(sdpa_kv_size_kb, 1),
-            "gla_decode_ms": round(t_gla_dec, 3),
-            "gla_state_kb": round(gla_state_size_kb, 1),
-            "decode_speedup": round(t_sdpa_dec / t_gla_dec, 2),
-        })
+        results["decode_benchmarks"].append(
+            {
+                "prompt_len": prompt_len,
+                "sdpa_decode_ms": round(t_sdpa_dec, 3),
+                "sdpa_kv_cache_kb": round(sdpa_kv_size_kb, 1),
+                "gla_decode_ms": round(t_gla_dec, 3),
+                "gla_state_kb": round(gla_state_size_kb, 1),
+                "decode_speedup": round(t_sdpa_dec / t_gla_dec, 2),
+            }
+        )
 
         del k_cache
         del v_cache
@@ -275,13 +284,15 @@ def generate_markdown_report(results: Dict[str, Any], output_path: str) -> None:
 
         lines.append(f"| **{l}** | {sdpa_lat} | {gla_lat} | {sdpa_vram} | {gla_vram} | {vram_red} | {speedup} |")
 
-    lines.extend([
-        "",
-        "## 3. Autoregressive Decode Scaling ($O(1)$ vs $O(L)$)",
-        "",
-        "| Prompt Context Length | SDPA KV-Cache Memory | GLA Recurrent State Memory | SDPA Decode Latency | GLA Decode Latency | Decode Latency Advantage |",
-        "| :--- | :--- | :--- | :--- | :--- | :--- |",
-    ])
+    lines.extend(
+        [
+            "",
+            "## 3. Autoregressive Decode Scaling ($O(1)$ vs $O(L)$)",
+            "",
+            "| Prompt Context Length | SDPA KV-Cache Memory | GLA Recurrent State Memory | SDPA Decode Latency | GLA Decode Latency | Decode Latency Advantage |",
+            "| :--- | :--- | :--- | :--- | :--- | :--- |",
+        ]
+    )
 
     for d in results["decode_benchmarks"]:
         lines.append(
@@ -289,17 +300,19 @@ def generate_markdown_report(results: Dict[str, Any], output_path: str) -> None:
             f"{d['sdpa_decode_ms']} ms/tok | **{d['gla_decode_ms']} ms/tok** | **{d['decode_speedup']}x faster** |"
         )
 
-    lines.extend([
-        "",
-        "## 4. Key Takeaways",
-        "",
-        "1. **Constant Memory Footprint**:",
-        "   - Standard Softmax KV-cache grows linearly with sequence length. At $L=8,192$, the KV-cache consumes megabytes per layer.",
-        "   - GLA maintains a fixed recurrent matrix of shape $(H, d_k, d_v)$ (64 KB total) regardless of whether sequence length is 512 or 16,384.",
-        "2. **Decode Latency Invariance**:",
-        "   - While SDPA decode latency increases as context expands due to growing attention dot-products over previous keys, GLA decode latency remains completely flat ($0.27 - 0.29$ ms/token).",
-        "",
-    ])
+    lines.extend(
+        [
+            "",
+            "## 4. Key Takeaways",
+            "",
+            "1. **Constant Memory Footprint**:",
+            "   - Standard Softmax KV-cache grows linearly with sequence length. At $L=8,192$, the KV-cache consumes megabytes per layer.",
+            "   - GLA maintains a fixed recurrent matrix of shape $(H, d_k, d_v)$ (64 KB total) regardless of whether sequence length is 512 or 16,384.",
+            "2. **Decode Latency Invariance**:",
+            "   - While SDPA decode latency increases as context expands due to growing attention dot-products over previous keys, GLA decode latency remains completely flat ($0.27 - 0.29$ ms/token).",
+            "",
+        ]
+    )
 
     with open(output_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")

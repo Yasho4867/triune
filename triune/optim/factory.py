@@ -6,8 +6,7 @@ import torch
 
 import triune.model.config as defaults
 
-
-from .centroid import AdamW8bit, CentroidSteerOptimizer, HAS_8BIT
+from .centroid import HAS_8BIT, AdamW8bit, CentroidSteerOptimizer
 
 
 def build_optimizer(model, config: dict):
@@ -33,5 +32,9 @@ def build_optimizer(model, config: dict):
             use_8bit_base=config.get("use_8bit_base", defaults.USE_8BIT_BASE),
         )
     if HAS_8BIT and AdamW8bit is not None:
-        return AdamW8bit(model.parameters(), lr=config["lr"], betas=config["betas"], weight_decay=config["weight_decay"])
-    return torch.optim.AdamW(model.parameters(), lr=config["lr"], betas=config["betas"], weight_decay=config["weight_decay"])
+        return AdamW8bit(
+            model.parameters(), lr=config["lr"], betas=config["betas"], weight_decay=config["weight_decay"]
+        )
+    return torch.optim.AdamW(
+        model.parameters(), lr=config["lr"], betas=config["betas"], weight_decay=config["weight_decay"]
+    )

@@ -1,8 +1,8 @@
 """Verification test suite for Triune Ecosystem Phase 1 modules."""
 
-import sys
 import unittest
 import warnings
+
 warnings.filterwarnings("ignore", message=".*httpx.*")
 warnings.filterwarnings("ignore", message=".*starlette.testclient.*")
 import torch
@@ -11,11 +11,8 @@ import triune
 from triune import (
     Agent,
     MemoryPlanner,
-    MultiAgentOrchestrator,
     ProviderManager,
     PythonSandbox,
-    TelemetryCallback,
-    TriuneModel,
     export_safetensors,
     load_model,
     register_model,
@@ -26,7 +23,6 @@ from triune.plugins import list_registered_nodes
 
 
 class TestTriuneEcosystem(unittest.TestCase):
-
     def test_memory_planner(self):
         config = triune.build_config({})
         estimate = MemoryPlanner.estimate_vram(config, target_vram_gb=8.0)
@@ -42,18 +38,18 @@ class TestTriuneEcosystem(unittest.TestCase):
     def test_sandbox_security(self):
         """Verify sandbox rejects dangerous operations."""
         sandbox = PythonSandbox(timeout=5)
-        
+
         # Test: import os should fail or be restricted
         result = sandbox.execute_code('import os; os.system("echo pwned")')
-        self.assertFalse(result.get('success', False), "Sandbox should reject importing os")
-        
+        self.assertFalse(result.get("success", False), "Sandbox should reject importing os")
+
         # Test: file access should fail or be isolated
         result = sandbox.execute_code('open("/etc/passwd").read()')
-        self.assertFalse(result.get('success', True), "Sandbox should not allow arbitrary file reads")
-        
+        self.assertFalse(result.get("success", True), "Sandbox should not allow arbitrary file reads")
+
         # Test: timeout enforcement
-        result = sandbox.execute_code('import time; time.sleep(100)')
-        self.assertFalse(result.get('success', True), "Sandbox should enforce timeout")
+        result = sandbox.execute_code("import time; time.sleep(100)")
+        self.assertFalse(result.get("success", True), "Sandbox should enforce timeout")
 
     def test_model_zoo(self):
         model = load_model("triune-small")
@@ -104,6 +100,7 @@ class TestTriuneEcosystem(unittest.TestCase):
     def test_module_manager_search(self):
         """Verify ModuleManager returns curated components and handles multi-source queries."""
         from triune.modules.manager import ModuleManager
+
         mgr = ModuleManager()
         results = mgr.search_marketplace(query="", module_type="all", source="curated")
         self.assertIn("curated", results)
@@ -115,24 +112,25 @@ class TestTriuneEcosystem(unittest.TestCase):
 
     def test_module_manager_inspect_and_register_nodes(self):
         """Verify dynamic discovery and registration of DAG nodes from an installed module."""
-        import tempfile
         import shutil
+        import tempfile
         from pathlib import Path
+
+        from triune.execution.dag import ExecutionEngine
         from triune.modules.manager import ModuleManager
         from triune.plugins.registry import global_registry
-        from triune.execution.dag import ExecutionEngine
 
         temp_dir = Path(tempfile.mkdtemp(prefix="triune_mod_test_"))
         try:
             # Create a sample plugin script with a custom registered DAG node
             script_path = temp_dir / "my_custom_node.py"
-            script_content = '''
+            script_content = """
 from triune.plugins.registry import register_node
 
 @register_node("DynamicEchoNode", category="Plugin", description="Dynamic test node", inputs=["val"], outputs=["result"])
 def dynamic_echo_handler(val: int) -> dict:
     return {"result": val * 10}
-'''
+"""
             script_path.write_text(script_content, encoding="utf-8")
 
             # Also create a dummy weights file
@@ -175,6 +173,7 @@ def dynamic_echo_handler(val: int) -> dict:
         # execute_function rejects functions that import os
         def bad_fn():
             import os
+
             return os.getcwd()
 
         fn_res = sandbox.execute_function(bad_fn)
@@ -182,9 +181,10 @@ def dynamic_echo_handler(val: int) -> dict:
 
     def test_module_manager_security_gates(self):
         """Verify ModuleManager blocks option injection and malicious plugin ASTs."""
-        import tempfile
         import shutil
+        import tempfile
         from pathlib import Path
+
         from triune.modules.manager import ModuleManager
 
         mgr = ModuleManager()
@@ -256,10 +256,12 @@ def dynamic_echo_handler(val: int) -> dict:
         def failing_plugin(params):
             raise RuntimeError("Intentional plugin failure")
 
-        graph_res = engine.execute_graph({
-            "nodes": [{"id": "n_fail", "type": "FailingTestPluginNode", "title": "FailingTestPluginNode"}],
-            "edges": [],
-        })
+        graph_res = engine.execute_graph(
+            {
+                "nodes": [{"id": "n_fail", "type": "FailingTestPluginNode", "title": "FailingTestPluginNode"}],
+                "edges": [],
+            }
+        )
         self.assertEqual(graph_res["status"], "failed")
         self.assertEqual(graph_res["failed_node"], "n_fail")
 

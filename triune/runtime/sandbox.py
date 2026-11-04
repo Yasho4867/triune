@@ -8,8 +8,6 @@ code from untrusted users without stronger OS/container isolation.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Callable, Dict
 import ast
 import inspect
 import json
@@ -18,6 +16,8 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+from dataclasses import dataclass
+from typing import Any, Callable, Dict
 
 
 class SandboxError(Exception):
@@ -27,41 +27,46 @@ class SandboxError(Exception):
 @dataclass
 class SandboxResult:
     """Result of code execution inside PythonSandbox."""
+
     success: bool
     output: Any
     error: str | None = None
     exec_time_sec: float = 0.0
 
 
-_ALLOWED_SANDBOX_MODULES = frozenset({
-    "math",
-    "random",
-    "statistics",
-    "itertools",
-    "functools",
-    "collections",
-    "json",
-    "re",
-})
+_ALLOWED_SANDBOX_MODULES = frozenset(
+    {
+        "math",
+        "random",
+        "statistics",
+        "itertools",
+        "functools",
+        "collections",
+        "json",
+        "re",
+    }
+)
 
-_BANNED_SANDBOX_CALLS = frozenset({
-    "eval",
-    "exec",
-    "compile",
-    "open",
-    "__import__",
-    "getattr",
-    "setattr",
-    "delattr",
-    "globals",
-    "locals",
-    "vars",
-    "dir",
-    "type",
-    "breakpoint",
-    "input",
-    "memoryview",
-})
+_BANNED_SANDBOX_CALLS = frozenset(
+    {
+        "eval",
+        "exec",
+        "compile",
+        "open",
+        "__import__",
+        "getattr",
+        "setattr",
+        "delattr",
+        "globals",
+        "locals",
+        "vars",
+        "dir",
+        "type",
+        "breakpoint",
+        "input",
+        "memoryview",
+    }
+)
 
 
 def _validate_sandbox_ast(code_str: str) -> None:
@@ -157,11 +162,7 @@ class PythonSandbox:
             f.write("\n".join(wrapper))
             temp_path = f.name
 
-        minimal_env = {
-            k: v
-            for k, v in os.environ.items()
-            if k in ("PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP")
-        }
+        minimal_env = {k: v for k, v in os.environ.items() if k in ("PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP")}
         try:
             result = subprocess.run(
                 [sys.executable, "-I", "-S", "-u", temp_path],

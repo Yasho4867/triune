@@ -164,4 +164,3 @@ def fast_zeropower_via_newtonschulz5_batched(
     if return_scratch:
         return res, (A, A2, B)
     return res
-

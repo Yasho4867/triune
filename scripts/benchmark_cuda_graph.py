@@ -18,19 +18,16 @@ from __future__ import annotations
 
 import argparse
 import copy
-import gc
 import hashlib
 import json
-import os
 import statistics
 import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -53,15 +50,11 @@ def compute_sha256(file_path: Path) -> str:
 
 def get_git_info() -> Tuple[str, bool]:
     try:
-        commit = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=str(REPO_ROOT), text=True
-        ).strip()
+        commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=str(REPO_ROOT), text=True).strip()
     except Exception:
         commit = "unknown"
     try:
-        status_out = subprocess.check_output(
-            ["git", "status", "--porcelain"], cwd=str(REPO_ROOT), text=True
-        ).strip()
+        status_out = subprocess.check_output(["git", "status", "--porcelain"], cwd=str(REPO_ROOT), text=True).strip()
         is_dirty = bool(status_out)
     except Exception:
         is_dirty = False
@@ -76,7 +69,8 @@ def load_dataset_batches(
     device: torch.device,
     allow_synthetic: bool = False,
 ) -> Tuple[List[Tuple[torch.Tensor, torch.Tensor]], Dict[str, Any]]:
-    dataset_file = REPO_ROOT / "data" / "fineweb_sample.jsonl"
+    real_edu_file = REPO_ROOT / "data" / "fineweb_edu_real.jsonl"
+    dataset_file = real_edu_file if real_edu_file.is_file() else (REPO_ROOT / "data" / "fineweb_sample.jsonl")
     tokenizer_file = REPO_ROOT / "triune_tokenizer.json"
     stride = seq_len + 1
     req_tokens_per_batch = batch_size * stride
@@ -94,6 +88,7 @@ def load_dataset_batches(
 
     if dataset_file.is_file() and tokenizer_file.is_file():
         from tokenizers import Tokenizer
+
         tok = Tokenizer.from_file(str(tokenizer_file))
         with open(dataset_file, "r", encoding="utf-8") as f:
             for line in f:
@@ -391,13 +386,15 @@ def run_cuda_graph_benchmark(
             if diff > max_param_drift:
                 max_param_drift = diff
 
-        parity_step_drift.append({
-            "step": step_i,
-            "loss_eager": round(float(l_e.item()), 5),
-            "loss_graph": round(engine_parity.current_loss_item(), 5),
-            "loss_diff": round(loss_diff, 7),
-            "max_param_weight_drift": max_param_drift,
-        })
+        parity_step_drift.append(
+            {
+                "step": step_i,
+                "loss_eager": round(float(l_e.item()), 5),
+                "loss_graph": round(engine_parity.current_loss_item(), 5),
+                "loss_diff": round(loss_diff, 7),
+                "max_param_weight_drift": max_param_drift,
+            }
+        )
 
     del m_eager_parity, m_graph_parity, opt_eager_parity, opt_graph_parity, engine_parity
     torch.cuda.empty_cache()
@@ -503,13 +500,13 @@ def generate_cuda_graph_report(results: Dict[str, Any], output_path: Path):
 
     md = f"""# Triune AI — CUDA Graph vs Eager Execution & Optimizer Parity Report
 
-**Benchmarked Hardware**: `{prov['hardware']['device_name']}` ({prov['hardware']['total_memory_mb']:,.1f} MB VRAM)  
-**Timestamp**: {results['timestamp_utc']}  
-**Git Provenance Commit**: `{prov['git_commit']}` (Working-Tree Clean: `{not prov['git_dirty']}`)  
-**Script SHA-256**: `{prov['script_sha256']}`  
-**Dataset**: `{prov['dataset']['dataset_path']}` (Mode: `{prov['dataset']['dataset_mode']}`, SHA-256: `{prov['dataset']['dataset_sha256']}`)  
-**Model Architecture**: `{arch['name']}` ({arch['total_parameters']:,} scalar parameters | {arch['layers']} layers, {arch['dim']} dim, {arch['heads']} heads, {arch['kv_heads']} KV heads, {arch['hidden_dim']} MLP dim)  
-**Workload**: Batch Size = {results['workload']['batch_size']}, Seq Len = {results['workload']['seq_len']}, Steps = {results['workload']['steps']}, Vocab = {results['workload']['vocab_size']}
+**Benchmarked Hardware**: `{prov["hardware"]["device_name"]}` ({prov["hardware"]["total_memory_mb"]:,.1f} MB VRAM)  
+**Timestamp**: {results["timestamp_utc"]}  
+**Git Provenance Commit**: `{prov["git_commit"]}` (Working-Tree Clean: `{not prov["git_dirty"]}`)  
+**Script SHA-256**: `{prov["script_sha256"]}`  
+**Dataset**: `{prov["dataset"]["dataset_path"]}` (Mode: `{prov["dataset"]["dataset_mode"]}`, SHA-256: `{prov["dataset"]["dataset_sha256"]}`)  
+**Model Architecture**: `{arch["name"]}` ({arch["total_parameters"]:,} scalar parameters | {arch["layers"]} layers, {arch["dim"]} dim, {arch["heads"]} heads, {arch["kv_heads"]} KV heads, {arch["hidden_dim"]} MLP dim)  
+**Workload**: Batch Size = {results["workload"]["batch_size"]}, Seq Len = {results["workload"]["seq_len"]}, Steps = {results["workload"]["steps"]}, Vocab = {results["workload"]["vocab_size"]}
 
 ---
 
@@ -519,9 +516,9 @@ CUDA Graph execution eliminates the Python interpreter overhead and kernel launc
 
 | Execution Mode | Host Launch Latency (CPU) | GPU Execution Time (Silicon) | Total Step Latency (Wall Clock) | Host Dispatch Speedup vs Eager |
 | :--- | :---: | :---: | :---: | :---: |
-| **Standard PyTorch Eager** | {eager_host:.1f} $\\mu$s | {t['eager']['gpu_time_ms']['median']:.2f} ms | {eager_step:.2f} ms | Baseline (0%) |
-| **CUDA Graph (Host Sync via `.item()`)** | {sync_host:.1f} $\\mu$s | {t['cuda_graph_sync']['gpu_time_ms']['median']:.2f} ms | {sync_step:.2f} ms | Blocks host on GPU |
-| **CUDA Graph (Asynchronous Replay)** | **{async_host:.1f} $\\mu$s** | **{t['cuda_graph_async']['gpu_time_ms']['median']:.2f} ms** | **{async_step:.2f} ms** | **-{host_reduction}% launch latency** |
+| **Standard PyTorch Eager** | {eager_host:.1f} $\\mu$s | {t["eager"]["gpu_time_ms"]["median"]:.2f} ms | {eager_step:.2f} ms | Baseline (0%) |
+| **CUDA Graph (Host Sync via `.item()`)** | {sync_host:.1f} $\\mu$s | {t["cuda_graph_sync"]["gpu_time_ms"]["median"]:.2f} ms | {sync_step:.2f} ms | Blocks host on GPU |
+| **CUDA Graph (Asynchronous Replay)** | **{async_host:.1f} $\\mu$s** | **{t["cuda_graph_async"]["gpu_time_ms"]["median"]:.2f} ms** | **{async_step:.2f} ms** | **-{host_reduction}% launch latency** |
 
 > [!IMPORTANT]
 > **Host Synchronization Elimination**:
@@ -541,8 +538,8 @@ To verify that CUDA Graph replay is mathematically identical to ordinary trainin
         md += f"| {rec['step']} | {rec['loss_eager']:.5f} | {rec['loss_graph']:.5f} | {rec['loss_diff']:.2e} | {rec['max_param_weight_drift']:.2e} | **{status}** |\n"
 
     md += f"""
-- **Maximum Observed Weight Drift**: `{parity['max_observed_weight_drift']:.2e}`
-- **Maximum Observed Loss Delta**: `{parity['max_observed_loss_diff']:.2e}`
+- **Maximum Observed Weight Drift**: `{parity["max_observed_weight_drift"]:.2e}`
+- **Maximum Observed Loss Delta**: `{parity["max_observed_loss_diff"]:.2e}`
 - **Parity Verdict**: **100% Mathematically Equivalent**. In-place gradient zeroing (`set_to_none=False`) and static optimizer state buffers ensure bitwise parity with eager PyTorch updates.
 """
     output_path.write_text(md, encoding="utf-8")
@@ -556,7 +553,9 @@ def main():
     parser.add_argument("--batch-size", type=int, default=4, help="Batch size (default 4)")
     parser.add_argument("--seq-len", type=int, default=256, help="Sequence length (default 256)")
     parser.add_argument("--vocab-size", type=int, default=32000, help="Vocab size (default 32000)")
-    parser.add_argument("--synthetic", action="store_true", help="Explicitly allow synthetic pseudo-text if dataset is missing")
+    parser.add_argument(
+        "--synthetic", action="store_true", help="Explicitly allow synthetic pseudo-text if dataset is missing"
+    )
     args = parser.parse_args()
 
     print("=" * 80)

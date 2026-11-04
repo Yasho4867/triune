@@ -22,8 +22,11 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--dataset_config", default="wikitext-103-raw-v1")
     args = parser.parse_args(argv)
     tokenizer = build_tokenizer(
-        args.output, vocab_size=args.vocab_size, min_frequency=args.min_frequency,
-        target_chars=args.target_chars, dataset_name=args.dataset_name,
+        args.output,
+        vocab_size=args.vocab_size,
+        min_frequency=args.min_frequency,
+        target_chars=args.target_chars,
+        dataset_name=args.dataset_name,
         dataset_config=args.dataset_config,
     )
     print(f"Tokenizer saved to {args.output}; vocabulary size: {tokenizer.get_vocab_size():,}")

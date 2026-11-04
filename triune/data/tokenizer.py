@@ -183,12 +183,12 @@ def build_tokenizer(
 ) -> Any:
     """Train and save a BPE tokenizer directly from a dataset stream."""
     try:
+        from datasets import load_dataset
         from tokenizers import Tokenizer
         from tokenizers.models import BPE
         from tokenizers.pre_tokenizers import ByteLevel
         from tokenizers.processors import ByteLevel as ByteLevelProcessor
         from tokenizers.trainers import BpeTrainer
-        from datasets import load_dataset
     except ImportError as e:
         raise RuntimeError(f"Tokenizer training requires 'tokenizers' and 'datasets' packages: {e}")
 

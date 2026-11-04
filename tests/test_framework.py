@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import torch
-import torch.nn as nn
+import sys
 import tempfile
 import unittest
 from pathlib import Path
-import sys
+
+import torch
+import torch.nn as nn
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -56,19 +57,21 @@ class FrameworkTest(unittest.TestCase):
             self._run_training_and_resume(Path(directory))
 
     def _run_training_and_resume(self, checkpoint_dir: Path):
-        config = build_config({
-            "vocab_size": 11,
-            "total_steps": 1,
-            "warmup_steps": 0,
-            "batch_size": 2,
-            "grad_accum_steps": 1,
-            "seq_len": 3,
-            "eval_batches": 1,
-            "eval_every": 2,
-            "log_every": 1,
-            "save_every": 2,
-            "checkpoint_dir": str(checkpoint_dir),
-        })
+        config = build_config(
+            {
+                "vocab_size": 11,
+                "total_steps": 1,
+                "warmup_steps": 0,
+                "batch_size": 2,
+                "grad_accum_steps": 1,
+                "seq_len": 3,
+                "eval_batches": 1,
+                "eval_every": 2,
+                "log_every": 1,
+                "save_every": 2,
+                "checkpoint_dir": str(checkpoint_dir),
+            }
+        )
         x = torch.tensor([[2, 3, 4], [5, 6, 7]])
         y = torch.tensor([[3, 4, 5], [6, 7, 8]])
         tokenizer = _Tokenizer()
@@ -106,16 +109,18 @@ class FrameworkTest(unittest.TestCase):
 
         # Verify optimizer state was restored
         for (k1, v1), (k2, v2) in zip(
-            trainer.optimizer.state_dict()['state'].items(),
-            resumed.optimizer.state_dict()['state'].items()
+            trainer.optimizer.state_dict()["state"].items(), resumed.optimizer.state_dict()["state"].items()
         ):
             if isinstance(v1, dict):
                 for sk in v1:
                     if isinstance(v1[sk], torch.Tensor):
-                        torch.testing.assert_close(v1[sk], v2[sk], msg=f"Optimizer state mismatch: param {k1}, key {sk}")
+                        torch.testing.assert_close(
+                            v1[sk], v2[sk], msg=f"Optimizer state mismatch: param {k1}, key {sk}"
+                        )
 
     def test_fp8_linear_backward_dtype_mix(self):
         from triune.model.fp8 import FP8Linear
+
         layer = FP8Linear(16, 32, bias=True, dtype=torch.bfloat16)
         x = torch.randn(2, 4, 16, dtype=torch.bfloat16, requires_grad=True)
         out = layer(x)
@@ -130,20 +135,23 @@ class FrameworkTest(unittest.TestCase):
     def test_triune_model_with_fp8(self):
         from triune.model import build_model
         from triune.optim.factory import build_optimizer
-        config = build_config({
-            "vocab_size": 32,
-            "hidden_dim": 64,
-            "num_heads": 2,
-            "head_dim": 32,
-            "num_layers": 8,
-            "num_experts": 2,
-            "router_prefix_layers": 2,
-            "reflex_exit_layer": 3,
-            "limbic_exit_layer": 5,
-            "use_fp8": True,
-            "total_steps": 1,
-            "checkpoint_dir": "test_ckpt"
-        })
+
+        config = build_config(
+            {
+                "vocab_size": 32,
+                "hidden_dim": 64,
+                "num_heads": 2,
+                "head_dim": 32,
+                "num_layers": 8,
+                "num_experts": 2,
+                "router_prefix_layers": 2,
+                "reflex_exit_layer": 3,
+                "limbic_exit_layer": 5,
+                "use_fp8": True,
+                "total_steps": 1,
+                "checkpoint_dir": "test_ckpt",
+            }
+        )
         model = build_model(config).to(dtype=torch.bfloat16)
         optimizer = build_optimizer(model, config)
         input_ids = torch.randint(0, 32, (2, 8))

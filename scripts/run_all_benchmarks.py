@@ -15,11 +15,11 @@ Usage:
 """
 
 import argparse
-import os
 import subprocess
 import sys
 import time
 from pathlib import Path
+
 import torch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -29,11 +29,7 @@ BENCHMARK_DIR = REPO_ROOT / "benchmarks"
 def get_hardware_header() -> str:
     dev = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU"
     vram = round(torch.cuda.get_device_properties(0).total_memory / (1024**3), 2) if torch.cuda.is_available() else 0
-    return (
-        f"Device: {dev} ({vram} GB VRAM) | "
-        f"PyTorch: {torch.__version__} | "
-        f"CUDA: {torch.version.cuda or 'N/A'}"
-    )
+    return f"Device: {dev} ({vram} GB VRAM) | PyTorch: {torch.__version__} | CUDA: {torch.version.cuda or 'N/A'}"
 
 
 def run_category(cat: str, py_exe: str) -> bool:

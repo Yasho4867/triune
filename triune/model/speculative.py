@@ -10,7 +10,8 @@ Exploits Triune's structural multi-exit architecture (Reflex -> Limbic -> Cortex
 from __future__ import annotations
 
 import time
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Union
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -35,14 +36,10 @@ class SelfSpeculativeGenerator:
 
         # Resolve special tokens
         self.pad_token_id = (
-            pad_token_id
-            if pad_token_id is not None
-            else getattr(tokenizer, "token_to_id", lambda t: None)("[PAD]")
+            pad_token_id if pad_token_id is not None else getattr(tokenizer, "token_to_id", lambda t: None)("[PAD]")
         )
         self.eos_token_id = (
-            eos_token_id
-            if eos_token_id is not None
-            else getattr(tokenizer, "token_to_id", lambda t: None)("[SEP]")
+            eos_token_id if eos_token_id is not None else getattr(tokenizer, "token_to_id", lambda t: None)("[SEP]")
         )
 
         self.telemetry = {

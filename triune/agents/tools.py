@@ -23,7 +23,9 @@ class ToolRegistry:
     def __init__(self) -> None:
         self._tools: Dict[str, Tool] = {}
 
-    def register(self, name: str, description: str, func: Callable, parameters_schema: Dict[str, Any] | None = None) -> Tool:
+    def register(
+        self, name: str, description: str, func: Callable, parameters_schema: Dict[str, Any] | None = None
+    ) -> Tool:
         tool = Tool(name=name, description=description, func=func, parameters_schema=parameters_schema or {})
         self._tools[name] = tool
         return tool

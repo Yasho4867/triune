@@ -1,13 +1,14 @@
 """Test Hugging Face Hub export and loading compatibility."""
 
 import json
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
+
 import torch
 
-from triune.model.transformer import TriuneTransformer
 from triune.export.hf_compat import export_to_huggingface, extract_triune_hf_config
+from triune.model.transformer import TriuneTransformer
 
 
 class TestHuggingFaceExport(unittest.TestCase):

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import unittest
 from contextlib import nullcontext
 
 import torch
 import torch.nn as nn
-import unittest
 
 from triune.trainer.engine import TrainingEngine
 
@@ -27,9 +27,9 @@ class _ChunkTestModel(nn.Module):
         logits = [head(hidden) for head in self.exits]
         route_logits = self.router(hidden.mean(dim=1))
         probabilities = route_logits.softmax(dim=-1)
-        self.last_balance_loss = (probabilities.mean(dim=0) - torch.tensor(
-            [0.5, 0.3, 0.2], device=input_ids.device
-        )).square().mean()
+        self.last_balance_loss = (
+            (probabilities.mean(dim=0) - torch.tensor([0.5, 0.3, 0.2], device=input_ids.device)).square().mean()
+        )
         self.last_depth_choice = route_logits.argmax(dim=-1)
         return logits, route_logits
 

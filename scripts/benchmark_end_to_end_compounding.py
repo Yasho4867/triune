@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import time
 from pathlib import Path
@@ -38,14 +37,10 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from triune.kernels import (
-    chunked_cross_entropy_from_hidden,
     fast_cross_entropy,
-    fast_chunk_gla,
-    fast_rmsnorm,
-    fast_zeropower_via_newtonschulz5,
 )
-from triune.optim.centroid import CentroidSteerOptimizer
 from triune.model import TriuneTransformer
+from triune.optim.centroid import CentroidSteerOptimizer
 
 
 # =========================================================================
@@ -102,9 +97,7 @@ class StandardBaselineTransformer(nn.Module):
     def __init__(self, vocab_size: int, dim: int, num_layers: int, num_heads: int, hidden_dim: int):
         super().__init__()
         self.embed = nn.Embedding(vocab_size, dim)
-        self.layers = nn.ModuleList([
-            StandardTransformerBlock(dim, num_heads, hidden_dim) for _ in range(num_layers)
-        ])
+        self.layers = nn.ModuleList([StandardTransformerBlock(dim, num_heads, hidden_dim) for _ in range(num_layers)])
         self.norm = StandardRMSNorm(dim)
         self.lm_head = nn.Linear(dim, vocab_size, bias=False)
 
@@ -160,7 +153,9 @@ def run_end_to_end_compounding_benchmark(
     # -------------------------------------------------------------------------
     print("\n[1/2] Running Standard Industry Baseline Stack...")
     torch.manual_seed(42)
-    model_baseline = StandardBaselineTransformer(vocab_size, dim, num_layers, num_heads, hidden_dim).to(device=device, dtype=dtype)
+    model_baseline = StandardBaselineTransformer(vocab_size, dim, num_layers, num_heads, hidden_dim).to(
+        device=device, dtype=dtype
+    )
     opt_baseline = torch.optim.AdamW(model_baseline.parameters(), lr=1e-3, weight_decay=0.01)
 
     # Warmup
@@ -199,8 +194,10 @@ def run_end_to_end_compounding_benchmark(
     print(f"  Standard Baseline Completed in: {base_total_time:.2f} s")
     print(f"  Step Latency:    {base_step_time_ms:.2f} ms/step")
     print(f"  Throughput:      {base_tok_s:,.0f} tokens/sec")
-    print(f"  Peak VRAM:       {base_peak_vram_mb:.1f} MB ({base_peak_vram_mb/1024:.2f} GB)")
-    print(f"  Initial Loss:    {baseline_losses[0]:.4f} -> Final Loss: {baseline_losses[-1]:.4f} (Drop: {base_loss_drop:.4f})")
+    print(f"  Peak VRAM:       {base_peak_vram_mb:.1f} MB ({base_peak_vram_mb / 1024:.2f} GB)")
+    print(
+        f"  Initial Loss:    {baseline_losses[0]:.4f} -> Final Loss: {baseline_losses[-1]:.4f} (Drop: {base_loss_drop:.4f})"
+    )
 
     # Clean up baseline GPU allocations before running Triune
     del model_baseline, opt_baseline
@@ -276,11 +273,19 @@ def run_end_to_end_compounding_benchmark(
     compounding_efficiency_factor = round(triune_vram_efficiency / max(base_vram_efficiency, 1e-6), 2)
 
     print(f"  Triune Stack Completed in:      {triune_total_time:.2f} s")
-    print(f"  Step Latency:    {triune_step_time_ms:.2f} ms/step ({round(base_step_time_ms/triune_step_time_ms, 2)}x speed)")
+    print(
+        f"  Step Latency:    {triune_step_time_ms:.2f} ms/step ({round(base_step_time_ms / triune_step_time_ms, 2)}x speed)"
+    )
     print(f"  Throughput:      {triune_tok_s:,.0f} tokens/sec")
-    print(f"  Peak VRAM:       {triune_peak_vram_mb:.1f} MB ({triune_peak_vram_mb/1024:.2f} GB) [{vram_saved_pct}% VRAM SAVED]")
-    print(f"  Initial Loss:    {triune_losses[0]:.4f} -> Final Loss: {triune_losses[-1]:.4f} (Drop: {triune_loss_drop:.4f})")
-    print(f"  Training VRAM Efficiency: {triune_vram_efficiency:,.0f} tok/s/GB vs {base_vram_efficiency:,.0f} tok/s/GB ({compounding_efficiency_factor}x compounding factor)")
+    print(
+        f"  Peak VRAM:       {triune_peak_vram_mb:.1f} MB ({triune_peak_vram_mb / 1024:.2f} GB) [{vram_saved_pct}% VRAM SAVED]"
+    )
+    print(
+        f"  Initial Loss:    {triune_losses[0]:.4f} -> Final Loss: {triune_losses[-1]:.4f} (Drop: {triune_loss_drop:.4f})"
+    )
+    print(
+        f"  Training VRAM Efficiency: {triune_vram_efficiency:,.0f} tok/s/GB vs {base_vram_efficiency:,.0f} tok/s/GB ({compounding_efficiency_factor}x compounding factor)"
+    )
 
     summary = {
         "workload": {
@@ -316,7 +321,7 @@ def run_end_to_end_compounding_benchmark(
             "vram_saved_pct": vram_saved_pct,
             "step_speedup": round(base_step_time_ms / max(triune_step_time_ms, 1e-6), 2),
             "compounding_vram_efficiency_gain": compounding_efficiency_factor,
-        }
+        },
     }
 
     # Save report
@@ -328,9 +333,9 @@ def run_end_to_end_compounding_benchmark(
     # Generate Markdown documentation
     report_md = f"""# Triune End-to-End Compounding Advantage Benchmark Report
 
-**Device**: `{torch.cuda.get_device_name(0) if device.type == 'cuda' else 'CPU'}`  
+**Device**: `{torch.cuda.get_device_name(0) if device.type == "cuda" else "CPU"}`  
 **Precision**: `torch.bfloat16` with native CUDA Tensor Cores  
-**Timestamp**: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}  
+**Timestamp**: {time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())}  
 **Workload**: {steps} steps, Batch Size = {batch_size}, Sequence Length = {seq_len} ({tokens_per_step:,} tokens/step)
 
 ---
@@ -350,9 +355,9 @@ When machine learning frameworks optimize only one component (e.g., just flash a
 
 | Metric | Standard Industry Baseline (PyTorch + AdamW + Softmax + Full CE) | Triune Full Compounded Stack (GLA + MoE + CentroidSteer + Chunked CE) | Compounded Advantage |
 | :--- | :---: | :---: | :---: |
-| **Peak Training VRAM** | **{base_peak_vram_mb:.1f} MB ({base_peak_vram_mb/1024:.2f} GB)** | **{triune_peak_vram_mb:.1f} MB ({triune_peak_vram_mb/1024:.2f} GB)** | **{vram_saved_pct}% VRAM SAVED** |
+| **Peak Training VRAM** | **{base_peak_vram_mb:.1f} MB ({base_peak_vram_mb / 1024:.2f} GB)** | **{triune_peak_vram_mb:.1f} MB ({triune_peak_vram_mb / 1024:.2f} GB)** | **{vram_saved_pct}% VRAM SAVED** |
 | **Training Step Latency** | **{base_step_time_ms:.2f} ms/step** | **{triune_step_time_ms:.2f} ms/step** | **{round(base_step_time_ms / max(triune_step_time_ms, 1e-6), 2)}x faster** |
-| **Training Throughput** | {base_tok_s:,.0f} tok/s | **{triune_tok_s:,.0f} tok/s** | **+{round((triune_tok_s - base_tok_s)/max(base_tok_s, 1)*100, 1)}% throughput** |
+| **Training Throughput** | {base_tok_s:,.0f} tok/s | **{triune_tok_s:,.0f} tok/s** | **+{round((triune_tok_s - base_tok_s) / max(base_tok_s, 1) * 100, 1)}% throughput** |
 | **Tokens per Second per GB VRAM** | {base_vram_efficiency:,.0f} tok/s/GB | **{triune_vram_efficiency:,.0f} tok/s/GB** | **{compounding_efficiency_factor}x Efficiency Multiplier** |
 | **Loss Drop ({steps} steps)** | {base_loss_drop:.4f} ({baseline_losses[0]:.4f} -> {baseline_losses[-1]:.4f}) | **{triune_loss_drop:.4f} ({triune_losses[0]:.4f} -> {triune_losses[-1]:.4f})** | **Faster loss reduction** |
 

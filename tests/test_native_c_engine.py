@@ -1,4 +1,5 @@
 """Tests for the Native C/C++/AVX2/CUDA Engine Bridge (`triune.ops._c_bridge`) and NeuronScope."""
+
 from __future__ import annotations
 
 import torch

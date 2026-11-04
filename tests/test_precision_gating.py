@@ -12,14 +12,15 @@ Verifies:
 from __future__ import annotations
 
 import unittest
+
 import torch
 import torch.nn as nn
 
+from triune.model.fp8 import FP8Linear
+from triune.model.transformer import TriuneTransformer
 from triune.runtime.capabilities import PrecisionCapabilities
 from triune.runtime.staging import FP8StagingBuffer, ParameterStager, StagingBuffer
 from triune.runtime.streaming import LayerStreamingEngine, StreamingConfig
-from triune.model.fp8 import FP8Linear
-from triune.model.transformer import TriuneTransformer
 
 
 class TestPrecisionCapabilityGating(unittest.TestCase):

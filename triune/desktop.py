@@ -70,13 +70,11 @@ def _find_wsl_python() -> str | None:
             'for p in "$HOME/venvs/triune/bin/python" "$HOME/.venv/bin/python"; do '
             'if [ -x "$p" ] && "$p" -c "import torch; raise SystemExit(0 if torch.cuda.is_available() else 1)" '
             '>/dev/null 2>&1; then echo "$p"; exit 0; fi; done; '
-            'if command -v python3 >/dev/null 2>&1 && python3 -c '
+            "if command -v python3 >/dev/null 2>&1 && python3 -c "
             '"import torch; raise SystemExit(0 if torch.cuda.is_available() else 1)" >/dev/null 2>&1; '
-            'then command -v python3; fi'
+            "then command -v python3; fi"
         )
-        result = subprocess.run(
-            ["wsl.exe", "bash", "-lc", script], capture_output=True, text=True, timeout=15.0
-        )
+        result = subprocess.run(["wsl.exe", "bash", "-lc", script], capture_output=True, text=True, timeout=15.0)
         candidate = result.stdout.strip().splitlines()
         if result.returncode == 0 and candidate:
             return candidate[-1]
@@ -95,6 +93,7 @@ def _to_wsl_path(path: Path) -> str:
 
 def _start_fallback_http_server(directory: Path, port: int) -> None:
     """Run built-in Python HTTP server if FastAPI is completely unavailable."""
+
     class QuietHandler(http.server.SimpleHTTPRequestHandler):
         def __init__(self, *a, **kw):
             super().__init__(*a, directory=str(directory), **kw)
@@ -151,6 +150,7 @@ def launch_desktop_app(
     local_has_cuda = False
     try:
         import torch
+
         local_has_torch = True
         local_has_cuda = torch.cuda.is_available()
     except ImportError:
@@ -169,6 +169,7 @@ def launch_desktop_app(
             # Native Python with CUDA PyTorch
             print(f"[Studio] Starting native PyTorch CUDA backend on http://127.0.0.1:{port}...")
             from triune.api import run_server
+
             server_thread = threading.Thread(
                 target=run_server,
                 kwargs={"host": "127.0.0.1", "port": port},
@@ -192,17 +193,19 @@ def launch_desktop_app(
                 f"from triune.api import run_server; run_server(host='127.0.0.1', port={port})"
             )
             wsl_cmd = [
-                "wsl.exe", "-e", wsl_py, "-c",
+                "wsl.exe",
+                "-e",
+                wsl_py,
+                "-c",
                 # WSL localhost forwarding exposes this guest-loopback service
                 # to the Windows host without opening it on the LAN. A wildcard
                 # bind is intentionally rejected by run_server unless TLS and
                 # an API token are configured.
-                wsl_startup
+                wsl_startup,
             ]
             try:
                 api_proc = subprocess.Popen(
-                    wsl_cmd,
-                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+                    wsl_cmd, creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
                 )
             except Exception as e:
                 print(f"[Studio] Failed to launch WSL backend: {e}")
@@ -211,6 +214,7 @@ def launch_desktop_app(
             # Native host Python with CPU PyTorch
             print(f"[Studio] Starting native PyTorch CPU backend on http://127.0.0.1:{port}...")
             from triune.api import run_server
+
             server_thread = threading.Thread(
                 target=run_server,
                 kwargs={"host": "127.0.0.1", "port": port},
@@ -222,6 +226,7 @@ def launch_desktop_app(
             # Native host Python in lightweight UI Mode or Fallback
             try:
                 from triune.api import run_server
+
                 print(f"[Studio] Starting Triune Studio in Host UI Mode on http://127.0.0.1:{port}...")
                 server_thread = threading.Thread(
                     target=run_server,

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Dict, Optional
 
 
 @dataclass
@@ -40,7 +40,9 @@ class ProviderManager:
         if os.getenv("OPENROUTER_API_KEY"):
             self.providers["openrouter"] = ProviderConfig("openrouter", api_key=os.getenv("OPENROUTER_API_KEY"))
 
-    def register_provider(self, provider: str, api_key: str, base_url: str | None = None, model_name: str | None = None) -> None:
+    def register_provider(
+        self, provider: str, api_key: str, base_url: str | None = None, model_name: str | None = None
+    ) -> None:
         self.providers[provider.lower()] = ProviderConfig(
             provider=provider.lower(),
             api_key=api_key,

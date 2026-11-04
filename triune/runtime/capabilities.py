@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import logging
+from dataclasses import dataclass
 from typing import Optional, Tuple
+
 import torch
 
 logger = logging.getLogger(__name__)
@@ -88,6 +89,7 @@ class PrecisionCapabilities:
         has_te = False
         try:
             import transformer_engine.pytorch as te  # noqa: F401
+
             has_te = True
         except (ImportError, Exception):
             has_te = False
@@ -105,11 +107,13 @@ class PrecisionCapabilities:
         if has_te and major >= 10:
             try:
                 from transformer_engine.common.recipe import NVFP4BlockScaling  # noqa: F401
+
                 has_te_fp4 = True
             except (ImportError, Exception):
                 has_te_fp4 = False
             try:
                 from transformer_engine.common.recipe import MXFP8BlockScaling  # noqa: F401
+
                 has_te_mxfp8 = True
             except (ImportError, Exception):
                 has_te_mxfp8 = False

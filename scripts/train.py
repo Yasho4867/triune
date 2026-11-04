@@ -65,23 +65,80 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--steer_scale", type=float)
     parser.add_argument("--use_fp4", "--use_nvfp4", dest="use_fp4", action="store_true")
     parser.add_argument("--use_fp8", action="store_true", help="Enable native FP8 (E4M3) precision context")
-    parser.add_argument("--use_muon", action=argparse.BooleanOptionalAction, default=True, help="Enable Muon for non-expert 2D hidden weights")
-    parser.add_argument("--use_triangular_core", action=argparse.BooleanOptionalAction, default=True, help="Enable fused triangular block update kernel for CentroidSteer")
-    parser.add_argument("--use_8bit_base", action=argparse.BooleanOptionalAction, default=False, help="Use 8-bit AdamW base optimizer if bitsandbytes is available")
+    parser.add_argument(
+        "--use_muon",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable Muon for non-expert 2D hidden weights",
+    )
+    parser.add_argument(
+        "--use_triangular_core",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable fused triangular block update kernel for CentroidSteer",
+    )
+    parser.add_argument(
+        "--use_8bit_base",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Use 8-bit AdamW base optimizer if bitsandbytes is available",
+    )
     parser.add_argument("--muon_lr", type=float, help="Muon learning rate (default: 0.02)")
-    parser.add_argument("--galore", action=argparse.BooleanOptionalAction, default=None, help="Enable GaLore low-rank gradient projection for expert weights")
+    parser.add_argument(
+        "--galore",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable GaLore low-rank gradient projection for expert weights",
+    )
     parser.add_argument("--galore_rank", type=int, help="GaLore projection subspace rank (default: 256)")
-    parser.add_argument("--galore_update_gap", type=int, help="GaLore subspace update frequency in steps (default: 200)")
+    parser.add_argument(
+        "--galore_update_gap", type=int, help="GaLore subspace update frequency in steps (default: 200)"
+    )
     parser.add_argument("--galore_lr", type=float, help="GaLore learning rate (default: 1e-4)")
     parser.add_argument("--galore_weight_decay", type=float, help="GaLore weight decay (default: 0.05)")
-    parser.add_argument("--force", action="store_true", help="Override resource manager feasibility recommendations and proceed regardless of VRAM budget")
-    parser.add_argument("--auto_fit", action="store_true", default=False, help="Automatically adopt recommended microbatch and grad_accum settings if not explicitly specified")
-    parser.add_argument("--streaming", action="store_true", help="Enable AirLLM-style layer streaming to train large models on consumer GPUs with <1.5 GB VRAM")
-    parser.add_argument("--streaming_chunk_size", type=int, default=1, help="Number of layers to stream/cache simultaneously (default: 1)")
-    parser.add_argument("--streaming_pin_memory", action=argparse.BooleanOptionalAction, default=None, help="Pin host memory for PCIe DMA in streaming mode (auto-detected based on RAM)")
-    parser.add_argument("--streaming_prefetch", action=argparse.BooleanOptionalAction, default=True, help="Prefetch next layer on secondary CUDA stream during layer streaming")
-    parser.add_argument("--streaming_fp8_weights", action=argparse.BooleanOptionalAction, default=True, help="Compress CPU host resident weights to FP8 to halve host RAM from 9.2 GB to 4.6 GB (default: True)")
-    parser.add_argument("--strict_vram", action="store_true", help="Deprecated alias; use default behavior without --force")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Override resource manager feasibility recommendations and proceed regardless of VRAM budget",
+    )
+    parser.add_argument(
+        "--auto_fit",
+        action="store_true",
+        default=False,
+        help="Automatically adopt recommended microbatch and grad_accum settings if not explicitly specified",
+    )
+    parser.add_argument(
+        "--streaming",
+        action="store_true",
+        help="Enable AirLLM-style layer streaming to train large models on consumer GPUs with <1.5 GB VRAM",
+    )
+    parser.add_argument(
+        "--streaming_chunk_size",
+        type=int,
+        default=1,
+        help="Number of layers to stream/cache simultaneously (default: 1)",
+    )
+    parser.add_argument(
+        "--streaming_pin_memory",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Pin host memory for PCIe DMA in streaming mode (auto-detected based on RAM)",
+    )
+    parser.add_argument(
+        "--streaming_prefetch",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Prefetch next layer on secondary CUDA stream during layer streaming",
+    )
+    parser.add_argument(
+        "--streaming_fp8_weights",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Compress CPU host resident weights to FP8 to halve host RAM from 9.2 GB to 4.6 GB (default: True)",
+    )
+    parser.add_argument(
+        "--strict_vram", action="store_true", help="Deprecated alias; use default behavior without --force"
+    )
     parser.add_argument("--no_wandb", action="store_true")
     parser.add_argument("--no_hf_login", action="store_true")
     parser.add_argument(
@@ -133,17 +190,45 @@ def main(argv: list[str] | None = None) -> dict:
     overrides = {
         key: getattr(args, key)
         for key in (
-            "checkpoint_dir", "seq_len", "lr", "warmup_steps", "total_steps", "batch_size", "grad_accum_steps",
-            "depth_mode", "save_every", "log_every", "eval_every", "eval_batches", "target_depth_dist",
-            "usage_ema_decay", "bias_strength",
-            "balance_coef", "exploration", "exploration_steps", "steer_scale", "use_muon", "muon_lr", "use_triangular_core", "use_8bit_base",
-            "galore", "galore_rank", "galore_update_gap", "galore_lr", "galore_weight_decay",
+            "checkpoint_dir",
+            "seq_len",
+            "lr",
+            "warmup_steps",
+            "total_steps",
+            "batch_size",
+            "grad_accum_steps",
+            "depth_mode",
+            "save_every",
+            "log_every",
+            "eval_every",
+            "eval_batches",
+            "target_depth_dist",
+            "usage_ema_decay",
+            "bias_strength",
+            "balance_coef",
+            "exploration",
+            "exploration_steps",
+            "steer_scale",
+            "use_muon",
+            "muon_lr",
+            "use_triangular_core",
+            "use_8bit_base",
+            "galore",
+            "galore_rank",
+            "galore_update_gap",
+            "galore_lr",
+            "galore_weight_decay",
             "dataset_name",
-            "dataset_config", "num_workers", "num_layers", "num_experts", "shuffle_buffer",
+            "dataset_config",
+            "num_workers",
+            "num_layers",
+            "num_experts",
+            "shuffle_buffer",
         )
         if getattr(args, key) is not None
     }
-    from triune.model.base import CANONICAL_MODEL_SPECS, _LEGACY_PRESET_ALIASES, get_model_spec
+    from triune.model.base import _LEGACY_PRESET_ALIASES, CANONICAL_MODEL_SPECS, get_model_spec
+
     model_name_str = (args.model_name or "triune-2.5b").strip().lower()
     is_canonical_preset = model_name_str in CANONICAL_MODEL_SPECS or model_name_str in _LEGACY_PRESET_ALIASES
     if is_canonical_preset:
@@ -187,7 +272,6 @@ def main(argv: list[str] | None = None) -> dict:
         print("⚠️ [Hardware] CUDA not detected. Training on CPU.", flush=True)
     from triune.runtime.resource_manager import DynamicResourceManager
 
-
     try:
         tokenizer = load_tokenizer(args.tokenizer_path)
         config["vocab_size"] = tokenizer.get_vocab_size()
@@ -202,7 +286,10 @@ def main(argv: list[str] | None = None) -> dict:
         print(DynamicResourceManager.format_assessment_report(assessment), flush=True)
 
         if args.streaming:
-            print(f"🌊 [Layer Streaming Engine] Active: chunk size {args.streaming_chunk_size}. Layers reside in CPU RAM and stream to GPU on-demand (<1.5 GB VRAM target).", flush=True)
+            print(
+                f"🌊 [Layer Streaming Engine] Active: chunk size {args.streaming_chunk_size}. Layers reside in CPU RAM and stream to GPU on-demand (<1.5 GB VRAM target).",
+                flush=True,
+            )
 
         # Validate and allot resources; respects user --force override and explicit flags
         allotment = DynamicResourceManager.validate_and_allot(
@@ -222,14 +309,17 @@ def main(argv: list[str] | None = None) -> dict:
             _request_hf_token()
 
         resume_path = args.resume_latest or (Path(config["checkpoint_dir"]) / "best.pt" if args.resume_best else None)
-        logger = NullLogger() if args.no_wandb else WandbLogger(
-            project="triune-transformer", config=config, run_id=_checkpoint_run_id(resume_path)
+        logger = (
+            NullLogger()
+            if args.no_wandb
+            else WandbLogger(project="triune-transformer", config=config, run_id=_checkpoint_run_id(resume_path))
         )
 
         # Build model with BF16 default dtype
         if not is_canonical_preset and ("/" in args.model_name or not Path(args.model_name).exists()):
             try:
                 from transformers import AutoModelForCausalLM
+
                 print(f"⏳ Loading Hugging Face model '{args.model_name}'...", flush=True)
                 raw_model = AutoModelForCausalLM.from_pretrained(args.model_name, torch_dtype=torch.bfloat16)
             except Exception as e:
@@ -248,6 +338,7 @@ def main(argv: list[str] | None = None) -> dict:
 
         if args.streaming:
             from triune.runtime.streaming import enable_layer_streaming
+
             enable_layer_streaming(
                 raw_model,
                 device=device,
@@ -264,6 +355,7 @@ def main(argv: list[str] | None = None) -> dict:
 
         if args.lora:
             from triune.trainer.finetune import LoRAConfig, TriuneFineTuner
+
             targets = [t.strip() for t in args.lora_targets.split(",")] if args.lora_targets else None
             lora_cfg = LoRAConfig(
                 rank=args.lora_rank,
@@ -273,7 +365,10 @@ def main(argv: list[str] | None = None) -> dict:
             )
             TriuneFineTuner(model, lora_cfg)
             trainable_p = sum(p.numel() for p in model.parameters() if p.requires_grad)
-            print(f"✅ LoRA attached: rank={args.lora_rank}, alpha={args.lora_alpha}, trainable={trainable_p:,}", flush=True)
+            print(
+                f"✅ LoRA attached: rank={args.lora_rank}, alpha={args.lora_alpha}, trainable={trainable_p:,}",
+                flush=True,
+            )
 
         if args.grad_checkpoint is not False and hasattr(model, "gradient_checkpointing_enable"):
             model.gradient_checkpointing_enable()
@@ -281,12 +376,15 @@ def main(argv: list[str] | None = None) -> dict:
 
         print(f"Params: {sum(parameter.numel() for parameter in model.parameters()):,}", flush=True)
         optimizer = build_optimizer(model, config)
-        print(f"⏳ Connecting dataset stream: '{config.get('dataset_name')}' ({config.get('dataset_config')})...", flush=True)
+        print(
+            f"⏳ Connecting dataset stream: '{config.get('dataset_name')}' ({config.get('dataset_config')})...",
+            flush=True,
+        )
         train_loader = build_dataloader(tokenizer, config, sep_token_id, is_holdout=False)
         eval_loader = build_dataloader(tokenizer, config, sep_token_id, is_holdout=True)
         print("✅ Dataset stream configured.", flush=True)
         if config.get("use_fp8", False):
-            fp8_count = sum(1 for m in model.modules() if getattr(m, '_triune_fp8_aware', False))
+            fp8_count = sum(1 for m in model.modules() if getattr(m, "_triune_fp8_aware", False))
             if fp8_count == 0:
                 print("⚠️ [FP8] use_fp8=True but no FP8Linear modules found in model. Check model factory.", flush=True)
 

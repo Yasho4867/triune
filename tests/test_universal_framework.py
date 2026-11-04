@@ -9,15 +9,15 @@ Verifies that Triune can seamlessly train, fine-tune (LoRA/QLoRA), and serve:
 from __future__ import annotations
 
 import unittest
-import torch
-import torch.nn as nn
 
+import torch
+
+from triune.trainer.finetune import LoRAConfig
 from triune.universal import (
+    TriuneUniversalEngine,
     UniversalDenseTransformer,
     UniversalMoETransformer,
-    TriuneUniversalEngine,
 )
-from triune.trainer.finetune import LoRAConfig, TriuneFineTuner
 
 
 class TestUniversalFramework(unittest.TestCase):

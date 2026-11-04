@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-import unittest
+import asyncio
 import inspect
 import tempfile
-import asyncio
-from unittest.mock import patch
+import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from triune.api.server import create_app
 from triune.api.routes import ChatCompletionRequest, pytorch_state, router
+from triune.api.server import create_app
 
 
 class TestStudioApiEndpoints(unittest.TestCase):
@@ -127,6 +127,7 @@ class TestStudioApiEndpoints(unittest.TestCase):
 
     def test_local_chat_cancel_signals_active_generation(self) -> None:
         import threading
+
         from triune.api import routes
 
         previous = routes.pytorch_state.active_generation_cancel
@@ -186,8 +187,9 @@ class TestStudioApiEndpoints(unittest.TestCase):
         self.assertIn("Credential Manager", response.json()["detail"])
 
     def test_byok_test_performs_authenticated_provider_request(self) -> None:
-        from triune.api import routes
         from unittest.mock import MagicMock
+
+        from triune.api import routes
 
         provider_response = MagicMock()
         provider_response.status = 200
@@ -206,8 +208,9 @@ class TestStudioApiEndpoints(unittest.TestCase):
             def get_config(self):
                 return {"byok_keys": {}}
 
-        with patch.object(routes, "module_manager", ConfigStub()), patch.dict(
-            "os.environ", {"OPENAI_API_KEY": "", "ANTHROPIC_API_KEY": "", "GEMINI_API_KEY": ""}
+        with (
+            patch.object(routes, "module_manager", ConfigStub()),
+            patch.dict("os.environ", {"OPENAI_API_KEY": "", "ANTHROPIC_API_KEY": "", "GEMINI_API_KEY": ""}),
         ):
             response = self.client.post(
                 "/v1/chat/completions",
@@ -223,9 +226,10 @@ class TestStudioApiEndpoints(unittest.TestCase):
             def get_config(self):
                 return {"byok_keys": {"gemini": "configured-secret"}}
 
-        with patch.object(routes, "module_manager", ConfigStub()), patch.object(
-            routes, "_call_gemini_api", return_value="provider response"
-        ) as provider_call:
+        with (
+            patch.object(routes, "module_manager", ConfigStub()),
+            patch.object(routes, "_call_gemini_api", return_value="provider response") as provider_call,
+        ):
             response = self.client.post(
                 "/v1/chat/completions",
                 json={"model": "gemini-3.8-flash", "messages": [{"role": "user", "content": "hello"}]},
@@ -238,6 +242,7 @@ class TestStudioApiEndpoints(unittest.TestCase):
 
     def test_byok_chat_distinguishes_authentication_from_quota_failures(self) -> None:
         import urllib.error
+
         from triune.api import routes
 
         class ConfigStub:
@@ -250,13 +255,15 @@ class TestStudioApiEndpoints(unittest.TestCase):
             (429, "rate or quota limit reached"),
         )
         for status_code, expected_message in cases:
-            with self.subTest(status_code=status_code), patch.object(
-                routes, "module_manager", ConfigStub()
-            ), patch.object(
-                routes,
-                "_call_gemini_api",
-                side_effect=urllib.error.HTTPError(
-                    "https://generativelanguage.googleapis.com/", status_code, "rejected", {}, None
+            with (
+                self.subTest(status_code=status_code),
+                patch.object(routes, "module_manager", ConfigStub()),
+                patch.object(
+                    routes,
+                    "_call_gemini_api",
+                    side_effect=urllib.error.HTTPError(
+                        "https://generativelanguage.googleapis.com/", status_code, "rejected", {}, None
+                    ),
                 ),
             ):
                 response = self.client.post(
@@ -268,16 +275,20 @@ class TestStudioApiEndpoints(unittest.TestCase):
 
     def test_byok_chat_identifies_provider_socket_timeouts(self) -> None:
         import urllib.error
+
         from triune.api import routes
 
         class ConfigStub:
             def get_config(self):
                 return {"byok_keys": {"gemini": "configured-secret"}}
 
-        with patch.object(routes, "module_manager", ConfigStub()), patch.object(
-            routes,
-            "_call_gemini_api",
-            side_effect=urllib.error.URLError(TimeoutError("timed out")),
+        with (
+            patch.object(routes, "module_manager", ConfigStub()),
+            patch.object(
+                routes,
+                "_call_gemini_api",
+                side_effect=urllib.error.URLError(TimeoutError("timed out")),
+            ),
         ):
             response = self.client.post(
                 "/v1/chat/completions",
@@ -290,9 +301,21 @@ class TestStudioApiEndpoints(unittest.TestCase):
 
     def test_execute_single_specification_nodes(self) -> None:
         cases = (
-            ({"id": "joint-loss", "type": "JointExitLoss", "params": {"lambda_reflex": 0.2}}, "failed", "requires all three"),
-            ({"id": "rope", "type": "FastRoPE", "params": {"dim": 64, "max_seq_len": 2048}}, "failed", "requires matching q and k"),
-            ({"id": "accumulator", "type": "GradientAccumulator", "params": {"grad_accum_steps": 4}}, "specification", None),
+            (
+                {"id": "joint-loss", "type": "JointExitLoss", "params": {"lambda_reflex": 0.2}},
+                "failed",
+                "requires all three",
+            ),
+            (
+                {"id": "rope", "type": "FastRoPE", "params": {"dim": 64, "max_seq_len": 2048}},
+                "failed",
+                "requires matching q and k",
+            ),
+            (
+                {"id": "accumulator", "type": "GradientAccumulator", "params": {"grad_accum_steps": 4}},
+                "specification",
+                None,
+            ),
         )
         for node, expected_status, expected_error in cases:
             with self.subTest(node=node["type"]):
@@ -303,7 +326,6 @@ class TestStudioApiEndpoints(unittest.TestCase):
                 if expected_error:
                     self.assertIn(expected_error, payload.get("error", ""))
                 self.assertIn("node_id", payload)
-
 
     def test_dag_compile_to_training(self) -> None:
         payload = {
@@ -409,6 +431,7 @@ class TestStudioApiEndpoints(unittest.TestCase):
 
     def test_single_training_step(self) -> None:
         from triune.api import routes
+
         pytorch_state = routes.pytorch_state
         initial_step = pytorch_state.step
         pytorch_state.batch_size = 1
@@ -567,21 +590,23 @@ class TestStudioApiEndpoints(unittest.TestCase):
 
     def test_byok_wandb_save_and_test(self) -> None:
         import os
+
         from triune.api import routes
 
         class ConfigStub:
             def __init__(self):
                 self.saved = {}
+
             def get_config(self):
                 return {"byok_keys": {}}
+
             def save_config(self, config, **kwargs):
                 self.saved = config
 
         stub = ConfigStub()
         with patch.object(routes, "module_manager", stub):
             res = self.client.post(
-                "/v1/byok/save",
-                json={"keys": {"wandb": "test-wandb-api-key-40-hex-characters-long"}}
+                "/v1/byok/save", json={"keys": {"wandb": "test-wandb-api-key-40-hex-characters-long"}}
             )
             self.assertEqual(res.status_code, 200)
             self.assertEqual(res.json()["status"], "saved")
@@ -590,8 +615,7 @@ class TestStudioApiEndpoints(unittest.TestCase):
         # Test wandb verification
         with patch("wandb.login", return_value=True, create=True):
             test_res = self.client.post(
-                "/v1/byok/test",
-                json={"provider": "wandb", "key": "test-wandb-api-key-40-hex-characters-long"}
+                "/v1/byok/test", json={"provider": "wandb", "key": "test-wandb-api-key-40-hex-characters-long"}
             )
             self.assertEqual(test_res.status_code, 200)
             self.assertEqual(test_res.json()["status"], "valid")
@@ -632,6 +656,7 @@ class TestStudioApiEndpoints(unittest.TestCase):
 
     def test_word_boundary_chunking_pads_and_preserves_words(self) -> None:
         from triune.api import routes
+
         engine = routes.pytorch_state
         engine.load_tokenizer()
         if engine.tokenizer:
@@ -667,23 +692,29 @@ class TestLocalChatStreaming(unittest.TestCase):
                 "checkpoint": "test.pt",
             }
 
-        endpoint = next(route.endpoint for route in router.routes if getattr(route, "path", None) == "/v1/chat/completions")
+        endpoint = next(
+            route.endpoint for route in router.routes if getattr(route, "path", None) == "/v1/chat/completions"
+        )
 
         async def request_stream():
-            response = await endpoint(ChatCompletionRequest(
-                model="triune-small",
-                messages=[{"role": "user", "content": "hi"}],
-                stream=True,
-                max_tokens=16,
-            ))
+            response = await endpoint(
+                ChatCompletionRequest(
+                    model="triune-small",
+                    messages=[{"role": "user", "content": "hi"}],
+                    stream=True,
+                    max_tokens=16,
+                )
+            )
             chunks = []
             async for chunk in response.body_iterator:
                 chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
             return response.media_type, "".join(chunks)
 
-        with patch.object(pytorch_state, "generate_text", side_effect=fake_generate), \
-             patch.object(pytorch_state, "is_training", False), \
-             patch.object(pytorch_state, "active_generation_cancel", None):
+        with (
+            patch.object(pytorch_state, "generate_text", side_effect=fake_generate),
+            patch.object(pytorch_state, "is_training", False),
+            patch.object(pytorch_state, "active_generation_cancel", None),
+        ):
             media_type, body = asyncio.run(asyncio.wait_for(request_stream(), timeout=10.0))
 
         self.assertEqual(media_type, "text/event-stream")

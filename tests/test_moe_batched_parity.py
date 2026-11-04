@@ -8,9 +8,11 @@ Verifies:
 """
 
 import copy
+
 import pytest
 import torch
 import torch.nn as nn
+
 from triune.model.moe import MoE_FFN
 
 
@@ -25,7 +27,9 @@ def test_moe_batched_parity_with_biases():
     B, T = 2, 8
 
     # 1. Instantiate model with standard nn.Linear experts (which have bias=True)
-    moe_batched = MoE_FFN(dim=dim, num_experts=num_experts, top_k=top_k, shared_expert=False).to(device=device, dtype=torch.float32)
+    moe_batched = MoE_FFN(dim=dim, num_experts=num_experts, top_k=top_k, shared_expert=False).to(
+        device=device, dtype=torch.float32
+    )
     # Ensure biases are non-zero
     for e in moe_batched.experts:
         nn.init.uniform_(e[0].bias, 0.1, 1.0)
@@ -92,7 +96,9 @@ def test_moe_batched_parity_bias_none():
     B, T = 2, 8
 
     # Model with bias=None
-    moe_batched = MoE_FFN(dim=dim, num_experts=num_experts, top_k=top_k, shared_expert=False).to(device=device, dtype=torch.float32)
+    moe_batched = MoE_FFN(dim=dim, num_experts=num_experts, top_k=top_k, shared_expert=False).to(
+        device=device, dtype=torch.float32
+    )
     for e in moe_batched.experts:
         e[0].bias = None
         e[2].bias = None
@@ -134,7 +140,9 @@ def test_moe_mixed_bias_fallback():
     B, T = 2, 8
 
     # Create MoE where expert 0 has no bias but expert 1-3 have biases
-    moe = MoE_FFN(dim=dim, num_experts=num_experts, top_k=top_k, shared_expert=False).to(device=device, dtype=torch.float32)
+    moe = MoE_FFN(dim=dim, num_experts=num_experts, top_k=top_k, shared_expert=False).to(
+        device=device, dtype=torch.float32
+    )
     moe.experts[0][0].bias = None
 
     x = torch.randn(B, T, dim, device=device, dtype=torch.float32, requires_grad=True)

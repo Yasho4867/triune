@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import unittest
+
 import torch
 import torch.nn as nn
 
 from triune.runtime.cuda_graph import CUDAGraphEngine
-from triune.universal import UniversalDenseTransformer
 
 
 class SimpleModel(nn.Module):
@@ -127,6 +127,7 @@ class TestCUDAGraphEngine(unittest.TestCase):
     def test_multi_step_mathematical_optimizer_parity(self):
         """Verifies multi-step weight updates in CUDA Graph replay match eager training bitwise."""
         import copy
+
         torch.manual_seed(42)
         m_eager = SimpleModel().to(device=self.device, dtype=torch.float32)
         m_graph = copy.deepcopy(m_eager)
@@ -182,6 +183,7 @@ class TestCUDAGraphEngine(unittest.TestCase):
     def test_host_launch_latency_asynchronous_vs_synchronous(self):
         """Asynchronous step returns without waiting for GPU execution."""
         import time
+
         model = SimpleModel().to(device=self.device, dtype=torch.bfloat16)
         opt = torch.optim.AdamW(model.parameters(), lr=1e-3, capturable=True)
         engine = CUDAGraphEngine(self.device)

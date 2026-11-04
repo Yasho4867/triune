@@ -3,11 +3,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .config import GLA_HEAD_DIM, ROPE_MAX_SEQ_LEN, USE_ROPE
-from .rotary import RotaryEmbedding, apply_rotary
-
+from .rotary import RotaryEmbedding
 
 try:
     from fla.ops.gla import chunk_gla
+
     try:
         from fla.ops.gla import fused_recurrent_gla
     except ImportError:
@@ -28,6 +28,7 @@ def _pytorch_chunk_gla(q, k, v, g, initial_state=None, chunk_size: int = 64):
     """
     try:
         from triune.ops.gla import gla
+
         return gla(q, k, v, g, initial_state=initial_state, chunk_size=chunk_size)
     except Exception:
         pass

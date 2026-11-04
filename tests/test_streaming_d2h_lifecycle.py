@@ -1,7 +1,7 @@
-import unittest
 import copy
+import unittest
+
 import torch
-import torch.nn as nn
 
 from triune.model.transformer import TriuneTransformer
 from triune.runtime.streaming import LayerStreamingEngine, StreamingConfig

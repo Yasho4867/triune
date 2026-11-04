@@ -12,13 +12,13 @@ Measures:
   empirical Quality-vs-Latency Pareto Frontier.
 """
 
-import gc
 import json
 import math
 import os
 import sys
 import time
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict
+
 import torch
 import torch.nn as nn
 
@@ -32,7 +32,9 @@ from triune.model.transformer import TriuneTransformer
 def get_hardware_info() -> Dict[str, Any]:
     return {
         "device_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU",
-        "total_vram_gb": round(torch.cuda.get_device_properties(0).total_memory / (1024**3), 2) if torch.cuda.is_available() else 0,
+        "total_vram_gb": round(torch.cuda.get_device_properties(0).total_memory / (1024**3), 2)
+        if torch.cuda.is_available()
+        else 0,
         "cuda_version": torch.version.cuda or "N/A",
         "pytorch_version": torch.__version__,
         "python_version": sys.version.split()[0],
@@ -70,7 +72,7 @@ def benchmark_forward_latency(
     with torch.no_grad():
         for _ in range(warmup):
             _ = model(inputs, force_depth=force_depth)
-        
+
         torch.cuda.synchronize()
         torch.cuda.reset_peak_memory_stats()
 
@@ -152,8 +154,8 @@ def evaluate_quality_on_heldout_tokens(
 
     with torch.no_grad():
         for i in range(num_batches):
-            inp = val_tokens[i:i+1, :-1]
-            tgt = val_tokens[i:i+1, 1:]
+            inp = val_tokens[i : i + 1, :-1]
+            tgt = val_tokens[i : i + 1, 1:]
             out = model(inp, force_depth=force_depth)
             logits = out[0] if isinstance(out, (tuple, list)) else out
             loss = loss_fn(logits.view(-1, logits.size(-1)), tgt.view(-1))
@@ -208,26 +210,32 @@ def run_dynamic_exits_suite() -> Dict[str, Any]:
     for name, depth_val, desc in exit_modes:
         print(f"\n[Mode: {name}]")
         fwd_metrics = benchmark_forward_latency(model, inputs, force_depth=depth_val)
-        print(f"  Forward Latency: {fwd_metrics['median_latency_ms']} ms | Throughput: {fwd_metrics['tokens_per_sec']} tok/s | VRAM: {fwd_metrics['peak_vram_mb']} MB")
+        print(
+            f"  Forward Latency: {fwd_metrics['median_latency_ms']} ms | Throughput: {fwd_metrics['tokens_per_sec']} tok/s | VRAM: {fwd_metrics['peak_vram_mb']} MB"
+        )
 
         gen_metrics = benchmark_autoregressive_generation(model, prompt_ids, gen_tokens=64, force_depth=depth_val)
-        print(f"  Decode Speed:    {gen_metrics['tokens_per_sec']} tok/s ({gen_metrics['latency_per_token_ms']} ms/tok)")
+        print(
+            f"  Decode Speed:    {gen_metrics['tokens_per_sec']} tok/s ({gen_metrics['latency_per_token_ms']} ms/tok)"
+        )
 
         qual_metrics = evaluate_quality_on_heldout_tokens(model, val_tokens, force_depth=depth_val)
         print(f"  Validation Loss: {qual_metrics['val_loss']} | Perplexity: {qual_metrics['perplexity']}")
 
-        results["exits"].append({
-            "name": name,
-            "depth_code": depth_val,
-            "description": desc,
-            "forward_latency_ms": fwd_metrics["median_latency_ms"],
-            "forward_throughput_tok_s": fwd_metrics["tokens_per_sec"],
-            "peak_vram_mb": fwd_metrics["peak_vram_mb"],
-            "decode_tok_s": gen_metrics["tokens_per_sec"],
-            "decode_latency_per_tok_ms": gen_metrics["latency_per_token_ms"],
-            "val_loss": qual_metrics["val_loss"],
-            "perplexity": qual_metrics["perplexity"],
-        })
+        results["exits"].append(
+            {
+                "name": name,
+                "depth_code": depth_val,
+                "description": desc,
+                "forward_latency_ms": fwd_metrics["median_latency_ms"],
+                "forward_throughput_tok_s": fwd_metrics["tokens_per_sec"],
+                "peak_vram_mb": fwd_metrics["peak_vram_mb"],
+                "decode_tok_s": gen_metrics["tokens_per_sec"],
+                "decode_latency_per_tok_ms": gen_metrics["latency_per_token_ms"],
+                "val_loss": qual_metrics["val_loss"],
+                "perplexity": qual_metrics["perplexity"],
+            }
+        )
 
     # Save JSON results
     out_dir = os.path.join(ROOT, "benchmarks")
@@ -285,18 +293,20 @@ def generate_markdown_report(results: Dict[str, Any], output_path: str) -> None:
             speedup = f"**-{pct}%** latency"
         lines.append(f"| **{name}** | {depth} | {fwd_lat} | {tok_s} | {dec_s} | {loss} | {ppl} | {speedup} |")
 
-    lines.extend([
-        "",
-        "## 3. Key Observations & Trade-Offs",
-        "",
-        "1. **Speedup vs Quality Trade-off**:",
-        "   - **Reflex Exit** provides an immediate **~2.8x to 3.2x speedup** in forward pass latency relative to full-depth Cortex.",
-        "   - Autoregressive decode throughput increases substantially when executing shallow blocks.",
-        "2. **Dynamic Routing Sweet-Spot**:",
-        "   - Learned dynamic routing captures **over 90% of the perplexity gains** of full Cortex processing while executing only intermediate depth on average.",
-        "   - The confidence gating mechanism automatically allocates compute where entropy is highest.",
-        "",
-    ])
+    lines.extend(
+        [
+            "",
+            "## 3. Key Observations & Trade-Offs",
+            "",
+            "1. **Speedup vs Quality Trade-off**:",
+            "   - **Reflex Exit** provides an immediate **~2.8x to 3.2x speedup** in forward pass latency relative to full-depth Cortex.",
+            "   - Autoregressive decode throughput increases substantially when executing shallow blocks.",
+            "2. **Dynamic Routing Sweet-Spot**:",
+            "   - Learned dynamic routing captures **over 90% of the perplexity gains** of full Cortex processing while executing only intermediate depth on average.",
+            "   - The confidence gating mechanism automatically allocates compute where entropy is highest.",
+            "",
+        ]
+    )
 
     with open(output_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")

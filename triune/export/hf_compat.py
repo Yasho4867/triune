@@ -9,14 +9,11 @@ enabling any external developer or platform to load Triune with:
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import shutil
-from typing import Any, Mapping, Optional
-import torch
+from pathlib import Path
+from typing import Any, Optional
+
 import torch.nn as nn
-
-from .exporter import export_safetensors
-
 
 _CONFIGURATION_TRIUNE_CODE = '''"""Triune Model Configuration for Hugging Face Transformers."""
 
@@ -279,9 +276,11 @@ def export_to_huggingface(
     safetensors_path = save_dir / "model.safetensors"
     try:
         from safetensors.torch import save_file
+
         save_file(prefixed_state, str(safetensors_path))
     except ImportError:
         from .exporter import _save_safetensors_fallback
+
         _save_safetensors_fallback(prefixed_state, safetensors_path)
 
     # 5. Copy or save tokenizer if available

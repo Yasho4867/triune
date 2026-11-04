@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-import sys
+import hmac
 import ipaddress
 import os
-import hmac
+import sys
 from pathlib import Path
 
 try:
     import fastapi
     import uvicorn
     from fastapi.staticfiles import StaticFiles
+
     from .routes import router
 
     HAS_FASTAPI = True
@@ -52,10 +53,7 @@ def create_app():
     unmatched path so the single-page app still works.
     """
     if not HAS_FASTAPI:
-        raise RuntimeError(
-            "fastapi is required to run the API server. "
-            "Install with `pip install fastapi uvicorn`"
-        )
+        raise RuntimeError("fastapi is required to run the API server. Install with `pip install fastapi uvicorn`")
 
     from fastapi.responses import FileResponse, JSONResponse
 
@@ -80,13 +78,20 @@ def create_app():
         if request.url.path.startswith(("/v1/", "/api/")):
             peer = request.client.host if request.client else None
             try:
-                is_loopback = (peer in ("testclient", "localhost")) or (peer is not None and ipaddress.ip_address(peer).is_loopback)
+                is_loopback = (peer in ("testclient", "localhost")) or (
+                    peer is not None and ipaddress.ip_address(peer).is_loopback
+                )
             except ValueError:
                 is_loopback = False
             if not is_loopback:
                 api_token = os.environ.get("TRIUNE_API_TOKEN", "")
                 if len(api_token) < 32:
-                    return JSONResponse(status_code=503, content={"detail": "Remote API is unavailable: configure TRIUNE_API_TOKEN with at least 32 characters."})
+                    return JSONResponse(
+                        status_code=503,
+                        content={
+                            "detail": "Remote API is unavailable: configure TRIUNE_API_TOKEN with at least 32 characters."
+                        },
+                    )
                 supplied = request.headers.get("authorization", "")
                 scheme, _, credential = supplied.partition(" ")
                 if scheme.lower() != "bearer" or not hmac.compare_digest(credential, api_token):
@@ -140,10 +145,13 @@ def create_app():
 
 
 if HAS_FASTAPI and uvicorn is not None:
+
     class SafeServer(uvicorn.Server):
         """Custom Uvicorn Server that safely bypasses signal handler registration when run in background threads."""
+
         def install_signal_handlers(self) -> None:
             import threading
+
             if threading.current_thread() is threading.main_thread():
                 try:
                     super().install_signal_handlers()
@@ -156,7 +164,9 @@ else:
 def run_server(host: str = "127.0.0.1", port: int = 8000) -> None:
     """Launch embedded API server using Uvicorn safely across main or background threads."""
     if not HAS_FASTAPI:
-        raise RuntimeError("fastapi and uvicorn are required to run the API server. Install with `pip install fastapi uvicorn`")
+        raise RuntimeError(
+            "fastapi and uvicorn are required to run the API server. Install with `pip install fastapi uvicorn`"
+        )
     import uvicorn
 
     try:
@@ -190,9 +200,9 @@ def run_server(host: str = "127.0.0.1", port: int = 8000) -> None:
     except Exception as err:
         print(f"[Triune API Server ERROR] Failed to start uvicorn server: {err}")
         import traceback
+
         traceback.print_exc()
 
 
 if __name__ == "__main__":
     run_server()
-

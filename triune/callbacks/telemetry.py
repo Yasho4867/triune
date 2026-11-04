@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from typing import Any, Dict
+
 import torch
+
 from .base import Callback
 
 
@@ -16,7 +18,9 @@ class TelemetryCallback(Callback):
 
     def on_step_end(self, trainer: Any, step: int, logs: Dict[str, Any]) -> None:
         vram_allocated_gb = (
-            torch.cuda.memory_allocated(trainer.device) / (1024**3) if torch.cuda.is_available() and trainer.device.type == "cuda" else 0.0
+            torch.cuda.memory_allocated(trainer.device) / (1024**3)
+            if torch.cuda.is_available() and trainer.device.type == "cuda"
+            else 0.0
         )
         payload = {
             "step": step,

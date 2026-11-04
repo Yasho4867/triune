@@ -1,9 +1,8 @@
 import unittest
+
 import torch
-import torch.nn as nn
 
 from triune.model.transformer import TriuneTransformer
-from triune.runtime.streaming import LayerStreamingEngine, StreamingConfig
 from triune.optim.centroid import CentroidSteerOptimizer
 
 
@@ -14,10 +13,11 @@ def test_layer_streaming_engine_lifecycle():
 
     device = torch.device("cuda")
     import gc
+
     gc.collect()
     torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats(device)
-    baseline_vram_mb = torch.cuda.memory_allocated(device) / (1024 ** 2)
+    baseline_vram_mb = torch.cuda.memory_allocated(device) / (1024**2)
 
     # 1. Build a model with 6 layers, 4 experts
     model = TriuneTransformer(
@@ -49,8 +49,10 @@ def test_layer_streaming_engine_lifecycle():
             assert p.device.type == "cpu"
             assert p.data.is_pinned()
 
-    initial_vram_mb = (torch.cuda.memory_allocated(device) / (1024 ** 2)) - baseline_vram_mb
-    print(f"\nInitial VRAM allocated after streaming attach: {initial_vram_mb:.2f} MB (baseline: {baseline_vram_mb:.2f} MB)")
+    initial_vram_mb = (torch.cuda.memory_allocated(device) / (1024**2)) - baseline_vram_mb
+    print(
+        f"\nInitial VRAM allocated after streaming attach: {initial_vram_mb:.2f} MB (baseline: {baseline_vram_mb:.2f} MB)"
+    )
     assert initial_vram_mb < 200.0, f"Expected initial VRAM delta < 200MB, got {initial_vram_mb} MB"
 
     # 4. Forward pass
@@ -62,7 +64,7 @@ def test_layer_streaming_engine_lifecycle():
     assert logits.shape == (batch_size, seq_len, 1000)
     assert route_logits.shape == (batch_size, 3)
 
-    forward_vram_mb = torch.cuda.memory_allocated(device) / (1024 ** 2)
+    forward_vram_mb = torch.cuda.memory_allocated(device) / (1024**2)
     print(f"Forward pass completed. VRAM allocated: {forward_vram_mb:.2f} MB")
 
     # 5. Backward pass with gradient offload verification
@@ -95,7 +97,7 @@ def test_layer_streaming_engine_lifecycle():
             p.grad = None
             p._cpu_grad = None
 
-    peak_vram_mb = (torch.cuda.max_memory_allocated(device) / (1024 ** 2)) - baseline_vram_mb
+    peak_vram_mb = (torch.cuda.max_memory_allocated(device) / (1024**2)) - baseline_vram_mb
     print(f"Peak VRAM during full forward/backward/step: {peak_vram_mb:.2f} MB")
     assert peak_vram_mb < 500.0, f"Expected peak VRAM delta < 500MB, got {peak_vram_mb} MB"
     engine.detach()
@@ -120,9 +122,7 @@ def test_layer_streaming_with_centroid_optimizer():
         use_fp8=False,
     )
     engine = model.enable_layer_streaming(device=device, chunk_size=1, pin_memory=False, instant_optimizer=False)
-    optimizer = CentroidSteerOptimizer(
-        model, lr=1e-4, betas=(0.9, 0.95), weight_decay=0.05, rank=32, update_gap=5
-    )
+    optimizer = CentroidSteerOptimizer(model, lr=1e-4, betas=(0.9, 0.95), weight_decay=0.05, rank=32, update_gap=5)
 
     batch_size = 2
     seq_len = 32
@@ -171,17 +171,14 @@ def test_layer_streaming_optimizer_gpu_execution():
 
     device = torch.device("cuda")
     import gc
+
     gc.collect()
     torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats(device)
-    baseline_vram_mb = torch.cuda.memory_allocated(device) / (1024 ** 2)
+    baseline_vram_mb = torch.cuda.memory_allocated(device) / (1024**2)
 
-    optimizer = CentroidSteerOptimizer(
-        model, lr=1e-4, betas=(0.9, 0.95), weight_decay=0.05, rank=32, update_gap=5
-    )
-    engine = model.enable_layer_streaming(
-        device=device, chunk_size=1, pin_memory=False, fp8_weights=True
-    )
+    optimizer = CentroidSteerOptimizer(model, lr=1e-4, betas=(0.9, 0.95), weight_decay=0.05, rank=32, update_gap=5)
+    engine = model.enable_layer_streaming(device=device, chunk_size=1, pin_memory=False, fp8_weights=True)
     engine.set_optimizer(optimizer)
 
     batch_size = 2
@@ -201,8 +198,10 @@ def test_layer_streaming_optimizer_gpu_execution():
         assert not hasattr(p, "_cpu_grad") or p._cpu_grad is None
         assert p.grad is None
 
-    peak_vram_mb = (torch.cuda.max_memory_allocated(device) / (1024 ** 2)) - baseline_vram_mb
-    print(f"Peak VRAM during Layer-Streaming GPU Optimizer: {peak_vram_mb:.2f} MB (baseline: {baseline_vram_mb:.2f} MB)")
+    peak_vram_mb = (torch.cuda.max_memory_allocated(device) / (1024**2)) - baseline_vram_mb
+    print(
+        f"Peak VRAM during Layer-Streaming GPU Optimizer: {peak_vram_mb:.2f} MB (baseline: {baseline_vram_mb:.2f} MB)"
+    )
     assert peak_vram_mb < 500.0, f"Expected peak VRAM delta < 500MB, got {peak_vram_mb} MB"
     engine.detach()
     print("✅ Layer-Streaming GPU Optimizer passed successfully!")
@@ -234,9 +233,7 @@ def test_streaming_gradient_numerical_parity():
     model_str = TriuneTransformer(**kwargs).eval()
     model_str.load_state_dict(model_std.state_dict())
 
-    engine = model_str.enable_layer_streaming(
-        device=device, chunk_size=1, pin_memory=False, instant_optimizer=False
-    )
+    engine = model_str.enable_layer_streaming(device=device, chunk_size=1, pin_memory=False, instant_optimizer=False)
 
     x = torch.randint(0, 100, (2, 8), device=device)
 
@@ -262,7 +259,11 @@ def test_streaming_gradient_numerical_parity():
     for (n1, p1), (n2, p2) in zip(model_std.named_parameters(), model_str.named_parameters()):
         param_count += 1
         g1 = p1.grad.cpu() if p1.grad is not None else None
-        g2 = p2._cpu_grad if hasattr(p2, "_cpu_grad") and p2._cpu_grad is not None else (p2.grad.cpu() if p2.grad is not None else None)
+        g2 = (
+            p2._cpu_grad
+            if hasattr(p2, "_cpu_grad") and p2._cpu_grad is not None
+            else (p2.grad.cpu() if p2.grad is not None else None)
+        )
         assert g1 is not None, f"{n1} has no grad in standard model"
         assert g2 is not None, f"{n2} has no grad in streaming model"
         diff = (g1 - g2).abs().max().item()
@@ -277,6 +278,7 @@ def test_streaming_gradient_numerical_parity():
 class TestLayerStreaming(unittest.TestCase):
     def setUp(self):
         import gc
+
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -284,6 +286,7 @@ class TestLayerStreaming(unittest.TestCase):
 
     def tearDown(self):
         import gc
+
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()

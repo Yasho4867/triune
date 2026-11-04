@@ -8,20 +8,17 @@ Fixed-Depth Transformers like SmolLM/TinyLlama, and Fused Chunked CE).
 from __future__ import annotations
 
 import unittest
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from triune.kernels import (
     chunked_cross_entropy_from_hidden,
-    fast_cross_entropy,
-    fast_chunk_gla,
     fast_rmsnorm,
-    fast_swiglu,
-    fast_zeropower_via_newtonschulz5,
 )
-from triune.optim.centroid import fast_subspace_projection
 from triune.model import TriuneTransformer
+from triune.optim.centroid import fast_subspace_projection
 
 
 class TestCompetitiveBenchmarks(unittest.TestCase):
@@ -76,7 +73,7 @@ class TestCompetitiveBenchmarks(unittest.TestCase):
         # VRAM reduction check: Triune should use less than 60% of standard VRAM (40%+ reduction)
         if self.device.type == "cuda":
             vram_ratio = tri_vram / max(std_vram, 1e-6)
-            self.assertLess(vram_ratio, 0.60, f"Expected < 60% VRAM usage, got {vram_ratio*100:.1f}%")
+            self.assertLess(vram_ratio, 0.60, f"Expected < 60% VRAM usage, got {vram_ratio * 100:.1f}%")
 
     # -------------------------------------------------------------------------
     # 2. Optimizer Footprint: CentroidSteer Low-Rank vs AdamW Memory
@@ -99,8 +96,8 @@ class TestCompetitiveBenchmarks(unittest.TestCase):
         ratio_vs_fp32 = centroid_mb / adamw_fp32_mb
         ratio_vs_8bit = centroid_mb / adamw_8bit_mb
 
-        self.assertLess(ratio_vs_fp32, 0.10, f"Expected < 10% of FP32 AdamW, got {ratio_vs_fp32*100:.1f}%")
-        self.assertLess(ratio_vs_8bit, 0.30, f"Expected < 30% of 8-bit AdamW, got {ratio_vs_8bit*100:.1f}%")
+        self.assertLess(ratio_vs_fp32, 0.10, f"Expected < 10% of FP32 AdamW, got {ratio_vs_fp32 * 100:.1f}%")
+        self.assertLess(ratio_vs_8bit, 0.30, f"Expected < 30% of 8-bit AdamW, got {ratio_vs_8bit * 100:.1f}%")
 
     # -------------------------------------------------------------------------
     # 3. Subspace Iteration vs Full SVD: Speed Dominance
@@ -152,17 +149,21 @@ class TestCompetitiveBenchmarks(unittest.TestCase):
     # -------------------------------------------------------------------------
     def test_dynamic_early_exit_latency_dominance(self):
         """Assert Reflex Exit (Layer 2) runs at least 2.5x faster than Cortex Full Depth (Layer 8)."""
-        model = TriuneTransformer(
-            vocab_size=32000,
-            hidden_dim=384,
-            num_layers=8,
-            num_heads=6,
-            head_dim=64,
-            num_experts=4,
-            router_prefix_layers=1,
-            reflex_exit_layer=2,
-            limbic_exit_layer=5,
-        ).to(device=self.device, dtype=self.dtype).eval()
+        model = (
+            TriuneTransformer(
+                vocab_size=32000,
+                hidden_dim=384,
+                num_layers=8,
+                num_heads=6,
+                head_dim=64,
+                num_experts=4,
+                router_prefix_layers=1,
+                reflex_exit_layer=2,
+                limbic_exit_layer=5,
+            )
+            .to(device=self.device, dtype=self.dtype)
+            .eval()
+        )
 
         input_ids = torch.randint(0, 32000, (1, 64), device=self.device)
 
@@ -205,7 +206,9 @@ class TestCompetitiveBenchmarks(unittest.TestCase):
 
         if self.device.type == "cuda":
             speedup = cortex_ms / max(reflex_ms, 1e-6)
-            self.assertGreater(speedup, 2.0, f"Expected Reflex exit to be > 2.0x faster than Cortex, got {speedup:.2f}x")
+            self.assertGreater(
+                speedup, 2.0, f"Expected Reflex exit to be > 2.0x faster than Cortex, got {speedup:.2f}x"
+            )
 
     # -------------------------------------------------------------------------
     # 5. Fast In-Place RMSNorm: Speed & Variance Parity

@@ -8,11 +8,12 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 
 class PortType(str, Enum):
     """Strongly typed port dataflow classifications."""
+
     TEXT = "text"
     TENSOR = "tensor"
     TENSOR_TUPLE = "tensor_tuple"
@@ -27,8 +28,9 @@ class PortType(str, Enum):
 
 class NodeExecutionType(str, Enum):
     """Categorization of node runtime behavior."""
-    EXECUTION = "execution"         # Runs genuine tensor operations / kernel forward-backward
-    SPECIFICATION = "specification" # Configures structural hyperparams, blueprints, precision recipes
+
+    EXECUTION = "execution"  # Runs genuine tensor operations / kernel forward-backward
+    SPECIFICATION = "specification"  # Configures structural hyperparams, blueprints, precision recipes
 
 
 def is_port_compatible(source_type: Any, target_type: Any) -> bool:
@@ -61,6 +63,7 @@ def is_port_compatible(source_type: Any, target_type: Any) -> bool:
 @dataclass
 class Port:
     """A strongly typed input or output terminal on a DAG node."""
+
     name: str
     type: str = PortType.ANY.value
     description: str = ""
@@ -73,6 +76,7 @@ class Port:
 @dataclass
 class NodeSchema:
     """Declarative specification for a Triune DAG visual computation node."""
+
     id: str
     name: str
     category: str  # "Data", "Model", "Optimizer", "Loss", "Runtime", "Evaluation", "Export", "Custom"

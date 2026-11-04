@@ -8,6 +8,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
 from typing import Any, Callable, Dict, Optional, Tuple, Type
+
 import torch
 import torch.nn as nn
 
@@ -336,7 +337,9 @@ def get_model_spec(preset_id: Optional[str] = None, **overrides: Any) -> ModelSp
     L = max(4, int(spec_dict.get("num_layers", 6)))
     r_prefix = max(1, min(int(spec_dict.get("router_prefix_layers", 1)), max(1, L - 3)))
     r_reflex = max(r_prefix + 1, min(int(spec_dict.get("reflex_exit_layer", max(2, L // 3))), max(r_prefix + 1, L - 2)))
-    r_limbic = max(r_reflex + 1, min(int(spec_dict.get("limbic_exit_layer", max(3, (2 * L) // 3))), max(r_reflex + 1, L - 1)))
+    r_limbic = max(
+        r_reflex + 1, min(int(spec_dict.get("limbic_exit_layer", max(3, (2 * L) // 3))), max(r_reflex + 1, L - 1))
+    )
 
     num_heads = max(1, int(spec_dict.get("num_heads", 4)))
     head_dim = max(1, int(spec_dict.get("head_dim", 64)))
@@ -365,21 +368,25 @@ def get_model_spec(preset_id: Optional[str] = None, **overrides: Any) -> ModelSp
     else:
         use_fp4 = bool(spec_dict.get("use_fp4", False) or req_prec == "fp4")
         use_fp8 = bool(spec_dict.get("use_fp8", False) or req_prec == "fp8")
-    precision = "fp8" if use_fp8 else ("fp4" if use_fp4 else (req_prec if req_prec in ("bf16", "fp16", "fp32") else "bf16"))
+    precision = (
+        "fp8" if use_fp8 else ("fp4" if use_fp4 else (req_prec if req_prec in ("bf16", "fp16", "fp32") else "bf16"))
+    )
 
-    spec_dict.update({
-        "num_layers": L,
-        "router_prefix_layers": r_prefix,
-        "reflex_exit_layer": r_reflex,
-        "limbic_exit_layer": r_limbic,
-        "num_heads": num_heads,
-        "head_dim": head_dim,
-        "hidden_dim": hidden_dim,
-        "num_experts": num_experts,
-        "use_fp4": use_fp4,
-        "use_fp8": use_fp8,
-        "precision": precision,
-    })
+    spec_dict.update(
+        {
+            "num_layers": L,
+            "router_prefix_layers": r_prefix,
+            "reflex_exit_layer": r_reflex,
+            "limbic_exit_layer": r_limbic,
+            "num_heads": num_heads,
+            "head_dim": head_dim,
+            "hidden_dim": hidden_dim,
+            "num_experts": num_experts,
+            "use_fp4": use_fp4,
+            "use_fp8": use_fp8,
+            "precision": precision,
+        }
+    )
     return ModelSpec.from_dict(spec_dict)
 
 
@@ -395,7 +402,7 @@ def build_model_from_spec(spec: ModelSpec) -> nn.Module:
     h_dim = spec.num_heads * spec.head_dim
 
     total_p, _ = spec.compute_exact_params()
-    use_bf16_alloc = (total_p >= 150_000_000 and str(getattr(spec, "precision", "bf16")).lower() != "fp32")
+    use_bf16_alloc = total_p >= 150_000_000 and str(getattr(spec, "precision", "bf16")).lower() != "fp32"
     orig_dtype = torch.get_default_dtype()
     orig_linear_reset = nn.Linear.reset_parameters
     orig_embed_reset = nn.Embedding.reset_parameters
@@ -443,7 +450,7 @@ def build_model_from_spec(spec: ModelSpec) -> nn.Module:
                     if gpu_buf is None or max_numel < p.numel():
                         gpu_buf = torch.empty(p.numel(), dtype=p.dtype, device="cuda:0")
                         max_numel = p.numel()
-                    view = gpu_buf[:p.numel()].view_as(p)
+                    view = gpu_buf[: p.numel()].view_as(p)
                     view.normal_(0.0, 0.02)
                     p.copy_(view, non_blocking=False)
                 else:
@@ -468,7 +475,9 @@ class TriuneModel(nn.Module, ABC):
     """Abstract Base Class for all Triune-compatible model architectures."""
 
     @abstractmethod
-    def forward(self, input_ids: torch.Tensor, force_depth: int | None = None) -> tuple[torch.Tensor, torch.Tensor | None]:
+    def forward(
+        self, input_ids: torch.Tensor, force_depth: int | None = None
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         """Forward pass returning (logits, aux_router_loss)."""
         pass
 

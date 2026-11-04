@@ -1,15 +1,11 @@
 import torch
-import torch.nn as nn
 
+from triune.model.transformer import TriuneTransformer
 from triune.runtime.resource_manager import (
     DynamicResourceManager,
     LiveVRAMMonitor,
-    HardwareProfile,
-    FeasibilityAssessment,
-    AllotmentPlan,
     VRAMBudgetExceededError,
 )
-from triune.model.transformer import TriuneTransformer
 
 
 def test_hardware_probe():
@@ -106,7 +102,7 @@ def test_user_override():
         DynamicResourceManager.validate_and_allot(oversized_config, force=False)
         assert False, "Should have raised VRAMBudgetExceededError without --force"
     except VRAMBudgetExceededError as err:
-        print(f"Caught expected VRAMBudgetExceededError (contains override instructions):")
+        print("Caught expected VRAMBudgetExceededError (contains override instructions):")
         assert "--force" in str(err)
         print("  Verified error contains '--force' override instruction.")
 
@@ -120,6 +116,7 @@ def test_user_override():
 def test_explicit_user_settings_preserved():
     print("=== Testing Explicit User Settings Preservation ===")
     import gc
+
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -136,9 +133,7 @@ def test_explicit_user_settings_preserved():
     }
     user_overrides = {"batch_size": 3, "grad_accum_steps": 5}
     # Even if auto_fit=True, user explicitly gave batch_size=3 so it MUST NOT be altered
-    plan = DynamicResourceManager.validate_and_allot(
-        config, auto_fit=True, user_overrides=user_overrides
-    )
+    plan = DynamicResourceManager.validate_and_allot(config, auto_fit=True, user_overrides=user_overrides)
     assert plan.batch_size == 3, f"Expected user batch_size 3, got {plan.batch_size}"
     assert plan.grad_accum_steps == 5, f"Expected user grad_accum 5, got {plan.grad_accum_steps}"
     print("✅ Explicit user settings preserved!\n")
@@ -158,9 +153,7 @@ def test_safe_to_device():
         reflex_exit_layer=2,
         limbic_exit_layer=3,
     )
-    loaded_model = DynamicResourceManager.safe_to_device(
-        model, device=device, dtype=torch.bfloat16, force=True
-    )
+    loaded_model = DynamicResourceManager.safe_to_device(model, device=device, dtype=torch.bfloat16, force=True)
     for p in loaded_model.parameters():
         assert p.device.type == device.type
     print("✅ Safe staged transfer passed!\n")

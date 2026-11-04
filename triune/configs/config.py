@@ -12,7 +12,6 @@ from typing import Any, Mapping
 import triune.model.config as defaults
 
 
-
 def default_config() -> dict[str, Any]:
     """Return an independent mutable configuration for one training run."""
     return {
@@ -79,7 +78,8 @@ def build_config(overrides: Mapping[str, Any] | str | None = None, **kwargs: Any
         model_name = overrides.get("model_name")
         if model_name:
             try:
-                from triune.model.base import CANONICAL_MODEL_SPECS, _LEGACY_PRESET_ALIASES, get_model_spec
+                from triune.model.base import _LEGACY_PRESET_ALIASES, CANONICAL_MODEL_SPECS, get_model_spec
+
                 model_name_str = str(model_name).strip().lower()
                 if model_name_str in CANONICAL_MODEL_SPECS or model_name_str in _LEGACY_PRESET_ALIASES:
                     spec = get_model_spec(model_name_str)
@@ -110,7 +110,7 @@ import math
 
 
 def validate_config(config: Mapping[str, Any]) -> None:
-    if config.get('use_fp4') and config.get('use_fp8'):
+    if config.get("use_fp4") and config.get("use_fp8"):
         raise ValueError("use_fp4 and use_fp8 are mutually exclusive. Enable only one.")
     if config.get("depth_mode", "dynamic") not in ("dynamic", "joint", "cortex"):
         raise ValueError(f"depth_mode must be 'dynamic', 'joint', or 'cortex'; got {config.get('depth_mode')!r}")
@@ -149,5 +149,3 @@ def validate_config(config: Mapping[str, Any]) -> None:
             raise ValueError("target_depth_dist must contain three finite non-negative values")
         if abs(sum(target) - 1.0) > 1e-6:
             raise ValueError("target_depth_dist must sum to 1.0")
-
-

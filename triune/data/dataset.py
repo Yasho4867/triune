@@ -57,6 +57,7 @@ class TokenStreamDataset(IterableDataset):
 
     def _stream(self):
         import os
+
         token_val = self.token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN") or None
         if os.path.exists(self.dataset_name):
             ext = os.path.splitext(self.dataset_name)[1].lower()
@@ -83,6 +84,7 @@ class TokenStreamDataset(IterableDataset):
 
     def __iter__(self) -> Iterator[tuple[torch.Tensor, torch.Tensor]]:
         import time
+
         max_retries = 3
         worker_info = torch.utils.data.get_worker_info()
 
@@ -99,7 +101,13 @@ class TokenStreamDataset(IterableDataset):
                     if isinstance(sample, str):
                         text = sample
                     else:
-                        text = sample.get("text") or sample.get("content") or sample.get("story") or sample.get("prompt") or ""
+                        text = (
+                            sample.get("text")
+                            or sample.get("content")
+                            or sample.get("story")
+                            or sample.get("prompt")
+                            or ""
+                        )
                     if not text.strip():
                         continue
 
@@ -150,9 +158,9 @@ class TokenStreamDataset(IterableDataset):
 
                 yield from self._flush(batch_buffer)
                 break
-            except Exception as e:
+            except Exception:
                 if attempt < max_retries - 1:
-                    time.sleep(2 ** attempt)
+                    time.sleep(2**attempt)
                 else:
                     raise
 
