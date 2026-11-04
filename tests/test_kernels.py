@@ -326,44 +326,64 @@ class TestKernelSuite(unittest.TestCase):
                         if with_init:
                             torch.testing.assert_close(s1.grad, s2.grad, atol=3e-4, rtol=1e-3)
 
-        # 2. CUDA BF16 numerical execution and gradient flow across divisible and irregular sequence lengths
+        # 2. CUDA BF16 numerical execution, reference parity, and gradient flow across divisible and irregular lengths
         if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
             cuda_dev = torch.device("cuda")
-            for T in (1, 17, 32, 70):
+            for T in (1, 8, 17, 32, 70):
                 for with_init in (False, True):
                     with self.subTest(T=T, with_init=with_init, dtype="bfloat16"):
                         torch.manual_seed(100 + T)
                         B, H, HD = 2, 4, 16
-                        q = torch.randn(B, T, H, HD, device=cuda_dev, dtype=torch.bfloat16, requires_grad=True)
-                        k = torch.randn_like(q, requires_grad=True)
-                        v = torch.randn_like(q, requires_grad=True)
-                        g = (-torch.rand_like(q) * 2.0 - 0.05).requires_grad_(True)
-                        s = (
+                        q1 = torch.randn(B, T, H, HD, device=cuda_dev, dtype=torch.bfloat16, requires_grad=True)
+                        k1 = torch.randn_like(q1, requires_grad=True)
+                        v1 = torch.randn_like(q1, requires_grad=True)
+                        g1 = (-torch.rand_like(q1) * 2.0 - 0.05).requires_grad_(True)
+                        s1 = (
                             torch.randn(B, H, HD, HD, device=cuda_dev, dtype=torch.bfloat16, requires_grad=True)
                             if with_init
                             else None
                         )
 
-                        out_tri, fin_tri = fast_chunk_gla(q, k, v, g, initial_state=s, chunk_size=32)
+                        out_tri, fin_tri = fast_chunk_gla(q1, k1, v1, g1, initial_state=s1, chunk_size=32)
                         self.assertEqual(out_tri.shape, (B, T, H, HD))
                         self.assertEqual(fin_tri.shape, (B, H, HD, HD))
                         self.assertFalse(torch.isnan(out_tri).any())
                         self.assertFalse(torch.isnan(fin_tri).any())
 
-                        loss = out_tri.sum() + fin_tri.sum()
-                        loss.backward()
+                        grad_out = torch.randn_like(out_tri)
+                        grad_fin = torch.randn_like(fin_tri)
+                        loss_tri = (out_tri * grad_out).sum() + (fin_tri * grad_fin).sum()
+                        loss_tri.backward()
 
-                        self.assertIsNotNone(q.grad)
-                        self.assertIsNotNone(k.grad)
-                        self.assertIsNotNone(v.grad)
-                        self.assertIsNotNone(g.grad)
-                        self.assertFalse(torch.isnan(q.grad).any())
-                        self.assertFalse(torch.isnan(k.grad).any())
-                        self.assertFalse(torch.isnan(v.grad).any())
-                        self.assertFalse(torch.isnan(g.grad).any())
+                        self.assertIsNotNone(q1.grad)
+                        self.assertIsNotNone(k1.grad)
+                        self.assertIsNotNone(v1.grad)
+                        self.assertIsNotNone(g1.grad)
+                        self.assertFalse(torch.isnan(q1.grad).any())
+                        self.assertFalse(torch.isnan(k1.grad).any())
+                        self.assertFalse(torch.isnan(v1.grad).any())
+                        self.assertFalse(torch.isnan(g1.grad).any())
                         if with_init:
-                            self.assertIsNotNone(s.grad)
-                            self.assertFalse(torch.isnan(s.grad).any())
+                            self.assertIsNotNone(s1.grad)
+                            self.assertFalse(torch.isnan(s1.grad).any())
+
+                        # Numerical parity verification against reference recurrence for T <= 8
+                        if T <= 8:
+                            q2 = q1.detach().clone().requires_grad_(True)
+                            k2 = k1.detach().clone().requires_grad_(True)
+                            v2 = v1.detach().clone().requires_grad_(True)
+                            g2 = g1.detach().clone().requires_grad_(True)
+                            s2 = s1.detach().clone().requires_grad_(True) if s1 is not None else None
+
+                            out_ref, fin_ref = _ref_gla(q2, k2, v2, g2, init_s=s2)
+                            torch.testing.assert_close(out_tri, out_ref, atol=0.25, rtol=0.25)
+                            torch.testing.assert_close(fin_tri, fin_ref, atol=0.25, rtol=0.25)
+
+                            loss_ref = (out_ref * grad_out).sum() + (fin_ref * grad_fin).sum()
+                            loss_ref.backward()
+                            torch.testing.assert_close(q1.grad, q2.grad, atol=0.35, rtol=0.35)
+                            torch.testing.assert_close(k1.grad, k2.grad, atol=0.35, rtol=0.35)
+                            torch.testing.assert_close(v1.grad, v2.grad, atol=0.35, rtol=0.35)
 
     def test_kernel_telemetry_and_turbo_mode(self):
         from triune.kernels import get_kernel_telemetry, is_turbo_mode_enabled, set_turbo_mode

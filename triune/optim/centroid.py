@@ -56,6 +56,22 @@ class _SyncedParamGroup(dict):
 
 
 class CentroidSteerOptimizer(torch.optim.Optimizer):
+    """Triune CentroidSteer 3-Tier Partitioned Optimizer.
+
+    Partitions model parameters into three specialized optimization tiers:
+    1. Tier 1 (Muon): Newton-Schulz 5th-order orthogonalization for 2D hidden linear weights.
+    2. Tier 2 (CentroidSteer): Low-rank triangular subspace projection along router centroids for MoE routed experts.
+    3. Tier 3 (Base AdamW): Fused AdamW or 8-bit AdamW for 1D parameters, layer norms, biases, and vocabulary embeddings.
+
+    Parameter Role Overrides (`param_roles`):
+        Pass a dictionary mapping parameter names (str) or parameter tensors to target roles:
+        - "muon", "orthogonal": Routes 2D parameters to Tier 1 Muon.
+        - "expert", "centroid", "subspace": Routes 2D+ parameters to Tier 2 CentroidSteer.
+        - "base", "adamw", "embedding", "vocab", "head", "router", "1d", "norm": Routes parameters to Tier 3 Base AdamW.
+        Explicit `param_roles` possess highest precedence and unconditionally override all automatic module-type,
+        naming, tied-weight, and aspect-ratio heuristics.
+    """
+
     def __init__(
         self,
         model,
