@@ -70,7 +70,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
         expert_betas=defaults.GALORE_BETAS,
         expert_wd=defaults.GALORE_WEIGHT_DECAY,
         use_muon=getattr(defaults, "USE_MUON", True),
-        muon_lr=getattr(defaults, "MUON_LR", 0.02),
+        muon_lr: float | None = None,
         muon_momentum=getattr(defaults, "MUON_MOMENTUM", 0.95),
         muon_weight_decay=getattr(defaults, "MUON_WEIGHT_DECAY", 0.01),
         muon_ns_steps=getattr(defaults, "MUON_NS_STEPS", 3),
@@ -82,9 +82,12 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
         energy_threshold: float = 0.50,
         min_subspace_gap: int = 5,
         max_subspace_gap: int = 50,
+        param_roles: dict[str | torch.nn.Parameter, str] | None = None,
     ):
         if expert_lr is None:
             expert_lr = lr
+        if muon_lr is None:
+            muon_lr = min(0.02, max(0.001, lr * 2.0))
         defaults_dict = dict(lr=lr, betas=betas, weight_decay=weight_decay)
         dummy_param = torch.nn.Parameter(torch.zeros(1))
         initial_group = _SyncedParamGroup(
@@ -114,6 +117,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
         self.energy_threshold = energy_threshold
         self.min_subspace_gap = min_subspace_gap
         self.max_subspace_gap = max_subspace_gap
+        self.param_roles = param_roles or {}
         self._triangular_buffers = {}
 
         self.non_expert_params = []
@@ -122,27 +126,72 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
         seen_param_ids = set()
 
         if isinstance(model, torch.nn.Module):
-            # Identify router parameters and token embeddings / vocabulary exit heads (these must stay on AdamW)
+            # 1. Module-type detection for embeddings (nn.Embedding, nn.EmbeddingBag) and routers
             router_param_ids = set()
-            for name, module in model.named_modules():
-                if isinstance(module, MoE_FFN) and hasattr(module, "router"):
+            embedding_param_ids = set()
+
+            for mod_name, module in model.named_modules():
+                if isinstance(module, (torch.nn.Embedding, torch.nn.EmbeddingBag)):
+                    for p in module.parameters():
+                        embedding_param_ids.add(id(p))
+                elif isinstance(module, MoE_FFN) and hasattr(module, "router"):
                     for p in module.router.parameters():
                         router_param_ids.add(id(p))
-                elif module.__class__.__name__ == "GumbelSoftmaxRouter" or name == "router" or name.endswith(".router"):
+                elif (
+                    module.__class__.__name__ in ("GumbelSoftmaxRouter", "Router", "TopKRouter")
+                    or "router" in mod_name.lower()
+                    or mod_name.endswith(".router")
+                ):
                     for p in module.parameters():
                         router_param_ids.add(id(p))
 
-            embedding_param_ids = set()
+            # 2. Check for tied weights with input embeddings
+            input_embed_data_ptrs = set()
+            for mod in model.modules():
+                if isinstance(mod, (torch.nn.Embedding, torch.nn.EmbeddingBag)) and hasattr(mod, "weight"):
+                    input_embed_data_ptrs.add(mod.weight.data_ptr())
+
+            # 3. Explicit roles, naming heuristics, and aspect-ratio safeguards
             for name, param in model.named_parameters():
+                # User explicit role override
+                if self.param_roles:
+                    role = self.param_roles.get(name) or self.param_roles.get(param)
+                    if role in ("embedding", "embed", "vocab", "head", "router", "adamw"):
+                        embedding_param_ids.add(id(param))
+                        continue
+                    elif role == "muon":
+                        continue
+
+                # Tied weight check
+                if param.data_ptr() in input_embed_data_ptrs:
+                    embedding_param_ids.add(id(param))
+                    continue
+
                 name_lower = name.lower()
-                if (
-                    "embed" in name_lower
-                    or "wte" in name_lower
-                    or "exit_head" in name_lower
-                    or "final_head" in name_lower
-                    or "lm_head" in name_lower
+                if any(
+                    k in name_lower
+                    for k in (
+                        "embed",
+                        "wte",
+                        "wpe",
+                        "exit_head",
+                        "final_head",
+                        "lm_head",
+                        "classifier",
+                        "output_head",
+                        "token_table",
+                    )
                 ):
                     embedding_param_ids.add(id(param))
+                    continue
+
+                # Large vocabulary aspect-ratio safeguard: matrices where max dim >= 1000 and ratio >= 4.0
+                if param.dim() == 2:
+                    d_max = max(param.shape[0], param.shape[1])
+                    d_min = min(param.shape[0], param.shape[1])
+                    if d_max >= 1000 and (d_max / max(d_min, 1)) >= 4.0:
+                        embedding_param_ids.add(id(param))
+                        continue
 
             # 1. Count MoE routed experts
             num_expert_groups = 0
@@ -225,11 +274,19 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                         continue
                     if param.requires_grad and id(param) not in seen_param_ids:
                         seen_param_ids.add(id(param))
+                        role = self.param_roles.get(param) if self.param_roles else None
+                        if role in ("embedding", "embed", "vocab", "head", "router", "adamw"):
+                            self.non_expert_params.append(param)
+                            continue
+                        elif role == "muon" and param.dim() == 2:
+                            self.muon_params.append(param)
+                            continue
+
                         if self.use_muon and param.dim() == 2:
                             # Vocabulary embedding tables (e.g. [vocab_size, dim]) must stay on base AdamW
                             is_vocab_embedding = (
                                 max(param.shape[0], param.shape[1]) >= 1000
-                                and max(param.shape[0], param.shape[1]) / min(param.shape[0], param.shape[1]) > 5
+                                and max(param.shape[0], param.shape[1]) / min(param.shape[0], param.shape[1]) >= 4.0
                             )
                             if is_vocab_embedding:
                                 self.non_expert_params.append(param)

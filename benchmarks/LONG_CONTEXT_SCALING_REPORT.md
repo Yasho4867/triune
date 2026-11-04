@@ -45,14 +45,16 @@ In production LLM serving, generation latency and memory are dominated by the KV
 
 ---
 
-## 3. Asymptotic Scaling Analysis & Summary
+## 3. Asymptotic Scaling Analysis & Workload Trade-offs
 
-1. **Sub-Quadratic Complexity ($O(T)$ vs $O(T^2)$)**:
-   - Standard Softmax Attention computes a $T \times T$ dense affinity matrix, incurring quadratic compute $O(T^2)$ and quadratic memory activation overhead.
-   - Triune GLA segments long sequences into fixed chunks ($C = 64$) and propagates hidden states inter-chunk via recurrent scans, maintaining strict $O(T)$ linear execution complexity.
+1. **Architectural Comparison & Crossover Behavior**:
+   - This experiment evaluates an architectural comparison between quadratic softmax attention (Standard SDPA) and linear recurrent attention (Triune Gated Linear Attention with Fused Chunk Recurrence).
+   - At short sequence lengths ( \le 2048$), SDPA's highly optimized FlashAttention CUDA C++ implementation is faster (e.g. 13.63 ms vs 35.24 ms at =512$) due to lower constant overhead and register saturation.
+   - Triune GLA demonstrates linear (T)$ complexity and crosses over around  \approx 4096$ (50.31 ms vs 62.67 ms, **1.25x faster**) and maintains lower step latency at  = 8192$ (155.45 ms vs 167.74 ms, **1.08x faster**) while slashing **1,333 MB (27.9%)** of peak training VRAM.
 
-2. **$O(1)$ Memory Consumption in Inference**:
-   - While standard transformer KV-cache footprints scale proportionally to context length (demanding tens of megabytes per sequence for multi-turn conversations), Triune's recurrent state remains exactly **48 KB total across all 8 layers**, enabling virtually unlimited context retention without memory exhaustion.
+2. **(1)$ Constant Memory in Autoregressive Generation**:
+   - While standard Transformer KV-cache footprints scale proportionally to context length (demanding 196.6 MB at 16,384 tokens), Triune's recurrent state remains exactly **48.0 KB per layer (384.0 KB total across all 8 layers)**.
+   - This unlocks dramatic decoding speedups as context expands (**1.82x faster** at 4,096 tokens, **3.28x faster** at 8,192 tokens, and **5.85x faster** at 16,384 tokens) with **99.8% memory savings**.
 
 3. **Logit-Free Loss Optimization**:
-   - The integration of Triune's chunked fused cross-entropy eliminates the intermediate `[B, T, V]` logit tensor ($32,000 \times 2$ bytes per token), slashing up to 85% of peak training memory at sequences of 4,096+ tokens.
+   - The integration of Triune's chunked cross-entropy from hidden states (chunked_cross_entropy_from_hidden) eliminates the intermediate [B, T, V] logit tensor, preventing GPU out-of-memory errors at long sequence lengths.

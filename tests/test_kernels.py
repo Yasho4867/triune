@@ -206,6 +206,123 @@ class TestKernelSuite(unittest.TestCase):
         self.assertEqual(out.shape, (B, T, H, HD))
         self.assertEqual(state.shape, (B, H, HD, HD))
 
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for Triton GLA scan parity")
+    def test_fused_recurrent_scan_mathematical_parity(self):
+        """Verify Triton FusedRecurrentScan against reference sequential recurrence in forward & backward."""
+        from triune.kernels.fast_gla import FusedRecurrentScan
+
+        if FusedRecurrentScan is None:
+            self.skipTest("Triton not available")
+
+        device = torch.device("cuda")
+        torch.manual_seed(42)
+
+        for N in (1, 4, 16, 32):  # num_chunks
+            for with_init in (False, True):
+                with self.subTest(num_chunks=N, with_init=with_init):
+                    B, H, Dk, Dv = 2, 4, 32, 32
+                    kv_ref = torch.randn(B, H, N, Dk, Dv, device=device, dtype=torch.float32, requires_grad=True)
+                    decay_ref = torch.rand(B, H, N, Dk, 1, device=device, dtype=torch.float32, requires_grad=True)
+                    init_ref = (
+                        torch.randn(B, H, Dk, Dv, device=device, dtype=torch.float32, requires_grad=True)
+                        if with_init
+                        else torch.zeros(B, H, Dk, Dv, device=device, dtype=torch.float32, requires_grad=True)
+                    )
+
+                    kv_tri = kv_ref.detach().clone().requires_grad_(True)
+                    decay_tri = decay_ref.detach().clone().requires_grad_(True)
+                    init_tri = init_ref.detach().clone().requires_grad_(True)
+
+                    # Reference PyTorch sequential loop
+                    cur = init_ref
+                    states_py = []
+                    for i in range(N):
+                        states_py.append(cur)
+                        cur = torch.addcmul(kv_ref[:, :, i], cur, decay_ref[:, :, i])
+                    s_py = torch.stack(states_py, dim=2)
+                    fin_py = cur
+
+                    # Triton FusedRecurrentScan
+                    s_tri, fin_tri = FusedRecurrentScan.apply(kv_tri, decay_tri, init_tri)
+
+                    # Forward parity
+                    torch.testing.assert_close(s_tri, s_py, atol=1e-5, rtol=1e-5)
+                    torch.testing.assert_close(fin_tri, fin_py, atol=1e-5, rtol=1e-5)
+
+                    # Backward gradient parity
+                    grad_s = torch.randn_like(s_tri)
+                    grad_fin = torch.randn_like(fin_tri)
+
+                    loss_py = (s_py * grad_s).sum() + (fin_py * grad_fin).sum()
+                    loss_py.backward()
+
+                    loss_tri = (s_tri * grad_s).sum() + (fin_tri * grad_fin).sum()
+                    loss_tri.backward()
+
+                    torch.testing.assert_close(kv_tri.grad, kv_ref.grad, atol=5e-5, rtol=1e-4)
+                    torch.testing.assert_close(decay_tri.grad, decay_ref.grad, atol=1e-4, rtol=1e-3)
+                    torch.testing.assert_close(init_tri.grad, init_ref.grad, atol=5e-5, rtol=1e-4)
+
+    def test_fast_chunk_gla_gradient_parity_and_lengths(self):
+        """Assert fast_chunk_gla matches token-by-token recurrence across divisible and non-divisible lengths."""
+        from triune.kernels.fast_gla import fast_chunk_gla
+
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        torch.manual_seed(42)
+
+        def _ref_gla(q, k, v, g, init_s=None):
+            B, T, H, HD = q.shape
+            cur = init_s.clone() if init_s is not None else torch.zeros(B, H, HD, HD, device=q.device, dtype=q.dtype)
+            out = []
+            for t in range(T):
+                cur = cur * torch.exp(g[:, t]).unsqueeze(-1) + k[:, t].unsqueeze(-1) @ v[:, t].unsqueeze(-2)
+                out.append((q[:, t].unsqueeze(-2) @ cur).squeeze(-2))
+            return torch.stack(out, dim=1), cur
+
+        # Test lengths: 1 (single-token), 32 (exact chunk), 70 (non-divisible), 128 (multi-chunk)
+        for T in (1, 32, 70, 128):
+            for with_init in (False, True):
+                with self.subTest(T=T, with_init=with_init):
+                    B, H, HD = 2, 4, 16
+                    q1 = torch.randn(B, T, H, HD, device=device, dtype=torch.float32, requires_grad=True)
+                    k1 = torch.randn_like(q1, requires_grad=True)
+                    v1 = torch.randn_like(q1, requires_grad=True)
+                    g1 = (-torch.rand_like(q1) * 2.0 - 0.05).requires_grad_(True)
+                    s1 = (
+                        torch.randn(B, H, HD, HD, device=device, dtype=torch.float32, requires_grad=True)
+                        if with_init
+                        else None
+                    )
+
+                    q2 = q1.detach().clone().requires_grad_(True)
+                    k2 = k1.detach().clone().requires_grad_(True)
+                    v2 = v1.detach().clone().requires_grad_(True)
+                    g2 = g1.detach().clone().requires_grad_(True)
+                    s2 = s1.detach().clone().requires_grad_(True) if s1 is not None else None
+
+                    out_tri, fin_tri = fast_chunk_gla(q1, k1, v1, g1, initial_state=s1, chunk_size=32)
+                    out_ref, fin_ref = _ref_gla(q2, k2, v2, g2, init_s=s2)
+
+                    # Forward parity
+                    torch.testing.assert_close(out_tri, out_ref, atol=2e-4, rtol=1e-3)
+                    torch.testing.assert_close(fin_tri, fin_ref, atol=2e-4, rtol=1e-3)
+
+                    # Backward parity
+                    grad_out = torch.randn_like(out_tri)
+                    loss_tri = (out_tri * grad_out).sum() + fin_tri.sum()
+                    loss_tri.backward()
+
+                    loss_ref = (out_ref * grad_out).sum() + fin_ref.sum()
+                    loss_ref.backward()
+
+                    self.assertIsNotNone(q1.grad)
+                    self.assertIsNotNone(k1.grad)
+                    self.assertIsNotNone(v1.grad)
+                    self.assertIsNotNone(g1.grad)
+                    torch.testing.assert_close(q1.grad, q2.grad, atol=2e-3, rtol=2e-2)
+                    torch.testing.assert_close(k1.grad, k2.grad, atol=2e-3, rtol=2e-2)
+                    torch.testing.assert_close(v1.grad, v2.grad, atol=2e-3, rtol=2e-2)
+
     def test_kernel_telemetry_and_turbo_mode(self):
         from triune.kernels import get_kernel_telemetry, is_turbo_mode_enabled, set_turbo_mode
 

@@ -447,6 +447,64 @@ def test_adaptive_subspace_refresh_and_rank_profiler():
     print("✅ Adaptive Subspace Refresh & Rank Sensitivity Profiler verified successfully!\n")
 
 
+def test_centroid_steer_parameter_role_classification():
+    """Verify robust parameter role classification across custom names, tied weights, and explicit roles."""
+    print("=== Testing Parameter Role Classification ===")
+
+    class CustomModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            # 1. Custom-named embedding (not named 'embed' or 'wte')
+            self.token_table = nn.Embedding(2048, 64)
+            # 2. Hidden linear layers (should go to Muon)
+            self.hidden1 = nn.Linear(64, 128, bias=False)
+            self.hidden2 = nn.Linear(128, 64, bias=False)
+            # 3. Tied output projection
+            self.output_proj = nn.Linear(64, 2048, bias=False)
+            self.output_proj.weight = self.token_table.weight
+            # 4. Custom ambiguous parameter
+            self.special_weight = nn.Parameter(torch.randn(64, 64))
+
+        def forward(self, x):
+            h = self.token_table(x)
+            h = self.hidden2(torch.relu(self.hidden1(h)))
+            return self.output_proj(h)
+
+    m = CustomModel()
+    opt = CentroidSteerOptimizer(
+        m,
+        lr=1e-3,
+        param_roles={"special_weight": "adamw"},
+    )
+
+    muon_param_ids = {id(p) for p in opt.muon_params}
+    non_expert_param_ids = {id(p) for p in opt.non_expert_params}
+
+    # Token table and tied output weight must NOT be in Muon
+    assert id(m.token_table.weight) not in muon_param_ids, "Embedding table must NOT be in Muon!"
+    assert id(m.token_table.weight) in non_expert_param_ids, "Embedding table must be in AdamW base!"
+
+    # Hidden weights must be in Muon
+    assert id(m.hidden1.weight) in muon_param_ids, "Hidden linear weight must be in Muon!"
+    assert id(m.hidden2.weight) in muon_param_ids, "Hidden linear weight must be in Muon!"
+
+    # Explicitly overridden parameter must be in AdamW base
+    assert id(m.special_weight) not in muon_param_ids, "Overridden parameter must NOT be in Muon!"
+    assert id(m.special_weight) in non_expert_param_ids, "Overridden parameter must be in AdamW base!"
+
+    # Test anonymous iterable with large aspect-ratio matrix
+    large_vocab_matrix = nn.Parameter(torch.randn(32000, 64))
+    hidden_matrix = nn.Parameter(torch.randn(64, 128))
+    opt_iter = CentroidSteerOptimizer([large_vocab_matrix, hidden_matrix], lr=1e-3)
+    iter_muon_ids = {id(p) for p in opt_iter.muon_params}
+    iter_adamw_ids = {id(p) for p in opt_iter.non_expert_params}
+
+    assert id(large_vocab_matrix) in iter_adamw_ids, "Large vocab matrix in iterable must be protected from Muon!"
+    assert id(hidden_matrix) in iter_muon_ids, "Hidden matrix in iterable must go to Muon!"
+
+    print("✅ Parameter role classification passed!\n")
+
+
 if __name__ == "__main__":
     test_newtonschulz5_orthogonality()
     test_muon_optimizer_step()
@@ -455,4 +513,5 @@ if __name__ == "__main__":
     test_full_triune_3tier_optimizer()
     test_centroid_steer_mathematical_invariants()
     test_adaptive_subspace_refresh_and_rank_profiler()
+    test_centroid_steer_parameter_role_classification()
     print("🎉 ALL TESTS PASSED SUCCESSFULLY!")
