@@ -417,6 +417,7 @@ class UniversalMoETransformer(nn.Module):
         router_prefix_layers: int = 1,
         reflex_exit_layer: int = 2,
         limbic_exit_layer: int = 5,
+        scale_residual_projections: bool = False,
     ):
         super().__init__()
         from triune.model.transformer import TriuneTransformer
@@ -431,6 +432,7 @@ class UniversalMoETransformer(nn.Module):
             router_prefix_layers=router_prefix_layers,
             reflex_exit_layer=reflex_exit_layer,
             limbic_exit_layer=limbic_exit_layer,
+            scale_residual_projections=scale_residual_projections,
         )
         self.vocab_size = vocab_size
         self.dim = dim

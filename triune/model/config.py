@@ -1,8 +1,6 @@
 """Canonical research configuration defaults for Triune Transformer."""
 
-# ============================================================
-# MODEL
-# ============================================================
+# --- MODEL ---
 
 VOCAB_SIZE = 32000
 
@@ -15,9 +13,7 @@ ROUTER_PREFIX_LAYERS = 3
 REFLEX_EXIT_LAYER = 6
 LIMBIC_EXIT_LAYER = 16
 
-# ============================================================
-# ATTENTION
-# ============================================================
+# --- ATTENTION ---
 
 USE_GLA = True
 USE_ROPE = True
@@ -25,9 +21,7 @@ USE_ROPE = True
 GLA_HEAD_DIM = 128
 ROPE_MAX_SEQ_LEN = 4096
 
-# ============================================================
-# MIXTURE OF EXPERTS
-# ============================================================
+# --- MIXTURE OF EXPERTS ---
 
 NUM_EXPERTS = 8
 TOP_K_EXPERTS = 1
@@ -48,9 +42,7 @@ CENTROID_EMA = 0.98
 # numerical stability
 ROUTER_NOISE_STD = 0.0
 
-# ============================================================
-# DEPTH ROUTER
-# ============================================================
+# --- DEPTH ROUTER ---
 
 TARGET_DEPTH_DIST = (
     0.34,
@@ -63,9 +55,7 @@ DEPTH_BALANCE_COEF = 0.30
 
 DEPTH_USAGE_EMA = 0.98
 
-# ============================================================
-# GALORe / Expert Optimizer
-# ============================================================
+# --- GALORe / Expert Optimizer ---
 
 GALORE = True
 
@@ -81,18 +71,14 @@ USE_TRIANGULAR_CORE = True
 USE_8BIT_BASE = False
 STEER_UPDATE_GAP = 10
 
-# ============================================================
-# MUON / Non-Expert 2D Optimizer
-# ============================================================
+# --- MUON / Non-Expert 2D Optimizer ---
 
 USE_MUON = True
 MUON_LR = 0.02
 MUON_MOMENTUM = 0.95
 MUON_WEIGHT_DECAY = 0.01
 
-# ============================================================
-# TRAINING
-# ============================================================
+# --- TRAINING ---
 
 BATCH_SIZE = 8
 GRAD_ACCUM_STEPS = 4
@@ -117,15 +103,11 @@ GRAD_CLIP = 1.0
 
 GRAD_CHECKPOINT = True
 
-# ============================================================
-# DATA
-# ============================================================
+# --- DATA ---
 
 SHUFFLE_BUFFER = 4096
 
-# ============================================================
-# LOGGING
-# ============================================================
+# --- LOGGING ---
 
 LOG_EVERY = 10
 
@@ -136,18 +118,14 @@ EVAL_BATCHES = 5
 
 CHECKPOINT_DIR = "checkpoints_full"
 
-# ============================================================
-# NUMERICAL CONSTANTS
-# ============================================================
+# --- NUMERICAL CONSTANTS ---
 
 EPS = 1e-6
 
 ROUTER_Z_LOSS = 1e-3
 
 
-# ============================================================
-# ACTIVATION CHECKPOINTING STATE
-# ============================================================
+# --- ACTIVATION CHECKPOINTING STATE ---
 
 import contextlib
 import threading

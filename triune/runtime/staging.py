@@ -184,7 +184,7 @@ class FP8StagingBuffer(StagingBuffer):
                 self.inv_scale = None
                 self.fp8_tensor = None
 
-            # CRITICAL INVARIANT: self.gpu_tensor is ALWAYS the master precision representation
+            # Master precision representation
             # so autograd, optimizer, and non-FP8 consumers always see BF16/FP32.
             self.gpu_tensor = gpu_master
             return self.gpu_tensor

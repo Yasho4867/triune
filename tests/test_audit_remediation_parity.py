@@ -22,9 +22,7 @@ from triune.optim.centroid import CentroidSteerOptimizer, fast_subspace_projecti
 from triune.trainer.engine import TrainingEngine
 from triune.trainer.scheduler import set_optimizer_lr
 
-# ─────────────────────────────────────────────────────────────────────────────
 # 1. MoE Architecture & Positional Constructor Compatibility
-# ─────────────────────────────────────────────────────────────────────────────
 
 
 def test_moe_activation_is_gelu_and_positional_api():
@@ -56,9 +54,7 @@ def test_moe_activation_is_gelu_and_positional_api():
     assert moe_no_shared.shared is None
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # 2. Padding-Aware Loss Normalization
-# ─────────────────────────────────────────────────────────────────────────────
 
 
 class _MockTrainer:
@@ -129,9 +125,7 @@ def test_padding_loss_normalization():
     assert torch.allclose(grad_computed, grad_manual, atol=1e-5)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # 3. Gradient Checkpointing Parity & State Invariance
-# ─────────────────────────────────────────────────────────────────────────────
 
 
 def test_checkpointing_gradient_and_state_parity():
@@ -188,9 +182,7 @@ def test_checkpointing_gradient_and_state_parity():
     assert torch.allclose(moe_no_cp.expert_load_ratio, moe_cp.expert_load_ratio, atol=1e-5)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # 4. Cholesky-QR Subspace Projection Robustness
-# ─────────────────────────────────────────────────────────────────────────────
 
 
 def test_cholesky_qr_numerical_robustness():
@@ -232,9 +224,7 @@ def test_cholesky_qr_numerical_robustness():
     assert torch.allclose(gram_r1, eye, atol=1e-4)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # 5. Expert Learning-Rate Schedule Decay
-# ─────────────────────────────────────────────────────────────────────────────
 
 
 def test_expert_lr_schedule_decay():
@@ -263,9 +253,7 @@ def test_expert_lr_schedule_decay():
     assert math.isclose(opt.base_optimizer.param_groups[0]["lr"], min_lr, rel_tol=1e-5)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # 6. Telemetry Semantics: Measured Usage vs Target Distribution
-# ─────────────────────────────────────────────────────────────────────────────
 
 
 def test_telemetry_semantics_distinguishes_usage_from_target():

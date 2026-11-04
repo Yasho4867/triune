@@ -1,5 +1,6 @@
 """Unit tests for Gated DeltaNet, DeepSeek-V3 router dynamic bias, and advanced optimizer features."""
 
+import math
 import unittest
 
 import torch
@@ -115,6 +116,41 @@ class TestGatedDeltaNetAndAdvancements(unittest.TestCase):
         opt = CentroidSteerOptimizer(model.parameters(), lr=0.001, adaptive_subspace_refresh=True, energy_threshold=0.6)
         self.assertTrue(opt.adaptive_subspace_refresh)
         self.assertEqual(opt.energy_threshold, 0.6)
+
+    def test_scale_residual_projections_initialization(self):
+        from triune.model.transformer import TriuneTransformer
+
+        model_standard = TriuneTransformer(
+            vocab_size=256,
+            hidden_dim=128,
+            num_layers=18,
+            num_heads=4,
+            head_dim=32,
+            num_experts=4,
+            router_prefix_layers=2,
+            reflex_exit_layer=4,
+            limbic_exit_layer=10,
+            scale_residual_projections=False,
+        )
+        model_scaled = TriuneTransformer(
+            vocab_size=256,
+            hidden_dim=128,
+            num_layers=18,
+            num_heads=4,
+            head_dim=32,
+            num_experts=4,
+            router_prefix_layers=2,
+            reflex_exit_layer=4,
+            limbic_exit_layer=10,
+            scale_residual_projections=True,
+        )
+
+        std_standard = model_standard.layers[0].attn.gla.out_proj.weight.std().item()
+        std_scaled = model_scaled.layers[0].attn.gla.out_proj.weight.std().item()
+
+        expected_scaled_std = 0.02 / math.sqrt(2 * 18)
+        self.assertAlmostEqual(std_scaled, expected_scaled_std, delta=0.005)
+        self.assertLess(std_scaled, std_standard)
 
 
 if __name__ == "__main__":

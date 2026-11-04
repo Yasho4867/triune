@@ -128,10 +128,6 @@ def launch_desktop_app(
     server_already_running = False
     if _is_port_in_use(port):
         if native_host:
-            # The native shell must start the backend with its current runtime
-            # environment (including the Windows credential-store bridge).
-            # Reusing an old API process here makes UI updates appear active
-            # while operations such as BYOK save still run stale code.
             raise RuntimeError(
                 f"Studio port {port} is already in use. Close the existing Studio window or choose another port, then retry."
             )
@@ -156,8 +152,6 @@ def launch_desktop_app(
     except ImportError:
         pass
 
-    # Windows Studio is self-contained around the native managed runtime by
-    # default. WSL is an explicit opt-in, never an invisible fallback.
     wsl_py = None
     if allow_wsl and not native_host and sys.platform == "win32" and not local_has_cuda:
         wsl_py = _find_wsl_python()

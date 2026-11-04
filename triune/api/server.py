@@ -6,6 +6,7 @@ import hmac
 import ipaddress
 import os
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 try:
@@ -42,6 +43,17 @@ def _resolve_studio_src() -> "Path | None":
     return None
 
 
+@asynccontextmanager
+async def lifespan(app: fastapi.FastAPI):
+    from .routes import pytorch_state
+
+    if pytorch_state is not None:
+        pytorch_state.schedule_cuda_inference_warmup()
+    yield
+    if pytorch_state is not None:
+        pytorch_state.stop_prefetch_worker()
+
+
 def create_app():
     """Create and configure FastAPI application for Triune Engine.
 
@@ -61,6 +73,7 @@ def create_app():
         title="Triune AI Server",
         description="Embedded API & Telemetry Server powering Triune AI Studio",
         version="2.0.0",
+        lifespan=lifespan,
     )
 
     @app.get("/healthz", include_in_schema=False)

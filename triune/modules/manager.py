@@ -441,9 +441,6 @@ class ModuleManager:
                 )
             return _WindowsCredentialStoreBridge(windows_python)
 
-        # A backend running directly on Windows should use the same built-in
-        # Credential Manager path as WSL. This keeps secure saves working even
-        # when the optional `keyring` package was omitted from an existing venv.
         if sys.platform == "win32":
             return _WindowsCredentialStoreBridge(sys.executable)
 
@@ -619,9 +616,7 @@ class ModuleManager:
             },
         ]
 
-    # -------------------------------------------------------------------------
     # Hardware & Software Auto-Scanner
-    # -------------------------------------------------------------------------
     def scan_hardware_and_software(self) -> dict[str, Any]:
         """Perform comprehensive auto-scan of system hardware, CUDA, Python, and installed packages."""
         import importlib.metadata as im
@@ -803,9 +798,7 @@ class ModuleManager:
         }
         return sys_info
 
-    # -------------------------------------------------------------------------
     # System Config Management
-    # -------------------------------------------------------------------------
     def get_config(self) -> dict[str, Any]:
         """Load user configuration and custom paths with environment variable precedence."""
         defaults = {
@@ -946,9 +939,7 @@ class ModuleManager:
                 pass
         return current
 
-    # -------------------------------------------------------------------------
     # Installed Modules Listing & Inspection
-    # -------------------------------------------------------------------------
     def get_installed_modules(self) -> list[dict[str, Any]]:
         """List currently installed modules with live disk inspection and Git metadata."""
         if self.installed_file.exists():
@@ -1075,9 +1066,7 @@ class ModuleManager:
             "registered_nodes": registered_nodes,
         }
 
-    # -------------------------------------------------------------------------
     # Search Marketplace & Repositories (Curated, GitHub, Hugging Face)
-    # -------------------------------------------------------------------------
     def search_marketplace(self, query: str = "", module_type: str = "all", source: str = "all") -> dict[str, Any]:
         """Search curated registry, GitHub repositories, and Hugging Face Hub."""
         installed = {m["id"]: m for m in self.get_installed_modules()}
@@ -1130,9 +1119,7 @@ class ModuleManager:
             "installed_count": len(installed),
         }
 
-    # -------------------------------------------------------------------------
     # Real Git Clone & Repository Import
-    # -------------------------------------------------------------------------
     def clone_repository(
         self, repo_url: str, module_type: str = "auto", branch: str = "main", custom_name: Optional[str] = None
     ) -> dict[str, Any]:
@@ -1264,9 +1251,7 @@ class ModuleManager:
             "module": record,
         }
 
-    # -------------------------------------------------------------------------
     # Git Pull / Sync
-    # -------------------------------------------------------------------------
     def git_pull(self, module_id: str) -> dict[str, Any]:
         """Perform git pull on a cloned repository to synchronize upstream commits."""
         target_folder = self._module_path(module_id)
@@ -1319,9 +1304,7 @@ class ModuleManager:
         except Exception as e:
             return {"success": False, "message": f"Failed to pull repository: {e}"}
 
-    # -------------------------------------------------------------------------
     # Dynamic Plugin & DAG Node Discovery
-    # -------------------------------------------------------------------------
     def discover_and_register_nodes(self, module_dir: Path, trusted: bool = True) -> List[str]:
         """Scan a module directory for Python scripts and register discovered DAG nodes into global_registry.
 
@@ -1571,9 +1554,7 @@ class {clean_name}:
             "message": f"Created {target_file.name}. Review the generated code, then scan the workspace to load it into Studio.",
         }
 
-    # -------------------------------------------------------------------------
     # Module Installation (Curated / Builtin / Pip / Cloned)
-    # -------------------------------------------------------------------------
     def install_module(self, module_data: dict[str, Any]) -> dict[str, Any]:
         """Install or update a curated recommendation, framework, or remote repository."""
         mod_id = module_data.get("id") or module_data.get("name", "")
@@ -1697,9 +1678,7 @@ class {clean_name}:
 
         return {"success": success, "message": msg, "installed_path": str(target_folder), "module": record}
 
-    # -------------------------------------------------------------------------
     # Uninstall Module
-    # -------------------------------------------------------------------------
     def uninstall_module(self, module_id: str) -> dict[str, Any]:
         """Uninstall a module, unregister its DAG nodes, and remove its directory."""
         target_folder = self._module_path(module_id)
@@ -1726,9 +1705,7 @@ class {clean_name}:
         self._save_installed_modules(installed)
         return {"success": True, "message": f"Module {module_id} uninstalled."}
 
-    # -------------------------------------------------------------------------
     # Check Updates
-    # -------------------------------------------------------------------------
     def check_updates(self) -> list[dict[str, Any]]:
         """Check all installed modules for version updates (curated and Git)."""
         installed = self.get_installed_modules()

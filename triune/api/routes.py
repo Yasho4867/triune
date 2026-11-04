@@ -866,14 +866,10 @@ if HAS_FASTAPI:
                 self.cuda_available = False
                 self.device = torch.device("cpu")
                 self.device_name = f"CPU ({platform.processor() or 'x86_64'})"
-                # Unit tests must not contend with a live Studio/training
-                # process for CUDA merely by importing the API module.
                 if not is_test_runtime and torch.cuda.is_available():
                     try:
                         torch.cuda.init()
                         torch.cuda.set_device(0)
-                        # Touch the actual allocator and synchronize so startup
-                        # cannot report a CUDA device that fails on first use.
                         _cuda_probe = torch.empty(1, device="cuda:0")
                         torch.cuda.synchronize(0)
                         del _cuda_probe
@@ -970,9 +966,6 @@ if HAS_FASTAPI:
                         self.current_lr = float(self.lr_schedule(self.config, self.step))
                 except Exception:
                     pass
-
-            # Test imports must not hydrate user checkpoints or contend for a
-            # live GPU. Tests construct the fixture they need explicitly.
             if is_test_runtime:
                 self.total_tokens_trained = restored
                 self.tokens_trained = restored
@@ -1341,8 +1334,6 @@ if HAS_FASTAPI:
 
             state_dict = checkpoint.get("model_state", checkpoint)
             state_dict = {str(key).removeprefix("_orig_mod."): value for key, value in state_dict.items()}
-            # strict=True is intentional: partial/randomly initialized models must never
-            # be reported as successfully loaded trained checkpoints.
             self.model.load_state_dict(state_dict, strict=True)
             del state_dict
             if isinstance(checkpoint, dict):
@@ -1480,16 +1471,8 @@ if HAS_FASTAPI:
         def lazy_init_model(self):
             if not HAS_TORCH or TriuneTransformer is None:
                 raise RuntimeError("PyTorch is not installed in this environment.")
-            # Only restore implicitly during first backend initialization. A
-            # model already built by an explicit preset selection is intentional
-            # (possibly fresh for training) and must never be replaced by the
-            # newest checkpoint behind the user's back.
             if self.model is not None:
                 return
-
-            # Prefer the checkpoint explicitly marked active; otherwise use the most
-            # recently modified managed checkpoint. Never swallow a bad restore and
-            # continue with random weights while claiming the trained model is active.
             active_candidates: List[Path] = []
             if self.active_checkpoint:
                 active_candidates.extend(
@@ -1525,8 +1508,6 @@ if HAS_FASTAPI:
             print(
                 f"[Triune Engine] Loaded 6-Layer MoE TriuneTransformer (32k vocab, 4 experts, Centroid+Muon Optimizer) on {self.device_name}."
             )
-            # Inference must not initialize a training corpus or open a network
-            # stream. Training's step_once/next_batch paths load data on demand.
 
         def connect_hf_stream(
             self,
@@ -2288,9 +2269,6 @@ if HAS_FASTAPI:
                 return
             self.inference_warmup_status = "warming"
             try:
-                # Use the exact production generation path, but keep the warmup
-                # short and deterministic. This avoids charging Triton/FLA's
-                # first-use compilation cost to the first interactive prompt.
                 with self.worker_lock:
                     self.generate_text("Hi", max_new_tokens=2, temperature=0.0)
                 self.inference_warmup_status = "ready"
@@ -2696,7 +2674,6 @@ if HAS_FASTAPI:
 
     atexit.register(pytorch_state.stop_prefetch_worker)
 
-    @router.on_event("startup")
     async def schedule_cuda_inference_warmup() -> None:
         """Warm the active checkpoint in the background without delaying API health."""
         pytorch_state.schedule_cuda_inference_warmup()
@@ -2777,9 +2754,6 @@ if HAS_FASTAPI:
         cuda_avail = bool(getattr(pytorch_state, "cuda_available", False))
         runtime_device = str(getattr(pytorch_state, "device", "cpu"))
         model = getattr(pytorch_state, "model", None)
-        # This is used as a frequent liveness/discovery probe by Studio.  Do
-        # not walk every parameter here: a large or layer-streamed model can
-        # make that apparently cheap request exceed the UI deadline.
         first_parameter = next(model.parameters(), None) if model is not None else None
         model_devices = [str(first_parameter.device)] if first_parameter is not None else []
         model_dtypes = [str(first_parameter.dtype).replace("torch.", "")] if first_parameter is not None else []
@@ -2988,10 +2962,6 @@ if HAS_FASTAPI:
         pytorch_state.active_generation_cancel = cancel_event
 
         def _locked_generate(on_text=None) -> Dict[str, Any]:
-            # Do not leave HTTP streaming workers blocked indefinitely behind
-            # training or an earlier generation.  A clear busy response is
-            # recoverable; an unbounded Lock.acquire makes the desktop look
-            # offline and prevents shutdown from completing.
             lock_timeout = max(0.1, float(os.environ.get("TRIUNE_GENERATION_LOCK_TIMEOUT_SECONDS", "5")))
             if not pytorch_state.worker_lock.acquire(timeout=lock_timeout):
                 raise RuntimeError(
@@ -3027,10 +2997,6 @@ if HAS_FASTAPI:
 
             def _enqueue(event: Dict[str, Any]) -> None:
                 if events.full():
-                    # Decoded text events are cumulative snapshots. Coalesce a
-                    # backlog to the newest snapshot rather than allowing a
-                    # slow UI/proxy to grow memory without bound. Preserve
-                    # control events; the completion event carries final text.
                     queued = []
                     while not events.empty():
                         queued.append(events.get_nowait())
@@ -3049,9 +3015,6 @@ if HAS_FASTAPI:
                 try:
                     loop.call_soon_threadsafe(_enqueue, event)
                 except RuntimeError:
-                    # The client may have disconnected while CUDA was finishing
-                    # its current kernel. The generation cancellation flag is
-                    # set by the response iterator's finally block below.
                     pass
 
             def _stream_worker() -> None:
@@ -3062,11 +3025,6 @@ if HAS_FASTAPI:
                     _publish({"type": "error", "message": str(exc)})
 
             async def _stream_events():
-                # A daemon thread is intentional here. asyncio.to_thread uses
-                # the event loop's default executor, which asyncio.run waits
-                # to shut down; a cancelled client could therefore stall the
-                # entire test/server lifetime behind a CUDA worker. Generation
-                # remains cooperatively cancellable through cancel_event.
                 worker = threading.Thread(
                     target=_stream_worker,
                     name="triune-stream-generation",
@@ -3075,8 +3033,6 @@ if HAS_FASTAPI:
                 worker.start()
                 previous_text = ""
                 try:
-                    # Flush an initial comment so clients and local proxies know
-                    # the request is alive while a checkpoint/CUDA context loads.
                     yield ": triune stream connected\n\n"
                     while True:
                         try:
@@ -3088,10 +3044,6 @@ if HAS_FASTAPI:
                             snapshot = str(event["text"])
                             if not snapshot or snapshot == previous_text:
                                 continue
-                            # Standard delta chunks are used when the tokenizer
-                            # appends text normally. A snapshot marker handles
-                            # rare byte-level decoder revisions without mangling
-                            # the visible response.
                             if snapshot.startswith(previous_text):
                                 delta = snapshot[len(previous_text) :]
                                 if not delta:
@@ -3544,8 +3496,6 @@ if HAS_FASTAPI:
                         )
                     )
                     try:
-                        # Cancelling an HTTP request cannot stop a Python worker
-                        # thread. Keep the queue lock until that work really ends.
                         res = await asyncio.shield(execution_task)
                     except asyncio.CancelledError:
                         await asyncio.shield(execution_task)
@@ -4080,10 +4030,6 @@ if HAS_FASTAPI:
         else:
             currently_resident = len(old_engine.resident_layers)
 
-        # This tuner is used for training: keep the engine's existing 2.5 GiB
-        # headroom for activations, optimizer work, and temporary workspaces.
-        # Count existing resident layer bytes as available when deciding
-        # whether a larger split can fit; never consume all free VRAM blindly.
         try:
             free_bytes, _ = torch.cuda.mem_get_info(device)
             resident_layers = old_engine.resident_layers if old_engine is not None else all_layers[:currently_resident]
@@ -4100,8 +4046,6 @@ if HAS_FASTAPI:
                 max_fit += 1
             target = min(requested, max_fit)
         except Exception:
-            # If device memory cannot be queried, retain the current safe split
-            # instead of attempting an unbounded allocation.
             target = min(requested, currently_resident)
 
         if target >= len(all_layers):
@@ -4158,8 +4102,6 @@ if HAS_FASTAPI:
         try:
             replacement.attach(optimizer)
         except Exception:
-            # Do not leave a half-installed wrapper after an allocation or
-            # staging failure. Restore the previous residency where possible.
             replacement.detach()
             if old_engine is not None:
                 rollback = LayerStreamingEngine(
@@ -4202,9 +4144,6 @@ if HAS_FASTAPI:
                 supports_fp8 = (props.major == 8 and props.minor == 9) or (props.major >= 9)
             except Exception:
                 pass
-
-        # A CPU-only runtime has no known VRAM budget. Never fabricate a GPU
-        # profile, because its auto-tune recommendations can trigger OOMs.
 
         arch_spec = getattr(pytorch_state, "architecture_spec", {}) or {}
         num_layers = int(
@@ -4281,9 +4220,6 @@ if HAS_FASTAPI:
         total_est_mb = round(weights_mb + opt_mb + act_mb + cuda_mb, 2)
         total_est_gb = round(total_est_mb / 1024.0, 2)
 
-        # Only report observed throughput. The old FLOPS-derived number was a
-        # theoretical guess presented as a speed estimate and was not a usable
-        # predictor for layer streaming, which can be PCIe-bound.
         recent_tok_s = [h["throughput"] for h in pytorch_state.history if h.get("throughput") and h["throughput"] > 0]
         empirical_tok_s = int(sum(recent_tok_s[-5:]) / len(recent_tok_s[-5:])) if recent_tok_s else 0
 
@@ -4385,8 +4321,6 @@ if HAS_FASTAPI:
         }
 
         if not is_cuda:
-            # CPU recommendations must never claim that CUDA layers were
-            # applied. Auto-optimize remains usable for batch/context tuning.
             for preset in presets.values():
                 preset["gpu_offload_pct"] = 0
                 preset["gpu_layers"] = 0
@@ -4530,9 +4464,6 @@ if HAS_FASTAPI:
                             precision_override=precision,
                         )
                     except Exception:
-                        # A precision-specific layout may not be compatible with
-                        # an older checkpoint. Put the previously active model
-                        # back before reporting the failure.
                         pytorch_state.load_model_checkpoint(
                             checkpoint_path,
                             restore_optimizer=True,
@@ -4676,8 +4607,6 @@ if HAS_FASTAPI:
         """Probe the active CUDA device, then apply a conservative training profile."""
         if HAS_TORCH and bool(getattr(pytorch_state, "cuda_available", False)):
             try:
-                # A name/VRAM badge can come from startup diagnostics; make this
-                # action itself verify that the active CUDA context still works.
                 await asyncio.to_thread(torch.cuda.init)
                 await asyncio.to_thread(torch.cuda.synchronize, pytorch_state.device)
             except Exception as exc:
@@ -5403,8 +5332,6 @@ if HAS_FASTAPI:
                         )
                     return pytorch_state.load_model_checkpoint(p)
 
-            # Checkpoint files can be hundreds of megabytes or larger. Keep disk and
-            # model hydration off the asyncio event loop so Studio health/UI calls stay responsive.
             restored = await asyncio.to_thread(_load_checkpoint_safely)
             pytorch_state.schedule_cuda_inference_warmup()
             restored_tokens = restored["tokens_trained"]
@@ -5916,9 +5843,7 @@ if HAS_FASTAPI:
         except Exception as err:
             return {"success": False, "error": str(err), "output": ""}
 
-    # -------------------------------------------------------------------------
     # System Scanner & Config Endpoints
-    # -------------------------------------------------------------------------
     @router.get("/v1/system/scan")
     async def get_system_scan() -> Dict[str, Any]:
         """Perform comprehensive auto-scan of system hardware, CUDA, Python, and installed packages."""
@@ -5981,9 +5906,7 @@ if HAS_FASTAPI:
             response["byok_keys"] = {key: _mask_secret(value) for key, value in response["byok_keys"].items()}
         return response
 
-    # -------------------------------------------------------------------------
     # Modules & Repos Marketplace Endpoints
-    # -------------------------------------------------------------------------
     @router.get("/v1/modules/search")
     async def search_modules(q: str = "", type: str = "all", source: str = "all") -> Dict[str, Any]:
         """Search curated registry, GitHub, and Hugging Face Hub for available modules."""
@@ -6034,8 +5957,6 @@ if HAS_FASTAPI:
         res: Dict[str, Any] = {"status": "success", "type": mod_type, "name": mod["name"]}
 
         if mod_type == "plugin" or mod.get("registered_nodes"):
-            # Trust explicit curated provenance, never a registry-looking ID;
-            # remote clones can choose their own display/module ID.
             is_trusted_curated = str(mod.get("download_url", "")).startswith("builtin://")
             if not is_trusted_curated and req.get("confirm_untrusted") is not True:
                 return {
@@ -6045,8 +5966,6 @@ if HAS_FASTAPI:
                         "current user's permissions. Review its source before explicitly activating it."
                     ),
                 }
-            # A remote repository remains untrusted when manually activated;
-            # do not let this endpoint bypass the manifest/strict-AST gate.
             nodes = module_manager.discover_and_register_nodes(p, trusted=is_trusted_curated)
             if not nodes and not is_trusted_curated:
                 return {
@@ -6119,9 +6038,7 @@ if HAS_FASTAPI:
         dest = req.get("destination_dir")
         return await asyncio.to_thread(module_manager.create_custom_plugin_template, name, category, dest)
 
-    # -------------------------------------------------------------------------
     # Engine Turbo Mode & Custom Kernel Accelerator Endpoints
-    # -------------------------------------------------------------------------
     class TurboModeRequest(BaseModel):
         enabled: bool = True
 
@@ -6161,9 +6078,7 @@ if HAS_FASTAPI:
             "message": "Run python scripts/benchmark_competitors.py to generate live benchmarks.",
         }
 
-    # -------------------------------------------------------------------------
     # Model Export Endpoints
-    # -------------------------------------------------------------------------
     @router.post("/v1/models/export")
     async def export_model_endpoint(req: ModelExportRequest) -> Dict[str, Any]:
         """Export active model weights to SafeTensors, ONNX, Ollama, or vLLM config."""
@@ -6281,9 +6196,7 @@ SYSTEM \"\"\"You are Triune AI, a high-efficiency cognitive language model train
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
-    # -------------------------------------------------------------------------
     # Tokenizer Endpoint
-    # -------------------------------------------------------------------------
     @router.post("/v1/tokenizer/tokenize")
     async def tokenize_text_endpoint(req: TokenizeRequest) -> Dict[str, Any]:
         """Tokenize text using active tokenizer or character/word hashing fallback."""
@@ -6315,9 +6228,6 @@ SYSTEM \"\"\"You are Triune AI, a high-efficiency cognitive language model train
                 tokens.append({"id": tid, "text": t_str})
             return {"status": "success", "tokens": tokens, "vocab_size": tokenizer.get_vocab_size(), "tokenizer": "BPE"}
         else:
-            # Never fabricate token IDs: a hash/word split looks plausible in
-            # the Studio but cannot be used to reason about the model's real
-            # vocabulary or training inputs.
             return {
                 "status": "unavailable",
                 "tokens": [],
@@ -6325,9 +6235,7 @@ SYSTEM \"\"\"You are Triune AI, a high-efficiency cognitive language model train
                 "message": "No Triune tokenizer is configured. Load a tokenizer to preview real token IDs.",
             }
 
-    # -------------------------------------------------------------------------
     # Datasets Endpoint
-    # -------------------------------------------------------------------------
     @router.get("/v1/datasets")
     async def list_datasets() -> Dict[str, Any]:
         """List active datasets, local files, and streaming presets."""
@@ -6539,9 +6447,7 @@ SYSTEM \"\"\"You are Triune AI, a high-efficiency cognitive language model train
             "active_batch_preview": pytorch_state.current_batch_preview,
         }
 
-    # -------------------------------------------------------------------------
     # BYOK Provider Credentials Endpoints
-    # -------------------------------------------------------------------------
     @router.post("/v1/byok/save")
     async def save_byok_keys(req: BYOKSaveRequest) -> Dict[str, Any]:
         """Save API provider keys to Studio configuration and the active runtime environment."""
@@ -6555,8 +6461,6 @@ SYSTEM \"\"\"You are Triune AI, a high-efficiency cognitive language model train
         existing_byok = cfg.get("byok_keys", {})
         merged_byok = dict(existing_byok) if isinstance(existing_byok, dict) else {}
         for k, v in req.keys.items():
-            # Empty inputs mean "leave unchanged". There is no delete control in
-            # this UI, and blank defaults must never erase a credential on save.
             value = v.strip()
             if value and not _is_masked(value):
                 merged_byok[k] = value
@@ -6627,9 +6531,6 @@ SYSTEM \"\"\"You are Triune AI, a high-efficiency cognitive language model train
         if provider not in {"openai", "anthropic", "gemini", "huggingface", "wandb"}:
             raise HTTPException(status_code=400, detail=f"Unsupported credential provider: {provider}")
         if not key or _is_masked(key):
-            # Saved secrets are deliberately never echoed back to the UI. Let a
-            # user verify an existing credential without retyping it into the
-            # blank replacement field on a later session.
             try:
                 cfg = await asyncio.to_thread(module_manager.get_config)
                 saved_keys = cfg.get("byok_keys", {}) if isinstance(cfg, dict) else {}

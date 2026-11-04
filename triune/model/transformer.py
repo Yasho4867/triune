@@ -39,6 +39,7 @@ class TriuneTransformer(nn.Module):
         use_fp4: bool = False,
         use_fp8: bool = False,
         streaming_fp8_weights: bool = False,
+        scale_residual_projections: bool = False,
     ):
         super().__init__()
         if not (0 < router_prefix_layers < reflex_exit_layer < limbic_exit_layer < num_layers):
@@ -102,6 +103,11 @@ class TriuneTransformer(nn.Module):
         self.final_head = nn.Linear(hidden_dim, vocab_size, bias=False)
         self.apply(self._init_weights)
         self.token_embed.weight = self.final_head.weight
+        if scale_residual_projections and self.num_layers > 0:
+            residual_std = 0.02 / math.sqrt(2 * self.num_layers)
+            for name, p in self.named_parameters():
+                if "out_proj" in name or name.endswith(".2.weight"):
+                    nn.init.normal_(p, mean=0.0, std=residual_std)
 
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
