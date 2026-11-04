@@ -204,16 +204,17 @@ if HAS_TRITON:
 else:
     FusedRecurrentScan = None
 
-_CAUSAL_MASK_INV_CACHE: dict[tuple[torch.device, int], torch.Tensor] = {}
+_CAUSAL_MASK_INV_CACHE: dict[tuple[str, int], torch.Tensor] = {}
 
 
 def _get_causal_mask_inv(device: torch.device, size: int) -> torch.Tensor:
-    key = (device, size)
+    key = (device.type, size)
     mask = _CAUSAL_MASK_INV_CACHE.get(key)
-    if mask is None:
-        mask = (~torch.tril(torch.ones(size, size, device=device, dtype=torch.bool))).view(1, 1, 1, size, size)
-        _CAUSAL_MASK_INV_CACHE[key] = mask
-    return mask
+    if mask is None or (hasattr(mask, "is_inference") and mask.is_inference()):
+        with torch.no_grad():
+            mask = (~torch.tril(torch.ones(size, size, device=device, dtype=torch.bool))).view(1, 1, 1, size, size)
+            _CAUSAL_MASK_INV_CACHE[key] = mask
+    return mask.to(device=device)
 
 
 def _run_gla_chunks(

@@ -275,7 +275,9 @@ class BenchmarkValidityTest(unittest.TestCase):
         self.assertIn("provenance", data)
         self.assertIn("results", data)
         results = data["results"]
-        self.assertEqual(len(results), 3, "Must have 3 optimizer regimes: adamw, bnb_8bit, triune")
+        regime_names = {r["regime_name"] for r in results}
+        for expected in ("adamw", "bnb_8bit", "triune"):
+            self.assertIn(expected, regime_names, f"Must include core optimizer regime: {expected}")
 
         for r in results:
             self.assertGreater(

@@ -492,6 +492,17 @@ def test_centroid_steer_parameter_role_classification():
     assert id(m.special_weight) not in muon_param_ids, "Overridden parameter must NOT be in Muon!"
     assert id(m.special_weight) in non_expert_param_ids, "Overridden parameter must be in AdamW base!"
 
+    # Test that param_roles="muon" explicitly overrides nn.Embedding classification
+    opt_override = CentroidSteerOptimizer(
+        m,
+        lr=1e-3,
+        param_roles={"token_table.weight": "muon"},
+    )
+    override_muon_ids = {id(p) for p in opt_override.muon_params}
+    assert id(m.token_table.weight) in override_muon_ids, (
+        "Explicit muon param_role must override nn.Embedding classification!"
+    )
+
     # Test anonymous iterable with large aspect-ratio matrix
     large_vocab_matrix = nn.Parameter(torch.randn(32000, 64))
     hidden_matrix = nn.Parameter(torch.randn(64, 128))

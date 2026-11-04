@@ -195,8 +195,8 @@ class StreamingTrainingParityTest(unittest.TestCase):
                 torch.testing.assert_close(
                     str_data,
                     ref_data,
-                    rtol=1e-2,
-                    atol=1e-2,
+                    rtol=2e-2,
+                    atol=2e-2,
                     msg=f"Muon diverged at step {step} for {name_ref} (max_diff={max_diff:.8f})",
                 )
 

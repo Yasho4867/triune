@@ -125,7 +125,47 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
         self.layer_groups = []
         seen_param_ids = set()
 
+        # Build unified explicit parameter role dictionary
+        explicit_param_roles: dict[int, str] = {}
+        if self.param_roles:
+            named_map = dict(model.named_parameters()) if isinstance(model, torch.nn.Module) else {}
+            for k_role, r_val in self.param_roles.items():
+                r_val_norm = str(r_val).lower().strip()
+                if isinstance(k_role, str):
+                    if k_role in named_map:
+                        explicit_param_roles[id(named_map[k_role])] = r_val_norm
+                    else:
+                        for p_name, p_tensor in named_map.items():
+                            if p_name.endswith(k_role) or p_name == k_role:
+                                explicit_param_roles[id(p_tensor)] = r_val_norm
+                elif isinstance(k_role, (torch.nn.Parameter, torch.Tensor)):
+                    explicit_param_roles[id(k_role)] = r_val_norm
+
         if isinstance(model, torch.nn.Module):
+            # Precedence Rule 1: User-specified param_roles completely override ALL automatic heuristics
+            if explicit_param_roles:
+                for name, param in model.named_parameters():
+                    if id(param) in explicit_param_roles and param.requires_grad:
+                        role = explicit_param_roles[id(param)]
+                        seen_param_ids.add(id(param))
+                        if role in ("muon", "orthogonal") and param.dim() == 2:
+                            self.muon_params.append(param)
+                        elif role in ("expert", "centroid", "subspace") and param.dim() >= 2:
+                            self.layer_groups.append(
+                                {
+                                    "module": None,
+                                    "expert_idx": None,
+                                    "param": param,
+                                    "projection": None,
+                                    "projection_side": "left" if param.shape[0] <= param.shape[1] else "right",
+                                    "proj_step": 0,
+                                    "state": {"momentum": None, "variance": None, "step": 0},
+                                }
+                            )
+                        else:
+                            # ("adamw", "base", "embedding", "vocab", "1d", "norm")
+                            self.non_expert_params.append(param)
+
             # 1. Module-type detection for embeddings (nn.Embedding, nn.EmbeddingBag) and routers
             router_param_ids = set()
             embedding_param_ids = set()
@@ -133,17 +173,20 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
             for mod_name, module in model.named_modules():
                 if isinstance(module, (torch.nn.Embedding, torch.nn.EmbeddingBag)):
                     for p in module.parameters():
-                        embedding_param_ids.add(id(p))
+                        if id(p) not in seen_param_ids:
+                            embedding_param_ids.add(id(p))
                 elif isinstance(module, MoE_FFN) and hasattr(module, "router"):
                     for p in module.router.parameters():
-                        router_param_ids.add(id(p))
+                        if id(p) not in seen_param_ids:
+                            router_param_ids.add(id(p))
                 elif (
                     module.__class__.__name__ in ("GumbelSoftmaxRouter", "Router", "TopKRouter")
                     or "router" in mod_name.lower()
                     or mod_name.endswith(".router")
                 ):
                     for p in module.parameters():
-                        router_param_ids.add(id(p))
+                        if id(p) not in seen_param_ids:
+                            router_param_ids.add(id(p))
 
             # 2. Check for tied weights with input embeddings
             input_embed_data_ptrs = set()
@@ -151,16 +194,10 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                 if isinstance(mod, (torch.nn.Embedding, torch.nn.EmbeddingBag)) and hasattr(mod, "weight"):
                     input_embed_data_ptrs.add(mod.weight.data_ptr())
 
-            # 3. Explicit roles, naming heuristics, and aspect-ratio safeguards
+            # 3. Naming heuristics and aspect-ratio safeguards
             for name, param in model.named_parameters():
-                # User explicit role override
-                if self.param_roles:
-                    role = self.param_roles.get(name) or self.param_roles.get(param)
-                    if role in ("embedding", "embed", "vocab", "head", "router", "adamw"):
-                        embedding_param_ids.add(id(param))
-                        continue
-                    elif role == "muon":
-                        continue
+                if id(param) in seen_param_ids:
+                    continue
 
                 # Tied weight check
                 if param.data_ptr() in input_embed_data_ptrs:
@@ -195,17 +232,17 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
 
             # 1. Count MoE routed experts
             num_expert_groups = 0
+            counting_seen = set()
             for name, module in model.named_modules():
                 if isinstance(module, MoE_FFN):
                     for expert_idx, expert in enumerate(module.experts):
                         for subname, submod in expert.named_modules():
                             if hasattr(submod, "weight") and isinstance(submod.weight, torch.nn.Parameter):
                                 p = submod.weight
-                                if p.requires_grad and p.dim() >= 2 and id(p) not in seen_param_ids:
-                                    seen_param_ids.add(id(p))
+                                if p.requires_grad and p.dim() >= 2 and id(p) not in counting_seen:
+                                    counting_seen.add(id(p))
                                     num_expert_groups += 1
 
-            seen_param_ids.clear()
             group_idx = 0
 
             # 1. Populate MoE routed experts (with Centroid Steering)
@@ -274,12 +311,24 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                         continue
                     if param.requires_grad and id(param) not in seen_param_ids:
                         seen_param_ids.add(id(param))
-                        role = self.param_roles.get(param) if self.param_roles else None
-                        if role in ("embedding", "embed", "vocab", "head", "router", "adamw"):
-                            self.non_expert_params.append(param)
-                            continue
-                        elif role == "muon" and param.dim() == 2:
-                            self.muon_params.append(param)
+                        if id(param) in explicit_param_roles:
+                            role = explicit_param_roles[id(param)]
+                            if role in ("muon", "orthogonal") and param.dim() == 2:
+                                self.muon_params.append(param)
+                            elif role in ("expert", "centroid", "subspace") and param.dim() >= 2:
+                                self.layer_groups.append(
+                                    {
+                                        "module": None,
+                                        "expert_idx": None,
+                                        "param": param,
+                                        "projection": None,
+                                        "projection_side": "left" if param.shape[0] <= param.shape[1] else "right",
+                                        "proj_step": 0,
+                                        "state": {"momentum": None, "variance": None, "step": 0},
+                                    }
+                                )
+                            else:
+                                self.non_expert_params.append(param)
                             continue
 
                         if self.use_muon and param.dim() == 2:
