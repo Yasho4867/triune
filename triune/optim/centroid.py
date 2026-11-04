@@ -761,7 +761,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                     g["state"]["step"] += 1
                     step_list[idx] = float(sub_step)
 
-                bucket_cache.append((m, n, r, start, end, g_list, QL_act, QR_act))
+                bucket_cache.append((m, n, r, start, end, g_list, QL_act, QR_act, QL_stack, QR_stack))
 
             step_vals = torch.tensor(step_list, device=device, dtype=torch.float32).view(N, 1, 1)
 
@@ -782,7 +782,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
             # 4. Batched BMM Reconstruction & Fused Multi-Tensor Weight Update
             beta_wd = 1.0 - expert_lr * expert_wd if expert_wd != 0 else 1.0
             alpha_upd = -expert_lr
-            for m, n, r, start, end, g_list, QL_act, QR_act in bucket_cache:
+            for m, n, r, start, end, g_list, QL_act, QR_act, QL_stack, QR_stack in bucket_cache:
                 delta_stack = batch_delta_R[start:end, : r + 1, : r + 1]
                 if any(g.get("steer_applied", False) for g in g_list):
                     if all(g.get("steer_applied", False) for g in g_list):
@@ -806,12 +806,10 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
 
                 if N < len(self.layer_groups):
                     # Subset / Layer-Streaming mode: isolate per-group state tensors before CPU offload
-                    QL_full = self._bucket_buffers[(K, m, n, r, device, dtype)]["QL_stack"]
-                    QR_full = self._bucket_buffers[(K, m, n, r, device, dtype)]["QR_stack"]
                     for b_idx, g in enumerate(g_list):
                         idx = start + b_idx
-                        g["Q_L"] = QL_full[b_idx].clone()
-                        g["Q_R"] = QR_full[b_idx].clone()
+                        g["Q_L"] = QL_stack[b_idx].clone()
+                        g["Q_R"] = QR_stack[b_idx].clone()
                         g["projection"] = g["Q_L"][:, :r]
                         g["state"]["momentum"] = batch_mom[idx].clone()
                         g["state"]["variance"] = batch_var[idx].clone()
