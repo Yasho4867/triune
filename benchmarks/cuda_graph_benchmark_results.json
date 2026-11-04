@@ -1,9 +1,9 @@
 {
   "benchmark_name": "cuda_graph_vs_eager_performance_and_parity",
-  "timestamp_utc": "2026-11-03 23:35:49 UTC",
+  "timestamp_utc": "2026-11-03 23:52:45 UTC",
   "provenance": {
-    "git_commit": "3caf18732a5d7851b1bd57ec1e87d7691a9aeb45",
-    "git_dirty": true,
+    "git_commit": "3fd3612ef803a0dc8f1376bac7856bf3c720136d",
+    "git_dirty": false,
     "script_sha256": "2ed3f7649996257a7f6a2efb19ce91019b474645b0dfbb8884621d881b12feb0",
     "dataset": {
       "dataset_mode": "fineweb_real",
@@ -42,148 +42,148 @@
   "timing_metrics": {
     "eager": {
       "host_launch_us": {
-        "median": 18067.7,
-        "mean": 18455.53,
-        "min": 16618.9,
-        "max": 22827.7,
-        "std": 1688.99
+        "median": 18278.5,
+        "mean": 18631.0,
+        "min": 16906.6,
+        "max": 22909.5,
+        "std": 1858.79
       },
       "gpu_time_ms": {
-        "median": 22.78,
-        "mean": 23.03,
-        "min": 21.09,
-        "max": 27.48,
-        "std": 1.71
+        "median": 22.85,
+        "mean": 23.57,
+        "min": 21.77,
+        "max": 27.79,
+        "std": 1.83
       },
       "total_step_ms": {
-        "median": 22.82,
-        "mean": 23.11,
-        "min": 21.12,
-        "max": 27.59,
-        "std": 1.72
+        "median": 22.9,
+        "mean": 23.63,
+        "min": 21.84,
+        "max": 28.13,
+        "std": 1.88
       }
     },
     "cuda_graph_sync": {
       "host_launch_us": {
-        "median": 14299.0,
-        "mean": 14338.53,
-        "min": 14041.1,
-        "max": 14665.5,
-        "std": 204.5
+        "median": 14362.0,
+        "mean": 14290.87,
+        "min": 13847.8,
+        "max": 14504.8,
+        "std": 199.57
       },
       "gpu_time_ms": {
-        "median": 14.38,
-        "mean": 14.34,
-        "min": 14.03,
-        "max": 14.72,
+        "median": 14.32,
+        "mean": 14.28,
+        "min": 13.83,
+        "max": 14.55,
         "std": 0.2
       },
       "total_step_ms": {
-        "median": 14.4,
-        "mean": 14.37,
-        "min": 14.05,
-        "max": 14.78,
-        "std": 0.22
+        "median": 14.37,
+        "mean": 14.32,
+        "min": 13.85,
+        "max": 14.58,
+        "std": 0.21
       }
     },
     "cuda_graph_async": {
       "host_launch_us": {
-        "median": 194.3,
-        "mean": 215.88,
-        "min": 148.7,
-        "max": 544.1,
-        "std": 96.26
+        "median": 188.3,
+        "mean": 227.56,
+        "min": 145.0,
+        "max": 613.1,
+        "std": 115.94
       },
       "gpu_time_ms": {
-        "median": 13.69,
-        "mean": 13.74,
-        "min": 13.63,
-        "max": 13.92,
-        "std": 0.1
+        "median": 14.29,
+        "mean": 14.25,
+        "min": 13.98,
+        "max": 14.45,
+        "std": 0.16
       },
       "total_step_ms": {
-        "median": 13.73,
-        "mean": 13.79,
-        "min": 13.66,
-        "max": 14.05,
-        "std": 0.12
+        "median": 14.33,
+        "mean": 14.32,
+        "min": 14.12,
+        "max": 14.59,
+        "std": 0.16
       }
     }
   },
   "parity_validation": {
     "steps_evaluated": 10,
-    "max_observed_weight_drift": 8.195638656616211e-07,
-    "max_observed_loss_diff": 1e-07,
+    "max_observed_weight_drift": 0.0,
+    "max_observed_loss_diff": 0.0,
     "step_records": [
       {
         "step": 1,
         "loss_eager": 4.8408,
         "loss_graph": 4.8408,
         "loss_diff": 0.0,
-        "max_param_weight_drift": 8.195638656616211e-07
+        "max_param_weight_drift": 0.0
       },
       {
         "step": 2,
         "loss_eager": 4.28449,
         "loss_graph": 4.28449,
         "loss_diff": 0.0,
-        "max_param_weight_drift": 8.158385753631592e-07
+        "max_param_weight_drift": 0.0
       },
       {
         "step": 3,
         "loss_eager": 3.49092,
         "loss_graph": 3.49092,
         "loss_diff": 0.0,
-        "max_param_weight_drift": 8.158385753631592e-07
+        "max_param_weight_drift": 0.0
       },
       {
         "step": 4,
         "loss_eager": 2.14266,
         "loss_graph": 2.14266,
         "loss_diff": 0.0,
-        "max_param_weight_drift": 8.158385753631592e-07
+        "max_param_weight_drift": 0.0
       },
       {
         "step": 5,
         "loss_eager": 1.67813,
         "loss_graph": 1.67813,
-        "loss_diff": 1e-07,
-        "max_param_weight_drift": 8.158385753631592e-07
+        "loss_diff": 0.0,
+        "max_param_weight_drift": 0.0
       },
       {
         "step": 6,
         "loss_eager": 1.39022,
         "loss_graph": 1.39022,
         "loss_diff": 0.0,
-        "max_param_weight_drift": 8.158385753631592e-07
+        "max_param_weight_drift": 0.0
       },
       {
         "step": 7,
         "loss_eager": 0.96975,
         "loss_graph": 0.96975,
         "loss_diff": 0.0,
-        "max_param_weight_drift": 8.158385753631592e-07
+        "max_param_weight_drift": 0.0
       },
       {
         "step": 8,
         "loss_eager": 0.85226,
         "loss_graph": 0.85226,
-        "loss_diff": 1e-07,
-        "max_param_weight_drift": 8.158385753631592e-07
+        "loss_diff": 0.0,
+        "max_param_weight_drift": 0.0
       },
       {
         "step": 9,
         "loss_eager": 0.74333,
         "loss_graph": 0.74333,
         "loss_diff": 0.0,
-        "max_param_weight_drift": 8.158385753631592e-07
+        "max_param_weight_drift": 0.0
       },
       {
         "step": 10,
         "loss_eager": 0.60012,
         "loss_graph": 0.60012,
         "loss_diff": 0.0,
-        "max_param_weight_drift": 8.158385753631592e-07
+        "max_param_weight_drift": 0.0
       }
     ]
   }

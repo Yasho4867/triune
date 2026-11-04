@@ -58,11 +58,13 @@ class BenchmarkValidityTest(unittest.TestCase):
             fpath = BENCHMARK_DIR / fname
             with open(fpath, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            hw = data.get("hardware", {})
+            hw = data.get("hardware") or data.get("provenance", {}).get("hardware", {})
             self.assertIn("device_name", hw, f"Missing device_name in {fname}")
             self.assertIn("total_vram_gb", hw, f"Missing total_vram_gb in {fname}")
-            self.assertIn("pytorch_version", hw, f"Missing pytorch_version in {fname}")
-            self.assertIn("cuda_version", hw, f"Missing cuda_version in {fname}")
+            pt_ver = hw.get("pytorch_version") or data.get("provenance", {}).get("software", {}).get("torch")
+            self.assertIsNotNone(pt_ver, f"Missing pytorch version in {fname}")
+            cuda_ver = hw.get("cuda_version") or data.get("provenance", {}).get("software", {}).get("cuda")
+            self.assertIsNotNone(cuda_ver, f"Missing cuda version in {fname}")
             if torch.cuda.is_available():
                 self.assertGreater(hw["total_vram_gb"], 0, f"Total VRAM must be > 0 in {fname}")
 
@@ -153,7 +155,8 @@ class BenchmarkValidityTest(unittest.TestCase):
 
         if isinstance(data, dict):
             self.assertIn("schema_version", data)
-            self.assertIn("git_commit", data)
+            git_commit = data.get("git_commit") or data.get("provenance", {}).get("git_commit")
+            self.assertIsNotNone(git_commit, "Git commit provenance must be present")
             self.assertIn("timestamp_utc", data)
             cells = data.get("cells", [])
         else:
@@ -170,7 +173,7 @@ class BenchmarkValidityTest(unittest.TestCase):
             self.assertFalse(math.isnan(cell["peak_vram_mb"]))
             if cell["stack"] == "adamw":
                 self.assertIn("AdamW", cell["optimizer"])
-            elif cell["stack"] == "unsloth":
+            elif cell["stack"] in ("unsloth", "bnb_8bit"):
                 self.assertIn("AdamW8bit", cell["optimizer"])
             elif cell["stack"] == "triune" and cell["task"] == "pretrain":
                 self.assertIn("CentroidSteer", cell["optimizer"])
@@ -182,8 +185,10 @@ class BenchmarkValidityTest(unittest.TestCase):
             data = json.load(f)
 
         self.assertIn("schema_version", data)
-        self.assertIn("git_commit", data)
-        self.assertIn("hardware", data)
+        git_commit = data.get("git_commit") or data.get("provenance", {}).get("git_commit")
+        self.assertIsNotNone(git_commit, "Git commit provenance must be present")
+        hardware = data.get("hardware") or data.get("provenance", {}).get("hardware")
+        self.assertIsNotNone(hardware, "Hardware info must be present")
         results = data.get("results", [])
         self.assertEqual(len(results), 7, "Must have exactly 7 benchmark cells")
 
@@ -202,6 +207,33 @@ class BenchmarkValidityTest(unittest.TestCase):
                 self.assertIn("CentroidSteer", r["optimizer"])
             elif r["framework"] == "pytorch":
                 self.assertEqual(r["optimizer"], "AdamW")
+
+    def test_cuda_graph_benchmark_results_validity(self):
+        """Verifies CUDA Graph benchmark provenance, launch latency speedup, and zero-drift parity."""
+        fpath = BENCHMARK_DIR / "cuda_graph_benchmark_results.json"
+        if not fpath.is_file():
+            self.skipTest("cuda_graph_benchmark_results.json not found")
+
+        with open(fpath, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        self.assertIn("provenance", data)
+        self.assertIn("timing_metrics", data)
+        self.assertIn("parity_validation", data)
+
+        timing = data["timing_metrics"]
+        self.assertIn("eager", timing)
+        self.assertIn("cuda_graph_async", timing)
+
+        # Async launch latency must be substantially faster than eager CPU dispatch
+        eager_launch = timing["eager"]["host_launch_us"]["median"]
+        async_launch = timing["cuda_graph_async"]["host_launch_us"]["median"]
+        self.assertLess(async_launch, eager_launch)
+
+        # Multi-step mathematical parity must show zero or negligible numerical drift
+        parity = data["parity_validation"]
+        self.assertLessEqual(parity["max_observed_weight_drift"], 1e-4)
+        self.assertLessEqual(parity["max_observed_loss_diff"], 1e-4)
 
 
 if __name__ == "__main__":
