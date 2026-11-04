@@ -688,6 +688,7 @@ This benchmark rigorously evaluates the component tiers of the Triune optimizati
      - **Tier 1 (Muon)**: $5,898,240$ parameters ($6.50\\%$)—attention projections and shared expert matrices.
      - **Tier 2 (CentroidSteer)**: $35,389,440$ parameters ($38.98\\%$)—routed MoE expert weights dynamically steered along router cluster centroids.
      - **Tier 3 (Fused AdamW)**: $49,501,591$ parameters ($54.52\\%$)—router gates, vocabulary embeddings, and layer norms.
+   - For empirical multi-seed validation of all three tiers active on real FineWeb-Edu text, see [`benchmarks/MOE_CONVERGENCE_100_STEPS_REPORT.md`](MOE_CONVERGENCE_100_STEPS_REPORT.md).
    - Dynamic router centroid steering accelerates multi-expert convergence by projecting updates into the subspace aligned with expert token assignments.
 
 4. **Base Optimizer & Vocabulary Safeguards**:
