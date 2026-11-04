@@ -381,7 +381,6 @@ class MoE_FFN(nn.Module):
                     if pad:
                         expert_output = expert_output[:orig_tokens]
 
-                    # Fix C-1: out-of-place to preserve autograd graph
                     out = out.index_add(0, indices, (expert_output * val_k_keep.unsqueeze(-1)).to(out.dtype))
 
         if need_stats:

@@ -67,7 +67,6 @@ def export_safetensors(model: torch.nn.Module, output_path: str | Path) -> Path:
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     state_dict = model.state_dict()
-    # Fix H-10: deduplicate tied weights that share memory
     seen_ptrs = set()
     deduped = {}
     for key, tensor in state_dict.items():

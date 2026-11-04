@@ -46,10 +46,8 @@ def build_fp8_precision_context(*, device, use_te: bool = True) -> callable:
         except (ImportError, Exception):
             pass
 
-    # 2. Native PyTorch FP8 fallback
-    # Fix H-11: PyTorch autocast doesn't support FP8 dtypes.
-    # FP8 compute is handled by FP8Linear modules internally;
-    # the precision context provides BF16 autocast for non-FP8 operations.
+    # Native PyTorch FP8 fallback: FP8 compute is handled by FP8Linear modules;
+    # precision context provides BF16 autocast for non-FP8 operations.
     if is_sm89_plus and caps.native_scaled_mm and hasattr(torch, "float8_e4m3fn"):
         ctx_fn = lambda: torch.amp.autocast("cuda", dtype=torch.bfloat16)
         ctx_fn.description = "Native PyTorch FP8 (module-level) with BF16 autocast active"

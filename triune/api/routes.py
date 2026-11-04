@@ -747,7 +747,6 @@ if HAS_FASTAPI:
         except Exception:
             pass
 
-    # REAL Hardware-Spinning PyTorch Engine State
     class RealPyTorchEngineState:
         def __init__(self):
             self.step = 0
@@ -1118,7 +1117,6 @@ if HAS_FASTAPI:
                 total_p, _ = spec.compute_exact_params()
                 exec_spec = spec
 
-                # Zero fake or silent downgrades: always instantiate the real user-chosen model architecture
                 self.model = build_model_from_spec(exec_spec)
                 self.model.model_spec = spec
 

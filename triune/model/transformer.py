@@ -261,7 +261,6 @@ class TriuneTransformer(nn.Module):
                 x_d, d_cache = self._run_layers(x_d, self.router_prefix_layers, self.num_layers, cache=d_cache)
                 logits_d = self.final_head(self.final_norm(x_d))
 
-            # Fix C-1: out-of-place to preserve autograd graph, match logits_d dtype under autocast
             if final_logits is None:
                 final_logits = torch.empty(B, T, self.final_head.out_features, device=device, dtype=logits_d.dtype)
             final_logits = final_logits.index_copy(0, idx, logits_d.to(final_logits.dtype))

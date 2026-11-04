@@ -147,7 +147,6 @@ class Muon(Optimizer):
                 state["step"] += 1
                 momentum = state["momentum"]
 
-                # Fix H-5: ensure momentum is on the same device as grad
                 if momentum.device != grad.device or momentum.dtype != grad.dtype:
                     state["momentum"] = momentum.to(device=grad.device, dtype=grad.dtype)
                     momentum = state["momentum"]
