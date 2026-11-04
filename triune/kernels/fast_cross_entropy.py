@@ -293,6 +293,7 @@ def chunked_cross_entropy_from_hidden(
     targets: torch.Tensor,
     chunk_size: int = 1024,
     ignore_index: int = -100,
+    force_chunked: bool = False,
 ) -> torch.Tensor:
     """Computes cross-entropy directly from hidden states without materializing full [B, T, V] logits.
 
@@ -305,8 +306,8 @@ def chunked_cross_entropy_from_hidden(
     total_elements = (hidden_states.numel() // hidden_states.size(-1)) * weight.size(0)
     is_capturing = bool(hidden_states.is_cuda and torch.cuda.is_current_stream_capturing())
 
-    # Fast path: when total logits memory <= 256 MB (134 million elements in BF16)
-    if total_elements <= 134_217_728 or is_capturing:
+    # Fast path: when total logits memory <= 256 MB (134 million elements in BF16) and not forced
+    if (total_elements <= 134_217_728 and not force_chunked) or is_capturing:
         logits = F.linear(hidden_states, weight, bias)
         return fast_cross_entropy(
             logits.reshape(-1, weight.size(0)), targets.reshape(-1), chunk_size=chunk_size, ignore_index=ignore_index

@@ -10,6 +10,21 @@ from __future__ import annotations
 
 import torch
 
+# Optimal quintic polynomial coefficients for Newton-Schulz / Polar Express
+NS5_COEFFS = (3.4445, -4.7750, 2.0315)
+
+
+def compute_muon_update_scale(d_out: int, d_in: int, rms_target: float | None = None) -> float:
+    """Compute aspect-ratio and RMS-matched update scaling factor for Muon.
+
+    Standard Muon uses scale = sqrt(max(1, d_out / d_in)).
+    When rms_target is provided, scales the update to match AdamW coordinate-wise variance.
+    """
+    aspect = max(1.0, float(d_out) / float(d_in)) ** 0.5
+    if rms_target is not None and rms_target > 0:
+        return aspect * float(rms_target)
+    return aspect
+
 
 def fast_zeropower_via_newtonschulz5(
     G: torch.Tensor,

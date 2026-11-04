@@ -407,8 +407,11 @@ class MoE_FFN(nn.Module):
         """Update non-gradient routing state without retaining an activation graph or syncing GPU to CPU."""
         target = max(1.0, float((flat_x.size(0) * self.top_k) / self.num_experts))
 
-        # Bias steering equalizes requested demand across experts
-        self._pending_bias_update = -(result.requested_counts - target).sign() * MOE_BIAS_UPDATE_RATE
+        # DeepSeek-V3 style continuous proportional bias steering:
+        # Decouples load-balancing from LM loss gradients while eliminating bang-bang chattering
+        counts_f = result.requested_counts.float().to(device=self.expert_bias.device)
+        error_ratio = (counts_f - target) / target
+        self._pending_bias_update = -error_ratio * MOE_BIAS_UPDATE_RATE
 
         # Expert utilization ratio reflects actual accepted tokens processed
         batch_ratio = result.accepted_counts.float() / target

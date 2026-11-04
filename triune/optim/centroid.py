@@ -90,6 +90,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
         muon_momentum=getattr(defaults, "MUON_MOMENTUM", 0.95),
         muon_weight_decay=getattr(defaults, "MUON_WEIGHT_DECAY", 0.01),
         muon_ns_steps=getattr(defaults, "MUON_NS_STEPS", 3),
+        muon_rms_target: float | None = None,
         svd_device="auto",
         use_triangular_core=getattr(defaults, "USE_TRIANGULAR_CORE", True),
         use_8bit_base: bool = getattr(defaults, "USE_8BIT_BASE", False),
@@ -400,6 +401,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                 momentum=muon_momentum,
                 weight_decay=muon_weight_decay,
                 ns_steps=muon_ns_steps,
+                rms_target=muon_rms_target,
             )
         else:
             self.muon_optimizer = None
@@ -607,10 +609,19 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                 G_stack = G_raw if m <= n else G_raw.transpose(1, 2)  # [K, d_small, d_large]
 
                 init_flags = [g.get("Q_L") is None for g in g_list]
-                upd_flags = [
-                    (not init_flags[b_idx]) and ((self.step_count - g.get("proj_step", 0)) >= self.update_gap)
-                    for b_idx, g in enumerate(g_list)
-                ]
+                upd_flags = []
+                for b_idx, g in enumerate(g_list):
+                    if init_flags[b_idx]:
+                        upd_flags.append(False)
+                        continue
+                    steps_since_proj = self.step_count - g.get("proj_step", 0)
+                    time_refresh = steps_since_proj >= self.update_gap
+                    energy_refresh = (
+                        self.adaptive_subspace_refresh
+                        and steps_since_proj >= self.min_subspace_gap
+                        and float(g.get("last_energy_ratio", 1.0)) < self.energy_threshold
+                    )
+                    upd_flags.append(time_refresh or energy_refresh)
                 any_refresh = any(init_flags) or any(upd_flags)
 
                 if any_refresh:

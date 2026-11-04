@@ -25,6 +25,7 @@ class GumbelSoftmaxRouter(nn.Module):
         if abs(target_tensor.sum().item() - 1.0) > 1e-4:
             raise ValueError(f"target_depth_dist must sum to 1.0, got {target_tensor.sum().item():.4f}")
         self.register_buffer("target_dist", target_tensor)
+        self.register_buffer("router_bias", torch.zeros(3, dtype=torch.float32))
 
     @property
     def target_depth_dist(self) -> torch.Tensor:
@@ -57,28 +58,34 @@ class GumbelSoftmaxRouter(nn.Module):
             return raw_logits, y_route, balance_loss
 
         if self.training:
-            logits = raw_logits
+            # DeepSeek-V3 style decoupled selection: biased logits guide selection, raw logits preserve true gradients
+            selection_logits = raw_logits + self.router_bias.to(raw_logits.device)
             # 1. Sample standard Gumbel noise: G = -log(-log(U)) where U ~ Uniform(0,1)
-            unif = torch.rand_like(logits)
+            unif = torch.rand_like(selection_logits)
             gumbels = -torch.log(-torch.log(unif + 1e-20) + 1e-20)
 
             # 2. Compute continuous relaxed softmax
-            y_soft = F.softmax((logits + gumbels) / temperature, dim=-1)
+            y_soft = F.softmax((raw_logits + gumbels) / temperature, dim=-1)
 
-            # 3. Discretization using Straight-Through (ST) estimator
-            index = y_soft.argmax(dim=-1, keepdim=True)
-            y_hard = torch.zeros_like(logits).scatter_(-1, index, 1.0)
+            # 3. Discretization using Straight-Through (ST) estimator guided by biased selection
+            index = (selection_logits + gumbels).argmax(dim=-1, keepdim=True)
+            y_hard = torch.zeros_like(raw_logits).scatter_(-1, index, 1.0)
 
             # Straight-through gradient identity block
             y_route = y_hard + y_soft - y_soft.detach()
+
+            # Dynamic auxiliary-loss-free bias tracking
+            with torch.no_grad():
+                routing_mean_det = y_route.detach().mean(dim=0)
+                self.router_bias.add_(-(routing_mean_det - self.target_dist) * 0.01).clamp_(-2.0, 2.0)
         else:
-            logits = raw_logits
+            selection_logits = raw_logits + self.router_bias.to(raw_logits.device)
             # Greedy inference path (deterministic argmax)
-            index = logits.argmax(dim=-1)
+            index = selection_logits.argmax(dim=-1)
             y_route = F.one_hot(index, num_classes=3).float()
 
         # Compute Load Balancing Regularization loss natively in the forward pass (unweighted MSE)
         routing_mean = y_route.mean(dim=0)
         balance_loss = (routing_mean - self.target_dist).pow(2).mean()
 
-        return logits, y_route, balance_loss
+        return raw_logits, y_route, balance_loss

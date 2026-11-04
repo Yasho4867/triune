@@ -124,11 +124,12 @@ def _pytorch_chunk_gla(q, k, v, g, initial_state=None, chunk_size: int = 64):
 
 
 class VectorisedGLA(nn.Module):
-    def __init__(self, dim, heads, head_dim=GLA_HEAD_DIM):
+    def __init__(self, dim, heads, head_dim=GLA_HEAD_DIM, use_delta_rule: bool = False):
         super().__init__()
         self.dim = dim
         self.heads = heads
         self.head_dim = head_dim
+        self.use_delta_rule = use_delta_rule
         self.hidden_dim = heads * head_dim
         self.q_proj = nn.Linear(dim, self.hidden_dim, bias=False)
         self.k_proj = nn.Linear(dim, self.hidden_dim, bias=False)
@@ -217,7 +218,11 @@ class VectorisedGLA(nn.Module):
         q = qk[:, :, 0]
         k = qk[:, :, 1]
 
-        if HAS_FLA and x.is_cuda:
+        if self.use_delta_rule:
+            from triune.kernels.fast_gla import fast_chunk_gated_deltanet
+
+            out, final_state = fast_chunk_gated_deltanet(q, k, v, g, initial_state=initial_state)
+        elif HAS_FLA and x.is_cuda:
             # FLA consumes [batch, sequence, heads, head_dim]. The prompt/prefill
             # uses the chunk kernel and MUST return its recurrent state; decode
             # then advances that state with the fused single-step kernel.
@@ -263,14 +268,15 @@ class VectorisedGLA(nn.Module):
 
 
 class HybridAttention(nn.Module):
-    def __init__(self, dim, heads, use_fp4=False, use_fp8=False):
+    def __init__(self, dim, heads, use_fp4=False, use_fp8=False, use_delta_rule=False):
         super().__init__()
         self.dim = dim
         self.heads = heads
         self.use_fp4 = use_fp4
         self.use_fp8 = use_fp8
+        self.use_delta_rule = use_delta_rule
         head_dim = dim // heads if (heads > 0 and dim % heads == 0) else GLA_HEAD_DIM
-        self.gla = VectorisedGLA(dim, heads, head_dim)
+        self.gla = VectorisedGLA(dim, heads, head_dim, use_delta_rule=use_delta_rule)
 
     def forward(self, x, cache=None):
         return self.gla(x, cache)

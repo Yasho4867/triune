@@ -743,7 +743,7 @@ Evaluated over the document-isolated held-out validation set (2,560 tokens) at i
 1. **Full 3-Tier Synergy in MoE Architectures**:
    - In `UniversalMoETransformer`, Tier 2 (CentroidSteer) is fully populated with **$35,389,440$ parameters** across 8 layers of routed experts.
    - Unlike dense models where Tier 2 contains 0 parameters, the MoE architecture exercises all three optimization regimes simultaneously: Muon on 2D attention matrices, Centroid Steering on routed expert MLPs, and fused AdamW on router gates and vocabulary embeddings.
-   - The Full Triune MoE stack achieves a final validation loss of **{tri_fin}**, substantially outperforming Standard AdamW ({adam_fin}) and performing within statistical parity of the Muon + AdamW baseline ({muon_fin}), while achieving the highest convergence efficiency ({agg_tri.get('convergence_efficiency', {}).get('mean', 0):.4f} loss/s) and fastest steady-state step latency ({agg_tri.get('steady_state_step_ms', {}).get('mean', 0):.2f} ms).
+   - The Full Triune MoE stack achieves a final validation loss of **{tri_fin}**, substantially outperforming Standard AdamW ({adam_fin}) and performing within statistical parity of the Muon + AdamW baseline ({muon_fin}), while achieving the highest convergence efficiency ({agg_tri.get("convergence_efficiency", {}).get("mean", 0):.4f} loss/s) and fastest steady-state step latency ({agg_tri.get("steady_state_step_ms", {}).get("mean", 0):.2f} ms).
 
 2. **Centroid Steering Acceleration on Sparse Experts**:
    - Dynamic router centroid steering ($R$) accelerates multi-expert convergence by projecting updates into the subspace aligned with expert token assignments.

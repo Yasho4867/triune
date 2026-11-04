@@ -93,6 +93,7 @@ class Muon(Optimizer):
         weight_decay: float = 0.01,
         nesterov: bool = True,
         ns_steps: int = 3,
+        rms_target: float | None = None,
     ):
         defaults = dict(
             lr=lr,
@@ -100,6 +101,7 @@ class Muon(Optimizer):
             weight_decay=weight_decay,
             nesterov=nesterov,
             ns_steps=ns_steps,
+            rms_target=rms_target,
         )
         super().__init__(params, defaults)
         for group in self.param_groups:
@@ -167,7 +169,9 @@ class Muon(Optimizer):
             for (shape, device, dtype), items in buckets.items():
                 K = len(items)
                 d_out, d_in = shape
-                scale = max(1.0, d_out / d_in) ** 0.5
+                from triune.kernels.fast_muon import compute_muon_update_scale
+
+                scale = compute_muon_update_scale(d_out, d_in, rms_target=group.get("rms_target"))
                 if K >= 2:
                     mom_stack = torch.stack([m for _, _, m, _ in items], dim=0)
                     if nesterov:

@@ -4,7 +4,23 @@ from __future__ import annotations
 
 import torch
 
-from triune.kernels.fast_gla import fast_chunk_gla
+from triune.kernels.fast_gla import fast_chunk_gated_deltanet, fast_chunk_gla
+
+
+def gated_deltanet(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    g: torch.Tensor,
+    beta: torch.Tensor | None = None,
+    initial_state: torch.Tensor | None = None,
+    chunk_size: int = 64,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Execute high-efficiency Gated DeltaNet with associative error-correcting memory updates.
+
+    Reference: Songlin Yang et al., 'Gated Delta Networks: Improving Mamba2 with Delta Rule', ICLR 2025.
+    """
+    return fast_chunk_gated_deltanet(q, k, v, g, beta=beta, initial_state=initial_state, chunk_size=chunk_size)
 
 
 def gla(

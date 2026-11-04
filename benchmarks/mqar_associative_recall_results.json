@@ -1,0 +1,98 @@
+[
+  {
+    "model_type": "softmax",
+    "seq_len": 256,
+    "num_kv_pairs": 8,
+    "accuracy": 0.0,
+    "latency_ms": 17.56,
+    "peak_vram_mb": 40.6
+  },
+  {
+    "model_type": "gla",
+    "seq_len": 256,
+    "num_kv_pairs": 8,
+    "accuracy": 0.0,
+    "latency_ms": 504.03,
+    "peak_vram_mb": 75.3
+  },
+  {
+    "model_type": "gated_deltanet",
+    "seq_len": 256,
+    "num_kv_pairs": 8,
+    "accuracy": 0.0,
+    "latency_ms": 178.68,
+    "peak_vram_mb": 111.0
+  },
+  {
+    "model_type": "softmax",
+    "seq_len": 512,
+    "num_kv_pairs": 16,
+    "accuracy": 0.0,
+    "latency_ms": 0.28,
+    "peak_vram_mb": 44.6
+  },
+  {
+    "model_type": "gla",
+    "seq_len": 512,
+    "num_kv_pairs": 16,
+    "accuracy": 0.0,
+    "latency_ms": 2.52,
+    "peak_vram_mb": 113.9
+  },
+  {
+    "model_type": "gated_deltanet",
+    "seq_len": 512,
+    "num_kv_pairs": 16,
+    "accuracy": 0.0,
+    "latency_ms": 240.77,
+    "peak_vram_mb": 185.0
+  },
+  {
+    "model_type": "softmax",
+    "seq_len": 1024,
+    "num_kv_pairs": 32,
+    "accuracy": 0.0,
+    "latency_ms": 0.28,
+    "peak_vram_mb": 52.7
+  },
+  {
+    "model_type": "gla",
+    "seq_len": 1024,
+    "num_kv_pairs": 32,
+    "accuracy": 0.0,
+    "latency_ms": 78.93,
+    "peak_vram_mb": 190.9
+  },
+  {
+    "model_type": "gated_deltanet",
+    "seq_len": 1024,
+    "num_kv_pairs": 32,
+    "accuracy": 0.0,
+    "latency_ms": 596.94,
+    "peak_vram_mb": 333.1
+  },
+  {
+    "model_type": "softmax",
+    "seq_len": 2048,
+    "num_kv_pairs": 64,
+    "accuracy": 0.0,
+    "latency_ms": 0.54,
+    "peak_vram_mb": 68.9
+  },
+  {
+    "model_type": "gla",
+    "seq_len": 2048,
+    "num_kv_pairs": 64,
+    "accuracy": 0.0,
+    "latency_ms": 3.48,
+    "peak_vram_mb": 345.1
+  },
+  {
+    "model_type": "gated_deltanet",
+    "seq_len": 2048,
+    "num_kv_pairs": 64,
+    "accuracy": 0.0,
+    "latency_ms": 1013.05,
+    "peak_vram_mb": 629.1
+  }
+]

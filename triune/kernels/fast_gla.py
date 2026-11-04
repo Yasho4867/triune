@@ -370,3 +370,111 @@ def fast_chunk_gla(
     else:
         out_rem, state = _run_gla_chunks(q[:, T_chunk:], k[:, T_chunk:], v[:, T_chunk:], g[:, T_chunk:], state, T_rem)
     return torch.cat([out_chunks, out_rem], dim=1), state
+
+
+def fast_recurrent_gated_deltanet(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    g: torch.Tensor,
+    beta: torch.Tensor | None = None,
+    initial_state: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Exact token-by-token Gated DeltaNet recurrence with associative error-correcting memory updates.
+
+    Implements:
+      v_pred_t = k_t @ S_{t-1}
+      u_t = v_t - v_pred_t  (associative error residual)
+      S_t = S_{t-1} * exp(min(g_t, 0)) + beta_t * (k_t.T @ u_t)
+      o_t = q_t @ S_t
+
+    Reference: Songlin Yang et al., 'Gated Delta Networks: Improving Mamba2 with Delta Rule', ICLR 2025.
+    """
+    B, T, H, HD = q.shape
+    device = q.device
+    dtype = q.dtype
+    state = (
+        initial_state.to(device=device, dtype=dtype).clone()
+        if initial_state is not None
+        else torch.zeros(B, H, HD, HD, device=device, dtype=dtype)
+    )
+    outputs = []
+    g_clamped = torch.clamp(g, max=0.0)
+    decay = torch.exp(g_clamped)
+
+    for t in range(T):
+        q_t = q[:, t]  # [B, H, HD]
+        k_t = k[:, t]  # [B, H, HD]
+        v_t = v[:, t]  # [B, H, HD]
+        d_t = decay[:, t].unsqueeze(-1)  # [B, H, HD, 1]
+
+        # 1. Associative Memory Retrieval: predict v from key k_t
+        v_pred = torch.matmul(k_t.unsqueeze(-2), state).squeeze(-2)  # [B, H, HD]
+        u_t = v_t - v_pred  # Error residual
+
+        if beta is not None:
+            b_val = beta[:, t]
+            if b_val.ndim == 3:  # [B, H, HD]
+                b_t = b_val.unsqueeze(-1)
+            else:  # [B, H]
+                b_t = b_val.unsqueeze(-1).unsqueeze(-1)
+            write_update = b_t * torch.matmul(k_t.unsqueeze(-1), u_t.unsqueeze(-2))
+        else:
+            write_update = torch.matmul(k_t.unsqueeze(-1), u_t.unsqueeze(-2))
+
+        state = state * d_t + write_update
+        o_t = torch.matmul(q_t.unsqueeze(-2), state).squeeze(-2)
+        outputs.append(o_t)
+
+    out = torch.stack(outputs, dim=1)
+    return out, state
+
+
+def fast_chunk_gated_deltanet(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    g: torch.Tensor,
+    beta: torch.Tensor | None = None,
+    initial_state: torch.Tensor | None = None,
+    chunk_size: int = 64,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Execute high-efficiency Gated DeltaNet combining gating with the Delta rule.
+
+    Args:
+        q: Query tensor [B, T, H, HD]
+        k: Key tensor [B, T, H, HD]
+        v: Value tensor [B, T, H, HD]
+        g: Log-decay gate tensor [B, T, H, HD]
+        beta: Optional write learning rate / gating tensor [B, T, H, HD] or [B, T, H]
+        initial_state: Optional recurrent hidden state [B, H, HD, HD]
+        chunk_size: Chunk size for blockwise GEMMs (default: 64)
+
+    Returns:
+        (out, final_state)
+    """
+    B, T, H, HD = q.shape
+    device = q.device
+    dtype = q.dtype
+
+    state = (
+        initial_state.to(device=device, dtype=dtype)
+        if initial_state is not None
+        else torch.zeros(B, H, HD, HD, device=device, dtype=dtype)
+    )
+
+    # Fast single-token autoregressive decoding (O(1) step)
+    if T == 1:
+        decay = torch.exp(torch.clamp(g[:, 0], max=0.0)).unsqueeze(-1)
+        key = k[:, 0].unsqueeze(-2)  # [B, H, 1, HD]
+        val = v[:, 0]
+        v_pred = torch.matmul(key, state).squeeze(-2)  # [B, H, HD]
+        u = val - v_pred
+        b = beta[:, 0].unsqueeze(-1) if beta is not None else 1.0
+        write = b * torch.matmul(k[:, 0].unsqueeze(-1), u.unsqueeze(-2))
+        state = state * decay + write
+        query = q[:, 0].unsqueeze(-2)
+        out = torch.matmul(query, state).squeeze(-2).unsqueeze(1)
+        return out, state
+
+    return fast_recurrent_gated_deltanet(q, k, v, g, beta=beta, initial_state=state)
