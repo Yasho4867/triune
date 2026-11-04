@@ -144,16 +144,37 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
         # Build unified explicit parameter role dictionary
         explicit_param_roles: dict[int, str] = {}
         if self.param_roles:
+            import fnmatch
+
             named_map = dict(model.named_parameters()) if isinstance(model, torch.nn.Module) else {}
             for k_role, r_val in self.param_roles.items():
                 r_val_norm = str(r_val).lower().strip()
                 if isinstance(k_role, str):
-                    if k_role in named_map:
+                    if "*" in k_role or "?" in k_role or "[" in k_role:
+                        matched_any = False
+                        for p_name, p_tensor in named_map.items():
+                            if fnmatch.fnmatch(p_name, k_role):
+                                explicit_param_roles[id(p_tensor)] = r_val_norm
+                                matched_any = True
+                        if not matched_any:
+                            raise KeyError(f"param_roles wildcard pattern '{k_role}' matched zero model parameters.")
+                    elif k_role in named_map:
                         explicit_param_roles[id(named_map[k_role])] = r_val_norm
                     else:
-                        for p_name, p_tensor in named_map.items():
-                            if p_name.endswith(k_role) or p_name == k_role:
-                                explicit_param_roles[id(p_tensor)] = r_val_norm
+                        # Reject ambiguous suffix matches while providing clear error diagnosis
+                        matching_suffixes = [p_name for p_name in named_map if p_name.endswith(f".{k_role}")]
+                        if len(matching_suffixes) > 1:
+                            raise ValueError(
+                                f"param_roles key '{k_role}' is ambiguous and matches multiple parameters: {matching_suffixes}. "
+                                f"Use exact full parameter names or explicit wildcards (e.g. '*{k_role}')."
+                            )
+                        elif len(matching_suffixes) == 1:
+                            explicit_param_roles[id(named_map[matching_suffixes[0]])] = r_val_norm
+                        else:
+                            raise KeyError(
+                                f"param_roles key '{k_role}' is not an exact parameter name. "
+                                f"Use exact full parameter names or explicit wildcards (e.g. '*{k_role}')."
+                            )
                 elif isinstance(k_role, (torch.nn.Parameter, torch.Tensor)):
                     explicit_param_roles[id(k_role)] = r_val_norm
 

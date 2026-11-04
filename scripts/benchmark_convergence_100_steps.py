@@ -115,12 +115,13 @@ def get_hardware_info(device: torch.device) -> Dict[str, Any]:
     }
 
 
-def load_fineweb_tokens(
+def load_fineweb_documents(
     data_path: Path,
     tokenizer_path: Path,
-    required_tokens: int = 100000,
-) -> Tuple[List[int], Dict[str, Any]]:
-    """Loads and tokenizes genuine FineWeb-Edu educational samples with document boundary packing."""
+    num_val_docs: int = 15,
+    required_tokens: int = 120000,
+) -> Tuple[List[int], List[int], Dict[str, Any]]:
+    """Loads genuine FineWeb-Edu educational samples, strictly partitions documents, and tokenizes splits independently."""
     real_path = REPO_ROOT / "data" / "fineweb_edu_real.jsonl"
     if real_path.is_file():
         data_path = real_path
@@ -131,21 +132,39 @@ def load_fineweb_tokens(
     from tokenizers import Tokenizer
 
     tok = Tokenizer.from_file(str(tokenizer_path))
-    sep_token_id = 3  # [SEP] token in triune_tokenizer.json for clean document boundary packing
+    sep_token_id = tok.token_to_id("[SEP]") if hasattr(tok, "token_to_id") else 3
+    if sep_token_id is None:
+        sep_token_id = 3
 
-    tokens: List[int] = []
+    docs: List[str] = []
     with open(data_path, "r", encoding="utf-8") as f:
         for line in f:
             if not line.strip():
                 continue
             item = json.loads(line)
             text = item.get("text", "")
-            doc_tokens = tok.encode(text).ids
-            if doc_tokens:
-                tokens.extend(doc_tokens)
-                tokens.append(sep_token_id)
-            if len(tokens) >= required_tokens:
-                break
+            if text.strip():
+                docs.append(text)
+
+    # Document-level split: reserve last num_val_docs documents for validation
+    val_docs = docs[-num_val_docs:]
+    train_docs = docs[:-num_val_docs]
+
+    train_tokens: List[int] = []
+    for d in train_docs:
+        enc = tok.encode(d).ids
+        if enc:
+            train_tokens.extend(enc)
+            train_tokens.append(sep_token_id)
+        if len(train_tokens) >= required_tokens:
+            break
+
+    val_tokens: List[int] = []
+    for d in val_docs:
+        enc = tok.encode(d).ids
+        if enc:
+            val_tokens.extend(enc)
+            val_tokens.append(sep_token_id)
 
     meta = {
         "dataset_name": "HuggingFaceFW/fineweb-edu (sample-10BT)",
@@ -153,9 +172,56 @@ def load_fineweb_tokens(
         "dataset_sha256": compute_sha256(data_path),
         "tokenizer_path": str(tokenizer_path.relative_to(REPO_ROOT)),
         "tokenizer_sha256": compute_sha256(tokenizer_path),
-        "total_tokens_loaded": len(tokens),
+        "total_documents_read": len(docs),
+        "train_documents_count": len(train_docs),
+        "val_documents_count": len(val_docs),
+        "train_tokens_packed": len(train_tokens),
+        "val_tokens_packed": len(val_tokens),
+        "separator_token_id": sep_token_id,
     }
-    return tokens, meta
+    return train_tokens, val_tokens, meta
+
+
+def create_optimizer(
+    model: torch.nn.Module,
+    optimizer_type: str,
+    lr: float = 1e-3,
+    use_8bit_base: bool = False,
+):
+    """Instantiates the specified optimizer regime."""
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    if optimizer_type == "adamw":
+        return torch.optim.AdamW(trainable_params, lr=lr, weight_decay=0.01)
+    elif optimizer_type == "bnb_8bit":
+        if bnb is None or not hasattr(bnb.optim, "AdamW8bit"):
+            raise RuntimeError("bitsandbytes AdamW8bit is required for bnb_8bit regime")
+        return bnb.optim.AdamW8bit(trainable_params, lr=lr, weight_decay=0.01)
+    elif optimizer_type == "muon":
+        return CentroidSteerOptimizer(
+            model,
+            lr=lr,
+            muon_lr=0.002,
+            weight_decay=0.01,
+            use_muon=True,
+            steer_scale=0.0,
+            use_8bit_base=use_8bit_base,
+        )
+    elif optimizer_type == "centroid_no_muon":
+        return CentroidSteerOptimizer(
+            model, lr=lr, weight_decay=0.01, use_muon=False, steer_scale=0.20, use_8bit_base=use_8bit_base
+        )
+    elif optimizer_type == "centroid_steer":
+        return CentroidSteerOptimizer(
+            model,
+            lr=lr,
+            muon_lr=0.002,
+            weight_decay=0.01,
+            use_muon=True,
+            steer_scale=0.20,
+            use_8bit_base=use_8bit_base,
+        )
+    else:
+        raise ValueError(f"Unknown optimizer_type: {optimizer_type}")
 
 
 def evaluate_validation_loss(
@@ -211,7 +277,7 @@ def run_single_seed_run(
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats(device)
 
-    # 1. Instantiate model and load IDENTICAL step-0 weights
+    # 1. Instantiate model and load initial weights
     model = UniversalDenseTransformer(
         vocab_size=vocab_size,
         dim=dim,
@@ -222,42 +288,33 @@ def run_single_seed_run(
     model.load_state_dict(copy.deepcopy(initial_state_dict))
     model.train()
 
-    # 2. Instantiate Optimizer
-    trainable_params = [p for p in model.parameters() if p.requires_grad]
-    if optimizer_type == "adamw":
-        optimizer = torch.optim.AdamW(trainable_params, lr=1e-3, weight_decay=0.01)
-    elif optimizer_type == "bnb_8bit":
-        if bnb is None or not hasattr(bnb.optim, "AdamW8bit"):
-            raise RuntimeError("bitsandbytes AdamW8bit is required for bnb_8bit regime")
-        optimizer = bnb.optim.AdamW8bit(trainable_params, lr=1e-3, weight_decay=0.01)
-    elif optimizer_type == "muon":
-        optimizer = CentroidSteerOptimizer(
-            model,
-            lr=1e-3,
-            muon_lr=0.002,
-            weight_decay=0.01,
-            use_muon=True,
-            steer_scale=0.0,
-            use_8bit_base=use_8bit_base,
-        )
-    elif optimizer_type == "centroid_no_muon":
-        optimizer = CentroidSteerOptimizer(
-            model, lr=1e-3, weight_decay=0.01, use_muon=False, steer_scale=0.20, use_8bit_base=use_8bit_base
-        )
-    elif optimizer_type == "centroid_steer":
-        optimizer = CentroidSteerOptimizer(
-            model,
-            lr=1e-3,
-            muon_lr=0.002,
-            weight_decay=0.01,
-            use_muon=True,
-            steer_scale=0.20,
-            use_8bit_base=use_8bit_base,
-        )
-    else:
-        raise ValueError(f"Unknown optimizer_type: {optimizer_type}")
+    # 2. Pre-warmup step to compile CUDA/Triton kernels and initialize memory pools
+    optimizer = create_optimizer(model, optimizer_type, lr=1e-3, use_8bit_base=use_8bit_base)
+    if len(train_batches) > 0:
+        warmup_x, warmup_y = train_batches[0]
+        optimizer.zero_grad(set_to_none=True)
+        if regime_name == "triune" and loss_mode == "fused_triune":
+            w_hidden, _ = model(warmup_x, return_hidden=True)
+            w_loss = chunked_cross_entropy_from_hidden(w_hidden, model.lm_head.weight, warmup_y)
+        else:
+            w_out = model(warmup_x)
+            w_logits = w_out[0] if isinstance(w_out, tuple) else w_out
+            w_loss = F.cross_entropy(w_logits.reshape(-1, vocab_size).float(), warmup_y.reshape(-1))
+        w_loss.backward()
+        optimizer.step()
+        optimizer.zero_grad(set_to_none=True)
+
+    # 3. Reload identical initial weights and re-create fresh optimizer for timed benchmark
+    model.load_state_dict(copy.deepcopy(initial_state_dict))
+    optimizer = create_optimizer(model, optimizer_type, lr=1e-3, use_8bit_base=use_8bit_base)
+
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats(device)
+        torch.cuda.synchronize(device)
 
     # Track parameter tier distribution
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
     if isinstance(optimizer, CentroidSteerOptimizer):
         tier1_muon_params = sum(p.numel() for p in getattr(optimizer, "muon_params", []))
         tier2_centroid_params = sum(g["param"].numel() for g in getattr(optimizer, "layer_groups", []))
@@ -677,9 +734,9 @@ def main():
     parser.add_argument("--use-8bit-base", action="store_true", help="Use BitsAndBytes 8-bit AdamW as base optimizer")
     parser.add_argument(
         "--include-ablation",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=True,
-        help="Include Muon and CentroidSteer component ablations",
+        help="Include Muon and CentroidSteer component ablations (toggle with --no-include-ablation)",
     )
     parser.add_argument("--use-gla", action="store_true", help="Use Gated Linear Attention across all regimes")
     args = parser.parse_args()
@@ -706,7 +763,26 @@ def main():
     )
     print("================================================================================")
 
-    tokens, dataset_meta = load_fineweb_tokens(data_path, tokenizer_path)
+    train_tokens, val_tokens, dataset_meta = load_fineweb_documents(data_path, tokenizer_path, num_val_docs=15)
+
+    repro_parts = [
+        "python scripts/benchmark_convergence_100_steps.py",
+        f"--steps {args.steps}",
+        f"--batch-size {args.batch_size}",
+        f"--seq-len {args.seq_len}",
+        f"--val-interval {args.val_interval}",
+        f"--seeds {' '.join(str(s) for s in args.seeds)}",
+        f"--num-val-batches {args.num_val_batches}",
+        f"--loss-mode {args.loss_mode}",
+    ]
+    if args.use_8bit_base:
+        repro_parts.append("--use-8bit-base")
+    if args.include_ablation:
+        repro_parts.append("--include-ablation")
+    else:
+        repro_parts.append("--no-include-ablation")
+    if args.use_gla:
+        repro_parts.append("--use-gla")
 
     provenance = {
         "git_commit": git_commit,
@@ -736,10 +812,7 @@ def main():
             "loss_function": "torch.nn.functional.cross_entropy",
             "loss_mode": args.loss_mode,
         },
-        "reproduction_command": (
-            f"python scripts/benchmark_convergence_100_steps.py --steps {args.steps} "
-            f"--seeds {' '.join(str(s) for s in args.seeds)} --num-val-batches {args.num_val_batches} --include-ablation"
-        ),
+        "reproduction_command": " ".join(repro_parts),
     }
 
     if args.include_ablation:
@@ -758,14 +831,13 @@ def main():
         ]
 
     tok_per_batch = args.batch_size * (args.seq_len + 1)
-    val_tokens_needed = args.num_val_batches * tok_per_batch
-    train_tokens_pool = tokens[:-val_tokens_needed]
-    val_tokens_pool = tokens[-val_tokens_needed:]
 
-    # Prepare fixed held-out validation batches
+    # Prepare document-isolated held-out validation batches
     val_batches: List[Tuple[torch.Tensor, torch.Tensor]] = []
     for b_idx in range(args.num_val_batches):
-        v_chunk = val_tokens_pool[b_idx * tok_per_batch : (b_idx + 1) * tok_per_batch]
+        v_chunk = val_tokens[b_idx * tok_per_batch : (b_idx + 1) * tok_per_batch]
+        if len(v_chunk) < tok_per_batch:
+            break
         v_tensor = torch.tensor(v_chunk, dtype=torch.long, device=device).reshape(args.batch_size, args.seq_len + 1)
         val_batches.append((v_tensor[:, :-1], v_tensor[:, 1:]))
 
@@ -782,7 +854,6 @@ def main():
         print(f" >>> STARTING SEED {seed}")
         print("=======================================================")
 
-        # Deterministically slice training batches for this seed
         torch.manual_seed(seed)
         if device.type == "cuda":
             torch.cuda.manual_seed_all(seed)
@@ -799,18 +870,25 @@ def main():
         del ref_model
         gc.collect()
 
-        # Slice train batches
+        # Slice train batches deterministically from document-partitioned train tokens
         train_batches: List[Tuple[torch.Tensor, torch.Tensor]] = []
-        cursor = (seed * 1024) % max(1, len(train_tokens_pool) - (args.steps * tok_per_batch))
+        cursor = (seed * 1024) % max(1, len(train_tokens) - (args.steps * tok_per_batch))
         for _ in range(args.steps):
-            if cursor + tok_per_batch > len(train_tokens_pool):
+            if cursor + tok_per_batch > len(train_tokens):
                 cursor = 0
-            chunk = train_tokens_pool[cursor : cursor + tok_per_batch]
+            chunk = train_tokens[cursor : cursor + tok_per_batch]
             cursor += tok_per_batch
             t_seq = torch.tensor(chunk, dtype=torch.long, device=device).reshape(args.batch_size, args.seq_len + 1)
             train_batches.append((t_seq[:, :-1], t_seq[:, 1:]))
 
-        for regime_name, opt_type in regimes:
+        # Randomize regime execution order for this seed to prevent order bias
+        import random
+
+        rng = random.Random(seed)
+        seed_regimes = list(regimes)
+        rng.shuffle(seed_regimes)
+
+        for regime_name, opt_type in seed_regimes:
             run_res = run_single_seed_run(
                 seed=seed,
                 regime_name=regime_name,
@@ -865,7 +943,7 @@ def main():
             results.append(primary_run)
 
     artifact_payload = {
-        "schema_version": "2.2.0",
+        "schema_version": "2.3.0",
         "benchmark_name": "convergence_100_steps_multiseed_ablation",
         "timestamp_utc": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
         "provenance": provenance,

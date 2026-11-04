@@ -4,7 +4,7 @@
 
 ## Key Capabilities & Pillars
 
-- **Gated Linear Attention (GLA)**: $O(N)$ linear-time complexity and strictly constant $O(1)$ memory (`48–64 KB`) recurrent decoding with native BF16 Tensor Core intra-chunk GEMM, logarithmic Hillis-Steele parallel prefix scan ($O(\log_2 N_c)$), and batched inter-chunk Tensor Core GEMMs, providing a **256x–512x smaller recurrent cache** and up to **7.94x faster autoregressive decoding** at long contexts ($L=16,384$) than standard Softmax KV-caching.
+- **Gated Linear Attention (GLA)**: $O(N)$ linear-time complexity and strictly constant $O(1)$ memory (`48–64 KB`) recurrent decoding with native BF16 Tensor Core intra-chunk GEMM, fused chunkwise recurrent Triton scan for autograd training (eliminating intermediate PyTorch graph node allocations), and logarithmic parallel prefix scan for inference, providing a **256x–512x smaller recurrent cache** and up to **7.94x faster autoregressive decoding** at long contexts ($L=16,384$) than standard Softmax KV-caching.
 - **Sparse Mixture of Experts (MoE)**: Batched 3D BMM top-$k$ expert routing with an always-active shared expert, zero-sync GPU overflow counters, and activation centroid tracking.
 - **Hierarchical Dynamic Exits**: Calibrated intermediate exit heads (**Reflex**, **Limbic**) and full-depth exit (**Cortex**), variance-matched via parameter-free `RMSNorm`, delivering a **3.6x–4.3x inference speedup** (`299,506 tok/s` forward throughput) on low-entropy tokens.
 - **3-Tier Partitioned Optimizer (`CentroidSteerOptimizer`)**:

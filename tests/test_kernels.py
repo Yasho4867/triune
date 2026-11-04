@@ -367,15 +367,26 @@ class TestKernelSuite(unittest.TestCase):
                             self.assertIsNotNone(s1.grad)
                             self.assertFalse(torch.isnan(s1.grad).any())
 
-                        # Numerical parity verification against reference recurrence for T <= 8
-                        if T <= 8:
-                            q2 = q1.detach().clone().requires_grad_(True)
-                            k2 = k1.detach().clone().requires_grad_(True)
-                            v2 = v1.detach().clone().requires_grad_(True)
-                            g2 = g1.detach().clone().requires_grad_(True)
-                            s2 = s1.detach().clone().requires_grad_(True) if s1 is not None else None
+                        # Numerical parity verification against reference recurrence
+                        q2 = q1.detach().clone().requires_grad_(True)
+                        k2 = k1.detach().clone().requires_grad_(True)
+                        v2 = v1.detach().clone().requires_grad_(True)
+                        g2 = g1.detach().clone().requires_grad_(True)
+                        s2 = s1.detach().clone().requires_grad_(True) if s1 is not None else None
 
-                            out_ref, fin_ref = _ref_gla(q2, k2, v2, g2, init_s=s2)
+                        out_ref, fin_ref = _ref_gla(q2, k2, v2, g2, init_s=s2)
+
+                        # Cosine similarity check across all sequence lengths (T=1..70)
+                        cos_out = torch.nn.functional.cosine_similarity(
+                            out_tri.float().flatten(), out_ref.float().flatten(), dim=0
+                        ).item()
+                        cos_fin = torch.nn.functional.cosine_similarity(
+                            fin_tri.float().flatten(), fin_ref.float().flatten(), dim=0
+                        ).item()
+                        self.assertGreater(cos_out, 0.995, f"T={T}: out cosine similarity {cos_out} < 0.995")
+                        self.assertGreater(cos_fin, 0.995, f"T={T}: fin cosine similarity {cos_fin} < 0.995")
+
+                        if T <= 8:
                             torch.testing.assert_close(out_tri, out_ref, atol=0.25, rtol=0.25)
                             torch.testing.assert_close(fin_tri, fin_ref, atol=0.25, rtol=0.25)
 
@@ -384,6 +395,43 @@ class TestKernelSuite(unittest.TestCase):
                             torch.testing.assert_close(q1.grad, q2.grad, atol=0.35, rtol=0.35)
                             torch.testing.assert_close(k1.grad, k2.grad, atol=0.35, rtol=0.35)
                             torch.testing.assert_close(v1.grad, v2.grad, atol=0.35, rtol=0.35)
+
+            # 3. Final-state-only and Output-only backward flow and extreme magnitude stability
+            for loss_target in ("final_only", "out_only", "extreme_decay"):
+                with self.subTest(loss_target=loss_target, dtype="bfloat16"):
+                    B, T, H, HD = 2, 35, 4, 16
+                    q = torch.randn(B, T, H, HD, device=cuda_dev, dtype=torch.bfloat16, requires_grad=True)
+                    k = torch.randn_like(q, requires_grad=True)
+                    v = torch.randn_like(q, requires_grad=True)
+                    g = (
+                        (-torch.rand_like(q) * 20.0 - 1.0).requires_grad_(True)
+                        if loss_target == "extreme_decay"
+                        else (-torch.rand_like(q) * 2.0 - 0.05).requires_grad_(True)
+                    )
+                    s = torch.randn(B, H, HD, HD, device=cuda_dev, dtype=torch.bfloat16, requires_grad=True)
+
+                    out_tri, fin_tri = fast_chunk_gla(q, k, v, g, initial_state=s, chunk_size=32)
+                    self.assertFalse(torch.isnan(out_tri).any())
+                    self.assertFalse(torch.isnan(fin_tri).any())
+
+                    if loss_target == "final_only":
+                        loss = fin_tri.sum()
+                    elif loss_target == "out_only":
+                        loss = out_tri.sum()
+                    else:
+                        loss = out_tri.sum() + fin_tri.sum()
+
+                    loss.backward()
+                    if loss_target == "final_only":
+                        # In GLA, final recurrent state depends strictly on (k, v, g, s) and is independent of q
+                        self.assertIsNone(q.grad)
+                    else:
+                        self.assertIsNotNone(q.grad)
+                        self.assertFalse(torch.isnan(q.grad).any())
+                    self.assertFalse(torch.isnan(k.grad).any())
+                    self.assertFalse(torch.isnan(v.grad).any())
+                    self.assertFalse(torch.isnan(g.grad).any())
+                    self.assertFalse(torch.isnan(s.grad).any())
 
     def test_kernel_telemetry_and_turbo_mode(self):
         from triune.kernels import get_kernel_telemetry, is_turbo_mode_enabled, set_turbo_mode

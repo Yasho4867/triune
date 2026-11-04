@@ -503,6 +503,30 @@ def test_centroid_steer_parameter_role_classification():
         "Explicit muon param_role must override nn.Embedding classification!"
     )
 
+    # Test explicit wildcard pattern matching (e.g. "hidden*.weight")
+    opt_wildcard = CentroidSteerOptimizer(
+        m,
+        lr=1e-3,
+        param_roles={"hidden*.weight": "expert"},
+    )
+    wildcard_layer_param_ids = {id(g["param"]) for g in opt_wildcard.layer_groups}
+    assert id(m.hidden1.weight) in wildcard_layer_param_ids, "Wildcard pattern must match hidden1.weight!"
+    assert id(m.hidden2.weight) in wildcard_layer_param_ids, "Wildcard pattern must match hidden2.weight!"
+
+    # Test ambiguous bare suffix raises ValueError
+    try:
+        CentroidSteerOptimizer(m, lr=1e-3, param_roles={"weight": "muon"})
+        raise AssertionError("Ambiguous suffix 'weight' must raise ValueError!")
+    except ValueError as e:
+        assert "ambiguous" in str(e).lower(), f"Expected ambiguity error, got: {e}"
+
+    # Test non-existent key raises KeyError
+    try:
+        CentroidSteerOptimizer(m, lr=1e-3, param_roles={"nonexistent_layer": "muon"})
+        raise AssertionError("Non-existent key must raise KeyError!")
+    except KeyError as e:
+        assert "not an exact parameter name" in str(e).lower(), f"Expected KeyError, got: {e}"
+
     # Test anonymous iterable with large aspect-ratio matrix
     large_vocab_matrix = nn.Parameter(torch.randn(32000, 64))
     hidden_matrix = nn.Parameter(torch.randn(64, 128))
