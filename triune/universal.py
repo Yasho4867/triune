@@ -242,33 +242,20 @@ class DenseAttention(nn.Module):
                     q = qkv[..., :q_dim].view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
                     k = qkv[..., q_dim : q_dim + kv_dim].view(B, T, self.num_kv_heads, self.head_dim).transpose(1, 2)
                     v = qkv[..., q_dim + kv_dim :].view(B, T, self.num_kv_heads, self.head_dim).transpose(1, 2)
-            elif can_fuse_base:
-                if self.q_proj.bias is None and self.k_proj.bias is None and self.v_proj.bias is None:
-                    qkv = _FusedBaseQKVFunction.apply(x, self.q_proj.weight, self.k_proj.weight, self.v_proj.weight)
-                else:
-                    W_qkv = torch.cat((self.q_proj.weight, self.k_proj.weight, self.v_proj.weight), dim=0)
-                    b_qkv = (
-                        torch.cat((self.q_proj.bias, self.k_proj.bias, self.v_proj.bias), dim=0)
-                        if self.q_proj.bias is not None
-                        else None
-                    )
-                    qkv = F.linear(x, W_qkv, b_qkv)
-                if self.num_kv_heads == self.num_heads:
-                    q, k, v = qkv.view(B, T, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4).unbind(0)
-                else:
-                    q = qkv[..., :q_dim].view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
-                    k = qkv[..., q_dim : q_dim + kv_dim].view(B, T, self.num_kv_heads, self.head_dim).transpose(1, 2)
-                    v = qkv[..., q_dim + kv_dim :].view(B, T, self.num_kv_heads, self.head_dim).transpose(1, 2)
             else:
                 q = _linear_or_lora(self.q_proj, x).reshape(B, T, self.num_heads, self.head_dim).transpose(1, 2)
                 k = _linear_or_lora(self.k_proj, x).reshape(B, T, self.num_kv_heads, self.head_dim).transpose(1, 2)
                 v = _linear_or_lora(self.v_proj, x).reshape(B, T, self.num_kv_heads, self.head_dim).transpose(1, 2)
 
             if self.num_kv_heads < self.num_heads:
-                k = k.repeat_interleave(self.num_heads // self.num_kv_heads, dim=1)
-                v = v.repeat_interleave(self.num_heads // self.num_kv_heads, dim=1)
-
-            out = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+                try:
+                    out = F.scaled_dot_product_attention(q, k, v, is_causal=True, enable_gqa=True)
+                except TypeError:
+                    k_rep = k.repeat_interleave(self.num_heads // self.num_kv_heads, dim=1)
+                    v_rep = v.repeat_interleave(self.num_heads // self.num_kv_heads, dim=1)
+                    out = F.scaled_dot_product_attention(q, k_rep, v_rep, is_causal=True)
+            else:
+                out = F.scaled_dot_product_attention(q, k, v, is_causal=True)
             out = out.transpose(1, 2).reshape(B, T, -1)
             return _linear_or_lora(self.o_proj, out), None
 
@@ -291,12 +278,6 @@ class DenseMLP(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.act_type == "swiglu":
-            can_fuse_gu_base = (
-                type(self.gate_proj) is nn.Linear
-                and type(self.up_proj) is nn.Linear
-                and not hasattr(self.gate_proj, "lora_A")
-                and not hasattr(self.up_proj, "lora_A")
-            )
             lora_g = _extract_lora_components(self.gate_proj)
             lora_u = _extract_lora_components(self.up_proj)
             can_fuse_gu_lora = (
@@ -316,23 +297,9 @@ class DenseMLP(nn.Module):
                 )
                 gate, up = gu.chunk(2, dim=-1)
                 return _linear_or_lora(self.down_proj, fast_swiglu(gate, up))
-            elif can_fuse_gu_base:
-                if self.gate_proj.bias is None and self.up_proj.bias is None:
-                    gu = _FusedBaseGateUpFunction.apply(x, self.gate_proj.weight, self.up_proj.weight)
-                else:
-                    W_gu = torch.cat((self.gate_proj.weight, self.up_proj.weight), dim=0)
-                    b_gu = (
-                        torch.cat((self.gate_proj.bias, self.up_proj.bias), dim=0)
-                        if self.gate_proj.bias is not None
-                        else None
-                    )
-                    gu = F.linear(x, W_gu, b_gu)
-                gate, up = gu.chunk(2, dim=-1)
-                return _linear_or_lora(self.down_proj, fast_swiglu(gate, up))
-            return _linear_or_lora(
-                self.down_proj,
-                fast_swiglu(_linear_or_lora(self.gate_proj, x), _linear_or_lora(self.up_proj, x)),
-            )
+            gate = _linear_or_lora(self.gate_proj, x)
+            up = _linear_or_lora(self.up_proj, x)
+            return _linear_or_lora(self.down_proj, fast_swiglu(gate, up))
         return _linear_or_lora(self.linear2, self.act(_linear_or_lora(self.linear1, x)))
 
 

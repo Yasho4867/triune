@@ -64,32 +64,32 @@ class _FusedSwiGLUFunction(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
-        ctx.save_for_backward(gate, up)
-        if is_triton_available() and gate.is_cuda and gate.is_contiguous() and up.is_contiguous():
-            n_elements = gate.numel()
-            out = torch.empty_like(gate)
+        if is_triton_available() and gate.is_cuda:
+            g = gate.contiguous() if not gate.is_contiguous() else gate
+            u = up.contiguous() if not up.is_contiguous() else up
+            ctx.save_for_backward(g, u)
+            n_elements = g.numel()
+            out = torch.empty_like(g)
             BLOCK_SIZE = 1024
             grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
-            _triton_swiglu_fwd_kernel[grid](gate, up, out, n_elements, BLOCK_SIZE=BLOCK_SIZE)
+            _triton_swiglu_fwd_kernel[grid](g, u, out, n_elements, BLOCK_SIZE=BLOCK_SIZE)
             return out
+        ctx.save_for_backward(gate, up)
         return _fused_swiglu_fwd(gate, up)
 
     @staticmethod
     def backward(ctx, grad_output: torch.Tensor):
         gate, up = ctx.saved_tensors
-        if (
-            is_triton_available()
-            and grad_output.is_cuda
-            and grad_output.is_contiguous()
-            and gate.is_contiguous()
-            and up.is_contiguous()
-        ):
-            n_elements = gate.numel()
-            grad_gate = torch.empty_like(gate)
-            grad_up = torch.empty_like(up)
+        if is_triton_available() and grad_output.is_cuda:
+            go = grad_output.contiguous() if not grad_output.is_contiguous() else grad_output
+            g = gate.contiguous() if not gate.is_contiguous() else gate
+            u = up.contiguous() if not up.is_contiguous() else up
+            n_elements = g.numel()
+            grad_gate = torch.empty_like(g)
+            grad_up = torch.empty_like(u)
             BLOCK_SIZE = 1024
             grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
-            _triton_swiglu_bwd_kernel[grid](grad_output, gate, up, grad_gate, grad_up, n_elements, BLOCK_SIZE=BLOCK_SIZE)
+            _triton_swiglu_bwd_kernel[grid](go, g, u, grad_gate, grad_up, n_elements, BLOCK_SIZE=BLOCK_SIZE)
             return grad_gate, grad_up
         return _fused_swiglu_bwd(grad_output, gate, up)
 
