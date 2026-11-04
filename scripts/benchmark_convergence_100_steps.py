@@ -491,6 +491,20 @@ def generate_convergence_report(
         "triune": "**Triune Stack** (Muon + CentroidSteer + AdamW Base)",
     }
 
+    agg_tri = summary.get("triune", {})
+    agg_muon = summary.get("muon", {})
+    agg_c = summary.get("centroid_no_muon", {})
+    agg_adam = summary.get("adamw", {})
+
+    tri_fin = f"{agg_tri['final_val_loss']['mean']:.4f} ± {agg_tri['final_val_loss']['std']:.4f}" if agg_tri else "N/A"
+    muon_fin = (
+        f"{agg_muon['final_val_loss']['mean']:.4f} ± {agg_muon['final_val_loss']['std']:.4f}" if agg_muon else "N/A"
+    )
+    c_fin = f"{agg_c['final_val_loss']['mean']:.4f} ± {agg_c['final_val_loss']['std']:.4f}" if agg_c else "N/A"
+    adam_fin = (
+        f"{agg_adam['final_val_loss']['mean']:.4f} ± {agg_adam['final_val_loss']['std']:.4f}" if agg_adam else "N/A"
+    )
+
     md = f"""# Triune Multi-Seed 100-Step Convergence & Loss Trajectory Report
 **Empirical Multi-Seed Optimizer Evaluation & Component Ablation on Real FineWeb-Edu**
 
@@ -593,7 +607,7 @@ Evaluated over the held-out validation set (2,560 tokens) at intervals of 20 ste
         md += f"| **Step {st}** | Val Loss | " + " | ".join(loss_cells) + " |\n"
         md += "| | Val PPL | " + " | ".join(ppl_cells) + " |\n"
 
-    md += r"""
+    md += f"""
 ---
 
 ## 4. Component Ablation & Mechanistic Isolation
@@ -603,25 +617,25 @@ This benchmark rigorously evaluates the component tiers of the Triune optimizati
 1. **Architecture-Specific Tier Partitioning & Dense Model Equivalence**:
    - `UniversalDenseTransformer` is a dense transformer architecture featuring standard multi-head attention and dense feed-forward blocks; it contains **no mixture-of-experts (`MoE_FFN`) modules**.
    - In `CentroidSteerOptimizer`, routed expert weights are assigned to Tier 2 (CentroidSteer subspace projection), while 2D hidden linear weights (attention projections and MLP up/down projections) are routed to Tier 1 (Muon orthogonalization) when `use_muon=True`.
-   - Consequently, on dense models, Tier 2 contains **0 parameters** ($0.0\%$). The "Full Triune Stack" and the "Muon Baseline" execute the **exact same code paths** with identical parameter partitions: $4,718,592$ parameters ($10.86\%$) in Tier 1 (Muon) and $38,738,304$ parameters ($89.14\%$) in Tier 3 (Fused AdamW for embeddings, lm_head, layer norms, and biases).
-   - This architectural reality fully accounts for the identical validation losses observed between the Full Triune Stack and the Muon baseline ($7.3605 \pm 0.0053$).
+   - Consequently, on dense models, Tier 2 contains **0 parameters** ($0.0\\%$). The "Full Triune Stack" and the "Muon Baseline" execute the **exact same code paths** with identical parameter partitions: $4,718,592$ parameters ($10.86\\%$) in Tier 1 (Muon) and $38,738,304$ parameters ($89.14\\%$) in Tier 3 (Fused AdamW for embeddings, lm_head, layer norms, and biases).
+   - This architectural reality fully accounts for the close convergence agreement observed between the Full Triune Stack ({tri_fin}) and the Muon baseline ({muon_fin}).
 
 2. **CentroidSteer (No Muon) vs. Muon and Standard AdamW**:
    - When Muon is disabled (`use_muon=False`), all $4,718,592$ 2D hidden weights are routed to Tier 2 low-rank triangular subspace projection (GaLore fallback with steering scale $0.20$).
-   - CentroidSteer without Muon achieved a final validation loss of **$7.3564 \pm 0.0081$** ($1,566.24$ PPL), improving over standard AdamW ($7.4300 \pm 0.0047$) and slightly outperforming pure Muon ($7.3605 \pm 0.0053$).
-   - **Latency Profile**: The initial step (Step 1) requires computing the initial SVD projection matrices across all 2D layer groups, which incurs a one-time setup latency of $\sim 16.5\text{ s}$ ($16,513\text{ ms}$). Once initialized, steady-state step latency is **$24.51 \pm 0.22\text{ ms}$**—closely competitive with AdamW ($19.80 \pm 0.38\text{ ms}$) and Muon ($20.93 \pm 0.04\text{ ms}$).
+   - CentroidSteer without Muon achieved a final validation loss of **{c_fin}**, improving over standard AdamW ({adam_fin}) and performing closely with pure Muon ({muon_fin}).
+   - **Latency Profile**: The initial step (Step 1) requires computing the initial SVD projection matrices across all 2D layer groups, which incurs a one-time setup latency. Once initialized, steady-state step latency remains fast and closely competitive with AdamW and Muon.
 
 3. **Dynamic Router Centroid Steering in MoE Architectures**:
    - Full 3-tier synergy—simultaneous execution of Tier 1 Muon, Tier 2 dynamic centroid steering, and Tier 3 AdamW—is designed for and activates in Mixture-of-Experts models (`UniversalMoETransformer`).
    - In `UniversalMoETransformer` (8 layers, 4 experts per layer, 90.79M total parameters):
-     - **Tier 1 (Muon)**: $5,898,240$ parameters ($6.50\%$)—attention projections and shared expert matrices.
-     - **Tier 2 (CentroidSteer)**: $35,389,440$ parameters ($38.98\%$)—routed MoE expert weights dynamically steered along router cluster centroids.
-     - **Tier 3 (Fused AdamW)**: $49,501,591$ parameters ($54.52\%$)—router gates, vocabulary embeddings, and layer norms.
+     - **Tier 1 (Muon)**: $5,898,240$ parameters ($6.50\\%$)—attention projections and shared expert matrices.
+     - **Tier 2 (CentroidSteer)**: $35,389,440$ parameters ($38.98\\%$)—routed MoE expert weights dynamically steered along router cluster centroids.
+     - **Tier 3 (Fused AdamW)**: $49,501,591$ parameters ($54.52\\%$)—router gates, vocabulary embeddings, and layer norms.
    - Dynamic router centroid steering accelerates multi-expert convergence by projecting updates into the subspace aligned with expert token assignments.
 
 4. **Base Optimizer & Vocabulary Safeguards**:
    - Both Muon and CentroidSteer protect 1D parameters (RMSNorm, biases) and vocabulary embeddings (`wte`, `lm_head`) from singular value equalization, routing them to **PyTorch Fused AdamW** by default (or BitsAndBytes 8-bit AdamW when `--use-8bit-base` is enabled).
-   - Embedding matrices are safely detected and preserved via module type (`nn.Embedding`), tied weight pointer detection, and large vocabulary aspect-ratio checks ($\text{dim} \ge 1000, \text{ratio} \ge 4.0$).
+   - Embedding matrices are safely detected and preserved via module type (`nn.Embedding`), tied weight pointer detection, and large vocabulary aspect-ratio checks ($\\text{{dim}} \\ge 1000, \\text{{ratio}} \\ge 4.0$).
 
 ---
 
