@@ -1,0 +1,14 @@
+{
+  "async_prefetcher": {
+    "sync_time_ms": 1292.3,
+    "async_time_ms": 1007.68,
+    "speedup": 1.28,
+    "sync_tok_per_sec": 633910.4,
+    "async_tok_per_sec": 812955.8
+  },
+  "fused_qkvg": {
+    "separate_gemm_ms": 670.03,
+    "fused_gemm_ms": 109.06,
+    "speedup": 6.14
+  }
+}

@@ -1,4 +1,4 @@
-from .dataloader import CyclingDataLoader
+from .dataloader import AsyncDevicePrefetcher, CyclingDataLoader
 from .tokenizer import build_tokenizer, load_tokenizer
 
 try:
@@ -7,4 +7,11 @@ except ImportError:
     TokenStreamDataset = None
     build_dataloader = None
 
-__all__ = ["CyclingDataLoader", "TokenStreamDataset", "build_dataloader", "build_tokenizer", "load_tokenizer"]
+__all__ = [
+    "AsyncDevicePrefetcher",
+    "CyclingDataLoader",
+    "TokenStreamDataset",
+    "build_dataloader",
+    "build_tokenizer",
+    "load_tokenizer",
+]

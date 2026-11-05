@@ -97,6 +97,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--galore_lr", type=float, help="GaLore learning rate (default: 1e-4)")
     parser.add_argument("--galore_weight_decay", type=float, help="GaLore weight decay (default: 0.05)")
     parser.add_argument(
+        "--distributed",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable multi-GPU Distributed Data Parallel (DDP) training (auto-detected under torchrun)",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="Override resource manager feasibility recommendations and proceed regardless of VRAM budget",
@@ -259,7 +265,25 @@ def main(argv: list[str] | None = None) -> dict:
         config["model_name"] = args.model_name
     Path(config["checkpoint_dir"]).mkdir(parents=True, exist_ok=True)
 
-    if torch.cuda.is_available():
+    dist_requested = args.distributed
+    if dist_requested is None:
+        dist_requested = "WORLD_SIZE" in os.environ and int(os.environ.get("WORLD_SIZE", "1")) > 1
+
+    from triune.trainer.distributed import (
+        cleanup_distributed,
+        setup_distributed,
+        wrap_distributed_model,
+    )
+
+    dist_ctx = setup_distributed() if dist_requested else None
+    if dist_ctx and dist_ctx.is_distributed:
+        device = torch.device(f"cuda:{dist_ctx.local_rank}" if torch.cuda.is_available() else "cpu")
+        if dist_ctx.is_main_process:
+            print(
+                f"🌐 [Distributed DDP] Initialized process {dist_ctx.rank}/{dist_ctx.world_size} on {device}",
+                flush=True,
+            )
+    elif torch.cuda.is_available():
         device = torch.device("cuda")
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
@@ -311,7 +335,7 @@ def main(argv: list[str] | None = None) -> dict:
         resume_path = args.resume_latest or (Path(config["checkpoint_dir"]) / "best.pt" if args.resume_best else None)
         logger = (
             NullLogger()
-            if args.no_wandb
+            if args.no_wandb or (dist_ctx and not dist_ctx.is_main_process)
             else WandbLogger(project="triune-transformer", config=config, run_id=_checkpoint_run_id(resume_path))
         )
 
@@ -411,6 +435,14 @@ def main(argv: list[str] | None = None) -> dict:
             precision_context=precision_context,
             logger=logger,
         )
+        if dist_ctx and dist_ctx.is_distributed:
+            model = wrap_distributed_model(
+                model,
+                device_ids=[dist_ctx.local_rank] if device.type == "cuda" else None,
+                find_unused_parameters=True,
+            )
+            print(f"🌐 [Distributed DDP] Model wrapped for rank {dist_ctx.rank}", flush=True)
+
         if args.compile:
             trainer.compile()
             print("✅ torch.compile enabled", flush=True)
@@ -422,6 +454,8 @@ def main(argv: list[str] | None = None) -> dict:
         print(f"🚀 Training from step {trainer.engine.step} to {config['total_steps']}", flush=True)
         return trainer.fit()
     finally:
+        if dist_ctx and dist_ctx.is_distributed:
+            cleanup_distributed()
         logger.finish()
 
 

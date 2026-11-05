@@ -194,7 +194,10 @@ class TrainingEngine:
 
         for _ in range(grad_accum):
             x, y = self.trainer.next_batch()
-            x, y = x.to(self.trainer.device), y.to(self.trainer.device)
+            if x.device != self.trainer.device:
+                x = x.to(self.trainer.device, non_blocking=True)
+            if y.device != self.trainer.device:
+                y = y.to(self.trainer.device, non_blocking=True)
             totals["tokens"] += int(x.numel())
             y_flat = y.reshape(-1)
             route_logits = torch.zeros((x.size(0), 3), device=self.trainer.device)

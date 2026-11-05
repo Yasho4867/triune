@@ -181,5 +181,6 @@ def build_dataloader(tokenizer, config: dict, sep_token_id: int, *, is_holdout: 
         dataset,
         batch_size=config["batch_size"],
         num_workers=config["num_workers"],
+        pin_memory=torch.cuda.is_available(),
         drop_last=True,
     )

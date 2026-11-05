@@ -55,7 +55,13 @@ class Trainer:
         self.router_loss_fn = nn.CrossEntropyLoss()
         self.grad_accum = config["grad_accum_steps"]
         self.z_loss_coef = 1e-3
-        self._train_batches = CyclingDataLoader(train_loader)
+        cycling = CyclingDataLoader(train_loader)
+        if self.device.type == "cuda":
+            from triune.data.dataloader import AsyncDevicePrefetcher
+
+            self._train_batches = AsyncDevicePrefetcher(cycling, self.device)
+        else:
+            self._train_batches = cycling
         print(f"[Trainer] Materializing {self.config.get('eval_batches', 1)} evaluation batch(es)...", flush=True)
         self.eval_batches = self._materialize_eval_batches()
         print("[Trainer] Evaluation batch(es) ready.", flush=True)
