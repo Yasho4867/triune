@@ -247,6 +247,17 @@ def create_moe_optimizer(
             steer_scale=0.0,
             use_8bit_base=use_8bit_base,
         )
+    elif optimizer_type == "triune_moe_random":
+        # CentroidSteer on experts, but centroids are replaced by random isotropic directions
+        return CentroidSteerOptimizer(
+            model,
+            lr=lr,
+            muon_lr=muon_lr,
+            weight_decay=0.01,
+            use_muon=True,
+            steer_scale=0.20,
+            use_8bit_base=use_8bit_base,
+        )
     else:
         raise ValueError(f"Unknown MoE optimizer_type: {optimizer_type}")
 
@@ -411,6 +422,12 @@ def run_single_moe_seed_run(
                         p.numel() for p in trainable_params if p.grad is not None and p.grad.abs().sum() > 0
                     )
 
+            if optimizer_type == "triune_moe_random":
+                for m in model.modules():
+                    if isinstance(m, MoE_FFN) and hasattr(m, "last_centroids") and m.last_centroids is not None:
+                        m.last_centroids.normal_()
+                        m.last_centroids.div_(m.last_centroids.norm(dim=-1, keepdim=True).clamp_min(1e-8))
+
             optimizer.step()
             for m in model.modules():
                 if isinstance(m, MoE_FFN):
@@ -430,6 +447,12 @@ def run_single_moe_seed_run(
             logits = out[0] if isinstance(out, tuple) else out
             loss = F.cross_entropy(logits.reshape(-1, vocab_size).float(), y.reshape(-1))
             loss.backward()
+            if optimizer_type == "triune_moe_random":
+                for m in model.modules():
+                    if isinstance(m, MoE_FFN) and hasattr(m, "last_centroids") and m.last_centroids is not None:
+                        m.last_centroids.normal_()
+                        m.last_centroids.div_(m.last_centroids.norm(dim=-1, keepdim=True).clamp_min(1e-8))
+
             optimizer.step()
             for m in model.modules():
                 if isinstance(m, MoE_FFN):
@@ -883,6 +906,7 @@ def main():
         ("centroid_no_muon", "centroid_no_muon"),
         ("triune_moe", "triune_moe"),
         ("triune_moe_nosteer", "triune_moe_nosteer"),
+        ("triune_moe_random", "triune_moe_random"),
     ]
     if args.regimes:
         regimes = [r for r in regimes if r[0] in set(args.regimes)]

@@ -375,6 +375,65 @@ def generate_parallelism_figure():
     print("Generated parallelism_speedups.[pdf|png]")
 
 
+def generate_moe_ablation_figure():
+    """Generates Figure 4 for Paper 1: MoE Router Centroid Steering Ablation."""
+    json_path = BENCHMARK_DIR / "moe_convergence_100_steps_results_steer_ablation.json"
+    if not json_path.exists():
+        print(f"Skipping ablation figure: {json_path} missing")
+        return
+
+    with open(json_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    summary = data["summary"]
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(7.0, 2.7), constrained_layout=True)
+
+    ablations = [
+        ("triune_moe_nosteer", "Unsteered Subspace (steer=0)", "#7f7f7f", ":", "^"),
+        ("triune_moe_random", "Random Orthogonal Direction", "#ff7f0e", "--", "s"),
+        ("triune_moe", "Dynamic Router Centroid Steering", "#1f77b4", "-", "o"),
+    ]
+
+    for key, label, color, ls, marker in ablations:
+        if key not in summary:
+            continue
+        traj = summary[key]["val_trajectory"]
+        steps = [pt["step"] for pt in traj]
+        losses = [pt["val_loss_mean"] for pt in traj]
+        stds = [pt["val_loss_std"] for pt in traj]
+        ppls = [pt["val_ppl_mean"] for pt in traj]
+
+        ax1.plot(steps, losses, label=label, color=color, linestyle=ls, marker=marker, markersize=4)
+        ax1.fill_between(
+            steps,
+            np.array(losses) - np.array(stds),
+            np.array(losses) + np.array(stds),
+            color=color,
+            alpha=0.12,
+        )
+
+        ax2.plot(steps, ppls, label=label, color=color, linestyle=ls, marker=marker, markersize=4)
+
+    ax1.set_xlabel("Training Steps")
+    ax1.set_ylabel("Held-Out Validation Loss")
+    ax1.set_title("(a) Steering Mechanism Ablation")
+    ax1.grid(True)
+    ax1.set_ylim(7.6, 9.2)
+
+    ax2.set_xlabel("Training Steps")
+    ax2.set_ylabel("Validation Perplexity")
+    ax2.set_title("(b) Perplexity Comparison")
+    ax2.set_yscale("log")
+    ax2.grid(True)
+    ax2.legend(loc="upper right", frameon=True, framealpha=0.9)
+
+    for out_dir in [P1_FIGS]:
+        fig.savefig(out_dir / "moe_steering_ablation.pdf")
+        fig.savefig(out_dir / "moe_steering_ablation.png")
+    plt.close(fig)
+    print("Generated moe_steering_ablation.[pdf|png]")
+
+
 def main():
     print("=" * 70)
     print("Generating Publication-Grade Figures for Triune Research Papers")
@@ -382,6 +441,7 @@ def main():
     generate_dense_convergence_figure()
     generate_moe_convergence_figure()
     generate_optimizer_memory_figure()
+    generate_moe_ablation_figure()
     generate_long_context_figure()
     generate_kernel_memory_figure()
     generate_parallelism_figure()
