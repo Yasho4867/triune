@@ -122,10 +122,6 @@ def load_fineweb_documents(
     required_tokens: int = 120000,
 ) -> Tuple[List[int], List[int], Dict[str, Any]]:
     """Loads genuine FineWeb-Edu educational samples, strictly partitions documents, and tokenizes splits independently."""
-    real_path = REPO_ROOT / "data" / "fineweb_edu_real.jsonl"
-    if real_path.is_file():
-        data_path = real_path
-
     assert data_path.is_file(), f"FineWeb dataset file missing: {data_path}"
     assert tokenizer_path.is_file(), f"Tokenizer file missing: {tokenizer_path}"
 
@@ -182,13 +178,18 @@ def load_fineweb_documents(
     return train_tokens, val_tokens, meta
 
 
+RUN_CONFIG: Dict[str, float] = {"lr": 1e-3, "muon_lr": 0.002}
+
+
 def create_optimizer(
     model: torch.nn.Module,
     optimizer_type: str,
-    lr: float = 1e-3,
+    lr: float | None = None,
     use_8bit_base: bool = False,
 ):
     """Instantiates the specified optimizer regime."""
+    lr = RUN_CONFIG["lr"] if lr is None else lr
+    muon_lr = RUN_CONFIG["muon_lr"]
     trainable_params = [p for p in model.parameters() if p.requires_grad]
     if optimizer_type == "adamw":
         return torch.optim.AdamW(trainable_params, lr=lr, weight_decay=0.01)
@@ -200,7 +201,7 @@ def create_optimizer(
         return CentroidSteerOptimizer(
             model,
             lr=lr,
-            muon_lr=0.002,
+            muon_lr=muon_lr,
             weight_decay=0.01,
             use_muon=True,
             steer_scale=0.0,
@@ -214,7 +215,7 @@ def create_optimizer(
         return CentroidSteerOptimizer(
             model,
             lr=lr,
-            muon_lr=0.002,
+            muon_lr=muon_lr,
             weight_decay=0.01,
             use_muon=True,
             steer_scale=0.20,
@@ -289,7 +290,7 @@ def run_single_seed_run(
     model.train()
 
     # 2. Pre-warmup step to compile CUDA/Triton kernels and initialize memory pools
-    optimizer = create_optimizer(model, optimizer_type, lr=1e-3, use_8bit_base=use_8bit_base)
+    optimizer = create_optimizer(model, optimizer_type, use_8bit_base=use_8bit_base)
     if len(train_batches) > 0:
         warmup_x, warmup_y = train_batches[0]
         optimizer.zero_grad(set_to_none=True)
@@ -306,7 +307,7 @@ def run_single_seed_run(
 
     # 3. Reload identical initial weights and re-create fresh optimizer for timed benchmark
     model.load_state_dict(copy.deepcopy(initial_state_dict))
-    optimizer = create_optimizer(model, optimizer_type, lr=1e-3, use_8bit_base=use_8bit_base)
+    optimizer = create_optimizer(model, optimizer_type, use_8bit_base=use_8bit_base)
 
     if device.type == "cuda":
         torch.cuda.empty_cache()
@@ -740,6 +741,13 @@ def main():
         help="Include Muon and CentroidSteer component ablations (toggle with --no-include-ablation)",
     )
     parser.add_argument("--use-gla", action="store_true", help="Use Gated Linear Attention across all regimes")
+    parser.add_argument("--data-path", type=Path, default=REPO_ROOT / "data" / "fineweb_edu_real.jsonl")
+    parser.add_argument("--required-tokens", type=int, default=120000, help="Training tokens to pack")
+    parser.add_argument("--num-val-docs", type=int, default=15, help="Held-out documents")
+    parser.add_argument("--lr", type=float, default=1e-3, help="Base (AdamW / subspace) learning rate")
+    parser.add_argument("--muon-lr", type=float, default=0.002, help="Muon learning rate")
+    parser.add_argument("--regimes", type=str, nargs="+", default=None, help="Subset of regime names to run")
+    parser.add_argument("--output-tag", type=str, default="", help="Suffix for result/report file names")
     args = parser.parse_args()
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -749,9 +757,9 @@ def main():
     script_sha256 = compute_sha256(Path(__file__).resolve())
     source_hashes = compute_source_hashes()
 
-    data_path = REPO_ROOT / "data" / "fineweb_edu_real.jsonl"
-    if not data_path.is_file():
-        data_path = REPO_ROOT / "data" / "fineweb_sample.jsonl"
+    RUN_CONFIG["lr"] = args.lr
+    RUN_CONFIG["muon_lr"] = args.muon_lr
+    data_path = args.data_path.resolve()
     tokenizer_path = REPO_ROOT / "triune_tokenizer.json"
 
     print("================================================================================")
@@ -764,7 +772,9 @@ def main():
     )
     print("================================================================================")
 
-    train_tokens, val_tokens, dataset_meta = load_fineweb_documents(data_path, tokenizer_path, num_val_docs=15)
+    train_tokens, val_tokens, dataset_meta = load_fineweb_documents(
+        data_path, tokenizer_path, num_val_docs=args.num_val_docs, required_tokens=args.required_tokens
+    )
 
     repro_parts = [
         "python scripts/benchmark_convergence_100_steps.py",
@@ -807,8 +817,8 @@ def main():
             "base_optimizer_impl": (
                 "bitsandbytes.optim.AdamW8bit" if args.use_8bit_base else "torch.optim.AdamW (fused=True)"
             ),
-            "learning_rate": 1e-3,
-            "muon_learning_rate": 0.002,
+            "learning_rate": args.lr,
+            "muon_learning_rate": args.muon_lr,
             "weight_decay": 0.01,
             "loss_function": "torch.nn.functional.cross_entropy",
             "loss_mode": args.loss_mode,
@@ -830,6 +840,16 @@ def main():
             ("bnb_8bit", "bnb_8bit"),
             ("triune", "centroid_steer"),
         ]
+
+    if args.regimes:
+        regimes = [r for r in regimes if r[0] in set(args.regimes)]
+        assert regimes, f"no regimes matched {args.regimes}"
+    provenance["reproduction_command"] += (
+        f" --data-path {data_path.relative_to(REPO_ROOT)} --required-tokens {args.required_tokens}"
+        f" --num-val-docs {args.num_val_docs} --lr {args.lr} --muon-lr {args.muon_lr}"
+        + (f" --regimes {' '.join(r[0] for r in regimes)}" if args.regimes else "")
+        + (f" --output-tag {args.output_tag}" if args.output_tag else "")
+    )
 
     tok_per_batch = args.batch_size * (args.seq_len + 1)
 
@@ -953,12 +973,13 @@ def main():
         "seed_runs": all_seed_runs,
     }
 
-    json_path = out_dir / "convergence_100_steps_results.json"
+    tag = f"_{args.output_tag}" if args.output_tag else ""
+    json_path = out_dir / f"convergence_100_steps_results{tag}.json"
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(artifact_payload, f, indent=2)
     print(f"\n[SUCCESS] Saved JSON results: {json_path}")
 
-    report_path = out_dir / "CONVERGENCE_100_STEPS_REPORT.md"
+    report_path = out_dir / f"CONVERGENCE_100_STEPS_REPORT{tag.upper()}.md"
     generate_convergence_report(summary, report_path, provenance)
 
 

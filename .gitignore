@@ -39,6 +39,16 @@ checkpoints_full/
 # Large local datasets
 my_data.txt
 tokenized_data.pt
+data/*large*.jsonl
+
+# LaTeX intermediates
+*.aux
+*.out
+*.toc
+*.bbl
+*.blg
+*.fls
+*.fdb_latexmk
 
 # Compiled caches
 unsloth_compiled_cache/
