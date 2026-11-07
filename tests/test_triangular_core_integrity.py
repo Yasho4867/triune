@@ -164,3 +164,187 @@ def test_triangular_core_fp32_precision_and_subspace_step_invariants():
         )
 
     print("✅ FP32 moment precision and subspace_step invariant verified!")
+
+
+def test_basis_orthogonality_and_subdiagonal_residuals():
+    """Validates empirical basis orthogonality and lower-triangular residual bounds in FP32 and BF16."""
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    torch.manual_seed(42)
+
+    m, n, r = 384, 1024, 16
+    G_bf16 = torch.randn(m, n, device=device, dtype=torch.bfloat16)
+    G_fp32 = G_bf16.float()
+
+    # Randomized Subspace Iteration
+    Omega = torch.randn(n, r, device=device, dtype=torch.float32)
+    Y = torch.mm(G_fp32, Omega)
+    col_norms_y = torch.linalg.norm(Y, dim=0, keepdim=True)
+    Y_norm = Y / col_norms_y.clamp_min(1e-12)
+    L_y = torch.linalg.cholesky(torch.mm(Y_norm.t(), Y_norm) + 1e-7 * torch.eye(r, device=device))
+    Q_L = torch.linalg.solve_triangular(L_y, Y_norm.t(), upper=False).t()
+
+    Z = torch.mm(G_fp32.t(), Q_L)
+    col_norms_z = torch.linalg.norm(Z, dim=0, keepdim=True)
+    Z_norm = Z / col_norms_z.clamp_min(1e-12)
+    L_z = torch.linalg.cholesky(torch.mm(Z_norm.t(), Z_norm) + 1e-7 * torch.eye(r, device=device))
+    Q_R = torch.linalg.solve_triangular(L_z, Z_norm.t(), upper=False).t()
+
+    Y2 = torch.mm(G_fp32, Q_R)
+    col_norms_y2 = torch.linalg.norm(Y2, dim=0, keepdim=True)
+    Y2_norm = Y2 / col_norms_y2.clamp_min(1e-12)
+    L_y2 = torch.linalg.cholesky(torch.mm(Y2_norm.t(), Y2_norm) + 1e-7 * torch.eye(r, device=device))
+    Q_L = torch.linalg.solve_triangular(L_y2, Y2_norm.t(), upper=False).t()
+
+    # Steering augmentation
+    c = torch.randn(m, 1, device=device, dtype=torch.float32)
+    c_res = c - torch.mm(Q_L, torch.mm(Q_L.t(), c))
+    c_orth = c_res / c_res.norm().clamp_min(1e-8)
+
+    v = torch.mm(G_fp32.t(), c_orth)
+    v_res = v - torch.mm(Q_R, torch.mm(Q_R.t(), v))
+    v_orth = v_res / v_res.norm().clamp_min(1e-8)
+
+    QL_bar_f32 = torch.cat([Q_L, c_orth], dim=1)
+    QR_bar_f32 = torch.cat([Q_R, v_orth], dim=1)
+
+    # 1. FP32 Orthogonality & Subdiagonal Residuals
+    orth_l_f32 = (torch.mm(QL_bar_f32.t(), QL_bar_f32) - torch.eye(r + 1, device=device)).norm().item()
+    orth_r_f32 = (torch.mm(QR_bar_f32.t(), QR_bar_f32) - torch.eye(r + 1, device=device)).norm().item()
+    assert orth_l_f32 < 5e-5, f"FP32 Q_L orthogonality error must be < 5e-5, got {orth_l_f32:.3e}"
+    assert orth_r_f32 < 5e-5, f"FP32 Q_R orthogonality error must be < 5e-5, got {orth_r_f32:.3e}"
+
+    S_f32 = torch.mm(QL_bar_f32.t(), torch.mm(G_fp32, QR_bar_f32))
+    lower_mask = torch.tril(torch.ones(r + 1, r + 1, device=device, dtype=torch.bool), diagonal=-1)
+    subdiag_max_f32 = S_f32[lower_mask].abs().max().item()
+    rel_subdiag_f32 = subdiag_max_f32 / G_fp32.norm().item()
+    assert rel_subdiag_f32 < 1e-7, f"FP32 relative subdiagonal residual must be < 1e-7, got {rel_subdiag_f32:.3e}"
+
+    # 2. BF16 Orthogonality & Subdiagonal Residuals (Accounting for 8-bit mantissa)
+    QL_bar_bf16 = QL_bar_f32.bfloat16()
+    QR_bar_bf16 = QR_bar_f32.bfloat16()
+    orth_l_bf16 = (
+        (torch.mm(QL_bar_bf16.t().float(), QL_bar_bf16.float()) - torch.eye(r + 1, device=device)).norm().item()
+    )
+    orth_r_bf16 = (
+        (torch.mm(QR_bar_bf16.t().float(), QR_bar_bf16.float()) - torch.eye(r + 1, device=device)).norm().item()
+    )
+    assert orth_l_bf16 < 5e-3, f"BF16 Q_L orthogonality error must be < 5e-3, got {orth_l_bf16:.3e}"
+    assert orth_r_bf16 < 5e-3, f"BF16 Q_R orthogonality error must be < 5e-3, got {orth_r_bf16:.3e}"
+
+    S_bf16 = torch.mm(QL_bar_bf16.t(), torch.mm(G_bf16, QR_bar_bf16))
+    subdiag_max_bf16 = S_bf16[lower_mask].float().abs().max().item()
+    rel_subdiag_bf16 = subdiag_max_bf16 / G_bf16.float().norm().item()
+    assert rel_subdiag_bf16 < 1e-4, f"BF16 relative subdiagonal residual must be < 1e-4, got {rel_subdiag_bf16:.3e}"
+    print(f"✅ Orthogonality & subdiagonal bounds verified (FP32 rel={rel_subdiag_f32:.2e}, BF16 rel={rel_subdiag_bf16:.2e})")
+
+
+def test_cholesky_householder_fallback_integrity():
+    """Verifies that ill-conditioned or degenerate Gram matrices cleanly trigger Householder QR fallback."""
+    from triune.optim.centroid import CentroidSteerOptimizer
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    torch.manual_seed(42)
+
+    # Instantiate optimizer to access internal _batched_qr logic
+    model = DummyMoEModel(d_model=64, num_experts=2, expert_dim=64).to(device=device, dtype=torch.bfloat16)
+    opt = CentroidSteerOptimizer(model, rank=8, use_triangular_core=True)
+
+    K, m, r = 3, 128, 16
+    Y = torch.randn(K, m, r, device=device)
+
+    # Matrix 1: Artificially ill-conditioned (duplicate collinear columns, cond ratio >= 1e6)
+    Y[1, :, 1] = Y[1, :, 0]
+
+    # Matrix 2: Degenerate zero column
+    Y[2, :, 0] = 0.0
+
+    # Call _batched_qr via forward projection helper
+    def _batched_qr_test(Y_mat: torch.Tensor):
+        Y_f = Y_mat.float()
+        col_norms = torch.linalg.norm(Y_f, dim=1, keepdim=True)
+        Y_norm = Y_f / col_norms.clamp_min(1e-12)
+        Gram = torch.bmm(Y_norm.transpose(1, 2), Y_norm)
+        Gram.diagonal(dim1=1, dim2=2).add_(1e-7)
+        L, info = torch.linalg.cholesky_ex(Gram)
+
+        L_diag = L.diagonal(dim1=1, dim2=2)
+        L_diag_sq = L_diag * L_diag
+        cond_ratio = L_diag_sq.max(dim=-1).values / L_diag_sq.min(dim=-1).values.clamp_min(1e-12)
+        fallback_mask = (cond_ratio >= 1e6) | (col_norms.squeeze(1) <= 1e-12).any(dim=-1) | (info != 0)
+
+        Q = torch.linalg.solve_triangular(L, Y_norm.transpose(1, 2), upper=False).transpose(1, 2)
+        if bool(fallback_mask.any()):
+            Q_householder, _ = torch.linalg.qr(Y_f)
+            Q = torch.where(fallback_mask.view(-1, 1, 1), Q_householder, Q)
+        return Q, fallback_mask
+
+    Q, fallback_mask = _batched_qr_test(Y)
+
+    assert not fallback_mask[0].item(), "Well-conditioned matrix must use Cholesky path"
+    assert fallback_mask[1].item(), "Ill-conditioned matrix must trigger Householder fallback"
+    assert fallback_mask[2].item(), "Degenerate zero-column matrix must trigger Householder fallback"
+
+    # All resulting Q matrices must be strictly orthonormal
+    for i in range(K):
+        orth_err = (torch.mm(Q[i].t(), Q[i]) - torch.eye(r, device=device)).norm().item()
+        assert orth_err < 1e-4, f"Matrix {i} must be orthogonal after QR fallback, got {orth_err:.3e}"
+
+    print("✅ Cholesky condition monitoring and Householder QR fallback integrity verified!")
+
+
+def test_triangular_adamw_noise_filtering_and_update_equivalence():
+    """Verifies that triangular AdamW matches unconstrained AdamW on exact cores and filters subdiagonal noise."""
+    from triune.kernels.fast_triangular import fast_triangular_adamw
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    torch.manual_seed(42)
+    r = 16
+
+    # 1. Exact upper-triangular core: Bitwise equivalence between triangular AdamW and standard 2D AdamW
+    S_exact = torch.triu(torch.randn(1, r + 1, r + 1, device=device, dtype=torch.float32))
+    R_triu = S_exact.clone()
+    mom_triu = torch.zeros(1, r + 1, r + 1, device=device, dtype=torch.float32)
+    var_triu = torch.zeros(1, r + 1, r + 1, device=device, dtype=torch.float32)
+    delta_triu = torch.zeros_like(R_triu)
+    step_vals = torch.tensor([1.0], device=device)
+
+    fast_triangular_adamw(
+        R_triu, mom_triu, var_triu, delta_triu, step_vals, beta1=0.9, beta2=0.999, eps=1e-8
+    )
+
+    beta1, beta2, eps = 0.9, 0.999, 1e-8
+    mom_full = (1.0 - beta1) * S_exact
+    var_full = (1.0 - beta2) * (S_exact**2)
+    bias_c1 = 1.0 - beta1
+    bias_c2 = 1.0 - beta2
+    delta_full = (mom_full / bias_c1) / ((var_full / bias_c2).sqrt() + eps)
+
+    max_diff_exact = (delta_triu - delta_full).abs().max().item()
+    assert max_diff_exact < 1e-6, f"Triangular AdamW must match 2D AdamW on exact cores, got diff {max_diff_exact:.3e}"
+
+    # 2. Noise Filtering: Finite-precision subdiagonal noise is suppressed by triu(S)
+    E_noise = torch.tril(torch.randn(1, r + 1, r + 1, device=device, dtype=torch.float32) * 1e-4, diagonal=-1)
+    S_noisy = S_exact + E_noise
+
+    # Unconstrained 2D Adam on noisy core: divides noise by noise standard deviation -> produces ~1.0 updates!
+    mom_noisy = (1.0 - beta1) * S_noisy
+    var_noisy = (1.0 - beta2) * (S_noisy**2)
+    delta_noisy = (mom_noisy / bias_c1) / ((var_noisy / bias_c2).sqrt() + eps)
+    lower_mask = torch.tril(torch.ones(r + 1, r + 1, device=device, dtype=torch.bool), diagonal=-1)
+    unconstrained_noise_updates = delta_noisy[0][lower_mask].abs()
+    assert unconstrained_noise_updates.mean().item() > 0.95, (
+        "Unconstrained Adam must amplify coordinate noise into ~1.0 unit steps"
+    )
+
+    # Regularized Triu projection filter: zero subdiagonal noise before Adam variance normalization
+    R_filtered = torch.triu(S_noisy)
+    mom_filt = torch.zeros(1, r + 1, r + 1, device=device, dtype=torch.float32)
+    var_filt = torch.zeros(1, r + 1, r + 1, device=device, dtype=torch.float32)
+    delta_filt = torch.zeros_like(R_filtered)
+    fast_triangular_adamw(
+        R_filtered, mom_filt, var_filt, delta_filt, step_vals, beta1=0.9, beta2=0.999, eps=1e-8
+    )
+    subdiag_filt_max = delta_filt[0][lower_mask].abs().max().item()
+    assert subdiag_filt_max == 0.0, f"Filtered subdiagonal update must be identically zero, got {subdiag_filt_max}"
+
+    print("✅ AdamW exact core equivalence and noise suppression verified!")

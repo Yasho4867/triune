@@ -585,7 +585,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                 L_diag = L.diagonal(dim1=1, dim2=2)
                 L_diag_sq = L_diag * L_diag
                 cond_ratio = L_diag_sq.max(dim=-1).values / L_diag_sq.min(dim=-1).values.clamp_min(1e-12)
-                fallback_mask = (cond_ratio >= 1e7) | (col_norms.squeeze(1) <= 1e-12).any(dim=-1) | (info != 0)
+                fallback_mask = (cond_ratio >= 1e6) | (col_norms.squeeze(1) <= 1e-12).any(dim=-1) | (info != 0)
 
                 Q = torch.linalg.solve_triangular(L, Y_norm.transpose(1, 2), upper=False).transpose(1, 2)
                 if bool(fallback_mask.any()):

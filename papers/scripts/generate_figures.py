@@ -5,7 +5,7 @@ Produces vector PDF and high-DPI PNG plots for:
 1. Dense convergence trajectory across 5 optimizer regimes (FineWeb-Edu).
 2. MoE convergence trajectory across 4 optimizer regimes.
 3. GLA constant-memory autoregressive decoding vs Softmax KV-cache explosion.
-4. Chunked Logit-Free Cross-Entropy memory scaling vs PyTorch.
+4. Chunked Vocabulary-Projection Cross-Entropy memory scaling vs PyTorch.
 5. CUDA Graph launch latency reduction and multi-step bitwise optimizer parity.
 6. Multi-level Parallelism speedups (Async DMA prefetching & Fused QKVG).
 """
@@ -82,8 +82,10 @@ def generate_dense_convergence_figure():
 
     for key, label, color, ls, marker in regimes_to_plot:
         if key not in summary:
-            continue
+            raise KeyError(f"Required series '{key}' missing from summary in {json_path}")
         traj = summary[key]["val_trajectory"]
+        if not traj:
+            raise ValueError(f"Empty trajectory for series '{key}' in {json_path}")
         steps = [pt["step"] for pt in traj]
         losses = [pt["val_loss_mean"] for pt in traj]
         stds = [pt["val_loss_std"] for pt in traj]
@@ -141,8 +143,10 @@ def generate_moe_convergence_figure():
 
     for key, label, color, ls, marker in regimes_to_plot:
         if key not in summary:
-            continue
+            raise KeyError(f"Required series '{key}' missing from summary in {json_path}")
         traj = summary[key]["val_trajectory"]
+        if not traj:
+            raise ValueError(f"Empty trajectory for series '{key}' in {json_path}")
         steps = [pt["step"] for pt in traj]
         losses = [pt["val_loss_mean"] for pt in traj]
         stds = [pt["val_loss_std"] for pt in traj]
@@ -254,6 +258,8 @@ def generate_long_context_figure():
         data = json.load(f).get("attention_scaling", {})
     decode_records = data.get("autoregressive_decode", [])
     prefill_records = data.get("results", [])
+    if not decode_records or not prefill_records:
+        raise ValueError(f"Attention scaling records missing or empty in {bench_file}")
 
     contexts = [r["context_length"] for r in decode_records]
     sdpa_cache_kb = [r["softmax_kv_cache_kb"] for r in decode_records]
@@ -290,13 +296,15 @@ def generate_long_context_figure():
 
 
 def generate_kernel_memory_figure():
-    """Generates Figure 2 for Paper 2: Chunked Logit-Free Cross-Entropy memory scaling."""
+    """Generates Figure 2 for Paper 2: Chunked Vocabulary-Projection Cross-Entropy memory scaling."""
     bench_file = BENCHMARK_DIR / "benchmark_results.json"
     if not bench_file.exists():
         raise FileNotFoundError(f"Missing required benchmark artifact: {bench_file}")
 
     with open(bench_file, "r", encoding="utf-8") as f:
         records = json.load(f).get("cross_entropy", {}).get("results", [])
+    if not records:
+        raise ValueError(f"Cross-entropy results missing or empty in {bench_file}")
     tokens = [f"N = {r['tokens']:,}" for r in records]
     pytorch_vram = [r["standard_vram_mb"] for r in records]
     triune_vram = [r["triune_vram_mb"] for r in records]
@@ -318,7 +326,7 @@ def generate_kernel_memory_figure():
         x + width / 2,
         triune_vram,
         width,
-        label="Triune Chunked Logit-Free",
+        label="Triune Chunked Vocab-Projection",
         color="#1f77b4",
         edgecolor="black",
         linewidth=0.6,
@@ -361,6 +369,8 @@ def generate_parallelism_figure():
 
     with open(bench_file, "r", encoding="utf-8") as f:
         p_data = json.load(f)
+    if "async_prefetcher" not in p_data or "fused_qkvg" not in p_data:
+        raise KeyError(f"Expected benchmark sections ('async_prefetcher', 'fused_qkvg') missing from {bench_file}")
     async_data = p_data.get("async_prefetcher", {})
     gemm_data = p_data.get("fused_qkvg", {})
     throughput = [async_data.get("sync_tok_per_sec", 633910.4), async_data.get("async_tok_per_sec", 812955.8)]
@@ -449,8 +459,10 @@ def generate_moe_ablation_figure():
 
     for key, label, color, ls, marker in ablations:
         if key not in summary:
-            continue
+            raise KeyError(f"Required ablation key '{key}' missing from summary in {json_path}")
         traj = summary[key]["val_trajectory"]
+        if not traj:
+            raise ValueError(f"Empty validation trajectory for key '{key}' in {json_path}")
         steps = [pt["step"] for pt in traj]
         losses = [pt["val_loss_mean"] for pt in traj]
         stds = [pt["val_loss_std"] for pt in traj]

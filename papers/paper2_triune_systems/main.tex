@@ -112,7 +112,7 @@ where $H$ is the number of attention heads, $d_k$ is the key dimension, and $d_v
         \text{out}_{\text{inter}} = \tilde{Q}_c S_{k-1} \in \mathbb{R}^{C \times d_v}
     \end{equation}
 \end{enumerate}
-The complete chunk representation is $\text{out} = \text{out}_{\text{intra}} + \text{out}_{\text{inter}}$. A custom fused Triton kernel (\texttt{FusedRecurrentScan}) evaluates the inter-chunk recurrence and its reverse-mode gradient backpropagation with recurrent state tiles maintained on-chip in GPU registers and shared memory (SRAM), eliminating intermediate PyTorch autograd graph allocations in DRAM.
+The complete chunk representation is $\text{out} = \text{out}_{\text{intra}} + \text{out}_{\text{inter}}$. A custom fused Triton kernel (\texttt{FusedRecurrentScan}) evaluates the inter-chunk recurrence and its reverse-mode gradient backpropagation. Rather than materializing all intermediate recurrent state tensors in global HBM via sequential PyTorch autograd nodes, the kernel streams chunk boundary states through HBM while maintaining active $64 \times 64$ recurrent accumulation tiles on-chip in GPU registers and shared memory (SRAM), eliminating $1,024$ sequential Python autograd nodes per forward-backward step.
 
 \textbf{Autoregressive Decode State}: During token-by-token generation ($T=1$), GLA updates the recurrent state via:
 \begin{equation}
@@ -269,7 +269,7 @@ As shown in Figure~\ref{fig:long_context}, Triune GLA fundamentally decouples ge
 
 \textbf{Sub-Quadratic and Linear Attention}: Linear transformers~\cite{katharopoulos2020transformers}, RWKV~\cite{peng2023rwkv}, RetNet~\cite{sun2023retentive}, Mamba~\cite{gu2023mamba}, and Gated Linear Attention (GLA)~\cite{yang2023gated} demonstrate sub-quadratic training and constant-memory inference. Triune integrates chunked parallel GLA with custom fused Triton autograd scans.
 
-\textbf{Memory-Efficient Loss Kernels}: Liger-kernel~\cite{liger2024} and Megatron-LM~\cite{shoeybi2019megatron} explored chunked cross-entropy. Triune implements an integrated logit-free formulation with direct hidden-state accumulation.
+\textbf{Memory-Efficient Loss Kernels}: Liger-kernel~\cite{liger2024} and Megatron-LM~\cite{shoeybi2019megatron} explored chunked cross-entropy. Triune implements an integrated vocabulary-tiled cross-entropy formulation that computes logits in localized vocabulary micro-blocks with direct online hidden-state gradient accumulation, eliminating full sequence-level $N \times V$ tensor allocations.
 
 \textbf{Adaptive Computation \& Early Exits}: Dynamic early-exit networks such as DeeBERT~\cite{xin2020deebert} and FastBERT~\cite{liu2020fastbert} adapt inference depth. Triune extends this paradigm with hierarchical entropy routing across heterogeneous expert layers.
 
