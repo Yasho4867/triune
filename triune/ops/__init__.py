@@ -26,6 +26,7 @@ from ._c_bridge import (
     is_native_c_available,
 )
 from .centroid_steer import (
+    batched_qr,
     batched_subspace_projection,
     cholesky_qr,
     subspace_projection,
@@ -56,6 +57,7 @@ __all__ = [
     "c_route_tiers_f32",
     "c_compute_neuron_heatmap_f32",
     "c_gla_recurrent_step_f32",
+    "batched_qr",
     "cholesky_qr",
     "subspace_projection",
     "batched_subspace_projection",

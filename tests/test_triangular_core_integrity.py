@@ -263,6 +263,23 @@ def test_cholesky_householder_fallback_integrity():
     assert diag["cond_fail_mask"][1].item() or diag["orth_fail_mask"][1].item(), "Ill-conditioned matrix must trigger condition or orth fallback"
     assert diag["degen_mask"][2].item(), "Zero-column matrix must trigger degen fallback"
 
+    # Verify mutually exclusive partition
+    primary_sum = (
+        diag["primary_degen_mask"].long()
+        + diag["primary_cholesky_mask"].long()
+        + diag["primary_cond_mask"].long()
+        + diag["primary_orth_mask"].long()
+    )
+    assert torch.equal(primary_sum, fallback_mask.long()), "Primary fallback reasons must partition fallback_mask exactly"
+
+    # Also test that batched_subspace_projection in triune.ops uses guarded QR
+    from triune.ops import batched_subspace_projection
+
+    test_grads = torch.randn(2, 64, 128, device=device)
+    proj, side, diag_hist = batched_subspace_projection(test_grads, rank=8, niter=1, return_diagnostics=True)
+    assert proj.shape == (2, 64, 8)
+    assert len(diag_hist) > 0, "batched_subspace_projection must record QR diagnostics"
+
     # Also verify that CentroidSteerOptimizer.batched_qr matches
     Q_opt, fallback_opt = CentroidSteerOptimizer.batched_qr(
         Y, cond_threshold=1e4, eps_shift=1e-7, orth_tol=1e-4, return_fallback_mask=True

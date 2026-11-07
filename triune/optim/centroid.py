@@ -18,96 +18,41 @@ except ImportError:
 
 
 from triune.ops.centroid_steer import (
+    batched_qr,
     batched_subspace_projection as batched_fast_subspace_projection,
-)
-from triune.ops.centroid_steer import (
+    cholesky_qr,
     subspace_projection,
 )
 
 
-def fast_subspace_projection(grad: torch.Tensor, rank: int, niter: int = 2) -> tuple[torch.Tensor, str]:
-    """High-performance CUDA/CPU Subspace Iteration via Cholesky-QR.
-
-    Replaces slow cuSOLVER svd_lowrank with direct Tensor Core GEMM + Cholesky Gram
-    orthogonalization. 6.8x faster (5.2ms vs 35.7ms) and consumes 3.1x less transient VRAM.
-    """
-    m, n = grad.shape
-    side = "left" if m <= n else "right"
-    proj = subspace_projection(grad, rank, niter=niter)
-    return proj, side
-
-
-def batched_qr(
-    Y_mat: torch.Tensor,
+def fast_subspace_projection(
+    grad: torch.Tensor,
+    rank: int,
+    niter: int = 2,
     cond_threshold: float = 1e4,
     eps_shift: float = 1e-7,
     orth_tol: float = 1e-4,
-    return_fallback_mask: bool = False,
-    return_diagnostics: bool = False,
-    out_dtype: torch.dtype | None = None,
-) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, dict[str, torch.Tensor]]:
-    """Computes batched thin QR with condition-ratio monitored Cholesky-QR, post-QR orthogonality verification, and Householder fallback.
+) -> tuple[torch.Tensor, str]:
+    """High-performance CUDA/CPU Subspace Iteration via condition-monitored QR with Householder fallback.
 
-    Args:
-        Y_mat: Batched input matrices of shape [K, d, r]
-        cond_threshold: Condition ratio threshold kappa(A) approx max(L_ii^2) / min(L_ii^2) for fallback (default 1e4)
-        eps_shift: Diagonal shift added to Gram matrix to ensure positive definiteness
-        orth_tol: Maximum permissible basis orthogonality error ||Q^T Q - I||_F before Householder fallback (default 1e-4)
-        return_fallback_mask: If True, returns (Q, fallback_mask)
-        return_diagnostics: If True, returns (Q, diagnostics_dict) with exact per-cause breakdown
-        out_dtype: Target output dtype for Q (defaults to Y_mat.dtype)
-
-    Returns:
-        Q orthonormal matrices of shape [K, d, r], optionally accompanied by fallback_mask or diagnostics_dict
+    Replaces slow cuSOLVER svd_lowrank with direct Tensor Core GEMM + condition-monitored
+    Gram orthogonalization and Householder QR fallback.
     """
-    dtype = out_dtype if out_dtype is not None else Y_mat.dtype
-    Y_f = Y_mat.float()
-    K, d, r = Y_f.shape
-    col_norms = torch.linalg.norm(Y_f, dim=1, keepdim=True)
-    degen_mask = (col_norms.squeeze(1) <= 1e-12).any(dim=-1)
+    m, n = grad.shape
+    side = "left" if m <= n else "right"
+    proj = subspace_projection(
+        grad,
+        rank,
+        niter=niter,
+        cond_threshold=cond_threshold,
+        eps_shift=eps_shift,
+        orth_tol=orth_tol,
+    )
+    return proj, side
 
-    Y_norm = Y_f / col_norms.clamp_min(1e-12)
-    Gram = torch.bmm(Y_norm.transpose(1, 2), Y_norm)
-    Gram.diagonal(dim1=1, dim2=2).add_(eps_shift)
-    L, info = torch.linalg.cholesky_ex(Gram)
-    cholesky_fail_mask = (info != 0)
 
-    # Condition ratio monitoring: kappa(A) approx max(L_ii^2) / min(L_ii^2)
-    L_diag = L.diagonal(dim1=1, dim2=2)
-    L_diag_sq = L_diag * L_diag
-    cond_ratio = L_diag_sq.max(dim=-1).values / L_diag_sq.min(dim=-1).values.clamp_min(1e-12)
-    cond_fail_mask = (cond_ratio >= cond_threshold)
-
-    # Solve triangular system L Q^T = Y_norm^T
-    Q = torch.linalg.solve_triangular(L, Y_norm.transpose(1, 2), upper=False).transpose(1, 2)
-
-    # Post-QR basis orthogonality check: ||Q^T Q - I||_F
-    I = torch.eye(r, device=Y_mat.device, dtype=torch.float32).unsqueeze(0).expand(K, -1, -1)
-    QtQ = torch.bmm(Q.transpose(1, 2), Q)
-    orth_err = torch.linalg.norm(QtQ - I, dim=(1, 2))
-    orth_fail_mask = (orth_err > orth_tol)
-
-    fallback_mask = cond_fail_mask | degen_mask | cholesky_fail_mask | orth_fail_mask
-
-    if bool(fallback_mask.any()):
-        Q_householder, _ = torch.linalg.qr(Y_f)
-        Q = torch.where(fallback_mask.view(-1, 1, 1), Q_householder, Q)
-
-    Q_out = Q.to(dtype=dtype)
-    if return_diagnostics:
-        diag = {
-            "fallback_mask": fallback_mask,
-            "cond_fail_mask": cond_fail_mask,
-            "degen_mask": degen_mask,
-            "cholesky_fail_mask": cholesky_fail_mask,
-            "orth_fail_mask": orth_fail_mask,
-            "cond_ratio": cond_ratio,
-            "orth_err": orth_err,
-        }
-        return Q_out, diag
-    if return_fallback_mask:
-        return Q_out, fallback_mask
-    return Q_out
+# Re-export batched_qr at module level for full backward compatibility
+batched_qr = batched_qr
 
 
 class _SyncedParamGroup(dict):
@@ -211,6 +156,23 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
         self.max_subspace_gap = max_subspace_gap
         self.param_roles = param_roles or {}
         self._triangular_buffers = {}
+        self.qr_telemetry = {
+            "total_qr_calls": 0,
+            "cholesky_fast_path_survivals": 0,
+            "householder_fallbacks": 0,
+            "primary_fallback_reasons": {
+                "degenerate_columns": 0,
+                "cholesky_non_positive_definite": 0,
+                "condition_ratio_exceeded": 0,
+                "orthogonality_tolerance_exceeded": 0,
+            },
+            "overlapping_triggers": {
+                "degenerate_columns": 0,
+                "cholesky_non_positive_definite": 0,
+                "condition_ratio_exceeded": 0,
+                "orthogonality_tolerance_exceeded": 0,
+            },
+        }
 
         self.non_expert_params = []
         self.muon_params = []
@@ -649,7 +611,16 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                 cursor += K
 
             def _batched_qr(Y_mat: torch.Tensor) -> torch.Tensor:
-                return batched_qr(Y_mat, cond_threshold=1e4, eps_shift=1e-7, orth_tol=1e-4, out_dtype=dtype)
+                Q, diag = batched_qr(
+                    Y_mat,
+                    cond_threshold=1e4,
+                    eps_shift=1e-7,
+                    orth_tol=1e-4,
+                    return_diagnostics=True,
+                    out_dtype=dtype,
+                )
+                self._record_qr_diagnostics(diag)
+                return Q
 
             bucket_cache = []
             step_list = [0.0] * N
@@ -943,7 +914,11 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
             if upd_groups:
                 if len(upd_groups) > 1:
                     stacked_grads = torch.stack([g["param"].grad.data for g in upd_groups], dim=0)
-                    new_projs, new_side = batched_fast_subspace_projection(stacked_grads, rank, niter=2)
+                    new_projs, new_side, diag_history = batched_fast_subspace_projection(
+                        stacked_grads, rank, niter=2, return_diagnostics=True
+                    )
+                    for d in diag_history:
+                        self._record_qr_diagnostics(d)
                     for i, g in enumerate(upd_groups):
                         new_proj = new_projs[i]
                         new_proj_fp32 = new_proj.float()
@@ -1301,6 +1276,51 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                     restored_state[k] = v
             g["state"].update(restored_state)
 
+    def _record_qr_diagnostics(self, diag: dict[str, torch.Tensor]) -> None:
+        """Records telemetry from a batched_qr call."""
+        fb = diag["fallback_mask"]
+        K = fb.numel()
+        fallbacks = int(fb.sum().item())
+        survivals = K - fallbacks
+        self.qr_telemetry["total_qr_calls"] += K
+        self.qr_telemetry["cholesky_fast_path_survivals"] += survivals
+        self.qr_telemetry["householder_fallbacks"] += fallbacks
+
+        p_deg = int(diag["primary_degen_mask"].sum().item())
+        p_chol = int(diag["primary_cholesky_mask"].sum().item())
+        p_cond = int(diag["primary_cond_mask"].sum().item())
+        p_orth = int(diag["primary_orth_mask"].sum().item())
+
+        self.qr_telemetry["primary_fallback_reasons"]["degenerate_columns"] += p_deg
+        self.qr_telemetry["primary_fallback_reasons"]["cholesky_non_positive_definite"] += p_chol
+        self.qr_telemetry["primary_fallback_reasons"]["condition_ratio_exceeded"] += p_cond
+        self.qr_telemetry["primary_fallback_reasons"]["orthogonality_tolerance_exceeded"] += p_orth
+
+        o_deg = int(diag["degen_mask"].sum().item())
+        o_chol = int(diag["cholesky_fail_mask"].sum().item())
+        o_cond = int(diag["cond_fail_mask"].sum().item())
+        o_orth = int(diag["orth_fail_mask"].sum().item())
+
+        self.qr_telemetry["overlapping_triggers"]["degenerate_columns"] += o_deg
+        self.qr_telemetry["overlapping_triggers"]["cholesky_non_positive_definite"] += o_chol
+        self.qr_telemetry["overlapping_triggers"]["condition_ratio_exceeded"] += o_cond
+        self.qr_telemetry["overlapping_triggers"]["orthogonality_tolerance_exceeded"] += o_orth
+
+    def get_qr_telemetry(self) -> dict[str, Any]:
+        """Returns live telemetry of QR fast-path survivals vs Householder fallbacks."""
+        total = self.qr_telemetry["total_qr_calls"]
+        survivals = self.qr_telemetry["cholesky_fast_path_survivals"]
+        fallbacks = self.qr_telemetry["householder_fallbacks"]
+        return {
+            "total_qr_calls": total,
+            "cholesky_fast_path_survivals": survivals,
+            "cholesky_survival_rate_pct": round(100.0 * survivals / max(1, total), 2),
+            "householder_fallbacks": fallbacks,
+            "householder_fallback_rate_pct": round(100.0 * fallbacks / max(1, total), 2),
+            "primary_fallback_reasons": dict(self.qr_telemetry["primary_fallback_reasons"]),
+            "overlapping_triggers": dict(self.qr_telemetry["overlapping_triggers"]),
+        }
+
     def get_telemetry(self) -> dict:
         """Returns detailed parameter breakdown, memory compression metrics, and live tier telemetry."""
         muon_count = sum(p.numel() for p in self.muon_params)
@@ -1373,6 +1393,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                 "saved_state_mb": round(saved_bytes / (1024 * 1024), 2),
                 "compression_ratio": round(compression_ratio, 2),
             },
+            "qr_telemetry": self.get_qr_telemetry(),
         }
 
 
