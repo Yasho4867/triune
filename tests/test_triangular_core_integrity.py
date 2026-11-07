@@ -239,15 +239,11 @@ def test_basis_orthogonality_and_subdiagonal_residuals():
 
 
 def test_cholesky_householder_fallback_integrity():
-    """Verifies that ill-conditioned or degenerate Gram matrices cleanly trigger Householder QR fallback."""
-    from triune.optim.centroid import CentroidSteerOptimizer
+    """Verifies that ill-conditioned or degenerate Gram matrices cleanly trigger Householder QR fallback in production batched_qr."""
+    from triune.optim.centroid import CentroidSteerOptimizer, batched_qr
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch.manual_seed(42)
-
-    # Instantiate optimizer to access internal _batched_qr logic
-    model = DummyMoEModel(d_model=64, num_experts=2, expert_dim=64).to(device=device, dtype=torch.bfloat16)
-    opt = CentroidSteerOptimizer(model, rank=8, use_triangular_core=True)
 
     K, m, r = 3, 128, 16
     Y = torch.randn(K, m, r, device=device)
@@ -258,27 +254,14 @@ def test_cholesky_householder_fallback_integrity():
     # Matrix 2: Degenerate zero column
     Y[2, :, 0] = 0.0
 
-    # Call _batched_qr via forward projection helper
-    def _batched_qr_test(Y_mat: torch.Tensor):
-        Y_f = Y_mat.float()
-        col_norms = torch.linalg.norm(Y_f, dim=1, keepdim=True)
-        Y_norm = Y_f / col_norms.clamp_min(1e-12)
-        Gram = torch.bmm(Y_norm.transpose(1, 2), Y_norm)
-        Gram.diagonal(dim1=1, dim2=2).add_(1e-7)
-        L, info = torch.linalg.cholesky_ex(Gram)
-
-        L_diag = L.diagonal(dim1=1, dim2=2)
-        L_diag_sq = L_diag * L_diag
-        cond_ratio = L_diag_sq.max(dim=-1).values / L_diag_sq.min(dim=-1).values.clamp_min(1e-12)
-        fallback_mask = (cond_ratio >= 1e6) | (col_norms.squeeze(1) <= 1e-12).any(dim=-1) | (info != 0)
-
-        Q = torch.linalg.solve_triangular(L, Y_norm.transpose(1, 2), upper=False).transpose(1, 2)
-        if bool(fallback_mask.any()):
-            Q_householder, _ = torch.linalg.qr(Y_f)
-            Q = torch.where(fallback_mask.view(-1, 1, 1), Q_householder, Q)
-        return Q, fallback_mask
-
-    Q, fallback_mask = _batched_qr_test(Y)
+    # Test the exact production batched_qr function
+    Q, fallback_mask = batched_qr(Y, cond_threshold=1e6, eps_shift=1e-7, return_fallback_mask=True)
+    # Also verify that CentroidSteerOptimizer.batched_qr matches
+    Q_opt, fallback_opt = CentroidSteerOptimizer.batched_qr(
+        Y, cond_threshold=1e6, eps_shift=1e-7, return_fallback_mask=True
+    )
+    assert torch.equal(Q, Q_opt), "CentroidSteerOptimizer.batched_qr staticmethod must be identical"
+    assert torch.equal(fallback_mask, fallback_opt)
 
     assert not fallback_mask[0].item(), "Well-conditioned matrix must use Cholesky path"
     assert fallback_mask[1].item(), "Ill-conditioned matrix must trigger Householder fallback"

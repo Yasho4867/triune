@@ -371,10 +371,17 @@ def generate_parallelism_figure():
         p_data = json.load(f)
     if "async_prefetcher" not in p_data or "fused_qkvg" not in p_data:
         raise KeyError(f"Expected benchmark sections ('async_prefetcher', 'fused_qkvg') missing from {bench_file}")
-    async_data = p_data.get("async_prefetcher", {})
-    gemm_data = p_data.get("fused_qkvg", {})
-    throughput = [async_data.get("sync_tok_per_sec", 633910.4), async_data.get("async_tok_per_sec", 812955.8)]
-    latencies = [gemm_data.get("separate_gemm_ms", 670.03), gemm_data.get("fused_gemm_ms", 109.06)]
+    async_data = p_data["async_prefetcher"]
+    gemm_data = p_data["fused_qkvg"]
+    for k in ("sync_tok_per_sec", "async_tok_per_sec"):
+        if k not in async_data:
+            raise KeyError(f"Missing required key '{k}' in async_prefetcher of {bench_file}")
+    for k in ("separate_gemm_ms", "fused_gemm_ms"):
+        if k not in gemm_data:
+            raise KeyError(f"Missing required key '{k}' in fused_qkvg of {bench_file}")
+
+    throughput = [async_data["sync_tok_per_sec"], async_data["async_tok_per_sec"]]
+    latencies = [gemm_data["separate_gemm_ms"], gemm_data["fused_gemm_ms"]]
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(7.0, 2.6), constrained_layout=True)
 

@@ -206,13 +206,15 @@ Theorem~\ref{thm:augmented_triu} establishes the structural upper-triangular ide
     \begin{equation}
         \hat{\kappa}(A) \approx \frac{\max_i L_{ii}^2}{\min_i L_{ii}^2}
     \end{equation}
-    When $\hat{\kappa}(A) \ge 10^6$, degenerate columns ($\min_j \|Y_{:, j}\| \le 10^{-12}$) appear, or Cholesky decomposition fails, the algorithm automatically falls back to standard Householder QR, preserving exact orthonormality.
-    \item \textbf{Storage Precision (BF16 vs.\ FP32)}: Retaining projection bases $\bar{Q}_L, \bar{Q}_R$ in BF16 introduces 8-bit mantissa truncation noise ($\epsilon_{\text{BF16}} \approx 3.9 \times 10^{-3}$, yielding basis orthogonality errors $\|Q^T Q - I\|_F \le 2.4 \times 10^{-3}$).
-    \item \textbf{Sub-Diagonal Error Quantification}: In rigorous empirical measurements across multi-seed transformer weight matrices ($m=384, n=1024, r=16$), the relative sub-diagonal residual $\max_{i > j} |\bar{S}_{ij}| / \|G\|_F$ is bounded by:
+    When $\hat{\kappa}(A) \ge 10^6$, degenerate columns ($\min_j \|Y_{:, j}\| \le 10^{-12}$) appear, or Cholesky decomposition fails (\texttt{info != 0}), the algorithm automatically falls back to standard Householder QR. In empirical evaluations on genuine trained transformer weights (\texttt{checkpoints/triune\_studio\_step\_36500.pt}, 75.8M params, step 36,500), $13$ out of $32$ active routed expert gradient layers possess low-rank or ill-conditioned Gram matrices that actively trigger this Householder fallback, rescuing them from numerical breakdown.
+    \item \textbf{Storage Precision (BF16 vs.\ FP32)}: Retaining projection bases $\bar{Q}_L, \bar{Q}_R$ in BF16 introduces 8-bit mantissa truncation noise ($\epsilon_{\text{BF16}} \approx 3.9 \times 10^{-3}$, yielding basis orthogonality errors $\|Q^T Q - I\|_F \le 2.7 \times 10^{-3}$ on synthetic inputs and $\le 9.6 \times 10^{-2}$ under extreme gradient dynamic range).
+    \item \textbf{Sub-Diagonal Error Quantification}: In rigorous empirical measurements recorded in \texttt{benchmarks/triangular\_qr\_residual\_results.json}, the relative sub-diagonal residual $\max_{i > j} |\bar{S}_{ij}| / \|G\|_F$ is bounded by:
     \begin{equation}
         \frac{\max_{i > j} |\bar{S}_{ij}|}{\|G\|_F} \le \begin{cases}
-            8.71 \times 10^{-9}, & \text{FP32 Bases} \\
-            8.34 \times 10^{-5}, & \text{BF16 Bases}
+            4.66 \times 10^{-7} \text{ (Real Gradients)}, & \text{FP32 Bases} \\
+            2.67 \times 10^{-3} \text{ (Real Gradients)}, & \text{BF16 Bases} \\
+            6.25 \times 10^{-9} \text{ (Synthetic)}, & \text{FP32 Bases} \\
+            8.31 \times 10^{-5} \text{ (Synthetic)}, & \text{BF16 Bases}
         \end{cases}
     \end{equation}
     \item \textbf{AdamW Noise Amplification \& Regularized Filtering}: Because adaptive coordinate-wise moment normalization scales gradient components by their empirical standard deviation ($\hat{m}_t / (\sqrt{\hat{v}_t} + \epsilon) \approx \operatorname{sign}(g)$ for $|g| \gg \epsilon$), an unconstrained 2D Adam optimizer applied to a noisy finite-precision core amplifies $\mathcal{O}(\epsilon_{\text{BF16}})$ roundoff residuals on theoretical zero entries into unit-magnitude updates ($\approx \pm 1.0$) across all $r(r+1)/2$ subdiagonal coordinates. Computing $R = \operatorname{triu}(\bar{S})$ functions as a \emph{regularized projection filter}: on exact theoretical cores, $\operatorname{triu}(\bar{S}) = \bar{S}$ (yielding bitwise identical updates to unconstrained AdamW, with maximum coordinate difference $< 2.4 \times 10^{-7}$), while on finite-precision cores, it strictly suppresses subdiagonal noise amplification without discarding legitimate gradient signals.

@@ -37,6 +37,50 @@ def fast_subspace_projection(grad: torch.Tensor, rank: int, niter: int = 2) -> t
     return proj, side
 
 
+def batched_qr(
+    Y_mat: torch.Tensor,
+    cond_threshold: float = 1e6,
+    eps_shift: float = 1e-7,
+    return_fallback_mask: bool = False,
+    out_dtype: torch.dtype | None = None,
+) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+    """Computes batched thin QR with condition-ratio monitored Cholesky-QR and Householder fallback.
+
+    Args:
+        Y_mat: Batched input matrices of shape [K, d, r]
+        cond_threshold: Condition ratio threshold kappa(A) approx max(L_ii^2) / min(L_ii^2) for fallback
+        eps_shift: Diagonal shift added to Gram matrix to ensure positive definiteness
+        return_fallback_mask: If True, returns (Q, fallback_mask)
+        out_dtype: Target output dtype for Q (defaults to Y_mat.dtype)
+
+    Returns:
+        Q orthonormal matrices of shape [K, d, r], optionally accompanied by fallback_mask
+    """
+    dtype = out_dtype if out_dtype is not None else Y_mat.dtype
+    Y_f = Y_mat.float()
+    col_norms = torch.linalg.norm(Y_f, dim=1, keepdim=True)
+    Y_norm = Y_f / col_norms.clamp_min(1e-12)
+    Gram = torch.bmm(Y_norm.transpose(1, 2), Y_norm)
+    Gram.diagonal(dim1=1, dim2=2).add_(eps_shift)
+    L, info = torch.linalg.cholesky_ex(Gram)
+
+    # Condition ratio monitoring: kappa(A) approx max(L_ii^2) / min(L_ii^2)
+    L_diag = L.diagonal(dim1=1, dim2=2)
+    L_diag_sq = L_diag * L_diag
+    cond_ratio = L_diag_sq.max(dim=-1).values / L_diag_sq.min(dim=-1).values.clamp_min(1e-12)
+    fallback_mask = (cond_ratio >= cond_threshold) | (col_norms.squeeze(1) <= 1e-12).any(dim=-1) | (info != 0)
+
+    Q = torch.linalg.solve_triangular(L, Y_norm.transpose(1, 2), upper=False).transpose(1, 2)
+    if bool(fallback_mask.any()):
+        Q_householder, _ = torch.linalg.qr(Y_f)
+        Q = torch.where(fallback_mask.view(-1, 1, 1), Q_householder, Q)
+
+    Q_out = Q.to(dtype=dtype)
+    if return_fallback_mask:
+        return Q_out, fallback_mask
+    return Q_out
+
+
 class _SyncedParamGroup(dict):
     """Dictionary subclass wrapping outer param_groups so that lr_scheduler updates
     immediately cascade to all internal optimizer tiers (Base AdamW, Muon, Expert Centroid)."""
@@ -71,6 +115,8 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
         Explicit `param_roles` possess highest precedence and unconditionally override all automatic module-type,
         naming, tied-weight, and aspect-ratio heuristics.
     """
+
+    batched_qr = staticmethod(batched_qr)
 
     def __init__(
         self,
@@ -574,24 +620,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                 cursor += K
 
             def _batched_qr(Y_mat: torch.Tensor) -> torch.Tensor:
-                Y_f = Y_mat.float()
-                col_norms = torch.linalg.norm(Y_f, dim=1, keepdim=True)
-                Y_norm = Y_f / col_norms.clamp_min(1e-12)
-                Gram = torch.bmm(Y_norm.transpose(1, 2), Y_norm)
-                Gram.diagonal(dim1=1, dim2=2).add_(1e-7)
-                L, info = torch.linalg.cholesky_ex(Gram)
-
-                # Condition ratio monitoring: kappa(A) approx max(L_ii^2) / min(L_ii^2)
-                L_diag = L.diagonal(dim1=1, dim2=2)
-                L_diag_sq = L_diag * L_diag
-                cond_ratio = L_diag_sq.max(dim=-1).values / L_diag_sq.min(dim=-1).values.clamp_min(1e-12)
-                fallback_mask = (cond_ratio >= 1e6) | (col_norms.squeeze(1) <= 1e-12).any(dim=-1) | (info != 0)
-
-                Q = torch.linalg.solve_triangular(L, Y_norm.transpose(1, 2), upper=False).transpose(1, 2)
-                if bool(fallback_mask.any()):
-                    Q_householder, _ = torch.linalg.qr(Y_f)
-                    Q = torch.where(fallback_mask.view(-1, 1, 1), Q_householder, Q)
-                return Q.to(dtype=dtype)
+                return batched_qr(Y_mat, cond_threshold=1e6, eps_shift=1e-7, out_dtype=dtype)
 
             bucket_cache = []
             step_list = [0.0] * N

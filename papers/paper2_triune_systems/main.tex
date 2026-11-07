@@ -175,10 +175,7 @@ Standard cross-entropy loss materializes the complete logit tensor $\mathcal{Z} 
 Triune integrates an exact, fused streaming cross-entropy formulation (\texttt{\_FusedLinearCrossEntropy}) that tiles the sequence into micro-chunks of size $B_c \le 1024$.
 Let $N_{\text{valid}} = \sum_{i=1}^N \mathbb{I}(y_i \neq \text{ignore\_index})$ denote the count of unmasked target tokens. For each chunk $c \in \{1, \dots, \lceil N / B_c \rceil\}$:
 \begin{enumerate}
-    \item \textbf{Tiled Logit Materialization}: Computes chunk logits $\mathcal{Z}_c = H_c W_{\text{head}}^T + b \in \mathbb{R}^{B_c \times V}$ in micro-chunks of $B_c \le 1024$ tokens. Within the Triton kernel, vocabulary blocks of size $2048$ are loaded sequentially into on-chip registers and SRAM:
-    \begin{equation}
-        \mathcal{Z}_c = H_c W_{\text{head}}^T + b \in \mathbb{R}^{B_c \times V}
-    \end{equation}
+    \item \textbf{Tiled Logit Computation}: For each micro-chunk of $B_c \le 1024$ tokens, hidden states $H_c$ and head weights $W_{\text{head}}$ are streamed from GPU HBM into on-chip registers and shared memory in blocks of $2048$ vocabulary channels to evaluate local logit tiles $\mathcal{Z}_c = H_c W_{\text{head}}^T + b \in \mathbb{R}^{B_c \times V}$. Rather than retaining the complete $N \times V$ logit tensor across the autograd graph in DRAM, only the single transient micro-chunk of size $B_c \times V$ is maintained, avoiding global memory bloat.
     \item \textbf{Online Log-Sum-Exp \& Loss Accumulation}: Computes the row-wise log-sum-exp $m_{c, i} = \operatorname{lse}(\mathcal{Z}_{c, i})$ and accumulates chunk scalar loss:
     \begin{equation}
         \mathcal{L}_c = \sum_{i=1}^{B_c} (m_{c, i} - \mathcal{Z}_{c, i, y_i}) \cdot \mathbb{I}(y_{c, i} \neq -100)
