@@ -216,9 +216,27 @@ def generate_optimizer_memory_figure():
 
 def generate_long_context_figure():
     """Generates Figure 1 for Paper 2: GLA constant decode memory vs Softmax KV explosion."""
-    contexts = [512, 1024, 2048, 4096, 8192, 16384]
-    sdpa_cache_kb = [768, 1536, 3072, 6144, 12288, 24576]
-    gla_cache_kb = [64, 64, 64, 64, 64, 64]
+    bench_file = BENCHMARK_DIR / "benchmark_results.json"
+    if bench_file.exists():
+        with open(bench_file, "r", encoding="utf-8") as f:
+            data = json.load(f).get("attention_scaling", {})
+        decode_records = data.get("autoregressive_decode", [])
+        prefill_records = data.get("results", [])
+
+        contexts = [r["context_length"] for r in decode_records]
+        sdpa_cache_kb = [r["softmax_kv_cache_kb"] for r in decode_records]
+        gla_cache_kb = [r["triune_gla_state_kb"] for r in decode_records]
+
+        prefill_contexts = [r["seq_len"] for r in prefill_records]
+        sdpa_prefill = [r["standard_time_ms"] for r in prefill_records]
+        gla_prefill = [r["triune_gla_time_ms"] for r in prefill_records]
+    else:
+        contexts = [512, 1024, 2048, 4096, 8192, 16384]
+        sdpa_cache_kb = [768, 1536, 3072, 6144, 12288, 24576]
+        gla_cache_kb = [48, 48, 48, 48, 48, 48]
+        prefill_contexts = [512, 1024, 2048, 4096, 8192]
+        sdpa_prefill = [0.06, 0.14, 0.42, 1.45, 5.29]
+        gla_prefill = [1.07, 1.22, 1.80, 3.02, 6.07]
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(7.0, 2.8), constrained_layout=True)
 
@@ -231,12 +249,8 @@ def generate_long_context_figure():
     ax1.grid(True)
     ax1.legend(loc="upper left")
 
-    # Prefill latency comparison
-    sdpa_prefill = [0.39, 0.40, 0.44, 1.27, 4.14, 14.20]
-    gla_prefill = [2.81, 1.36, 2.96, 3.03, 2.95, 7.25]
-
-    ax2.plot(contexts, sdpa_prefill, "s--", label="Softmax SDPA", color="#d62728")
-    ax2.plot(contexts, gla_prefill, "o-", label="Triune Chunked GLA", color="#1f77b4", linewidth=2.0)
+    ax2.plot(prefill_contexts, sdpa_prefill, "s--", label="Softmax SDPA", color="#d62728")
+    ax2.plot(prefill_contexts, gla_prefill, "o-", label="Triune Chunked GLA", color="#1f77b4", linewidth=2.0)
     ax2.set_xlabel("Context Length (Tokens)")
     ax2.set_ylabel("Prefill Latency (ms)")
     ax2.set_title("(b) Context Prefill Latency")
@@ -252,11 +266,19 @@ def generate_long_context_figure():
 
 def generate_kernel_memory_figure():
     """Generates Figure 2 for Paper 2: Chunked Logit-Free Cross-Entropy memory scaling."""
-    fig, ax = plt.subplots(figsize=(4.2, 2.8), constrained_layout=True)
-    tokens = ["N = 2,048", "N = 4,096", "N = 8,192"]
-    pytorch_vram = [1089.5, 2170.4, 4182.3]
-    triune_vram = [289.4, 348.8, 365.8]
+    bench_file = BENCHMARK_DIR / "benchmark_results.json"
+    if bench_file.exists():
+        with open(bench_file, "r", encoding="utf-8") as f:
+            records = json.load(f).get("cross_entropy", {}).get("results", [])
+        tokens = [f"N = {r['tokens']:,}" for r in records]
+        pytorch_vram = [r["standard_vram_mb"] for r in records]
+        triune_vram = [r["triune_vram_mb"] for r in records]
+    else:
+        tokens = ["N = 2,048", "N = 4,096", "N = 8,192"]
+        pytorch_vram = [1089.5, 2170.4, 4182.3]
+        triune_vram = [289.4, 348.8, 365.8]
 
+    fig, ax = plt.subplots(figsize=(4.2, 2.8), constrained_layout=True)
     x = np.arange(len(tokens))
     width = 0.35
 
@@ -310,11 +332,22 @@ def generate_kernel_memory_figure():
 
 def generate_parallelism_figure():
     """Generates Figure 3 for Paper 2: Parallelism speedups."""
+    bench_file = BENCHMARK_DIR / "parallelism_benchmark_results.json"
+    if bench_file.exists():
+        with open(bench_file, "r", encoding="utf-8") as f:
+            p_data = json.load(f)
+        async_data = p_data.get("async_prefetcher", {})
+        gemm_data = p_data.get("fused_qkvg", {})
+        throughput = [async_data.get("sync_tok_per_sec", 633910.4), async_data.get("async_tok_per_sec", 812955.8)]
+        latencies = [gemm_data.get("separate_gemm_ms", 670.03), gemm_data.get("fused_gemm_ms", 109.06)]
+    else:
+        throughput = [633910.4, 812955.8]
+        latencies = [670.03, 109.06]
+
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(7.0, 2.6), constrained_layout=True)
 
     # Async Prefetcher Throughput
     loaders = ["Synchronous\nDataLoader", "Async Stream\nPrefetcher"]
-    throughput = [633910.4, 812955.8]
     colors1 = ["#7f7f7f", "#1f77b4"]
     bars1 = ax1.bar(loaders, throughput, color=colors1, width=0.45, edgecolor="black", linewidth=0.6)
     ax1.set_ylabel("Tokens / Second")
@@ -342,7 +375,6 @@ def generate_parallelism_figure():
 
     # Fused GEMM Latency
     projs = ["4 Separate\nGEMMs", "1 Fused\nQKVG GEMM"]
-    latencies = [670.03, 109.06]
     colors2 = ["#d62728", "#2ca02c"]
     bars2 = ax2.bar(projs, latencies, color=colors2, width=0.45, edgecolor="black", linewidth=0.6)
     ax2.set_ylabel("50-Step Latency (ms)")

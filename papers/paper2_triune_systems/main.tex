@@ -95,27 +95,28 @@ where $H$ is the number of attention heads, $d_k$ is the key dimension, and $d_v
         \text{out}_{\text{intra}} = A \cdot V_c \in \mathbb{R}^{C \times d_v}
     \end{equation}
     \item \textbf{Decayed Key-Value Chunk Accumulation}:
-    Let $g_{\text{last}} = g_C^{\text{cum}}$. Each key is decayed to the chunk boundary by $\exp(g_{\text{last}} - g_t^{\text{cum}})$:
+    Let $g_t \in \mathbb{R}^{d_k}$ denote the key-channel-wise log-decay vector, with chunk accumulation $g_{\text{last}} = \sum_{t=1}^C g_t \in \mathbb{R}^{d_k}$. Each key vector is decayed toward the chunk boundary:
     \begin{equation}
-        K_{\text{decayed}} = K_c \odot \exp(g_{\text{last}} - g_t^{\text{cum}})
+        K_{\text{decayed}} = K_c \odot \exp(g_{\text{last}} - g_t^{\text{cum}}) \in \mathbb{R}^{C \times d_k}
     \end{equation}
     \begin{equation}
         KV_{\text{chunk}} = K_{\text{decayed}}^T V_c \in \mathbb{R}^{d_k \times d_v}
     \end{equation}
     \item \textbf{Inter-Chunk Recurrent Propagation}:
-    The chunk decay scalar is $\alpha_k = \exp(g_{\text{last}}) \in (0, 1]$. The recurrent state evolves as:
+    The inter-chunk decay vector is $\alpha_k = \exp(g_{\text{last}}) \in (0, 1]^{d_k}$. The recurrent state evolves as:
     \begin{equation}
-        S_k = \alpha_k \odot S_{k-1} + KV_{\text{chunk}} \in \mathbb{R}^{H \times d_k \times d_v}
+        S_k = \operatorname{diag}(\alpha_k) S_{k-1} + KV_{\text{chunk}} \in \mathbb{R}^{d_k \times d_v}
     \end{equation}
+    where $\operatorname{diag}(\alpha_k)$ scales each key feature channel independently along the rows of $S_{k-1}$, and:
     \begin{equation}
-        \text{out}_{\text{inter}} = \tilde{Q}_c S_{k-1}
+        \text{out}_{\text{inter}} = \tilde{Q}_c S_{k-1} \in \mathbb{R}^{C \times d_v}
     \end{equation}
 \end{enumerate}
 The complete chunk representation is $\text{out} = \text{out}_{\text{intra}} + \text{out}_{\text{inter}}$. A custom fused Triton kernel (\texttt{FusedRecurrentScan}) evaluates the inter-chunk recurrence and its reverse-mode gradient backpropagation entirely in GPU SRAM.
 
 \textbf{Autoregressive Decode State}: During token-by-token generation ($T=1$), GLA updates the recurrent state via:
 \begin{equation}
-    S_t = \exp(g_t) \odot S_{t-1} + k_t^T v_t, \quad o_t = q_t S_t
+    S_t = \operatorname{diag}(\exp(g_t)) S_{t-1} + k_t^T v_t, \quad o_t = q_t S_t
 \end{equation}
 The total recurrent state memory per layer is strictly given by:
 \begin{equation}
@@ -130,14 +131,14 @@ For our evaluated configuration ($H=6$ heads, $d_k=64, d_v=64$ in BF16, $b=2$ by
 \small
 \caption{\textbf{Hierarchical Dynamic Exits Quality-vs-Compute Pareto Frontier} on batch size 4, sequence length 512, evaluated on FineWeb-Edu.}
 \label{tab:dynamic_exits}
-\begin{tabular}{lcccc}
+\begin{tabular}{lccccc}
 \toprule
-\textbf{Exit Tier} & \textbf{Latency} & \textbf{Throughput} & \textbf{Loss} & \textbf{Perplexity} \\
+\textbf{Exit Tier} & \textbf{Fwd Latency} & \textbf{Decode Latency} & \textbf{Fwd Tok/s} & \textbf{Loss} & \textbf{Perplexity} \\
 \midrule
-Reflex (Layer 2) & \textbf{7.29 ms} & \textbf{280,941 tok/s} & 8.4313 & 4588.2 \\
-Limbic (Layer 5) & 17.88 ms & 114,528 tok/s & 8.4250 & 4559.6 \\
-Cortex (Layer 8) & 26.76 ms & 76,543 tok/s & 8.4250 & 4559.6 \\
-\textbf{Adaptive Routing} & \textbf{6.84 ms} & \textbf{299,506 tok/s} & \textbf{8.4313} & \textbf{4588.2} \\
+Reflex (Layer 2) & \textbf{5.64 ms} & \textbf{4.87 ms/tok} & \textbf{22,709} & 8.4313 & 4588.2 \\
+Limbic (Layer 5) & 11.58 ms & 8.95 ms/tok & 11,057 & 8.4250 & 4559.6 \\
+Cortex (Layer 8) & 16.32 ms & 9.32 ms/tok & 7,844 & 8.4250 & 4559.6 \\
+\textbf{Dynamic Routing} & \textbf{10.47 ms} & \textbf{6.24 ms/tok} & \textbf{12,226} & \textbf{8.4278} & \textbf{4567.8} \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -159,7 +160,7 @@ with exit weights $w_2 = 0.2, w_5 = 0.3, w_8 = 0.5$.
 \begin{equation}
     \mathcal{H}(p^{(l)}) = -\frac{1}{\log V} \sum_{v=1}^V p_v^{(l)} \log p_v^{(l)} \in [0, 1]
 \end{equation}
-If $\mathcal{H}(p^{(l)}) < \tau_l$ (calibrated empirically on validation distributions), execution halts early and emits token $y = \arg\max p^{(l)}$, bypassing all subsequent transformer blocks. As demonstrated in Table~\ref{tab:dynamic_exits}, adaptive routing executes at $6.84\text{ ms}$ ($299,506\text{ tok/s}$), providing a \textbf{$74.4\%$ reduction in forward latency} relative to full Cortex processing.
+If $\mathcal{H}(p^{(l)}) < \tau_l$ (calibrated empirically to $\tau = 0.35$ on validation distributions), execution halts early and emits token $y = \arg\max p^{(l)}$, bypassing all subsequent transformer blocks. Across validation text, the empirical routing distribution selects Reflex for $64.2\%$ of tokens, Limbic for $23.1\%$, and Cortex for $12.7\%$. As demonstrated in Table~\ref{tab:dynamic_exits}, dynamic routing achieves $10.47\text{ ms}$ forward latency ($1.56\times$ speedup, $35.8\%$ compute reduction) and $6.24\text{ ms/tok}$ in autoregressive decoding ($1.49\times$ decode speedup vs.\ full Cortex), with negligible loss impact ($8.4278$ vs.\ $8.4250$).
 
 \subsection{Chunked Vocabulary-Projection Cross-Entropy}
 
@@ -170,24 +171,34 @@ If $\mathcal{H}(p^{(l)}) < \tau_l$ (calibrated empirically on validation distrib
     \label{fig:chunked_ce}
 \end{figure}
 
-Standard cross-entropy loss materializes the complete logit tensor $\mathcal{Z} = H W_{\text{head}}^T \in \mathbb{R}^{N \times V}$, consuming $\mathcal{O}(NV)$ transient memory:
-\begin{equation}
-    \mathcal{L} = -\frac{1}{N} \sum_{i=1}^N \log \left( \frac{\exp(\mathcal{Z}_{i, y_i})}{\sum_{j=1}^V \exp(\mathcal{Z}_{i, j})} \right)
-\end{equation}
-Triune's chunked vocabulary-projection cross-entropy partitions the total token sequence $N = B \times T$ into micro-chunks of size $B_c \le 1024$. For each chunk $c$:
+Standard cross-entropy loss materializes the complete logit tensor $\mathcal{Z} = H W_{\text{head}}^T \in \mathbb{R}^{N \times V}$ across all $N = B \times T$ sequence tokens simultaneously, creating an unsustainable $\mathcal{O}(NV)$ transient memory footprint.
+Triune integrates an exact, fused streaming cross-entropy formulation (\texttt{\_FusedLinearCrossEntropy}) that tiles the sequence into micro-chunks of size $B_c \le 1024$.
+Let $N_{\text{valid}} = \sum_{i=1}^N \mathbb{I}(y_i \neq \text{ignore\_index})$ denote the count of unmasked target tokens. For each chunk $c \in \{1, \dots, \lceil N / B_c \rceil\}$:
 \begin{enumerate}
-    \item Computes local chunk logits in SRAM/registers:
+    \item \textbf{Local Logit Materialization}: Computes chunk logits in high-speed SRAM/registers:
     \begin{equation}
-        \mathcal{Z}_c = H_c W_{\text{head}}^T \in \mathbb{R}^{B_c \times V}
+        \mathcal{Z}_c = H_c W_{\text{head}}^T + b \in \mathbb{R}^{B_c \times V}
     \end{equation}
-    \item Evaluates online log-sum-exp normalization $m_c = \max_j \mathcal{Z}_{c, j}$ and accumulated loss scalar $\mathcal{L}_c$.
-    \item Computes hidden-state gradient directly:
+    \item \textbf{Online Log-Sum-Exp \& Loss Accumulation}: Computes the row-wise log-sum-exp $m_{c, i} = \operatorname{lse}(\mathcal{Z}_{c, i})$ and accumulates chunk scalar loss:
     \begin{equation}
-        \frac{\partial \mathcal{L}}{\partial H_c} = (P_c - Y_c) W_{\text{head}} \in \mathbb{R}^{B_c \times d}
+        \mathcal{L}_c = \sum_{i=1}^{B_c} (m_{c, i} - \mathcal{Z}_{c, i, y_i}) \cdot \mathbb{I}(y_{c, i} \neq -100)
     \end{equation}
-    \item Immediately deallocates $\mathcal{Z}_c$ before evaluating chunk $c+1$.
+    \item \textbf{In-Place Softmax Gradient}: Evaluates unscaled softmax residual $g_c \in \mathbb{R}^{B_c \times V}$ in-place on $\mathcal{Z}_c$:
+    \begin{equation}
+        (g_c)_{i, j} = \left( \exp(\mathcal{Z}_{c, i, j} - m_{c, i}) - \mathbb{I}(j = y_{c, i}) \right) \cdot \mathbb{I}(y_{c, i} \neq -100)
+    \end{equation}
+    and scales by the global batch normalization: $\tilde{g}_c = \frac{1}{N_{\text{valid}}} g_c$.
+    \item \textbf{Hidden-State Gradient}: Computes chunk activation gradients:
+    \begin{equation}
+        \frac{\partial \mathcal{L}}{\partial H_c} = \tilde{g}_c W_{\text{head}} \in \mathbb{R}^{B_c \times d}
+    \end{equation}
+    \item \textbf{Online Weight Gradient Accumulation}: Directly accumulates projection weight gradients via in-place rank-$B_c$ GEMM:
+    \begin{equation}
+        \frac{\partial \mathcal{L}}{\partial W_{\text{head}}} = \sum_{c} \tilde{g}_c^T H_c \in \mathbb{R}^{V \times d}
+    \end{equation}
+    \item \textbf{Immediate Deallocation}: Frees $\mathcal{Z}_c$ and $\tilde{g}_c$ from HBM prior to evaluating chunk $c+1$.
 \end{enumerate}
-Peak transient memory is reduced from $\mathcal{O}(NV)$ to $\mathcal{O}(B_c V)$. As shown in Figure~\ref{fig:chunked_ce}, at $N=8,192$ and $V=32,000$, peak loss memory drops from $4,182.3\text{ MB}$ to $365.8\text{ MB}$—a \textbf{$91.3\%$ reduction}—while accelerating computation by $1.76\times$ by eliminating DRAM spills.
+Peak transient memory is reduced from $\mathcal{O}(NV)$ to $\mathcal{O}(B_c V)$. As shown in Figure~\ref{fig:chunked_ce}, at $N=8,192$ and $V=32,000$, peak loss memory drops from $4,182.3\text{ MB}$ to $365.8\text{ MB}$—a \textbf{$91.3\%$ reduction}—while accelerating computation by $1.76\times$ by eliminating DRAM thrashing. Empirical gradient parity tests confirm maximum relative error $< 4.5 \times 10^{-8}$ against standard PyTorch autograd.
 
 \subsection{Stream-Pipelined Parallelism}
 
@@ -204,9 +215,9 @@ Peak transient memory is reduced from $\mathcal{O}(NV)$ to $\mathcal{O}(B_c V)$.
 \end{equation}
 As shown in Figure~\ref{fig:parallelism}(a), this eliminates PCIe transfer stalls, increasing throughput from $633,910\text{ tok/s}$ to \textbf{$812,956\text{ tok/s}$} ($1.28\times$ speedup).
 
-\textbf{Tensor Core GEMM Fusion}: Triune consolidates separate query, key, value, and gate projection matrices into a single contiguous weight tensor $W_{QKVG} \in \mathbb{R}^{d \times (3 d_k + d_v)}$. A single unified Tensor Core GEMM computes all head representations simultaneously, saturating SM arithmetic intensity and delivering a \textbf{$6.14\times$ speedup} over sequential launches (Figure~\ref{fig:parallelism}(b)).
+\textbf{Tensor Core GEMM Fusion (Micro-Benchmark)}: In multi-head projection layers, separate query, key, value, and gate matrix multiplications suffer from kernel launch overhead and under-utilized SM warp occupancy. Triune consolidates these matrices into a contiguous weight tensor $W_{QKVG} \in \mathbb{R}^{d \times (3 d_k + d_v)}$. In isolated micro-kernel benchmarks (Figure~\ref{fig:parallelism}(b)), a single fused Tensor Core GEMM executes in $109.1\text{ ms}$ vs.\ $670.0\text{ ms}$ for separate GEMMs, delivering a \textbf{$6.14\times$ kernel-level speedup}.
 
-\textbf{Asynchronous CUDA Graph Engine}: Static forward, loss, backward, and optimizer execution DAGs are captured directly into GPU硅 command buffers. Operating with \texttt{sync=False}, CPU host launch latency decreases from $18,278.5\ \mu\text{s}$ to \textbf{$188.3\ \mu\text{s}$} (a \textbf{$99.0\%$ reduction}), completely decoupling host CPU scheduling from GPU silicon execution.
+\textbf{Asynchronous CUDA Graph Engine}: Static forward, loss, backward, and optimizer execution DAGs are captured directly into GPU command buffers. Operating with \texttt{sync=False}, CPU host launch latency decreases from $18,278.5\ \mu\text{s}$ to \textbf{$188.3\ \mu\text{s}$} (a \textbf{$99.0\%$ reduction}), completely decoupling host CPU scheduling from GPU silicon execution.
 
 \begin{table*}[t]
 \centering
@@ -247,10 +258,11 @@ Table~\ref{tab:unsloth_matrix} summarizes head-to-head empirical benchmarks comp
 
 \subsection{Long-Context Autoregressive Generation}
 
-As shown in Figure~\ref{fig:long_context}, Triune GLA fundamentally decouples generation memory from prompt length:
+As shown in Figure~\ref{fig:long_context}, Triune GLA fundamentally decouples generation memory and decode latency from prompt context length:
 \begin{itemize}
-    \item At $L=16,384$ tokens, Softmax SDPA KV-cache expands to $24.6\text{ MB}$ per layer, whereas Triune retains a strictly flat $48.0\text{ KiB}$ recurrent matrix ($99.8\%$ compression).
-    \item In autoregressive decoding, Triune achieves up to \textbf{$7.94\times$ faster token generation} at $16\text{k}$ context by replacing dynamic dot-products with constant-time state projections.
+    \item \textbf{Evaluation Protocol}: Evaluated on single-token generation ($T=1$, batch size 1, $H=6$ heads, $d=384, d_k=64$ in BF16) across context lengths $L \in [512, 16384]$ following 50 synchronized CUDA warmup steps and 100 timed steps.
+    \item \textbf{Constant Cache Footprint}: At $L=16,384$ tokens, standard Softmax SDPA KV-cache expands to $24.0\text{ MiB}$ per layer ($24,576\text{ KiB}$), whereas Triune retains a strictly flat $48.0\text{ KiB}$ recurrent matrix—a \textbf{$99.8\%$ memory compression}.
+    \item \textbf{Decode Latency Scaling}: In Softmax SDPA, step decode time scales linearly from $0.0382\text{ ms}$ ($L=512$) to $0.7925\text{ ms}$ ($L=16,384$) as attention dot-products become memory-bandwidth bound over the expanding KV cache. In contrast, Triune GLA decode latency is strictly constant at $\approx 0.100\text{ ms}$ ($0.1048\text{ ms}$ at 512, $0.0999\text{ ms}$ at 16k), achieving a \textbf{$7.94\times$ decode speedup} at $16\text{k}$ context.
 \end{itemize}
 
 \section{Related Work}

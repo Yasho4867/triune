@@ -37,7 +37,7 @@
 \maketitle
 
 \begin{abstract}
-First-order adaptive optimizers such as AdamW maintain persistent first and second gradient moments that consume $8.0$ bytes of high-bandwidth memory (HBM) per parameter, creating a primary bottleneck in scaling foundation models. While low-rank gradient projection methods reduce optimizer memory, they project updates onto arbitrary principal directions that ignore the dynamic activation geometry of routed expert tokens in Mixture-of-Experts (MoE) architectures. Furthermore, recent matrix polar optimization methods (such as Muon) treat parameter tensors uniformly, causing empirical instability when applied indiscriminately to high-aspect-ratio vocabulary embeddings. In this paper, we propose \textbf{CentroidSteer}, an activation-guided, tri-tier partitioned optimizer tailored for sparse MoE models. CentroidSteer dynamically partitions weights into: (1) \textbf{Tier 1 (Muon)}, applying 5th-order Newton-Schulz polar orthogonalization to 2D attention matrices; (2) \textbf{Tier 2 (CentroidSteer)}, projecting routed expert updates into an augmented low-rank subspace steered along empirical router activation centroids via scale-invariant Cholesky-QR Gram orthogonalization; and (3) \textbf{Tier 3 (Base AdamW)}, safely preserving 1D normalization layers, router gates, and vocabulary embeddings under standard fused adaptive updates. Mathematically, we prove that alternating orthogonal subspace iteration yields an upper-triangular Krylov core, establishing the theoretical validity of the triangular projection. In rigorous multi-seed pre-training evaluations on FineWeb-Edu ($N=3$ seeds with bitwise-identical initial weights), CentroidSteer reduces persistent expert optimizer memory by $98.4\%$ to \textbf{0.128} bytes/param ($1.00$ byte/param model-wide average), while controlled ablations demonstrate that router-derived centroid steering consistently improves convergence ($7.7985 \pm 0.0874$) over both unsteered ($7.8087 \pm 0.0595$) and randomly steered ($7.8061 \pm 0.0481$) low-rank subspaces.
+First-order adaptive optimizers such as AdamW maintain persistent first and second gradient moments that consume $8.0$ bytes of high-bandwidth memory (HBM) per parameter, creating a primary bottleneck in scaling foundation models. While low-rank gradient projection methods reduce optimizer memory, they project updates onto arbitrary principal directions that ignore the dynamic activation geometry of routed expert tokens in Mixture-of-Experts (MoE) architectures. Furthermore, recent matrix polar optimization methods (such as Muon) treat parameter tensors uniformly, causing empirical instability when applied indiscriminately to high-aspect-ratio vocabulary embeddings. In this paper, we propose \textbf{CentroidSteer}, an activation-guided, tri-tier partitioned optimizer tailored for sparse MoE models. CentroidSteer dynamically partitions weights into: (1) \textbf{Tier 1} (Muon), applying 5th-order Newton-Schulz polar orthogonalization to 2D attention matrices; (2) \textbf{Tier 2} (CentroidSteer), projecting routed expert updates into an augmented low-rank subspace steered along empirical router activation centroids via scale-invariant Cholesky-QR Gram orthogonalization; and (3) \textbf{Tier 3} (Base AdamW), safely preserving 1D normalization layers, router gates, and vocabulary embeddings under standard fused adaptive updates. Mathematically, we prove that alternating orthogonal subspace iteration combined with activation augmentation produces an exact upper-triangular block Krylov core $\bar{S} = \bar{Q}_L^T G \bar{Q}_R$, establishing the theoretical validity of the triangular projection without discarding legitimate gradient information. In rigorous multi-seed pre-training evaluations on FineWeb-Edu ($N=3$ seeds with bitwise-identical initial weights), CentroidSteer reduces persistent expert optimizer memory by $98.4\%$ to \textbf{0.128} bytes/param ($4.54$ bytes/param model-wide with standard Tier 3 AdamW, or $1.27$ bytes/param with 8-bit AdamW), while controlled ablations evaluate the directional influence of router-derived centroid steering ($7.7985 \pm 0.0874$) over both unsteered ($7.8087 \pm 0.0595$) and randomly steered ($7.8061 \pm 0.0481$) low-rank subspaces.
 \end{abstract}
 
 \section{Introduction}
@@ -54,8 +54,8 @@ To address these challenges, we introduce \textbf{CentroidSteer}, a mathematical
 \begin{itemize}
     \item \textbf{Tri-Tier Parameter Partitioning}: We introduce a principled parameter role taxonomy that separates 2D attention projections (Tier 1: Polar Orthogonalization), routed expert MLP matrices (Tier 2: Activation-Guided Subspace), and sensitive embeddings/normalizations (Tier 3: Fused AdamW).
     \item \textbf{Activation-Guided Subspace Steering}: We augment the low-rank gradient projection basis with the empirical activation centroid of tokens assigned to each expert, mathematically proving that the augmented basis remains strictly orthonormal and provides robust rank-deficient fallbacks.
-    \item \textbf{Krylov Core Triangularization}: We prove that alternating orthogonal subspace iteration naturally produces an upper-triangular Krylov projection core $S = Q_L^T G Q_R \equiv R_L$, resolving the theoretical ambiguity of triangular core updates.
-    \item \textbf{Controlled Empirical Ablation}: Across multi-seed FineWeb-Edu training, we isolate the causal contribution of router-derived activation steering against both unsteered and isotropic random-steering baselines.
+    \item \textbf{Augmented Krylov Core Triangularization}: We prove that alternating orthogonal subspace iteration and activation centroid augmentation naturally yield an exact block upper-triangular projection core $\bar{S} = \bar{Q}_L^T G \bar{Q}_R = \begin{bmatrix} R_L & Q_L^T G \tilde{v}_\perp \\ \mathbf{0} & \tilde{c}_\perp^T G \tilde{v}_\perp \end{bmatrix}$, establishing that strictly lower-triangular entries are algebraically zero and resolving the theoretical validity of triangular core updates.
+    \item \textbf{Statistical Empirical Evaluation}: Across multi-seed FineWeb-Edu training, we evaluate paired per-seed differences between router-derived activation steering, unsteered low-rank subspaces, and isotropic random-steering baselines, providing transparent confidence intervals and statistical testing.
 \end{itemize}
 
 \section{CentroidSteer Formulation}
@@ -98,28 +98,7 @@ Here, $\text{CholQR}(Y)$ denotes column-normalized shifted Cholesky-QR:
 \begin{equation}
     Q = \tilde{Y} (L^{-1})^T
 \end{equation}
-where $\epsilon = 10^{-7}$ in standard 32-bit floating point precision. Because column normalization bounds the diagonal entries of $A$ to $1 + \epsilon$, the condition number $\kappa(A) \approx \kappa(\tilde{Y})^2$. If $\kappa(\tilde{Y}) \ge 10^{3.5}$ or Cholesky factorization encounters a non-positive-definite minor, the kernel safely falls back to standard unregularized Householder QR.
-
-We now establish the mathematical validity of the upper-triangular projection:
-
-\begin{theorem}[Upper-Triangular Subspace Identity]
-\label{thm:triu}
-Let $Q_R \in \mathbb{R}^{n \times r}$ have orthonormal columns, and let $Q_L \in \mathbb{R}^{m \times r}$ and $R_L \in \mathbb{R}^{r \times r}$ be obtained from the thin QR decomposition of $G Q_R$, such that $G Q_R = Q_L R_L$ with $R_L$ upper triangular and $Q_L^T Q_L = I_r$. Then the projected core matrix $S = Q_L^T G Q_R$ satisfies:
-\begin{equation}
-    S \equiv R_L
-\end{equation}
-and is therefore strictly upper triangular.
-\end{theorem}
-
-\begin{proof}
-Substituting the factorization $G Q_R = Q_L R_L$ directly into the projected core definition:
-\begin{equation}
-    S = Q_L^T (G Q_R) = Q_L^T (Q_L R_L) = (Q_L^T Q_L) R_L = I_r R_L = R_L
-\end{equation}
-Since $R_L$ is upper triangular by definition of the thin QR decomposition, $S$ is identically upper triangular.
-\end{proof}
-
-In finite-precision floating-point arithmetic, computing $S = Q_L^T (G Q_R)$ via matrix multiplication introduces sub-diagonal rounding errors of magnitude $\mathcal{O}(\epsilon_{\text{mach}} \|G\|_F)$, empirically observed to be $< 2 \times 10^{-6}$. The operation $R = \operatorname{triu}(S)$ in CentroidSteer algebraically suppresses this numerical noise, exactly recovering the theoretical factor $R_L$.
+where $\epsilon = 10^{-7}$ in standard 32-bit floating point precision. Because column normalization bounds the diagonal entries of $A$ to $1 + \epsilon$, the condition number $\kappa(A) \approx \kappa(\tilde{Y})^2$. We monitor numerical conditioning via the diagonal ratio of the Cholesky factor: $\hat{\kappa}(A) = \max_i L_{ii}^2 / \min_i L_{ii}^2$. If $\hat{\kappa}(A) \ge 10^7$ or Cholesky factorization encounters a non-positive-definite minor, the kernel safely falls back to standard unregularized Householder QR.
 
 \subsection{Dynamic Router Centroid Steering}
 
@@ -132,22 +111,11 @@ To steer expert parameter updates along this active functional manifold without 
     c_\perp = (I - Q_L Q_L^T) c_e
 \end{equation}
 
-\begin{proposition}[Basis Orthogonality]
-For any vector $q \in \operatorname{col}(Q_L)$, $\langle q, c_\perp \rangle = 0$.
-\end{proposition}
-\begin{proof}
-Since $q = Q_L a$ for some $a \in \mathbb{R}^{r}$:
-\begin{equation}
-    q^T c_\perp = a^T Q_L^T (I - Q_L Q_L^T) c_e = a^T (Q_L^T - Q_L^T Q_L Q_L^T) c_e = 0
-\end{equation}
-as $Q_L^T Q_L = I_r$.
-\end{proof}
-
 We evaluate numerical stability thresholds before augmentation:
 \begin{equation}
     \tilde{c}_\perp = \begin{cases} 
         \frac{c_\perp}{\|c_\perp\|_2}, & \text{if } \|c_\perp\|_2 > \tau \\
-        0, & \text{otherwise}
+        \mathbf{0}_{m \times 1}, & \text{otherwise}
     \end{cases}
 \end{equation}
 with threshold $\tau = 10^{-8}$. To construct the corresponding right dual steering vector, we evaluate the gradient action:
@@ -157,20 +125,81 @@ with threshold $\tau = 10^{-8}$. To construct the corresponding right dual steer
 \begin{equation}
     \tilde{v}_\perp = \begin{cases}
         \frac{v_\perp}{\|v_\perp\|_2}, & \text{if } \|c_\perp\|_2 > \tau \text{ and } \|v_\perp\|_2 > \tau \\
-        0, & \text{otherwise}
+        \mathbf{0}_{n \times 1}, & \text{otherwise}
     \end{cases}
 \end{equation}
 
-When $\|c_\perp\|_2 > \tau$ and $\|v_\perp\|_2 > \tau$, the bases are augmented to rank $r+1$:
+When both stability thresholds pass ($\|c_\perp\|_2 > \tau$ and $\|v_\perp\|_2 > \tau$), the projection bases are augmented to rank $r+1$:
 \begin{equation}
     \bar{Q}_L = [Q_L, \; \tilde{c}_\perp] \in \mathbb{R}^{m \times (r+1)}, \quad \bar{Q}_R = [Q_R, \; \tilde{v}_\perp] \in \mathbb{R}^{n \times (r+1)}
 \end{equation}
-By Proposition 1, $\bar{Q}_L^T \bar{Q}_L = I_{r+1}$ and $\bar{Q}_R^T \bar{Q}_R = I_{r+1}$. If either norm condition fails, column $r+1$ is zeroed, and the update falls back to the rank-$r$ unsteered subspace.
 
-The projected gradient is then:
+\begin{proposition}[Basis Isometricity and Rank Fallback]
+\label{prop:ortho}
+Let $Q_L \in \mathbb{R}^{m \times r}$ and $Q_R \in \mathbb{R}^{n \times r}$ have orthonormal columns ($Q_L^T Q_L = I_r, Q_R^T Q_R = I_r$).
+\begin{enumerate}
+    \item When $\|c_\perp\|_2 > \tau$ and $\|v_\perp\|_2 > \tau$, the augmented bases $\bar{Q}_L$ and $\bar{Q}_R$ are exact isometric embeddings satisfying $\bar{Q}_L^T \bar{Q}_L = I_{r+1}$ and $\bar{Q}_R^T \bar{Q}_R = I_{r+1}$.
+    \item When either stability threshold fails, $\tilde{c}_\perp = \mathbf{0}$ and $\tilde{v}_\perp = \mathbf{0}$. The effective rank of the projection bases strictly falls back from $r+1$ to $r$, guaranteeing that the update is confined entirely to the unperturbed Krylov subspace $\operatorname{span}(Q_L) \times \operatorname{span}(Q_R)$ without division-by-zero or numerical degeneracy.
+\end{enumerate}
+\end{proposition}
+
+\begin{proof}
+For part (1), let $q \in \operatorname{col}(Q_L)$ such that $q = Q_L a$ for $a \in \mathbb{R}^r$. Then:
 \begin{equation}
-    R = \operatorname{triu}(\bar{Q}_L^T G \bar{Q}_R) \in \mathbb{R}^{(r+1) \times (r+1)}
+    q^T c_\perp = a^T Q_L^T (I - Q_L Q_L^T) c_e = a^T (Q_L^T - Q_L^T Q_L Q_L^T) c_e = 0
 \end{equation}
+because $Q_L^T Q_L = I_r$. Normalizing by $\|c_\perp\|_2 > 0$ preserves orthogonality: $Q_L^T \tilde{c}_\perp = \mathbf{0}_{r \times 1}$. Combined with $\|\tilde{c}_\perp\|_2 = 1$, we obtain:
+\begin{equation}
+    \bar{Q}_L^T \bar{Q}_L = \begin{bmatrix} Q_L^T Q_L & Q_L^T \tilde{c}_\perp \\ \tilde{c}_\perp^T Q_L & \tilde{c}_\perp^T \tilde{c}_\perp \end{bmatrix} = \begin{bmatrix} I_r & \mathbf{0} \\ \mathbf{0}^T & 1 \end{bmatrix} = I_{r+1}
+\end{equation}
+Identical reasoning applies to $v_\perp = (I - Q_R Q_R^T) v$, establishing that $Q_R^T \tilde{v}_\perp = \mathbf{0}_{r \times 1}$ and $\bar{Q}_R^T \bar{Q}_R = I_{r+1}$.
+For part (2), setting column $r+1$ to zero yields $\bar{Q}_L \bar{Q}_L^T = Q_L Q_L^T$ and $\bar{Q}_R \bar{Q}_R^T = Q_R Q_R^T$, so the effective rank is identically $r$.
+\end{proof}
+
+\subsection{Augmented Krylov Core Triangularization}
+
+We now establish the central theorem proving that the projected core matrix under both unaugmented and centroid-augmented bases is mathematically strictly upper triangular.
+
+\begin{theorem}[Augmented Upper-Triangular Subspace Identity]
+\label{thm:augmented_triu}
+Let $Q_R \in \mathbb{R}^{n \times r}$ have orthonormal columns ($Q_R^T Q_R = I_r$), and let $(Q_L, R_L) = \operatorname{qr}(G Q_R)$ be the thin QR decomposition of $G Q_R$ such that $G Q_R = Q_L R_L$ with $Q_L^T Q_L = I_r$ and $R_L \in \mathbb{R}^{r \times r}$ upper triangular.
+Let $\bar{Q}_L = [Q_L, \; \tilde{c}_\perp]$ and $\bar{Q}_R = [Q_R, \; \tilde{v}_\perp]$ be the augmented bases defined above with $\tilde{c}_\perp \perp \operatorname{col}(Q_L)$.
+Then the projected core matrix $\bar{S} = \bar{Q}_L^T G \bar{Q}_R \in \mathbb{R}^{(r+1) \times (r+1)}$ satisfies the exact block decomposition:
+\begin{equation}
+    \bar{S} = \begin{bmatrix} Q_L^T G Q_R & Q_L^T G \tilde{v}_\perp \\ \tilde{c}_\perp^T G Q_R & \tilde{c}_\perp^T G \tilde{v}_\perp \end{bmatrix} = \begin{bmatrix} R_L & Q_L^T G \tilde{v}_\perp \\ \mathbf{0}_{1 \times r} & \tilde{c}_\perp^T G \tilde{v}_\perp \end{bmatrix}
+\end{equation}
+and is therefore strictly upper triangular: for all row indices $i$ and column indices $j$ with $i > j$, $\bar{S}_{ij} = 0$.
+\end{theorem}
+
+\begin{proof}
+We evaluate the four block partitions of $\bar{S}$:
+\begin{enumerate}
+    \item \textbf{Top-Left Block ($r \times r$)}: Substituting the alternating QR factorization $G Q_R = Q_L R_L$:
+    \begin{equation}
+        Q_L^T G Q_R = Q_L^T (Q_L R_L) = (Q_L^T Q_L) R_L = I_r R_L = R_L
+    \end{equation}
+    Since $R_L$ is upper triangular by definition of thin QR decomposition, $(Q_L^T G Q_R)_{ij} = 0$ for all $1 \le j < i \le r$.
+    \item \textbf{Bottom-Left Block ($1 \times r$)}: The $(r+1)$-th row across the first $r$ columns is given by $\tilde{c}_\perp^T G Q_R$. Substituting $G Q_R = Q_L R_L$:
+    \begin{equation}
+        \tilde{c}_\perp^T G Q_R = \tilde{c}_\perp^T (Q_L R_L) = (\tilde{c}_\perp^T Q_L) R_L
+    \end{equation}
+    By Proposition~\ref{prop:ortho}, $\tilde{c}_\perp$ is strictly orthogonal to every column of $Q_L$, which implies $\tilde{c}_\perp^T Q_L = \mathbf{0}_{1 \times r}$. Therefore:
+    \begin{equation}
+        \tilde{c}_\perp^T G Q_R = \mathbf{0}_{1 \times r} R_L = \mathbf{0}_{1 \times r}
+    \end{equation}
+    Thus, every element in the $(r+1)$-th row across columns $1 \dots r$ is identically zero.
+    \item \textbf{Diagonal Entry ($i = j = r+1$)}: The scalar $\bar{S}_{r+1, r+1} = \tilde{c}_\perp^T G \tilde{v}_\perp$ lies on the main diagonal.
+    \item \textbf{Top-Right Block ($r \times 1$)}: The entries $\bar{S}_{1:r, r+1} = Q_L^T G \tilde{v}_\perp$ reside strictly in the upper triangular portion (column $r+1$, rows $1 \dots r$).
+\end{enumerate}
+Combining all four blocks, every strictly lower-triangular entry with $i > j$ is algebraically zero:
+\begin{equation}
+    \bar{S}_{ij} = 0 \quad \forall \; 1 \le j < i \le r+1
+\end{equation}
+This completes the proof.
+\end{proof}
+
+Theorem~\ref{thm:augmented_triu} proves that the augmented core matrix $\bar{S} = \bar{Q}_L^T G \bar{Q}_R$ is mathematically in exact upper-triangular form. In finite-precision arithmetic, evaluating $\bar{S}$ produces sub-diagonal roundoff errors bounded by $\mathcal{O}(\epsilon_{\text{mach}} \|G\|_F)$, empirically verified to be $< 8 \times 10^{-15}$ in FP64 and $< 2 \times 10^{-6}$ in FP32. Computing $R = \operatorname{triu}(\bar{S})$ algebraically suppresses this machine noise without discarding any legitimate gradient components.
+
 A fused Triton kernel applies triangular AdamW updates to $R$, yielding preconditioned update direction $\Delta_R$. To apply steering acceleration, the $(r+1)$-th column of $\Delta_R$ is scaled by $(1 + \alpha)$, where $\alpha \ge 0$ is the steering scale. The full weight update is reconstructed via:
 \begin{equation}
     \Delta W = \bar{Q}_L \Delta_R \bar{Q}_R^T \in \mathbb{R}^{m \times n}
@@ -201,8 +230,8 @@ For an expert weight matrix $W \in \mathbb{R}^{m \times n}$ with $P = mn$ parame
 \begin{itemize}
     \item \textbf{Persistent Moments} ($M, V$): CentroidSteer tracks moments only for the upper-triangular core $R \in \mathbb{R}^{(r+1) \times (r+1)}$, consuming $2(r+1)^2 \times 4$ bytes in FP32 ($2,312$ bytes for $r=16$).
     \item \textbf{Projection Bases} ($Q_L, Q_R$): Retained between subspace update intervals in BF16, consuming $(m + n)(r+1) \times 2$ bytes ($47,872$ bytes for $m=384, n=1024, r=16$).
-    \item \textbf{Total Persistent Footprint}: As summarized in Table~\ref{tab:memory_breakdown}, CentroidSteer requires $50,184$ bytes, or \textbf{0.128} bytes/param ($98.4\%$ reduction vs.\ AdamW's $8.0$ B/param).
-    \item \textbf{Model-Wide Average}: When averaged across a full 90.8M MoE model containing Tier 1 (Muon momentum: $2.0$ B/param) and Tier 3 (Base AdamW on embeddings: $8.0$ B/param), the model-wide average persistent footprint is \textbf{1.00} byte/param.
+    \item \textbf{Total Persistent Expert Footprint}: As summarized in Table~\ref{tab:memory_breakdown}, CentroidSteer requires $50,184$ bytes, or \textbf{0.128} bytes/param ($98.4\%$ reduction vs.\ AdamW's $8.0$ B/param).
+    \item \textbf{Model-Wide Footprint}: In our evaluated 90.79M MoE model, parameter tiers comprise Tier 1 (6.5\%), Tier 2 (39.0\%), and Tier 3 (54.5\%, dominated by vocabulary embeddings). If Tier 3 uses standard FP32 AdamW ($8.0$ B/p), the model-wide footprint is $0.065 \times 2.0 + 0.390 \times 0.128 + 0.545 \times 8.0 = \mathbf{4.54}$ \textbf{bytes/param} ($43.3\%$ overall memory reduction). If Tier 3 employs 8-bit AdamW ($2.0$ B/p), the model-wide footprint drops to $\mathbf{1.27}$ \textbf{bytes/param} ($84.1\%$ reduction). Furthermore, as expert count scales in larger models ($E \ge 64$), Tier 2 comprises $>85\%$ of total parameters, asymptotically driving model-wide state memory toward the Tier 2 bound of $0.128$ B/p.
 \end{itemize}
 
 \begin{figure}[t]
@@ -282,32 +311,34 @@ In Table~\ref{tab:moe_convergence} and Figure~\ref{fig:moe_conv}, we evaluate \t
 Tier 1 contains $5.90\text{M}$ parameters ($6.5\%$), Tier 2 contains $35.39\text{M}$ parameters ($39.0\%$), and Tier 3 contains $49.50\text{M}$ parameters ($54.5\%$).
 The Full Triune MoE stack achieves a final validation loss of $7.8268 \pm 0.0558$, significantly improving upon Standard AdamW ($7.9216 \pm 0.0667$) and matching the Muon+AdamW baseline ($7.8246 \pm 0.0041$) while reducing optimizer state memory on expert weights by $98.4\%$.
 
-\subsection{Causal Routing Steering Ablation}
+\subsection{Router Centroid Steering Ablation \& Statistical Analysis}
 
-\begin{table}[t]
+\begin{table*}[t]
 \centering
 \small
-\caption{\textbf{Controlled Routing Steering Ablation on MoE Model (3 Seeds)} under identical initial weights and sequence ordering.}
+\caption{\textbf{Controlled Routing Steering Ablation on MoE Model (3 Seeds)} under identical initial weights and sequence ordering. Per-seed trajectories and paired statistical tests.}
 \label{tab:steering_ablation}
-\begin{tabular}{lccc}
+\begin{tabular}{lcccccc}
 \toprule
-\textbf{Steering Regime} & \textbf{Final Val Loss} & \textbf{Val Loss Drop} & \textbf{Final Val PPL} \\
+\textbf{Steering Regime} & \textbf{Seed 42} & \textbf{Seed 1337} & \textbf{Seed 2026} & \textbf{Mean $\pm$ Std} & \textbf{Val Loss Drop} & \textbf{Paired $\Delta$ vs.\ Unsteered} \\
 \midrule
-Unsteered Subspace ($\alpha=0$) & $7.8087 \pm 0.0595$ & $2.6419 \pm 0.0621$ & $2465.0 \pm 146.8$ \\
-Random Orthogonal Direction & $7.8061 \pm 0.0481$ & $2.6445 \pm 0.0437$ & $2457.5 \pm 118.2$ \\
-\textbf{Router Centroid Steering} & \textbf{7.7985} $\pm$ \textbf{0.0874} & \textbf{2.6521} $\pm$ \textbf{0.0863} & \textbf{2443.2} $\pm$ \textbf{210.7} \\
+Unsteered Subspace ($\alpha=0$) & 7.7835 & 7.8767 & 7.7660 & $7.8087 \pm 0.0595$ & $2.6419 \pm 0.0621$ & --- \\
+Random Orthogonal Direction & 7.7817 & 7.7751 & 7.8616 & $7.8061 \pm 0.0481$ & $2.6445 \pm 0.0437$ & $-0.0026 \pm 0.098$ ($p=0.96$) \\
+\textbf{Router Centroid Steering} & \textbf{7.7043} & 7.8768 & 7.8145 & \textbf{7.7985} $\pm$ \textbf{0.0874} & \textbf{2.6521} $\pm$ \textbf{0.0863} & $\mathbf{-0.0102 \pm 0.064}$ ($p=0.81$) \\
 \bottomrule
 \end{tabular}
-\end{table}
+\end{table*}
 
-To isolate whether router-derived activation geometry causally accelerates convergence, Table~\ref{tab:steering_ablation} and Figure~\ref{fig:moe_ablation} evaluate three controlled configurations:
+To isolate whether router-derived activation geometry provides an effective inductive bias, Table~\ref{tab:steering_ablation} and Figure~\ref{fig:moe_ablation} evaluate three controlled configurations across three identical random seeds:
 \begin{enumerate}
-    \item \textbf{Unsteered Subspace} ($\alpha=0$): The expert parameters are optimized purely within the rank-16 gradient subspace $Q_L, Q_R$.
+    \item \textbf{Unsteered Subspace} ($\alpha=0$): Expert parameters are optimized purely within the rank-16 gradient Krylov subspace $Q_L, Q_R$.
     \item \textbf{Random Orthogonal Steering}: Subspaces are augmented by an isotropic Gaussian vector $\eta \sim \mathcal{N}(0, I)$ orthogonalized against $Q_L$ and $Q_R$.
     \item \textbf{Router Centroid Steering}: Subspaces are augmented by the true empirical router activation centroid $c_\perp$.
 \end{enumerate}
 
-Dynamic router centroid steering achieves the lowest validation loss ($7.7985 \pm 0.0874$) and largest loss reduction ($2.6521 \pm 0.0863$), outperforming both the unsteered baseline ($7.8087$) and random directional augmentation ($7.8061$). This demonstrates that aligning gradient updates with the active token activation manifold provides a genuine, measurable inductive bias during sparse expert pre-training.
+Dynamic router centroid steering achieves the lowest mean validation loss ($7.7985 \pm 0.0874$) and largest loss reduction ($2.6521 \pm 0.0863$), outperforming both the unsteered baseline ($7.8087$) and random directional augmentation ($7.8061$).
+However, statistical inspection of the paired per-seed trajectories reveals that inter-seed variance ($\pm 0.0874$) is considerably larger than the observed mean difference ($\Delta = -0.0102$). On Seed 42, router centroid steering exhibits a noticeable advantage ($-0.0792$ loss drop over unsteered), whereas on Seed 2026 the unsteered configuration achieves lower loss. A two-tailed paired $t$-test across $N=3$ seeds yields $t = -0.275$ ($p = 0.81$), with a $95\%$ confidence interval of $[-0.169, +0.149]$.
+Consequently, while the directional trend is encouraging and aligns with our theoretical motivation, these 100-step, 3-seed empirical results do not permit rejecting the null hypothesis at standard significance levels ($\alpha=0.05$). We treat router steering as a promising inductive prior that warrants verification over extended pre-training horizons ($> 10^4$ steps) and larger seed cohorts ($N \ge 10$).
 
 \section{Related Work}
 

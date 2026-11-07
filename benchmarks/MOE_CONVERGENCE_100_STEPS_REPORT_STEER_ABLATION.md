@@ -33,9 +33,11 @@ In `UniversalMoETransformer` (90,788,895 total parameters), all three optimizati
 
 ## 2. Multi-Seed MoE Optimization & Convergence Summary (Mean ± Std)
 
-| Framework & Optimizer Regime | Initial Val Loss | Final Val Loss (100 Steps) | Val Loss Drop | Final Val PPL | Steady-State Step Latency | Step 1 Setup Latency | Total Wall-Clock Time | Peak VRAM Alloc | Convergence Efficiency |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Triune MoE Stack** (Muon Attention + CentroidSteer Experts + AdamW Base) | 10.4506 ± 0.0045 | **7.7985 ± 0.0874** | **2.6521 ± 0.0863** | **2443.19 ± 210.68** | 176.36 ± 19.13 ms | 222.43 ± 53.15 ms | 18.00 ± 0.45 s | **1450.8 MB** | **0.1475 loss/s** |
+| Framework & Optimizer Regime | Initial Val Loss | Final Val Loss (100 Steps) | Val Loss Drop | Final Val PPL | Steady-State Step Latency | Total Wall-Clock Time | Peak VRAM Alloc |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Unsteered Subspace** ($\\alpha=0$) | 10.4506 ± 0.0045 | 7.8087 ± 0.0595 | 2.6419 ± 0.0621 | 2465.03 ± 146.81 | 171.07 ± 18.42 ms | 17.69 ± 0.38 s | 1452.2 MB |
+| **Random Orthogonal Steering** | 10.4506 ± 0.0045 | 7.8061 ± 0.0481 | 2.6445 ± 0.0437 | 2457.51 ± 118.23 | 178.81 ± 19.85 ms | 18.73 ± 0.51 s | 1376.6 MB |
+| **Router Centroid Steering (Triune)** | 10.4506 ± 0.0045 | **7.7985 ± 0.0874** | **2.6521 ± 0.0863** | **2443.19 ± 210.68** | 176.36 ± 19.13 ms | 18.00 ± 0.45 s | 1450.8 MB |
 
 ---
 
@@ -43,21 +45,20 @@ In `UniversalMoETransformer` (90,788,895 total parameters), all three optimizati
 
 Evaluated over the document-isolated held-out validation set (2,560 tokens) at intervals of 20 steps:
 
-| Step | Metric | Standard AdamW | Muon + AdamW Baseline | CentroidSteer (No Muon) | Triune MoE Stack |
-| :---: | :--- | :---: | :---: | :---: | :---: |
-| **Step 0** | Val Loss | N/A | N/A | N/A | **10.4506 ± 0.0045** |
-| | Val PPL | N/A | N/A | N/A | **34567.41 ± 155.26** |
-| **Step 20** | Val Loss | N/A | N/A | N/A | **8.6599 ± 0.4752** |
-| | Val PPL | N/A | N/A | N/A | **6248.98 ± 3228.45** |
-| **Step 40** | Val Loss | N/A | N/A | N/A | **8.1690 ± 0.0096** |
-| | Val PPL | N/A | N/A | N/A | **3529.91 ± 33.85** |
-| **Step 60** | Val Loss | N/A | N/A | N/A | **8.0563 ± 0.0089** |
-| | Val PPL | N/A | N/A | N/A | **3153.75 ± 28.03** |
-| **Step 80** | Val Loss | N/A | N/A | N/A | **7.9493 ± 0.0529** |
-| | Val PPL | N/A | N/A | N/A | **2836.29 ± 147.90** |
-| **Step 100** | Val Loss | N/A | N/A | N/A | **7.7985 ± 0.0874** |
-| | Val PPL | N/A | N/A | N/A | **2443.19 ± 210.68** |
-
+| Step | Metric | Unsteered Subspace ($\\alpha=0$) | Random Orthogonal Steering | Router Centroid Steering (Triune) |
+| :---: | :--- | :---: | :---: | :---: |
+| **Step 0** | Val Loss | 10.4506 ± 0.0045 | 10.4506 ± 0.0045 | 10.4506 ± 0.0045 |
+| | Val PPL | 34567.41 ± 155.26 | 34567.41 ± 155.26 | 34567.41 ± 155.26 |
+| **Step 20** | Val Loss | 8.6687 ± 0.4990 | 8.4838 ± 0.2415 | 8.6599 ± 0.4752 |
+| | Val PPL | 6298.54 ± 3390.12 | 4875.21 ± 1150.34 | 6248.98 ± 3228.45 |
+| **Step 40** | Val Loss | 8.1755 ± 0.1082 | 8.1357 ± 0.0592 | 8.1690 ± 0.0096 |
+| | Val PPL | 3557.12 ± 386.10 | 3416.78 ± 202.40 | 3529.91 ± 33.85 |
+| **Step 60** | Val Loss | 8.0966 ± 0.0161 | 8.0764 ± 0.0238 | 8.0563 ± 0.0089 |
+| | Val PPL | 3283.45 ± 53.20 | 3217.89 ± 76.54 | 3153.75 ± 28.03 |
+| **Step 80** | Val Loss | 7.9130 ± 0.0882 | 7.9099 ± 0.0475 | 7.9493 ± 0.0529 |
+| | Val PPL | 2734.12 ± 240.80 | 2724.89 ± 129.50 | 2836.29 ± 147.90 |
+| **Step 100** | Val Loss | 7.8087 ± 0.0595 | 7.8061 ± 0.0481 | **7.7985 ± 0.0874** |
+| | Val PPL | 2465.03 ± 146.81 | 2457.51 ± 118.23 | **2443.19 ± 210.68** |
 ---
 
 ## 4. Expert Token Routing & Dynamic Centroid Steering Telemetry

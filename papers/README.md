@@ -1,51 +1,68 @@
-# Triune AI — Research Publications
+# Triune AI — Research Manuscripts & Preprints
 
-This directory contains publication-grade research papers, vector figures, and LaTeX manuscripts documenting the architectural, mathematical, and systems innovations introduced in **Triune AI**.
+This directory contains research preprints, vector figures, and LaTeX manuscripts documenting the architectural, mathematical, and systems innovations introduced in **Triune AI**.
 
 ---
 
-## Published Papers
+## Research Preprints (Working Manuscripts)
 
-### 1. CentroidSteer: Tri-Tier Subspace Optimization and Polar Orthogonalization for Dynamic Mixture-of-Experts
+### 1. CentroidSteer: Activation-Guided Low-Rank Subspace Optimization for Sparse Mixture-of-Experts
 - **Track**: Machine Learning Optimization & Scalable Pre-Training
 - **Manuscript**: [`paper1_centroidsteer/main.tex`](paper1_centroidsteer/main.tex)
 - **Compiled PDF**: [`paper1_centroidsteer/centroidsteer.pdf`](paper1_centroidsteer/centroidsteer.pdf)
 - **Primary Artifacts**:
-  - Multi-seed FineWeb-Edu convergence evaluation ($N=3$ seeds: 42, 1337, 2026).
-  - Tri-tier parameter partitioning: Muon polar orthogonalization (Tier 1), CentroidSteer low-rank router subspace projection (Tier 2), and Fused AdamW base (Tier 3).
+  - Theorem 1 proving upper-triangular Krylov projection core identity $\bar{S} = \bar{Q}_L^T G \bar{Q}_R = \begin{bmatrix} R_L & Q_L^T G \tilde{v}_\perp \\ \mathbf{0} & \tilde{c}_\perp^T G \tilde{v}_\perp \end{bmatrix}$.
+  - Proposition 1 establishing basis isometricity and robust fallback to effective rank $r$ under degeneracy.
+  - Multi-seed FineWeb-Edu convergence evaluation ($N=3$ seeds: 42, 1337, 2026) under bitwise identical initial weights.
+  - Paired per-seed steering ablation analysis with confidence intervals and hypothesis testing.
   - Scale-invariant Cholesky-QR Gram orthogonalization ($6.8\times$ faster than SVD, $3.1\times$ lower transient VRAM).
-  - Persistent optimizer state memory reduced to **$1.00$ byte/param** ($87.5\%$ reduction vs.\ standard AdamW).
-  - Highest convergence efficiency ($0.1916$ loss/s) on 90.8M Mixture-of-Experts.
+  - Exact memory accounting: **0.128 bytes/param** on Tier 2 expert weights ($98.4\%$ reduction vs.\ AdamW), $4.54$ bytes/param model-wide with standard Tier 3 AdamW, or $1.27$ bytes/param with 8-bit AdamW.
 
 ```bibtex
 @article{bhardwaj2026centroidsteer,
-  title={CentroidSteer: Tri-Tier Subspace Optimization and Polar Orthogonalization for Dynamic Mixture-of-Experts},
+  title={CentroidSteer: Activation-Guided Low-Rank Subspace Optimization for Sparse Mixture-of-Experts},
   author={Bhardwaj, Yash},
-  journal={arXiv preprint},
+  note={Working paper / preprint under review},
+  url={https://github.com/Yasho4867/triune},
   year={2026}
 }
 ```
 
 ---
 
-### 2. Triune: A Sub-Quadratic, Multi-Exit Transformer Architecture with Fused Logit-Free Kernels and Asynchronous Pipelining
+### 2. Triune: A Memory-Virtualizing and Constant-State Transformer Architecture for Long-Context Autoregressive Models
 - **Track**: Efficient Deep Learning Systems & Hardware-Aware Machine Learning
 - **Manuscript**: [`paper2_triune_systems/main.tex`](paper2_triune_systems/main.tex)
 - **Compiled PDF**: [`paper2_triune_systems/triune_architecture.pdf`](paper2_triune_systems/triune_architecture.pdf)
 - **Primary Artifacts**:
-  - Gated Linear Attention (GLA) with fused Triton recurrent scan: constant $\mathcal{O}(1)$ decode memory ($64.0\text{ KB}$ fixed cache, $99.8\%$ compression vs.\ Softmax SDPA at 16k context, up to $7.94\times$ faster decode).
-  - Hierarchical Dynamic Exits (Reflex L2, Limbic L5, Cortex L8) with learned entropy-gated routing ($-74.4\%$ latency on low-entropy tokens).
-  - Chunked Logit-Free Cross-Entropy: $-91.3\%$ peak transient memory and $1.76\times$ speedup at vocabulary size $V=32,000$.
-  - Multi-Level Parallelism: Asynchronous PCIe DMA prefetching ($1.28\times$ throughput speedup, $812,956\text{ tok/s}$), Tensor Core GEMM projection fusion ($6.14\times$ speedup), and asynchronous CUDA Graph replay ($-99.0\%$ CPU launch latency with bitwise optimizer parity).
+  - Gated Linear Attention (GLA) with fused Triton recurrent scan: constant $\mathcal{O}(1)$ decode memory ($48.0\text{ KiB}$ fixed cache for $H=6$ heads, $64.0\text{ KiB}$ for $H=8$ heads; $99.8\%$ compression vs.\ Softmax SDPA at 16k context, up to $7.94\times$ faster decode).
+  - Hierarchical Dynamic Exits (Reflex L2, Limbic L5, Cortex L8) with learned entropy-gated routing ($-35.8\%$ compute, $1.49\times$ decode speedup vs Cortex).
+  - Chunked Vocabulary-Projection Cross-Entropy: $-91.3\%$ peak transient memory and $1.76\times$ speedup at vocabulary size $V=32,000$, with exact online $\nabla_W \mathcal{L}$ gradient accumulation.
+  - Multi-Level Parallelism: Asynchronous PCIe DMA prefetching ($1.28\times$ throughput speedup, $812,956\text{ tok/s}$), Tensor Core GEMM projection fusion ($6.14\times$ micro-kernel speedup), and asynchronous CUDA Graph replay ($-99.0\%$ CPU launch latency with bitwise optimizer parity).
   - Head-to-head competitive benchmark vs.\ genuine installed Unsloth (2026.10.10): $+19.7\%$ throughput on LoRA fine-tuning with native Mixture-of-Experts execution.
 
 ```bibtex
 @article{bhardwaj2026triune,
-  title={Triune: A Sub-Quadratic, Multi-Exit Transformer Architecture with Fused Logit-Free Kernels and Asynchronous Pipelining},
+  title={Triune: A Memory-Virtualizing and Constant-State Transformer Architecture for Long-Context Autoregressive Models},
   author={Bhardwaj, Yash},
-  journal={arXiv preprint},
+  note={Working paper / preprint under review},
+  url={https://github.com/Yasho4867/triune},
   year={2026}
 }
+```
+
+---
+
+## Reproduction & Build Commands
+
+To recompile all figures and LaTeX manuscripts to PDF from source:
+
+```bash
+# 1. Regenerate publication vector figures
+python papers/scripts/generate_figures.py
+
+# 2. Build both research paper PDFs
+python papers/scripts/build_papers.py
 ```
 
 ---
