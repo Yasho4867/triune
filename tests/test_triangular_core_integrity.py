@@ -13,17 +13,18 @@ class DummyMoEModel(nn.Module):
         self.head = nn.Linear(d_model, 64, bias=False)
 
     def forward(self, x):
-        h, aux = self.ffn(x)
-        return self.head(h), aux
+        h = self.ffn(x)
+        return self.head(h), None
 
 
 def test_triangular_core_state_persistence():
+    torch.manual_seed(42)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = DummyMoEModel(d_model=128, num_experts=4, expert_dim=256).to(device=device, dtype=torch.bfloat16)
     opt = CentroidSteerOptimizer(model, rank=16, use_triangular_core=True)
 
     # Step 1
-    x = torch.randn(2, 16, 128, device=device, dtype=torch.bfloat16)
+    x = torch.randn(4, 32, 128, device=device, dtype=torch.bfloat16)
     out, _ = model(x)
     loss = out.sum()
     loss.backward()
@@ -100,8 +101,8 @@ def test_triangular_core_mixed_ranks():
             self.head_large = nn.Linear(64, 128, bias=False)  # min dim 64 > rank 16!
 
         def forward(self, x):
-            h, aux = self.ffn(x)
-            return self.head_tiny(h) + self.head_large(h)[:, :8], aux
+            h = self.ffn(x)
+            return self.head_tiny(h) + self.head_large(h)[..., :8], None
 
     model = MixedModel().to(device=device, dtype=torch.bfloat16)
     opt = CentroidSteerOptimizer(model, rank=16, use_triangular_core=True)

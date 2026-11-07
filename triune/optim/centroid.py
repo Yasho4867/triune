@@ -580,9 +580,17 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                 Gram = torch.bmm(Y_norm.transpose(1, 2), Y_norm)
                 Gram.diagonal(dim1=1, dim2=2).add_(1e-7)
                 L, info = torch.linalg.cholesky_ex(Gram)
+
+                # Condition ratio monitoring: kappa(A) approx max(L_ii^2) / min(L_ii^2)
+                L_diag = L.diagonal(dim1=1, dim2=2)
+                L_diag_sq = L_diag * L_diag
+                cond_ratio = L_diag_sq.max(dim=-1).values / L_diag_sq.min(dim=-1).values.clamp_min(1e-12)
+                fallback_mask = (cond_ratio >= 1e7) | (col_norms.squeeze(1) <= 1e-12).any(dim=-1) | (info != 0)
+
                 Q = torch.linalg.solve_triangular(L, Y_norm.transpose(1, 2), upper=False).transpose(1, 2)
-                if bool((col_norms <= 1e-12).any() or info.any()):
-                    Q, _ = torch.linalg.qr(Y_f)
+                if bool(fallback_mask.any()):
+                    Q_householder, _ = torch.linalg.qr(Y_f)
+                    Q = torch.where(fallback_mask.view(-1, 1, 1), Q_householder, Q)
                 return Q.to(dtype=dtype)
 
             bucket_cache = []

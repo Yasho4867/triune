@@ -4,15 +4,15 @@
 
 ## Key Capabilities & Pillars
 
-- **Gated Linear Attention (GLA)**: $O(N)$ linear-time complexity and strictly constant $O(1)$ memory (`48–64 KB`) recurrent decoding with native BF16 Tensor Core intra-chunk GEMM, fused chunkwise recurrent Triton scan for autograd training (eliminating intermediate PyTorch graph node allocations), and logarithmic parallel prefix scan for inference, providing a **256x–512x smaller recurrent cache** and up to **7.94x faster autoregressive decoding** at long contexts ($L=16,384$) than standard Softmax KV-caching.
+- **Gated Linear Attention (GLA)**: $O(N)$ linear-time complexity and strictly constant $O(1)$ memory (`48.0 KiB` for 6 heads, `64.0 KiB` for 8 heads) recurrent decoding with native BF16 Tensor Core intra-chunk GEMM, fused chunkwise recurrent Triton scan for autograd training (eliminating intermediate PyTorch graph node allocations), and logarithmic parallel prefix scan for inference, providing a **256x–512x smaller recurrent cache** and up to **7.94x faster autoregressive decoding** at long contexts ($L=16,384$) than standard Softmax KV-caching.
 - **Sparse Mixture of Experts (MoE)**: Batched 3D BMM top-$k$ expert routing with an always-active shared expert, zero-sync GPU overflow counters, and activation centroid tracking.
-- **Hierarchical Dynamic Exits**: Calibrated intermediate exit heads (**Reflex**, **Limbic**) and full-depth exit (**Cortex**), variance-matched via parameter-free `RMSNorm`, delivering a **3.6x–4.3x inference speedup** (`299,506 tok/s` forward throughput) on low-entropy tokens.
+- **Hierarchical Dynamic Exits**: Calibrated intermediate exit heads (**Reflex**, **Limbic**) and full-depth exit (**Cortex**), delivering a **1.56x forward latency speedup** (-35.8% latency) and **1.49x faster autoregressive decoding** ($6.24\text{ ms/tok}$ vs $9.32\text{ ms/tok}$) via entropy-gated token routing, with shallow Reflex exits executing at up to $22,709\text{ tok/s}$.
 - **3-Tier Partitioned Optimizer (`CentroidSteerOptimizer`)**:
-  - **Tier 1 (`Muon`)**: Batched 5th-order Newton-Schulz polar orthogonalization with fused `baddbmm` polynomial evaluation and multi-tensor `_foreach` updates for 2D hidden projections.
-  - **Tier 2 (`CentroidSteer`)**: Universal Triangular Core with batched Cholesky-QR subspace iteration, dual-orthonormal centroid steering, and Triton-fused upper-triangular AdamW for routed MoE experts (**66.4%–94.8% state memory reduction**, **`4.76 ms/step`**, and **+15.7% faster 50-step loss reduction** than AdamW / BitsAndBytes 8-bit).
-  - **Tier 3 (`AdamW` / `8-bit AdamW`)**: Fused adaptive moments for 1D vectors, norms, router gates, and vocabulary embeddings.
+  - **Tier 1 (`Muon`)**: Batched 5th-order Newton-Schulz polar orthogonalization with fused `baddbmm` polynomial evaluation and multi-tensor `_foreach` updates for 2D hidden projections ($2.0\text{ bytes/param}$).
+  - **Tier 2 (`CentroidSteer`)**: Universal Triangular Core with batched Cholesky-QR subspace iteration, condition-ratio monitoring, dual-orthonormal centroid steering, and Triton-fused upper-triangular AdamW for routed MoE experts (**98.4% state memory reduction to 0.128 bytes/param**, with highest convergence efficiency on 90.8M MoE).
+  - **Tier 3 (`AdamW` / `8-bit AdamW`)**: Fused adaptive moments for 1D vectors, norms, router gates, and vocabulary embeddings ($4.54\text{ B/p}$ model-wide with standard FP32 AdamW, or $1.27\text{ B/p}$ with 8-bit AdamW).
 - **Layer Streaming Runtime (`LayerStreamingEngine`)**: On-demand layer staging and immediate gradient offloading between host RAM and GPU VRAM with configurable `resident_gpu_layers`, reducing peak GPU VRAM by **up to 47.9%** without pegging system RAM.
-- **Native C/AVX2/CUDA/Triton Operator Engine (`csrc/` & `triune.ops`)**: Zero-copy `ctypes` / P/Invoke C ABI (`triune_core.dll` / `libtriune_core.so`) and Triton/Tensor Core kernels for RMSNorm, RoPE, GLA recurrent decode, chunked logit-free Cross-Entropy (**up to 90.7% VRAM saved**), and Neuron Scope activation telemetry.
+- **Native C/AVX2/CUDA/Triton Operator Engine (`csrc/` & `triune.ops`)**: Zero-copy `ctypes` / P/Invoke C ABI (`triune_core.dll` / `libtriune_core.so`) and Triton/Tensor Core kernels for RMSNorm, RoPE, GLA recurrent decode, chunked logit-free Cross-Entropy (**up to 91.3% peak transient VRAM saved**), and Neuron Scope activation telemetry.
 - **Triune AI Studio (`TriuneStudio.exe`)**: Self-contained native Windows desktop application (`.NET 10` + `WebView2` + `triune_core.dll`) and visual DAG IDE for interactive training, LoRA/QLoRA fine-tuning, live Neuron Scope inspection, and OpenAI-compatible serving.
 
 ## 3-Tier Refactored Repository Structure
@@ -50,7 +50,7 @@ TriuneTransformer/
 2. **Minimalist Python SDK (`import triune`)**:
    Build dense or MoE transformers with `triune.Model(triune.Config(...))` or `triune.load_model("triune-2.5b")`, and train with `triune.CentroidSteer` or `triune.Muon`.
 3. **Drop-In Low-VRAM Optimizers (`triune.CentroidSteer` & `triune.Muon`)**:
-   Plug `CentroidSteerOptimizer` or `Muon` directly into any existing PyTorch or Hugging Face training loop to cut optimizer state VRAM by **56%–95%** while accelerating convergence.
+   Plug `CentroidSteerOptimizer` or `Muon` directly into any existing PyTorch or Hugging Face training loop to cut expert optimizer state VRAM by **up to 98.4%** ($0.128\text{ bytes/param}$) and model-wide VRAM by **43.3%–84.1%**.
 4. **Standalone Fused Operators (`triune.ops`)**:
    Call `triune.ops.cross_entropy`, `triune.ops.chunked_cross_entropy` (saving up to **91.3% VRAM**), `triune.ops.gla`, `triune.ops.rmsnorm`, `triune.ops.rope`, `triune.ops.swiglu`, or `triune.ops.lora_linear` inside custom PyTorch models.
 5. **Native Desktop IDE & Unified CLI (`TriuneStudio.exe` / `triune studio` / `triune serve` / `triune doctor`)**:

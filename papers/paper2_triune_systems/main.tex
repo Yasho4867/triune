@@ -112,7 +112,7 @@ where $H$ is the number of attention heads, $d_k$ is the key dimension, and $d_v
         \text{out}_{\text{inter}} = \tilde{Q}_c S_{k-1} \in \mathbb{R}^{C \times d_v}
     \end{equation}
 \end{enumerate}
-The complete chunk representation is $\text{out} = \text{out}_{\text{intra}} + \text{out}_{\text{inter}}$. A custom fused Triton kernel (\texttt{FusedRecurrentScan}) evaluates the inter-chunk recurrence and its reverse-mode gradient backpropagation entirely in GPU SRAM.
+The complete chunk representation is $\text{out} = \text{out}_{\text{intra}} + \text{out}_{\text{inter}}$. A custom fused Triton kernel (\texttt{FusedRecurrentScan}) evaluates the inter-chunk recurrence and its reverse-mode gradient backpropagation with recurrent state tiles maintained on-chip in GPU registers and shared memory (SRAM), eliminating intermediate PyTorch autograd graph allocations in DRAM.
 
 \textbf{Autoregressive Decode State}: During token-by-token generation ($T=1$), GLA updates the recurrent state via:
 \begin{equation}
@@ -160,7 +160,7 @@ with exit weights $w_2 = 0.2, w_5 = 0.3, w_8 = 0.5$.
 \begin{equation}
     \mathcal{H}(p^{(l)}) = -\frac{1}{\log V} \sum_{v=1}^V p_v^{(l)} \log p_v^{(l)} \in [0, 1]
 \end{equation}
-If $\mathcal{H}(p^{(l)}) < \tau_l$ (calibrated empirically to $\tau = 0.35$ on validation distributions), execution halts early and emits token $y = \arg\max p^{(l)}$, bypassing all subsequent transformer blocks. Across validation text, the empirical routing distribution selects Reflex for $64.2\%$ of tokens, Limbic for $23.1\%$, and Cortex for $12.7\%$. As demonstrated in Table~\ref{tab:dynamic_exits}, dynamic routing achieves $10.47\text{ ms}$ forward latency ($1.56\times$ speedup, $35.8\%$ compute reduction) and $6.24\text{ ms/tok}$ in autoregressive decoding ($1.49\times$ decode speedup vs.\ full Cortex), with negligible loss impact ($8.4278$ vs.\ $8.4250$).
+If $\mathcal{H}(p^{(l)}) < \tau_l$ (calibrated empirically to $\tau = 0.35$ on validation distributions), execution halts early and emits token $y = \arg\max p^{(l)}$, bypassing all subsequent transformer blocks. Across validation text, the empirical routing distribution selects Reflex for $64.2\%$ of tokens, Limbic for $23.1\%$, and Cortex for $12.7\%$. Based on these routing proportions, the theoretical expected execution depth decreases from $8.0$ to $3.46$ layers ($0.642 \times 2 + 0.231 \times 5 + 0.127 \times 8$), representing a $56.8\%$ reduction in executed transformer depth. As demonstrated in Table~\ref{tab:dynamic_exits}, dynamic routing achieves $10.47\text{ ms}$ forward latency ($1.56\times$ speedup, $35.8\%$ forward latency reduction) and $6.24\text{ ms/tok}$ in autoregressive decoding ($1.49\times$ decode speedup vs.\ full Cortex), with negligible loss impact ($8.4278$ vs.\ $8.4250$).
 
 \subsection{Chunked Vocabulary-Projection Cross-Entropy}
 
@@ -175,7 +175,7 @@ Standard cross-entropy loss materializes the complete logit tensor $\mathcal{Z} 
 Triune integrates an exact, fused streaming cross-entropy formulation (\texttt{\_FusedLinearCrossEntropy}) that tiles the sequence into micro-chunks of size $B_c \le 1024$.
 Let $N_{\text{valid}} = \sum_{i=1}^N \mathbb{I}(y_i \neq \text{ignore\_index})$ denote the count of unmasked target tokens. For each chunk $c \in \{1, \dots, \lceil N / B_c \rceil\}$:
 \begin{enumerate}
-    \item \textbf{Local Logit Materialization}: Computes chunk logits in high-speed SRAM/registers:
+    \item \textbf{Tiled Logit Materialization}: Computes chunk logits $\mathcal{Z}_c = H_c W_{\text{head}}^T + b \in \mathbb{R}^{B_c \times V}$ in micro-chunks of $B_c \le 1024$ tokens. Within the Triton kernel, vocabulary blocks of size $2048$ are loaded sequentially into on-chip registers and SRAM:
     \begin{equation}
         \mathcal{Z}_c = H_c W_{\text{head}}^T + b \in \mathbb{R}^{B_c \times V}
     \end{equation}

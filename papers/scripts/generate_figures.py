@@ -64,8 +64,7 @@ def generate_dense_convergence_figure():
     """Generates Figure 1 for Paper 1: Dense multi-seed convergence trajectory."""
     json_path = BENCHMARK_DIR / "convergence_100_steps_results.json"
     if not json_path.exists():
-        print(f"Skipping dense figure: {json_path} missing")
-        return
+        raise FileNotFoundError(f"Missing required benchmark artifact: {json_path}")
 
     with open(json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -125,8 +124,7 @@ def generate_moe_convergence_figure():
     """Generates Figure 2 for Paper 1: MoE multi-seed dynamic steering convergence."""
     json_path = BENCHMARK_DIR / "moe_convergence_100_steps_results.json"
     if not json_path.exists():
-        print(f"Skipping MoE figure: {json_path} missing")
-        return
+        raise FileNotFoundError(f"Missing required benchmark artifact: {json_path}")
 
     with open(json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -183,30 +181,62 @@ def generate_moe_convergence_figure():
 
 def generate_optimizer_memory_figure():
     """Generates Figure 3 for Paper 1: Optimizer state memory footprint."""
-    fig, ax = plt.subplots(figsize=(4.0, 2.8), constrained_layout=True)
-    optimizers = ["PyTorch AdamW", "8-bit AdamW", "Muon (2D)", "CentroidSteer (Rank 16)"]
-    bytes_per_param = [8.0, 2.0, 1.30, 1.00]
-    colors = [COLORS["adamw"], COLORS["bnb_8bit"], COLORS["muon"], COLORS["triune"]]
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(7.0, 2.8), constrained_layout=True)
 
-    bars = ax.bar(optimizers, bytes_per_param, color=colors, width=0.55, edgecolor="black", linewidth=0.7)
-    ax.set_ylabel("Persistent State (Bytes / Param)")
-    ax.set_title("Optimizer Memory Footprint")
-    ax.grid(axis="y", linestyle=":")
-    ax.set_ylim(0, 9.5)
+    # Panel (a): Per-matrix memory on Tier 2 expert weights (384x1024, r=16)
+    expert_opts = ["Standard\nAdamW", "8-bit\nAdamW", "GaLore\n(1-Sided)", "CentroidSteer\n(Augmented)"]
+    expert_bpp = [8.00, 2.00, 0.365, 0.128]
+    colors1 = [COLORS["adamw"], COLORS["bnb_8bit"], "#ff7f0e", COLORS["triune"]]
 
-    for bar, val in zip(bars, bytes_per_param):
+    bars1 = ax1.bar(expert_opts, expert_bpp, color=colors1, width=0.55, edgecolor="black", linewidth=0.6)
+    ax1.set_ylabel("State Memory (Bytes / Param)")
+    ax1.set_title("(a) Tier 2 Expert Weights ($384 \\times 1024$)")
+    ax1.grid(axis="y", linestyle=":")
+    ax1.set_ylim(0, 9.5)
+
+    for bar, val in zip(bars1, expert_bpp):
         yval = bar.get_height()
-        ax.text(
+        ax1.text(
             bar.get_x() + bar.get_width() / 2.0,
             yval + 0.25,
-            f"{val:.2f} B",
+            f"{val:.3f} B" if val < 1.0 else f"{val:.2f} B",
             ha="center",
             va="bottom",
-            fontsize=8.5,
+            fontsize=8.0,
+            fontweight="bold",
+        )
+    ax1.text(
+        3,
+        4.0,
+        "-98.4% HBM\nvs. AdamW",
+        ha="center",
+        fontsize=8.0,
+        bbox=dict(boxstyle="round,pad=0.3", fc="#e7f0fa", ec=COLORS["triune"]),
+    )
+
+    # Panel (b): Full model-wide memory across tiers (90.8M MoE)
+    model_opts = ["Pure\nAdamW", "Triune MoE\n(FP32 Tier 3)", "Triune MoE\n(8-bit Tier 3)", "Asymptotic\n($E \\geq 64$)"]
+    model_bpp = [8.00, 4.54, 1.27, 0.128]
+    colors2 = [COLORS["adamw"], "#2ca02c", COLORS["triune"], "#9467bd"]
+
+    bars2 = ax2.bar(model_opts, model_bpp, color=colors2, width=0.55, edgecolor="black", linewidth=0.6)
+    ax2.set_ylabel("Model-Wide (Bytes / Param)")
+    ax2.set_title("(b) Model-Wide Memory (90.8M MoE)")
+    ax2.grid(axis="y", linestyle=":")
+    ax2.set_ylim(0, 9.5)
+
+    for bar, val in zip(bars2, model_bpp):
+        yval = bar.get_height()
+        ax2.text(
+            bar.get_x() + bar.get_width() / 2.0,
+            yval + 0.25,
+            f"{val:.2f} B" if val >= 1.0 else f"{val:.3f} B",
+            ha="center",
+            va="bottom",
+            fontsize=8.0,
             fontweight="bold",
         )
 
-    plt.xticks(rotation=18, ha="right")
     for out_dir in [P1_FIGS]:
         fig.savefig(out_dir / "optimizer_memory.pdf")
         fig.savefig(out_dir / "optimizer_memory.png")
@@ -217,26 +247,21 @@ def generate_optimizer_memory_figure():
 def generate_long_context_figure():
     """Generates Figure 1 for Paper 2: GLA constant decode memory vs Softmax KV explosion."""
     bench_file = BENCHMARK_DIR / "benchmark_results.json"
-    if bench_file.exists():
-        with open(bench_file, "r", encoding="utf-8") as f:
-            data = json.load(f).get("attention_scaling", {})
-        decode_records = data.get("autoregressive_decode", [])
-        prefill_records = data.get("results", [])
+    if not bench_file.exists():
+        raise FileNotFoundError(f"Missing required benchmark artifact: {bench_file}")
 
-        contexts = [r["context_length"] for r in decode_records]
-        sdpa_cache_kb = [r["softmax_kv_cache_kb"] for r in decode_records]
-        gla_cache_kb = [r["triune_gla_state_kb"] for r in decode_records]
+    with open(bench_file, "r", encoding="utf-8") as f:
+        data = json.load(f).get("attention_scaling", {})
+    decode_records = data.get("autoregressive_decode", [])
+    prefill_records = data.get("results", [])
 
-        prefill_contexts = [r["seq_len"] for r in prefill_records]
-        sdpa_prefill = [r["standard_time_ms"] for r in prefill_records]
-        gla_prefill = [r["triune_gla_time_ms"] for r in prefill_records]
-    else:
-        contexts = [512, 1024, 2048, 4096, 8192, 16384]
-        sdpa_cache_kb = [768, 1536, 3072, 6144, 12288, 24576]
-        gla_cache_kb = [48, 48, 48, 48, 48, 48]
-        prefill_contexts = [512, 1024, 2048, 4096, 8192]
-        sdpa_prefill = [0.06, 0.14, 0.42, 1.45, 5.29]
-        gla_prefill = [1.07, 1.22, 1.80, 3.02, 6.07]
+    contexts = [r["context_length"] for r in decode_records]
+    sdpa_cache_kb = [r["softmax_kv_cache_kb"] for r in decode_records]
+    gla_cache_kb = [r["triune_gla_state_kb"] for r in decode_records]
+
+    prefill_contexts = [r["seq_len"] for r in prefill_records]
+    sdpa_prefill = [r["standard_time_ms"] for r in prefill_records]
+    gla_prefill = [r["triune_gla_time_ms"] for r in prefill_records]
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(7.0, 2.8), constrained_layout=True)
 
@@ -267,16 +292,14 @@ def generate_long_context_figure():
 def generate_kernel_memory_figure():
     """Generates Figure 2 for Paper 2: Chunked Logit-Free Cross-Entropy memory scaling."""
     bench_file = BENCHMARK_DIR / "benchmark_results.json"
-    if bench_file.exists():
-        with open(bench_file, "r", encoding="utf-8") as f:
-            records = json.load(f).get("cross_entropy", {}).get("results", [])
-        tokens = [f"N = {r['tokens']:,}" for r in records]
-        pytorch_vram = [r["standard_vram_mb"] for r in records]
-        triune_vram = [r["triune_vram_mb"] for r in records]
-    else:
-        tokens = ["N = 2,048", "N = 4,096", "N = 8,192"]
-        pytorch_vram = [1089.5, 2170.4, 4182.3]
-        triune_vram = [289.4, 348.8, 365.8]
+    if not bench_file.exists():
+        raise FileNotFoundError(f"Missing required benchmark artifact: {bench_file}")
+
+    with open(bench_file, "r", encoding="utf-8") as f:
+        records = json.load(f).get("cross_entropy", {}).get("results", [])
+    tokens = [f"N = {r['tokens']:,}" for r in records]
+    pytorch_vram = [r["standard_vram_mb"] for r in records]
+    triune_vram = [r["triune_vram_mb"] for r in records]
 
     fig, ax = plt.subplots(figsize=(4.2, 2.8), constrained_layout=True)
     x = np.arange(len(tokens))
@@ -333,16 +356,15 @@ def generate_kernel_memory_figure():
 def generate_parallelism_figure():
     """Generates Figure 3 for Paper 2: Parallelism speedups."""
     bench_file = BENCHMARK_DIR / "parallelism_benchmark_results.json"
-    if bench_file.exists():
-        with open(bench_file, "r", encoding="utf-8") as f:
-            p_data = json.load(f)
-        async_data = p_data.get("async_prefetcher", {})
-        gemm_data = p_data.get("fused_qkvg", {})
-        throughput = [async_data.get("sync_tok_per_sec", 633910.4), async_data.get("async_tok_per_sec", 812955.8)]
-        latencies = [gemm_data.get("separate_gemm_ms", 670.03), gemm_data.get("fused_gemm_ms", 109.06)]
-    else:
-        throughput = [633910.4, 812955.8]
-        latencies = [670.03, 109.06]
+    if not bench_file.exists():
+        raise FileNotFoundError(f"Missing required benchmark artifact: {bench_file}")
+
+    with open(bench_file, "r", encoding="utf-8") as f:
+        p_data = json.load(f)
+    async_data = p_data.get("async_prefetcher", {})
+    gemm_data = p_data.get("fused_qkvg", {})
+    throughput = [async_data.get("sync_tok_per_sec", 633910.4), async_data.get("async_tok_per_sec", 812955.8)]
+    latencies = [gemm_data.get("separate_gemm_ms", 670.03), gemm_data.get("fused_gemm_ms", 109.06)]
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(7.0, 2.6), constrained_layout=True)
 
@@ -411,8 +433,7 @@ def generate_moe_ablation_figure():
     """Generates Figure 4 for Paper 1: MoE Router Centroid Steering Ablation."""
     json_path = BENCHMARK_DIR / "moe_convergence_100_steps_results_steer_ablation.json"
     if not json_path.exists():
-        print(f"Skipping ablation figure: {json_path} missing")
-        return
+        raise FileNotFoundError(f"Missing required benchmark artifact: {json_path}")
 
     with open(json_path, "r", encoding="utf-8") as f:
         data = json.load(f)

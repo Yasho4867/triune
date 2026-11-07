@@ -36,7 +36,7 @@ This directory contains research preprints, vector figures, and LaTeX manuscript
 - **Compiled PDF**: [`paper2_triune_systems/triune_architecture.pdf`](paper2_triune_systems/triune_architecture.pdf)
 - **Primary Artifacts**:
   - Gated Linear Attention (GLA) with fused Triton recurrent scan: constant $\mathcal{O}(1)$ decode memory ($48.0\text{ KiB}$ fixed cache for $H=6$ heads, $64.0\text{ KiB}$ for $H=8$ heads; $99.8\%$ compression vs.\ Softmax SDPA at 16k context, up to $7.94\times$ faster decode).
-  - Hierarchical Dynamic Exits (Reflex L2, Limbic L5, Cortex L8) with learned entropy-gated routing ($-35.8\%$ compute, $1.49\times$ decode speedup vs Cortex).
+  - Hierarchical Dynamic Exits (Reflex L2, Limbic L5, Cortex L8) with learned entropy-gated routing ($-35.8\%$ forward latency reduction, $56.8\%$ layer-skip reduction, $1.49\times$ decode speedup vs Cortex).
   - Chunked Vocabulary-Projection Cross-Entropy: $-91.3\%$ peak transient memory and $1.76\times$ speedup at vocabulary size $V=32,000$, with exact online $\nabla_W \mathcal{L}$ gradient accumulation.
   - Multi-Level Parallelism: Asynchronous PCIe DMA prefetching ($1.28\times$ throughput speedup, $812,956\text{ tok/s}$), Tensor Core GEMM projection fusion ($6.14\times$ micro-kernel speedup), and asynchronous CUDA Graph replay ($-99.0\%$ CPU launch latency with bitwise optimizer parity).
   - Head-to-head competitive benchmark vs.\ genuine installed Unsloth (2026.10.10): $+19.7\%$ throughput on LoRA fine-tuning with native Mixture-of-Experts execution.
@@ -49,20 +49,6 @@ This directory contains research preprints, vector figures, and LaTeX manuscript
   url={https://github.com/Yasho4867/triune},
   year={2026}
 }
-```
-
----
-
-## Reproduction & Build Commands
-
-To recompile all figures and LaTeX manuscripts to PDF from source:
-
-```bash
-# 1. Regenerate publication vector figures
-python papers/scripts/generate_figures.py
-
-# 2. Build both research paper PDFs
-python papers/scripts/build_papers.py
 ```
 
 ---
