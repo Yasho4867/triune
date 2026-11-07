@@ -43,8 +43,9 @@ def batched_qr(
     eps_shift: float = 1e-7,
     orth_tol: float = 1e-4,
     return_fallback_mask: bool = False,
+    return_diagnostics: bool = False,
     out_dtype: torch.dtype | None = None,
-) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """Computes batched thin QR with condition-ratio monitored Cholesky-QR, post-QR orthogonality verification, and Householder fallback.
 
     Args:
@@ -53,25 +54,29 @@ def batched_qr(
         eps_shift: Diagonal shift added to Gram matrix to ensure positive definiteness
         orth_tol: Maximum permissible basis orthogonality error ||Q^T Q - I||_F before Householder fallback (default 1e-4)
         return_fallback_mask: If True, returns (Q, fallback_mask)
+        return_diagnostics: If True, returns (Q, diagnostics_dict) with exact per-cause breakdown
         out_dtype: Target output dtype for Q (defaults to Y_mat.dtype)
 
     Returns:
-        Q orthonormal matrices of shape [K, d, r], optionally accompanied by fallback_mask
+        Q orthonormal matrices of shape [K, d, r], optionally accompanied by fallback_mask or diagnostics_dict
     """
     dtype = out_dtype if out_dtype is not None else Y_mat.dtype
     Y_f = Y_mat.float()
     K, d, r = Y_f.shape
     col_norms = torch.linalg.norm(Y_f, dim=1, keepdim=True)
+    degen_mask = (col_norms.squeeze(1) <= 1e-12).any(dim=-1)
+
     Y_norm = Y_f / col_norms.clamp_min(1e-12)
     Gram = torch.bmm(Y_norm.transpose(1, 2), Y_norm)
     Gram.diagonal(dim1=1, dim2=2).add_(eps_shift)
     L, info = torch.linalg.cholesky_ex(Gram)
+    cholesky_fail_mask = (info != 0)
 
     # Condition ratio monitoring: kappa(A) approx max(L_ii^2) / min(L_ii^2)
     L_diag = L.diagonal(dim1=1, dim2=2)
     L_diag_sq = L_diag * L_diag
     cond_ratio = L_diag_sq.max(dim=-1).values / L_diag_sq.min(dim=-1).values.clamp_min(1e-12)
-    pre_fallback = (cond_ratio >= cond_threshold) | (col_norms.squeeze(1) <= 1e-12).any(dim=-1) | (info != 0)
+    cond_fail_mask = (cond_ratio >= cond_threshold)
 
     # Solve triangular system L Q^T = Y_norm^T
     Q = torch.linalg.solve_triangular(L, Y_norm.transpose(1, 2), upper=False).transpose(1, 2)
@@ -80,13 +85,26 @@ def batched_qr(
     I = torch.eye(r, device=Y_mat.device, dtype=torch.float32).unsqueeze(0).expand(K, -1, -1)
     QtQ = torch.bmm(Q.transpose(1, 2), Q)
     orth_err = torch.linalg.norm(QtQ - I, dim=(1, 2))
-    fallback_mask = pre_fallback | (orth_err > orth_tol)
+    orth_fail_mask = (orth_err > orth_tol)
+
+    fallback_mask = cond_fail_mask | degen_mask | cholesky_fail_mask | orth_fail_mask
 
     if bool(fallback_mask.any()):
         Q_householder, _ = torch.linalg.qr(Y_f)
         Q = torch.where(fallback_mask.view(-1, 1, 1), Q_householder, Q)
 
     Q_out = Q.to(dtype=dtype)
+    if return_diagnostics:
+        diag = {
+            "fallback_mask": fallback_mask,
+            "cond_fail_mask": cond_fail_mask,
+            "degen_mask": degen_mask,
+            "cholesky_fail_mask": cholesky_fail_mask,
+            "orth_fail_mask": orth_fail_mask,
+            "cond_ratio": cond_ratio,
+            "orth_err": orth_err,
+        }
+        return Q_out, diag
     if return_fallback_mask:
         return Q_out, fallback_mask
     return Q_out

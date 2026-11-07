@@ -256,6 +256,13 @@ def test_cholesky_householder_fallback_integrity():
 
     # Test the exact production batched_qr function
     Q, fallback_mask = batched_qr(Y, cond_threshold=1e4, eps_shift=1e-7, orth_tol=1e-4, return_fallback_mask=True)
+    # Also verify diagnostics breakdown
+    Q_diag, diag = batched_qr(Y, cond_threshold=1e4, eps_shift=1e-7, orth_tol=1e-4, return_diagnostics=True)
+    assert torch.equal(Q, Q_diag)
+    assert torch.equal(fallback_mask, diag["fallback_mask"])
+    assert diag["cond_fail_mask"][1].item() or diag["orth_fail_mask"][1].item(), "Ill-conditioned matrix must trigger condition or orth fallback"
+    assert diag["degen_mask"][2].item(), "Zero-column matrix must trigger degen fallback"
+
     # Also verify that CentroidSteerOptimizer.batched_qr matches
     Q_opt, fallback_opt = CentroidSteerOptimizer.batched_qr(
         Y, cond_threshold=1e4, eps_shift=1e-7, orth_tol=1e-4, return_fallback_mask=True
