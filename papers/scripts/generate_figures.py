@@ -403,10 +403,13 @@ def generate_parallelism_figure():
             fontsize=8.5,
             fontweight="bold",
         )
+    async_speedup = throughput[1] / max(throughput[0], 1e-12)
+    gemm_speedup = latencies[0] / max(latencies[1], 1e-12)
+
     ax1.text(
         1,
         400000,
-        "1.28x Speedup\n(PCIe Bubble Hidden)",
+        f"{async_speedup:.2f}x Speedup\n(PCIe Bubble Hidden)",
         ha="center",
         fontsize=8.5,
         bbox=dict(boxstyle="round,pad=0.3", fc="#e7f0fa", ec="#1f77b4"),
@@ -433,7 +436,7 @@ def generate_parallelism_figure():
     ax2.text(
         1,
         350,
-        "6.14x Speedup\n(SM Saturation)",
+        f"{gemm_speedup:.2f}x Speedup\n(SM Saturation)",
         ha="center",
         fontsize=8.5,
         bbox=dict(boxstyle="round,pad=0.3", fc="#eafaf1", ec="#2ca02c"),

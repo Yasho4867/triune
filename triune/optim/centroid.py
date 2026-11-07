@@ -39,17 +39,19 @@ def fast_subspace_projection(grad: torch.Tensor, rank: int, niter: int = 2) -> t
 
 def batched_qr(
     Y_mat: torch.Tensor,
-    cond_threshold: float = 1e6,
+    cond_threshold: float = 1e4,
     eps_shift: float = 1e-7,
+    orth_tol: float = 1e-4,
     return_fallback_mask: bool = False,
     out_dtype: torch.dtype | None = None,
 ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
-    """Computes batched thin QR with condition-ratio monitored Cholesky-QR and Householder fallback.
+    """Computes batched thin QR with condition-ratio monitored Cholesky-QR, post-QR orthogonality verification, and Householder fallback.
 
     Args:
         Y_mat: Batched input matrices of shape [K, d, r]
-        cond_threshold: Condition ratio threshold kappa(A) approx max(L_ii^2) / min(L_ii^2) for fallback
+        cond_threshold: Condition ratio threshold kappa(A) approx max(L_ii^2) / min(L_ii^2) for fallback (default 1e4)
         eps_shift: Diagonal shift added to Gram matrix to ensure positive definiteness
+        orth_tol: Maximum permissible basis orthogonality error ||Q^T Q - I||_F before Householder fallback (default 1e-4)
         return_fallback_mask: If True, returns (Q, fallback_mask)
         out_dtype: Target output dtype for Q (defaults to Y_mat.dtype)
 
@@ -58,6 +60,7 @@ def batched_qr(
     """
     dtype = out_dtype if out_dtype is not None else Y_mat.dtype
     Y_f = Y_mat.float()
+    K, d, r = Y_f.shape
     col_norms = torch.linalg.norm(Y_f, dim=1, keepdim=True)
     Y_norm = Y_f / col_norms.clamp_min(1e-12)
     Gram = torch.bmm(Y_norm.transpose(1, 2), Y_norm)
@@ -68,9 +71,17 @@ def batched_qr(
     L_diag = L.diagonal(dim1=1, dim2=2)
     L_diag_sq = L_diag * L_diag
     cond_ratio = L_diag_sq.max(dim=-1).values / L_diag_sq.min(dim=-1).values.clamp_min(1e-12)
-    fallback_mask = (cond_ratio >= cond_threshold) | (col_norms.squeeze(1) <= 1e-12).any(dim=-1) | (info != 0)
+    pre_fallback = (cond_ratio >= cond_threshold) | (col_norms.squeeze(1) <= 1e-12).any(dim=-1) | (info != 0)
 
+    # Solve triangular system L Q^T = Y_norm^T
     Q = torch.linalg.solve_triangular(L, Y_norm.transpose(1, 2), upper=False).transpose(1, 2)
+
+    # Post-QR basis orthogonality check: ||Q^T Q - I||_F
+    I = torch.eye(r, device=Y_mat.device, dtype=torch.float32).unsqueeze(0).expand(K, -1, -1)
+    QtQ = torch.bmm(Q.transpose(1, 2), Q)
+    orth_err = torch.linalg.norm(QtQ - I, dim=(1, 2))
+    fallback_mask = pre_fallback | (orth_err > orth_tol)
+
     if bool(fallback_mask.any()):
         Q_householder, _ = torch.linalg.qr(Y_f)
         Q = torch.where(fallback_mask.view(-1, 1, 1), Q_householder, Q)
@@ -620,7 +631,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                 cursor += K
 
             def _batched_qr(Y_mat: torch.Tensor) -> torch.Tensor:
-                return batched_qr(Y_mat, cond_threshold=1e6, eps_shift=1e-7, out_dtype=dtype)
+                return batched_qr(Y_mat, cond_threshold=1e4, eps_shift=1e-7, orth_tol=1e-4, out_dtype=dtype)
 
             bucket_cache = []
             step_list = [0.0] * N
@@ -757,16 +768,21 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                         ).unsqueeze(-1)  # [K, d_small, 1]
                         QL_r = QL_stack[:, :, :r]
                         QR_r = QR_stack[:, :, :r]
-                        c_proj = torch.bmm(QL_r, torch.bmm(QL_r.transpose(1, 2), C))
-                        c_res = (C - c_proj).squeeze(-1)
+                        # Twice re-orthogonalization (Kahan-Parlett) for numerical machine precision
+                        c_proj1 = torch.bmm(QL_r, torch.bmm(QL_r.transpose(1, 2), C))
+                        c_res1 = C - c_proj1
+                        c_proj2 = torch.bmm(QL_r, torch.bmm(QL_r.transpose(1, 2), c_res1))
+                        c_res = (c_res1 - c_proj2).squeeze(-1)
                         c_res_norm = c_res.norm(dim=-1, keepdim=True)
                         c_orth = torch.where(
                             c_res_norm > 1e-8, c_res / c_res_norm.clamp_min(1e-8), torch.zeros_like(c_res)
                         )
 
                         v = torch.bmm(G_stack.transpose(1, 2), c_orth.unsqueeze(-1))
-                        v_proj = torch.bmm(QR_r, torch.bmm(QR_r.transpose(1, 2), v))
-                        v_res = (v - v_proj).squeeze(-1)
+                        v_proj1 = torch.bmm(QR_r, torch.bmm(QR_r.transpose(1, 2), v))
+                        v_res1 = v - v_proj1
+                        v_proj2 = torch.bmm(QR_r, torch.bmm(QR_r.transpose(1, 2), v_res1))
+                        v_res = (v_res1 - v_proj2).squeeze(-1)
                         v_res_norm = v_res.norm(dim=-1, keepdim=True)
                         steer_mask = (c_res_norm.squeeze(-1) > 1e-8) & (v_res_norm.squeeze(-1) > 1e-8)
                         v_orth = torch.where(

@@ -255,10 +255,10 @@ def test_cholesky_householder_fallback_integrity():
     Y[2, :, 0] = 0.0
 
     # Test the exact production batched_qr function
-    Q, fallback_mask = batched_qr(Y, cond_threshold=1e6, eps_shift=1e-7, return_fallback_mask=True)
+    Q, fallback_mask = batched_qr(Y, cond_threshold=1e4, eps_shift=1e-7, orth_tol=1e-4, return_fallback_mask=True)
     # Also verify that CentroidSteerOptimizer.batched_qr matches
     Q_opt, fallback_opt = CentroidSteerOptimizer.batched_qr(
-        Y, cond_threshold=1e6, eps_shift=1e-7, return_fallback_mask=True
+        Y, cond_threshold=1e4, eps_shift=1e-7, orth_tol=1e-4, return_fallback_mask=True
     )
     assert torch.equal(Q, Q_opt), "CentroidSteerOptimizer.batched_qr staticmethod must be identical"
     assert torch.equal(fallback_mask, fallback_opt)
