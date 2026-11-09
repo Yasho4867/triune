@@ -668,6 +668,9 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                 any_refresh = any(init_flags) or any(upd_flags)
 
                 if any_refresh:
+                    # Periodic refresh path (every update_gap steps): performs one boolean vector readback
+                    # per shape bucket to filter unrouted zero-gradient experts before batched_qr.
+                    # Non-refresh steps (95%–99.5% of training) bypass this block completely with zero host-device syncs.
                     refresh_indices = [b_idx for b_idx in range(K) if init_flags[b_idx] or upd_flags[b_idx]]
                     G_ref_all = G_stack[refresh_indices].float()
                     g_norms = torch.linalg.norm(G_ref_all, dim=(1, 2))

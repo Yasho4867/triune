@@ -417,3 +417,66 @@ def test_scholqr2_shift_bias_elimination_and_zero_grad_skip():
     )
     print("✅ sCholQR2 shift-bias elimination and zero-grad/non-refresh QR skipping verified!")
 
+
+def test_benchmark_config_validation_and_scientific_pvalues():
+    """Verifies upfront parameter validation and non-zero scientific p-value preservation in verify_triangular_qr_residuals."""
+    import sys
+    from pathlib import Path
+
+    import pytest
+
+    repo_root = str(Path(__file__).resolve().parent.parent)
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+
+    from benchmarks.verify_triangular_qr_residuals import (
+        compute_paired_and_tost,
+        format_p_value,
+        run_numerical_qr_residual_verification,
+        validate_experiment_configuration,
+    )
+
+    # 1. Upfront fail-fast validation: opt_steps > train_pool_batches must raise ValueError immediately
+    with pytest.raises(ValueError, match="opt_steps.*cannot exceed train_pool_batches"):
+        validate_experiment_configuration(opt_steps=500, train_pool_batches=200)
+
+    with pytest.raises(ValueError, match="opt_steps.*cannot exceed train_pool_batches"):
+        run_numerical_qr_residual_verification(opt_steps=250, train_pool_batches=100)
+
+    # 2. Invalid scalar bounds, duplicate seeds, <2 eval seeds, unbalanced Latin square, and invalid synthetic shapes
+    with pytest.raises(ValueError, match="seq_len"):
+        validate_experiment_configuration(seq_len=1)
+
+    with pytest.raises(ValueError, match="duplicate"):
+        validate_experiment_configuration(seeds=[42, 1337, 42])
+
+    with pytest.raises(ValueError, match="at least 2 integer seeds"):
+        validate_experiment_configuration(opt_eval_seeds=[42])
+
+    with pytest.raises(ValueError, match="duplicate"):
+        validate_experiment_configuration(opt_eval_seeds=[42, 1337, 1337])
+
+    with pytest.raises(ValueError, match="multiple of 3"):
+        validate_experiment_configuration(opt_eval_seeds=[42, 1337, 2026, 7777], require_balanced_latin_square=True)
+
+    with pytest.raises(ValueError, match="rank r=20 cannot exceed"):
+        validate_experiment_configuration(synthetic_shapes=[(16, 32, 20)])
+
+    # 3. Scientific p-value preservation (never rounded to 0.0)
+    vals_tri = [4.1700 + 0.0002 * ((-1) ** i) for i in range(12)]
+    vals_adm = [4.1663 + 0.0001 * ((-1) ** i) for i in range(12)]
+    stats_out = compute_paired_and_tost(vals_tri, vals_adm, eq_margin=0.05)
+
+    assert 0.0 < stats_out["p_value"] < 1e-4, f"Small p_value must retain non-zero float precision, got {stats_out['p_value']}"
+    assert "<0.0001" in stats_out["p_value_formatted"]
+
+    for margin_key, m_entry in stats_out["tost_sensitivity_profile"].items():
+        assert 0.0 < m_entry["p_tost"] < 1e-4, f"{margin_key} p_tost must not be rounded to 0.0, got {m_entry['p_tost']}"
+        assert 0.0 < m_entry["p_upper"] < 1e-4, f"{margin_key} p_upper must not be rounded to 0.0, got {m_entry['p_upper']}"
+        assert "<0.0001" in m_entry["p_tost_formatted"]
+
+    assert format_p_value(1.5129e-7) == "1.513e-07 (<0.0001)"
+    assert format_p_value(0.0200) == "0.0200"
+    print("✅ Benchmark configuration validation and scientific p-value formatting verified!")
+
+

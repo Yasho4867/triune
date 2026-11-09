@@ -24,10 +24,14 @@ Directly validates the empirical bounds and invariant claims in CentroidSteer (P
 
 from __future__ import annotations
 
+import argparse
 import gc
 import hashlib
 import json
 import math
+import subprocess
+import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -41,6 +45,8 @@ from triune.optim.centroid import CentroidSteerOptimizer, batched_qr
 
 # Centralized Reproducibility Configuration (12 seeds = 4 complete 3x3 Latin squares, df=11)
 DEFAULT_SEEDS: list[int] = [42, 1337, 2026, 7777, 9999, 31415, 27182, 16180, 86753, 54321, 65537, 90001]
+DEFAULT_SUBPROCESS_ISOLATION_SEEDS: list[int] = [42, 1337, 2026]
+DEFAULT_SECONDARY_CHECKPOINT_PATH: str = "checkpoints/triune_studio_step_35500.pt"
 DEFAULT_SYNTHETIC_SHAPES: list[tuple[int, int, int]] = [(384, 1024, 16), (128, 256, 8)]
 DEFAULT_BATCH_SIZE: int = 4
 DEFAULT_SEQ_LEN: int = 128
@@ -52,6 +58,146 @@ DEFAULT_SUBSPACE_RANK: int = 16
 DEFAULT_SUBSPACE_UPDATE_GAP: int = 20
 DEFAULT_VAL_TOST_MARGINS: tuple[float, ...] = (0.01, 0.02, 0.05)
 DEFAULT_TRAIN_TOST_MARGINS: tuple[float, ...] = (0.02, 0.05, 0.10)
+
+
+def format_p_value(p: float) -> str:
+    """Formats a p-value in scientific notation when < 1e-4 so small p-values never display as 0.0."""
+    p_f = float(p)
+    if p_f == 0.0:
+        return "<1e-300 (underflow)"
+    if p_f < 1e-4:
+        return f"{p_f:.3e} (<0.0001)"
+    return f"{p_f:.4f}"
+
+
+def compute_paired_and_tost(
+    vals_a: list[float],
+    vals_b: list[float],
+    eq_margin: float = 0.05,
+    margin_grid: tuple[float, ...] = DEFAULT_VAL_TOST_MARGINS,
+) -> dict:
+    """Computes two-tailed paired Student-t test and multi-margin Schuirmann TOST with unrounded scientific p-values."""
+    if len(vals_a) != len(vals_b) or len(vals_a) < 2:
+        raise ValueError(f"Paired test requires equal-length sequences with N >= 2, got {len(vals_a)} and {len(vals_b)}")
+    n = len(vals_a)
+    df = n - 1
+    diffs = [float(a - b) for a, b in zip(vals_a, vals_b)]
+    d_mean = float(sum(diffs) / n)
+    d_std = float((sum((x - d_mean) ** 2 for x in diffs) / df) ** 0.5) if df > 0 else 0.0
+    d_sem = max(d_std / (n ** 0.5), 1e-12)
+    res_2tail = stats.ttest_rel(vals_a, vals_b)
+    p_2tail = float(f"{float(res_2tail.pvalue):.6e}")
+
+    def eval_tost_at_margin(margin_val: float) -> dict:
+        t_l = (d_mean - (-margin_val)) / d_sem
+        p_l = float(f"{float(stats.t.sf(t_l, df=df)):.6e}")
+        t_u = (d_mean - margin_val) / d_sem
+        p_u = float(f"{float(stats.t.cdf(t_u, df=df)):.6e}")
+        p_t = max(p_l, p_u)
+        return {
+            "equivalence_margin_nats": margin_val,
+            "relative_perplexity_tolerance_pct": round((math.exp(margin_val) - 1.0) * 100.0, 2),
+            "t_lower": round(float(t_l), 4),
+            "p_lower": p_l,
+            "p_lower_formatted": format_p_value(p_l),
+            "t_upper": round(float(t_u), 4),
+            "p_upper": p_u,
+            "p_upper_formatted": format_p_value(p_u),
+            "p_tost": p_t,
+            "p_tost_formatted": format_p_value(p_t),
+            "equivalent_within_margin_alpha_0_05": bool(p_t < 0.05),
+        }
+
+    t_crit_90 = float(stats.t.ppf(0.95, df=df))
+    t_crit_95 = float(stats.t.ppf(0.975, df=df))
+    min_eq_margin = abs(d_mean) + t_crit_90 * d_sem
+
+    return {
+        "paired_mean_diff": round(d_mean, 4),
+        "paired_std": round(d_std, 4),
+        "paired_sem": round(d_sem, 4),
+        "df": df,
+        "paired_ci90_t": [round(d_mean - t_crit_90 * d_sem, 4), round(d_mean + t_crit_90 * d_sem, 4)],
+        "paired_ci95_t": [round(d_mean - t_crit_95 * d_sem, 4), round(d_mean + t_crit_95 * d_sem, 4)],
+        "minimum_equivalence_margin_alpha_0_05_nats": round(min_eq_margin, 4),
+        "minimum_equivalence_relative_ppl_pct": round((math.exp(min_eq_margin) - 1.0) * 100.0, 2),
+        "t_statistic": round(float(res_2tail.statistic), 4),
+        "p_value": p_2tail,
+        "p_value_formatted": format_p_value(p_2tail),
+        "null_hypothesis_rejected_alpha_0_05": bool(p_2tail < 0.05),
+        "tost_equivalence": eval_tost_at_margin(eq_margin),
+        "tost_sensitivity_profile": {f"{m:.2f}_nats": eval_tost_at_margin(m) for m in margin_grid},
+    }
+
+
+def validate_experiment_configuration(
+    *,
+    num_fineweb_batches: int = DEFAULT_STATIC_FINEWEB_BATCHES,
+    seeds: list[int] = DEFAULT_SEEDS,
+    opt_eval_seeds: list[int] | None = None,
+    opt_steps: int = DEFAULT_OPT_STEPS,
+    train_pool_batches: int = DEFAULT_TRAIN_POOL_BATCHES,
+    val_batches: int = DEFAULT_VAL_BATCHES,
+    batch_size: int = DEFAULT_BATCH_SIZE,
+    seq_len: int = DEFAULT_SEQ_LEN,
+    subspace_rank: int = DEFAULT_SUBSPACE_RANK,
+    subspace_update_gap: int = DEFAULT_SUBSPACE_UPDATE_GAP,
+    synthetic_shapes: list[tuple[int, int, int]] = DEFAULT_SYNTHETIC_SHAPES,
+    require_balanced_latin_square: bool = False,
+) -> list[int]:
+    """Fail-fast validation of all experiment hyperparameters and seed relationships before execution."""
+    for name, val, min_v in [
+        ("num_fineweb_batches", num_fineweb_batches, 1),
+        ("opt_steps", opt_steps, 1),
+        ("train_pool_batches", train_pool_batches, 1),
+        ("val_batches", val_batches, 1),
+        ("batch_size", batch_size, 1),
+        ("seq_len", seq_len, 2),
+        ("subspace_rank", subspace_rank, 1),
+        ("subspace_update_gap", subspace_update_gap, 1),
+    ]:
+        if isinstance(val, bool) or not isinstance(val, int) or val < min_v:
+            raise ValueError(f"Invalid configuration: '{name}' must be an integer >= {min_v}, got {val!r}.")
+
+    if opt_steps > train_pool_batches:
+        raise ValueError(
+            f"Invalid configuration: opt_steps ({opt_steps}) cannot exceed train_pool_batches ({train_pool_batches}) "
+            "when sampling micro-batch trajectories without replacement."
+        )
+
+    if not seeds or len(seeds) < 1 or any(isinstance(s, bool) or not isinstance(s, int) for s in seeds):
+        raise ValueError(f"Invalid configuration: 'seeds' must be a non-empty list of integers, got {seeds!r}.")
+    if len(set(seeds)) != len(seeds):
+        raise ValueError(f"Invalid configuration: 'seeds' contains duplicate entries: {seeds!r}.")
+
+    eval_seeds = list(opt_eval_seeds) if opt_eval_seeds is not None else list(seeds)
+    if len(eval_seeds) < 2 or any(isinstance(s, bool) or not isinstance(s, int) for s in eval_seeds):
+        raise ValueError(
+            f"Invalid configuration: 'opt_eval_seeds' must contain at least 2 integer seeds for paired Student-t "
+            f"and TOST inference (df >= 1), got {eval_seeds!r}."
+        )
+    if len(set(eval_seeds)) != len(eval_seeds):
+        raise ValueError(f"Invalid configuration: 'opt_eval_seeds' contains duplicate entries: {eval_seeds!r}.")
+
+    if require_balanced_latin_square and (len(eval_seeds) % 3 != 0):
+        raise ValueError(
+            f"Invalid configuration: balanced 3x3 Latin-square schedule requires len(opt_eval_seeds) to be a "
+            f"multiple of 3, got {len(eval_seeds)}."
+        )
+
+    if not synthetic_shapes or len(synthetic_shapes) < 1:
+        raise ValueError("Invalid configuration: 'synthetic_shapes' must be a non-empty sequence of (m, n, r) tuples.")
+    for shape in synthetic_shapes:
+        if len(shape) != 3 or any(isinstance(d, bool) or not isinstance(d, int) or d < 1 for d in shape):
+            raise ValueError(f"Invalid synthetic shape {shape!r}: must be a 3-tuple of positive integers (m, n, r).")
+        m_s, n_s, r_s = shape
+        if r_s > min(m_s, n_s):
+            raise ValueError(f"Invalid synthetic shape {shape!r}: rank r={r_s} cannot exceed min(m={m_s}, n={n_s}).")
+
+    return eval_seeds
+
+
+_validate_experiment_configuration = validate_experiment_configuration
 
 
 def compute_sha256(path: Path) -> str:
@@ -92,8 +238,563 @@ def load_fineweb_tokens(
     return tokens
 
 
+def calc_seed_summary_stats(vals: list[float]) -> dict:
+    """Computes mean, std, sem, and exact 95% Student-t confidence interval across seeds."""
+    n = len(vals)
+    m = float(sum(vals) / n)
+    if n > 1:
+        df = n - 1
+        s = float((sum((x - m) ** 2 for x in vals) / df) ** 0.5)
+        sem = s / (n ** 0.5)
+        t_crit = float(stats.t.ppf(0.975, df=df))
+        ci95 = t_crit * sem
+    else:
+        df, s, sem, t_crit, ci95 = 0, 0.0, 0.0, 0.0, 0.0
+    return {
+        "mean": round(m, 4),
+        "std": round(s, 4),
+        "sem": round(sem, 4),
+        "df": df,
+        "t_critical_95": round(t_crit, 4),
+        "ci95_margin": round(ci95, 4),
+        "ci95": [round(m - ci95, 4), round(m + ci95, 4)],
+    }
+
+
+def _execute_single_subprocess_worker(args: argparse.Namespace) -> None:
+    """Executes a single (seed, optimizer) 200-step trajectory in a fresh OS process and CUDA context."""
+    device = torch.device(args.device)
+    gc.collect()
+    if device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats(device)
+        torch.cuda.synchronize()
+        baseline_vram = torch.cuda.memory_allocated(device) / (1024 * 1024)
+    else:
+        baseline_vram = 0.0
+
+    ckpt = torch.load(args.checkpoint_path, map_location="cpu", weights_only=False)
+    cfg = ckpt.get("config", {})
+    cpu_model_state = {k: v.cpu() for k, v in ckpt["model_state"].items()}
+    del ckpt
+
+    token_bundle = torch.load(args.tokens_cache, map_location="cpu", weights_only=False)
+    train_tokens_cpu = token_bundle["train_tokens_cpu"]
+    val_tokens_cpu = token_bundle["val_tokens_cpu"]
+    del token_bundle
+    gc.collect()
+
+    B, T = args.batch_size, args.seq_len
+    opt_steps = args.opt_steps
+    val_batches = args.val_batches
+    subspace_rank = args.subspace_rank
+    subspace_update_gap = args.subspace_update_gap
+    run_seed = args.seed
+    opt_key = args.opt_key
+
+    perm_gen = torch.Generator().manual_seed(run_seed)
+    batch_perm = torch.randperm(args.train_pool_batches, generator=perm_gen)[:opt_steps].tolist()
+
+    torch.manual_seed(run_seed)
+    model_cur = build_model(cfg).to(device=device, dtype=torch.bfloat16)
+    model_cur.load_state_dict(cpu_model_state, strict=True)
+    model_cur.train()
+
+    if opt_key == "standard_2d_adamw":
+        opt_cur = torch.optim.AdamW(model_cur.parameters(), lr=1e-4, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.01)
+        is_adamw = True
+    else:
+        use_triu = opt_key == "triangular_centroidsteer"
+        opt_cur = CentroidSteerOptimizer(
+            model_cur,
+            lr=1e-4,
+            rank=subspace_rank,
+            use_triangular_core=use_triu,
+            update_gap=subspace_update_gap,
+        )
+        is_adamw = False
+
+    losses_gpu = []
+    opt_times = []
+    full_times = []
+    refresh_opt_times, non_refresh_opt_times = [], []
+
+    for s_idx in range(opt_steps):
+        b_slot = batch_perm[s_idx]
+        tt = train_tokens_cpu[b_slot * B * T : (b_slot + 1) * B * T + 1].to(device=device, non_blocking=True)
+        inp, tgt = tt[:-1].view(B, T), tt[1:].view(B, T)
+
+        torch.cuda.synchronize() if device.type == "cuda" else None
+        t_full_start = time.perf_counter()
+
+        out = model_cur(inp)
+        logits = out[0] if isinstance(out, tuple) else out
+        loss = torch.nn.functional.cross_entropy(logits.view(-1, logits.size(-1)), tgt.view(-1))
+        loss.backward()
+
+        torch.cuda.synchronize() if device.type == "cuda" else None
+        t_opt_start = time.perf_counter()
+
+        if is_adamw:
+            opt_cur.step()
+        else:
+            opt_cur.step_parameters(model_cur.parameters(), is_global_step_end=True)
+
+        torch.cuda.synchronize() if device.type == "cuda" else None
+        t_opt_ms = (time.perf_counter() - t_opt_start) * 1000.0
+        opt_times.append(t_opt_ms)
+
+        if opt_key == "triangular_centroidsteer":
+            if s_idx > 0 and s_idx % subspace_update_gap == 0:
+                refresh_opt_times.append(t_opt_ms)
+            elif s_idx >= 5:
+                non_refresh_opt_times.append(t_opt_ms)
+
+        opt_cur.zero_grad(set_to_none=True)
+
+        t_full_ms = (time.perf_counter() - t_full_start) * 1000.0
+        full_times.append(t_full_ms)
+        losses_gpu.append(loss.detach().float())
+        del tt, inp, tgt, out, logits, loss
+
+    losses = torch.stack(losses_gpu).float().tolist()
+    del losses_gpu
+
+    model_cur.eval()
+    v_losses_gpu = []
+    with torch.no_grad():
+        for v_idx in range(val_batches):
+            tt_v = val_tokens_cpu[v_idx * B * T : (v_idx + 1) * B * T + 1].to(device=device, non_blocking=True)
+            inp_v, tgt_v = tt_v[:-1].view(B, T), tt_v[1:].view(B, T)
+            out_v = model_cur(inp_v)
+            logits_v = out_v[0] if isinstance(out_v, tuple) else out_v
+            v_loss = torch.nn.functional.cross_entropy(logits_v.view(-1, logits_v.size(-1)).float(), tgt_v.view(-1))
+            v_losses_gpu.append(v_loss.detach().float())
+            del tt_v, inp_v, tgt_v, out_v, logits_v, v_loss
+        val_loss = float(torch.stack(v_losses_gpu).float().mean().item())
+    del v_losses_gpu
+
+    peak_vram = torch.cuda.max_memory_allocated(device) / (1024 * 1024) if device.type == "cuda" else 0.0
+    inc_peak_vram = max(0.0, peak_vram - baseline_vram)
+
+    out_payload = {
+        "seed": run_seed,
+        "opt_key": opt_key,
+        "batch_permutation_first5": batch_perm[:5],
+        "final_train_loss": round(float(losses[-1]), 6),
+        "mean_train_loss": round(float(sum(losses) / len(losses)), 6),
+        "final_val_loss": round(val_loss, 6),
+        "optimizer_step_time_ms": round(sum(opt_times[5:]) / max(len(opt_times[5:]), 1), 2),
+        "full_step_time_ms": round(sum(full_times[5:]) / max(len(full_times[5:]), 1), 2),
+        "baseline_vram_mb": round(baseline_vram, 2),
+        "peak_vram_mb": round(peak_vram, 2),
+        "incremental_peak_vram_mb": round(inc_peak_vram, 2),
+    }
+    if opt_key == "triangular_centroidsteer":
+        out_payload["triangular_qr_telemetry"] = opt_cur.get_qr_telemetry()
+        non_ref_m = sum(non_refresh_opt_times) / max(len(non_refresh_opt_times), 1)
+        ref_m = sum(refresh_opt_times) / max(len(refresh_opt_times), 1)
+        out_payload["triangular_timing_breakdown_ms"] = {
+            "non_refresh_mean_ms": round(non_ref_m, 2),
+            "refresh_mean_ms": round(ref_m, 2),
+            "amortized_refresh_overhead_per_step_ms": round(max(0.0, ref_m - non_ref_m) / float(subspace_update_gap), 3),
+        }
+
+    with open(args.output_json, "w", encoding="utf-8") as f:
+        json.dump(out_payload, f)
+
+
+def run_subprocess_isolated_verification(
+    *,
+    checkpoint_path: str,
+    train_tokens_cpu: torch.Tensor,
+    val_tokens_cpu: torch.Tensor,
+    sub_seeds: list[int] = DEFAULT_SUBPROCESS_ISOLATION_SEEDS,
+    opt_steps: int = DEFAULT_OPT_STEPS,
+    train_pool_batches: int = DEFAULT_TRAIN_POOL_BATCHES,
+    val_batches: int = DEFAULT_VAL_BATCHES,
+    batch_size: int = DEFAULT_BATCH_SIZE,
+    seq_len: int = DEFAULT_SEQ_LEN,
+    subspace_rank: int = DEFAULT_SUBSPACE_RANK,
+    subspace_update_gap: int = DEFAULT_SUBSPACE_UPDATE_GAP,
+    device_str: str = "cuda",
+) -> dict:
+    """Spawns a fresh OS child process per (seed, optimizer) trajectory to eliminate CUDA context carryover."""
+    base_optimizer_configs = [
+        ("triangular_centroidsteer", True, False),
+        ("unconstrained_centroidsteer", False, False),
+        ("standard_2d_adamw", False, True),
+    ]
+    position_counts = {k: [0, 0, 0] for k, _, _ in base_optimizer_configs}
+    sub_seed_runs = []
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tokens_cache_path = Path(tmpdir) / "tokens_cache.pt"
+        torch.save({"train_tokens_cpu": train_tokens_cpu, "val_tokens_cpu": val_tokens_cpu}, tokens_cache_path)
+
+        for seed_idx, run_seed in enumerate(sub_seeds):
+            rot = seed_idx % len(base_optimizer_configs)
+            optimizer_configs = base_optimizer_configs[rot:] + base_optimizer_configs[:rot]
+            for pos_idx, (opt_k, _, _) in enumerate(optimizer_configs):
+                position_counts[opt_k][pos_idx] += 1
+
+            seed_rec = {
+                "seed": run_seed,
+                "execution_order": [opt_k for opt_k, _, _ in optimizer_configs],
+                "batch_permutation_first5": [],
+                "final_train_loss": {},
+                "mean_train_loss": {},
+                "final_val_loss": {},
+                "optimizer_step_time_ms": {},
+                "full_step_time_ms": {},
+                "baseline_vram_mb": {},
+                "peak_vram_mb": {},
+                "incremental_peak_vram_mb": {},
+            }
+
+            for opt_key, _, _ in optimizer_configs:
+                worker_out_path = Path(tmpdir) / f"worker_{run_seed}_{opt_key}.json"
+                cmd = [
+                    sys.executable,
+                    str(Path(__file__).resolve()),
+                    "--_subprocess-worker",
+                    "--checkpoint-path",
+                    str(checkpoint_path),
+                    "--tokens-cache",
+                    str(tokens_cache_path),
+                    "--output-json",
+                    str(worker_out_path),
+                    "--seed",
+                    str(run_seed),
+                    "--opt-key",
+                    opt_key,
+                    "--opt-steps",
+                    str(opt_steps),
+                    "--train-pool-batches",
+                    str(train_pool_batches),
+                    "--val-batches",
+                    str(val_batches),
+                    "--batch-size",
+                    str(batch_size),
+                    "--seq-len",
+                    str(seq_len),
+                    "--subspace-rank",
+                    str(subspace_rank),
+                    "--subspace-update-gap",
+                    str(subspace_update_gap),
+                    "--device",
+                    device_str,
+                ]
+                print(f"    [Subprocess Worker] Spawning fresh OS process for seed={run_seed}, opt={opt_key}...")
+                subprocess.run(cmd, check=True)
+                with open(worker_out_path, "r", encoding="utf-8") as wf:
+                    wres = json.load(wf)
+
+                seed_rec["batch_permutation_first5"] = wres["batch_permutation_first5"]
+                seed_rec["final_train_loss"][opt_key] = wres["final_train_loss"]
+                seed_rec["mean_train_loss"][opt_key] = wres["mean_train_loss"]
+                seed_rec["final_val_loss"][opt_key] = wres["final_val_loss"]
+                seed_rec["optimizer_step_time_ms"][opt_key] = wres["optimizer_step_time_ms"]
+                seed_rec["full_step_time_ms"][opt_key] = wres["full_step_time_ms"]
+                seed_rec["baseline_vram_mb"][opt_key] = wres["baseline_vram_mb"]
+                seed_rec["peak_vram_mb"][opt_key] = wres["peak_vram_mb"]
+                seed_rec["incremental_peak_vram_mb"][opt_key] = wres["incremental_peak_vram_mb"]
+                if opt_key == "triangular_centroidsteer":
+                    seed_rec["triangular_qr_telemetry"] = wres["triangular_qr_telemetry"]
+                    seed_rec["triangular_timing_breakdown_ms"] = wres["triangular_timing_breakdown_ms"]
+
+            sub_seed_runs.append(seed_rec)
+
+    sub_agg = {}
+    for metric_k in [
+        "final_train_loss",
+        "mean_train_loss",
+        "final_val_loss",
+        "optimizer_step_time_ms",
+        "full_step_time_ms",
+        "baseline_vram_mb",
+        "peak_vram_mb",
+        "incremental_peak_vram_mb",
+    ]:
+        sub_agg[metric_k] = {
+            opt_k: calc_seed_summary_stats([r[metric_k][opt_k] for r in sub_seed_runs])
+            for opt_k, _, _ in base_optimizer_configs
+        }
+
+    return {
+        "isolation_mode": "separate_os_subprocess_per_trajectory",
+        "num_subprocesses_spawned": len(sub_seeds) * len(base_optimizer_configs),
+        "seeds_evaluated": list(sub_seeds),
+        "steps_per_seed": opt_steps,
+        "execution_schedule_balance": {
+            "is_balanced_latin_square": len(sub_seeds) % 3 == 0,
+            "num_complete_latin_squares": len(sub_seeds) // 3,
+            "position_counts_by_optimizer": position_counts,
+        },
+        "seed_runs": sub_seed_runs,
+        "aggregated_metrics": sub_agg,
+        "paired_val_loss_test": compute_paired_and_tost(
+            [r["final_val_loss"]["triangular_centroidsteer"] for r in sub_seed_runs],
+            [r["final_val_loss"]["standard_2d_adamw"] for r in sub_seed_runs],
+            eq_margin=0.05,
+            margin_grid=DEFAULT_VAL_TOST_MARGINS,
+        ),
+    }
+
+
+def run_secondary_checkpoint_verification(
+    *,
+    secondary_checkpoint_path: str = DEFAULT_SECONDARY_CHECKPOINT_PATH,
+    train_tokens_cpu: torch.Tensor,
+    val_tokens_cpu: torch.Tensor,
+    static_tokens: list[int],
+    sub_seeds: list[int] = DEFAULT_SUBPROCESS_ISOLATION_SEEDS,
+    num_fineweb_batches: int = DEFAULT_STATIC_FINEWEB_BATCHES,
+    opt_steps: int = DEFAULT_OPT_STEPS,
+    train_pool_batches: int = DEFAULT_TRAIN_POOL_BATCHES,
+    val_batches: int = DEFAULT_VAL_BATCHES,
+    batch_size: int = DEFAULT_BATCH_SIZE,
+    seq_len: int = DEFAULT_SEQ_LEN,
+    subspace_rank: int = DEFAULT_SUBSPACE_RANK,
+    subspace_update_gap: int = DEFAULT_SUBSPACE_UPDATE_GAP,
+    device: torch.device,
+) -> dict:
+    """Evaluates static QR bounds and 200-step continuation trajectories on an earlier pre-training checkpoint stage."""
+    sec_file = Path(secondary_checkpoint_path)
+    if not sec_file.exists():
+        raise FileNotFoundError(f"Secondary checkpoint file missing: {sec_file}")
+
+    print(f"Evaluating secondary checkpoint stage: {sec_file}...")
+    ckpt = torch.load(sec_file, map_location="cpu", weights_only=False)
+    cfg = ckpt.get("config", {})
+    ckpt_step = ckpt.get("step", 35500)
+    ckpt_tokens = ckpt.get("total_tokens_trained", 157211840)
+    cpu_model_state = {k: v.cpu() for k, v in ckpt["model_state"].items()}
+    del ckpt
+    gc.collect()
+
+    B, T = batch_size, seq_len
+    r = subspace_rank
+    model = build_model(cfg).to(device=device, dtype=torch.bfloat16)
+    model.load_state_dict(cpu_model_state, strict=True)
+    model.train()
+
+    total_qr_calls = 0
+    total_fallbacks = 0
+    max_fp32_orth = 0.0
+    max_bf16_orth = 0.0
+    max_fp32_rel_subdiag = 0.0
+    max_bf16_rel_subdiag = 0.0
+    active_layers = set()
+
+    for b_idx in range(num_fineweb_batches):
+        sub_tokens = static_tokens[b_idx * B * T : (b_idx + 1) * B * T + 1]
+        tokens_tensor = torch.tensor(sub_tokens, device=device, dtype=torch.long)
+        input_ids, target_ids = tokens_tensor[:-1].view(B, T), tokens_tensor[1:].view(B, T)
+
+        torch.manual_seed(42 + b_idx)
+        out = model(input_ids)
+        logits = out[0] if isinstance(out, tuple) else out
+        loss = torch.nn.functional.cross_entropy(logits.view(-1, logits.size(-1)), target_ids.view(-1))
+        loss.backward()
+
+        for name, p in model.named_parameters():
+            if "experts" in name and "weight" in name and p.grad is not None and p.dim() == 2:
+                G_raw = p.grad.data
+                if G_raw.norm() == 0:
+                    continue
+                active_layers.add(name)
+                G = G_raw if G_raw.shape[0] <= G_raw.shape[1] else G_raw.t()
+                m, n = G.shape
+                G_f = G.float()
+
+                torch.manual_seed(42 + b_idx)
+                Omega = torch.randn(1, n, r, device=device, dtype=torch.float32)
+                Y = torch.bmm(G_f.unsqueeze(0), Omega)
+                Q_L, d1 = batched_qr(Y, cond_threshold=1e4, eps_shift=1e-7, orth_tol=1e-4, return_diagnostics=True)
+                Z = torch.bmm(G_f.t().unsqueeze(0), Q_L)
+                Q_R, d2 = batched_qr(Z, cond_threshold=1e4, eps_shift=1e-7, orth_tol=1e-4, return_diagnostics=True)
+                Y2 = torch.bmm(G_f.unsqueeze(0), Q_R)
+                Q_L, d3 = batched_qr(Y2, cond_threshold=1e4, eps_shift=1e-7, orth_tol=1e-4, return_diagnostics=True)
+
+                for diag in (d1, d2, d3):
+                    total_qr_calls += 1
+                    if bool(diag["fallback_mask"].any()):
+                        total_fallbacks += 1
+
+                Q_L_mat, Q_R_mat = Q_L.squeeze(0), Q_R.squeeze(0)
+                torch.manual_seed(42 + b_idx)
+                c = torch.randn(m, 1, device=device, dtype=torch.float32)
+                c_res1 = c - torch.mm(Q_L_mat, torch.mm(Q_L_mat.t(), c))
+                c_res = c_res1 - torch.mm(Q_L_mat, torch.mm(Q_L_mat.t(), c_res1))
+                c_norm = c_res.norm().item()
+
+                v = torch.mm(G_f.t(), c_res / max(c_norm, 1e-8))
+                v_res1 = v - torch.mm(Q_R_mat, torch.mm(Q_R_mat.t(), v))
+                v_res = v_res1 - torch.mm(Q_R_mat, torch.mm(Q_R_mat.t(), v_res1))
+                v_norm = v_res.norm().item()
+
+                if c_norm > 1e-8 and v_norm > 1e-8:
+                    QL_bar_f32 = torch.cat([Q_L_mat, c_res / c_norm], dim=1)
+                    QR_bar_f32 = torch.cat([Q_R_mat, v_res / v_norm], dim=1)
+                    k_dim = r + 1
+                else:
+                    QL_bar_f32, QR_bar_f32, k_dim = Q_L_mat, Q_R_mat, r
+
+                orth_f32 = max(
+                    (torch.mm(QL_bar_f32.t(), QL_bar_f32) - torch.eye(k_dim, device=device)).norm().item(),
+                    (torch.mm(QR_bar_f32.t(), QR_bar_f32) - torch.eye(k_dim, device=device)).norm().item(),
+                )
+                S_f32 = torch.mm(QL_bar_f32.t(), torch.mm(G_f, QR_bar_f32))
+                lower_mask = torch.tril(torch.ones(k_dim, k_dim, device=device, dtype=torch.bool), diagonal=-1)
+                rel_f32 = (S_f32[lower_mask].abs().max().item() if lower_mask.any() else 0.0) / G_f.norm().item()
+
+                QL_bar_bf16, QR_bar_bf16 = QL_bar_f32.bfloat16(), QR_bar_f32.bfloat16()
+                orth_bf16 = max(
+                    (torch.mm(QL_bar_bf16.t().float(), QL_bar_bf16.float()) - torch.eye(k_dim, device=device)).norm().item(),
+                    (torch.mm(QR_bar_bf16.t().float(), QR_bar_bf16.float()) - torch.eye(k_dim, device=device)).norm().item(),
+                )
+                S_bf16 = torch.mm(QL_bar_bf16.t(), torch.mm(G, QR_bar_bf16))
+                rel_bf16 = (S_bf16[lower_mask].float().abs().max().item() if lower_mask.any() else 0.0) / G.float().norm().item()
+
+                max_fp32_orth = max(max_fp32_orth, orth_f32)
+                max_bf16_orth = max(max_bf16_orth, orth_bf16)
+                max_fp32_rel_subdiag = max(max_fp32_rel_subdiag, rel_f32)
+                max_bf16_rel_subdiag = max(max_bf16_rel_subdiag, rel_bf16)
+
+        model.zero_grad(set_to_none=True)
+
+    def eval_val(m_eval):
+        m_eval.eval()
+        v_losses = []
+        with torch.no_grad():
+            for v_idx in range(val_batches):
+                tt_v = val_tokens_cpu[v_idx * B * T : (v_idx + 1) * B * T + 1].to(device=device, non_blocking=True)
+                inp_v, tgt_v = tt_v[:-1].view(B, T), tt_v[1:].view(B, T)
+                out_v = m_eval(inp_v)
+                logits_v = out_v[0] if isinstance(out_v, tuple) else out_v
+                v_loss = torch.nn.functional.cross_entropy(logits_v.view(-1, logits_v.size(-1)).float(), tgt_v.view(-1))
+                v_losses.append(v_loss.detach().float())
+            mv = float(torch.stack(v_losses).float().mean().item())
+        m_eval.train()
+        return mv
+
+    model.load_state_dict(cpu_model_state, strict=True)
+    initial_val_loss = eval_val(model)
+    del model
+    gc.collect()
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+
+    base_optimizer_configs = [
+        ("triangular_centroidsteer", True, False),
+        ("unconstrained_centroidsteer", False, False),
+        ("standard_2d_adamw", False, True),
+    ]
+    sec_seed_runs = []
+    for seed_idx, run_seed in enumerate(sub_seeds):
+        perm_gen = torch.Generator().manual_seed(run_seed)
+        batch_perm = torch.randperm(train_pool_batches, generator=perm_gen)[:opt_steps].tolist()
+        rot = seed_idx % 3
+        optimizer_configs = base_optimizer_configs[rot:] + base_optimizer_configs[:rot]
+        s_res = {
+            "seed": run_seed,
+            "execution_order": [k for k, _, _ in optimizer_configs],
+            "final_train_loss": {},
+            "mean_train_loss": {},
+            "final_val_loss": {},
+        }
+        for opt_key, use_triu, is_adamw in optimizer_configs:
+            torch.manual_seed(run_seed)
+            m_cur = build_model(cfg).to(device=device, dtype=torch.bfloat16)
+            m_cur.load_state_dict(cpu_model_state, strict=True)
+            m_cur.train()
+            if is_adamw:
+                o_cur = torch.optim.AdamW(m_cur.parameters(), lr=1e-4, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.01)
+            else:
+                o_cur = CentroidSteerOptimizer(
+                    m_cur, lr=1e-4, rank=subspace_rank, use_triangular_core=use_triu, update_gap=subspace_update_gap
+                )
+            losses_gpu = []
+            for s_idx in range(opt_steps):
+                b_slot = batch_perm[s_idx]
+                tt = train_tokens_cpu[b_slot * B * T : (b_slot + 1) * B * T + 1].to(device=device, non_blocking=True)
+                inp, tgt = tt[:-1].view(B, T), tt[1:].view(B, T)
+                out = m_cur(inp)
+                logits = out[0] if isinstance(out, tuple) else out
+                loss = torch.nn.functional.cross_entropy(logits.view(-1, logits.size(-1)), tgt.view(-1))
+                loss.backward()
+                if is_adamw:
+                    o_cur.step()
+                else:
+                    o_cur.step_parameters(m_cur.parameters(), is_global_step_end=True)
+                o_cur.zero_grad(set_to_none=True)
+                losses_gpu.append(loss.detach().float())
+            losses = torch.stack(losses_gpu).float().tolist()
+            v_loss = eval_val(m_cur)
+            s_res["final_train_loss"][opt_key] = round(float(losses[-1]), 6)
+            s_res["mean_train_loss"][opt_key] = round(float(sum(losses) / len(losses)), 6)
+            s_res["final_val_loss"][opt_key] = round(v_loss, 6)
+            if opt_key == "triangular_centroidsteer":
+                s_res["triangular_qr_telemetry"] = o_cur.get_qr_telemetry()
+            del m_cur, o_cur
+            gc.collect()
+            if device.type == "cuda":
+                torch.cuda.empty_cache()
+        sec_seed_runs.append(s_res)
+
+    sec_agg = {
+        metric_k: {
+            opt_k: calc_seed_summary_stats([r[metric_k][opt_k] for r in sec_seed_runs])
+            for opt_k, _, _ in base_optimizer_configs
+        }
+        for metric_k in ["final_train_loss", "mean_train_loss", "final_val_loss"]
+    }
+    sec_qr_calls = sum(r["triangular_qr_telemetry"]["total_qr_calls"] for r in sec_seed_runs)
+    sec_qr_surv = sum(r["triangular_qr_telemetry"]["cholesky_fast_path_survivals"] for r in sec_seed_runs)
+
+    return {
+        "checkpoint_path": str(sec_file),
+        "training_step": ckpt_step,
+        "cumulative_tokens_trained": ckpt_tokens,
+        "static_5batch_qr_evaluation": {
+            "active_expert_layers_evaluated": len(active_layers),
+            "total_qr_operations": total_qr_calls,
+            "cholesky_fast_path_survivals": total_qr_calls - total_fallbacks,
+            "cholesky_fast_path_survival_rate_pct": round((total_qr_calls - total_fallbacks) / max(1, total_qr_calls) * 100, 2),
+            "householder_fallbacks_triggered": total_fallbacks,
+            "householder_fallback_rate_pct": round(total_fallbacks / max(1, total_qr_calls) * 100, 2),
+            "max_fp32_orthogonality_error": max_fp32_orth,
+            "max_bf16_orthogonality_error": max_bf16_orth,
+            "max_fp32_relative_residual": max_fp32_rel_subdiag,
+            "max_bf16_relative_residual": max_bf16_rel_subdiag,
+        },
+        "continuation_evaluation_3seed_latin_square": {
+            "seeds_evaluated": list(sub_seeds),
+            "steps_per_seed": opt_steps,
+            "initial_val_loss": round(initial_val_loss, 4),
+            "seed_runs": sec_seed_runs,
+            "aggregated_metrics": sec_agg,
+            "paired_val_loss_test": compute_paired_and_tost(
+                [r["final_val_loss"]["triangular_centroidsteer"] for r in sec_seed_runs],
+                [r["final_val_loss"]["standard_2d_adamw"] for r in sec_seed_runs],
+                eq_margin=0.05,
+                margin_grid=DEFAULT_VAL_TOST_MARGINS,
+            ),
+            "live_qr_telemetry": {
+                "total_qr_calls": sec_qr_calls,
+                "cholesky_fast_path_survivals": sec_qr_surv,
+                "cholesky_survival_rate_pct": round(100.0 * sec_qr_surv / max(1, sec_qr_calls), 2),
+                "householder_fallbacks": sec_qr_calls - sec_qr_surv,
+                "householder_fallback_rate_pct": round(100.0 * (sec_qr_calls - sec_qr_surv) / max(1, sec_qr_calls), 2),
+            },
+        },
+    }
+
+
 def run_numerical_qr_residual_verification(
     checkpoint_path: str = "checkpoints/triune_studio_step_36500.pt",
+    secondary_checkpoint_path: str | None = DEFAULT_SECONDARY_CHECKPOINT_PATH,
     fineweb_path: str = "data/fineweb_edu_real.jsonl",
     tokenizer_path: str = "triune_tokenizer.json",
     num_fineweb_batches: int = DEFAULT_STATIC_FINEWEB_BATCHES,
@@ -107,14 +808,30 @@ def run_numerical_qr_residual_verification(
     subspace_rank: int = DEFAULT_SUBSPACE_RANK,
     subspace_update_gap: int = DEFAULT_SUBSPACE_UPDATE_GAP,
     synthetic_shapes: list[tuple[int, int, int]] = DEFAULT_SYNTHETIC_SHAPES,
+    require_balanced_latin_square: bool = False,
+    run_subprocess_isolation_check: bool = True,
     device_str: str = "cuda" if torch.cuda.is_available() else "cpu",
 ) -> dict:
+    eval_seeds = validate_experiment_configuration(
+        num_fineweb_batches=num_fineweb_batches,
+        seeds=seeds,
+        opt_eval_seeds=opt_eval_seeds,
+        opt_steps=opt_steps,
+        train_pool_batches=train_pool_batches,
+        val_batches=val_batches,
+        batch_size=batch_size,
+        seq_len=seq_len,
+        subspace_rank=subspace_rank,
+        subspace_update_gap=subspace_update_gap,
+        synthetic_shapes=synthetic_shapes,
+        require_balanced_latin_square=require_balanced_latin_square,
+    )
     device = torch.device(device_str)
-    eval_seeds = list(opt_eval_seeds) if opt_eval_seeds is not None else list(seeds)
     results = {
         "device": device_str,
         "experiment_configuration": {
             "checkpoint_path": checkpoint_path,
+            "secondary_checkpoint_path": secondary_checkpoint_path,
             "fineweb_path": fineweb_path,
             "tokenizer_path": tokenizer_path,
             "batch_size": batch_size,
@@ -130,6 +847,7 @@ def run_numerical_qr_residual_verification(
             "val_tokens": val_batches * batch_size * seq_len,
             "seeds": list(seeds),
             "opt_eval_seeds": eval_seeds,
+            "subprocess_isolation_seeds": list(DEFAULT_SUBPROCESS_ISOLATION_SEEDS),
             "synthetic_shapes": [list(s) for s in synthetic_shapes],
             "val_tost_margins_nats": list(DEFAULT_VAL_TOST_MARGINS),
             "train_tost_margins_nats": list(DEFAULT_TRAIN_TOST_MARGINS),
@@ -137,6 +855,7 @@ def run_numerical_qr_residual_verification(
         "checkpoint_evaluation": None,
         "stress_test_evaluation": None,
         "production_optimizer_comparison": None,
+        "secondary_checkpoint_verification": None,
         "synthetic_runs": [],
         "summary": {},
     }
@@ -806,53 +1525,6 @@ def run_numerical_qr_residual_verification(
         },
     }
 
-    # Two-tailed Paired Student's t-test + Multi-Margin Schuirmann TOST Equivalence Profile
-    def compute_paired_and_tost(vals_a, vals_b, eq_margin=0.05, margin_grid=DEFAULT_VAL_TOST_MARGINS):
-        n = len(vals_a)
-        df = n - 1
-        diffs = [float(a - b) for a, b in zip(vals_a, vals_b)]
-        d_mean = float(sum(diffs) / n)
-        d_std = float((sum((x - d_mean) ** 2 for x in diffs) / df) ** 0.5) if df > 0 else 0.0
-        d_sem = max(d_std / (n ** 0.5), 1e-12)
-        res_2tail = stats.ttest_rel(vals_a, vals_b)
-
-        def eval_tost_at_margin(margin_val: float) -> dict:
-            t_l = (d_mean - (-margin_val)) / d_sem
-            p_l = float(1.0 - stats.t.cdf(t_l, df=df))
-            t_u = (d_mean - margin_val) / d_sem
-            p_u = float(stats.t.cdf(t_u, df=df))
-            p_t = max(p_l, p_u)
-            return {
-                "equivalence_margin_nats": margin_val,
-                "relative_perplexity_tolerance_pct": round((math.exp(margin_val) - 1.0) * 100.0, 2),
-                "t_lower": round(float(t_l), 4),
-                "p_lower": round(p_l, 4),
-                "t_upper": round(float(t_u), 4),
-                "p_upper": round(p_u, 4),
-                "p_tost": round(p_t, 4),
-                "equivalent_within_margin_alpha_0_05": bool(p_t < 0.05),
-            }
-
-        t_crit_90 = float(stats.t.ppf(0.95, df=df))
-        t_crit_95 = float(stats.t.ppf(0.975, df=df))
-        min_eq_margin = abs(d_mean) + t_crit_90 * d_sem
-
-        return {
-            "paired_mean_diff": round(d_mean, 4),
-            "paired_std": round(d_std, 4),
-            "paired_sem": round(d_sem, 4),
-            "df": df,
-            "paired_ci90_t": [round(d_mean - t_crit_90 * d_sem, 4), round(d_mean + t_crit_90 * d_sem, 4)],
-            "paired_ci95_t": [round(d_mean - t_crit_95 * d_sem, 4), round(d_mean + t_crit_95 * d_sem, 4)],
-            "minimum_equivalence_margin_alpha_0_05_nats": round(min_eq_margin, 4),
-            "minimum_equivalence_relative_ppl_pct": round((math.exp(min_eq_margin) - 1.0) * 100.0, 2),
-            "t_statistic": round(float(res_2tail.statistic), 4),
-            "p_value": round(float(res_2tail.pvalue), 4),
-            "null_hypothesis_rejected_alpha_0_05": bool(res_2tail.pvalue < 0.05),
-            "tost_equivalence": eval_tost_at_margin(eq_margin),
-            "tost_sensitivity_profile": {f"{m:.2f}_nats": eval_tost_at_margin(m) for m in margin_grid},
-        }
-
     t_train = [r["final_train_loss"]["triangular_centroidsteer"] for r in seed_runs]
     a_train = [r["final_train_loss"]["standard_2d_adamw"] for r in seed_runs]
     t_mtrain = [r["mean_train_loss"]["triangular_centroidsteer"] for r in seed_runs]
@@ -899,6 +1571,43 @@ def run_numerical_qr_residual_verification(
     mean_non_ref = float(sum(non_ref_ms) / len(non_ref_ms))
     mean_ref = float(sum(ref_ms) / len(ref_ms))
 
+    subprocess_iso_res = None
+    if run_subprocess_isolation_check:
+        sub_seeds_to_use = [s for s in DEFAULT_SUBPROCESS_ISOLATION_SEEDS if s in eval_seeds] or eval_seeds[:3]
+        subprocess_iso_res = run_subprocess_isolated_verification(
+            checkpoint_path=str(ckpt_file),
+            train_tokens_cpu=train_tokens_cpu,
+            val_tokens_cpu=val_tokens_cpu,
+            sub_seeds=sub_seeds_to_use,
+            opt_steps=opt_steps,
+            train_pool_batches=train_pool_batches,
+            val_batches=val_batches,
+            batch_size=B,
+            seq_len=T,
+            subspace_rank=subspace_rank,
+            subspace_update_gap=subspace_update_gap,
+            device_str=device_str,
+        )
+
+    if secondary_checkpoint_path and Path(secondary_checkpoint_path).exists():
+        sub_seeds_to_use = [s for s in DEFAULT_SUBPROCESS_ISOLATION_SEEDS if s in eval_seeds] or eval_seeds[:3]
+        results["secondary_checkpoint_verification"] = run_secondary_checkpoint_verification(
+            secondary_checkpoint_path=secondary_checkpoint_path,
+            train_tokens_cpu=train_tokens_cpu,
+            val_tokens_cpu=val_tokens_cpu,
+            static_tokens=all_tokens,
+            sub_seeds=sub_seeds_to_use,
+            num_fineweb_batches=num_fineweb_batches,
+            opt_steps=opt_steps,
+            train_pool_batches=train_pool_batches,
+            val_batches=val_batches,
+            batch_size=B,
+            seq_len=T,
+            subspace_rank=subspace_rank,
+            subspace_update_gap=subspace_update_gap,
+            device=device,
+        )
+
     results["production_optimizer_comparison"] = {
         "steps_per_seed": opt_steps,
         "seeds_evaluated": eval_seeds,
@@ -919,6 +1628,7 @@ def run_numerical_qr_residual_verification(
         "seed_runs": seed_runs,
         "aggregated_metrics": agg,
         "paired_statistical_tests": paired_tests,
+        "subprocess_isolated_verification": subprocess_iso_res,
         "production_qr_telemetry_aggregate": prod_qr_agg,
         "final_losses": {
             "triangular_centroidsteer": agg["final_train_loss"]["triangular_centroidsteer"]["mean"],
@@ -1060,8 +1770,10 @@ def run_numerical_qr_residual_verification(
         "production_optimizer_mean_losses": opt_eval["mean_losses_across_steps"],
         "production_optimizer_aggregated": opt_eval["aggregated_metrics"],
         "production_optimizer_paired_tests": opt_eval["paired_statistical_tests"],
+        "production_optimizer_subprocess_isolated_verification": opt_eval["subprocess_isolated_verification"],
         "production_optimizer_qr_telemetry": opt_eval["production_qr_telemetry_aggregate"],
         "production_optimizer_step_runtime_ms": opt_eval["step_runtime_ms"],
+        "secondary_checkpoint_verification": results["secondary_checkpoint_verification"],
         "synthetic_max_fp32_relative_residual": max(s["fp32_relative_subdiag_residual"] for s in synth_runs),
         "synthetic_max_bf16_relative_residual": max(s["bf16_relative_subdiag_residual"] for s in synth_runs),
         "synthetic_max_fp32_orthogonality_error": max(s["fp32_orthogonality_error"] for s in synth_runs),
@@ -1071,14 +1783,7 @@ def run_numerical_qr_residual_verification(
     return results
 
 
-if __name__ == "__main__":
-    out_dir = Path("benchmarks")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    res = run_numerical_qr_residual_verification()
-    out_path = out_dir / "triangular_qr_residual_results.json"
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(res, f, indent=2)
-
+def _print_verification_report(res: dict, out_path: Path) -> None:
     summary = res["summary"]
     print("======================================================================")
     print("TRIUNE NUMERICAL QR & RESIDUAL VERIFICATION")
@@ -1153,18 +1858,17 @@ if __name__ == "__main__":
         ("final_val_loss", "Val Loss"),
     ]:
         mt = ttest[metric_key]
-        tost = mt["tost_equivalence"]
         print(
             f"    - {metric_label:<10}: diff = {mt['paired_mean_diff']:+.4f} +/- {mt['paired_std']:.4f} "
             f"(95% CI {mt['paired_ci95_t']}, 90% CI {mt['paired_ci90_t']})"
         )
         print(
-            f"      Two-tailed paired t = {mt['t_statistic']}, p = {mt['p_value']} | "
+            f"      Two-tailed paired t = {mt['t_statistic']}, p = {mt['p_value_formatted']} (exact={mt['p_value']:.3e}) | "
             f"Min Equiv Margin (alpha=0.05) = +/-{mt['minimum_equivalence_margin_alpha_0_05_nats']} nats "
             f"(+/-{mt['minimum_equivalence_relative_ppl_pct']}% PPL)"
         )
         prof_str = " | ".join(
-            f"+/-{v['equivalence_margin_nats']}n ({v['relative_perplexity_tolerance_pct']}% PPL): p_TOST={v['p_tost']}"
+            f"+/-{v['equivalence_margin_nats']}n ({v['relative_perplexity_tolerance_pct']}% PPL): p_TOST={v['p_tost_formatted']}"
             for v in mt["tost_sensitivity_profile"].values()
         )
         print(f"      TOST Profile: {prof_str}")
@@ -1205,6 +1909,47 @@ if __name__ == "__main__":
         mp = agg["peak_vram_mb"][name]["mean"]
         mi = agg["incremental_peak_vram_mb"][name]["mean"]
         print(f"    - {label:<20}: baseline = {mb:.2f} MB | total peak = {mp:.1f} MB | incremental = {mi:.1f} MB")
+    sub_iso = summary.get("production_optimizer_subprocess_isolated_verification")
+    if sub_iso:
+        print(f"  VRAM & Latency in Separate-OS-Subprocess Isolation ({sub_iso['num_subprocesses_spawned']} fresh child processes):")
+        sagg = sub_iso["aggregated_metrics"]
+        for name, label in [
+            ("triangular_centroidsteer", "Triangular Core"),
+            ("unconstrained_centroidsteer", "Unconstrained Core"),
+            ("standard_2d_adamw", "Standard 2D AdamW"),
+        ]:
+            mb = sagg["baseline_vram_mb"][name]["mean"]
+            mp = sagg["peak_vram_mb"][name]["mean"]
+            mi = sagg["incremental_peak_vram_mb"][name]["mean"]
+            ot = sagg["optimizer_step_time_ms"][name]["mean"]
+            ft = sagg["full_step_time_ms"][name]["mean"]
+            vl = sagg["final_val_loss"][name]["mean"]
+            print(
+                f"    - {label:<20}: baseline = {mb:.2f} MB | peak = {mp:.1f} MB | inc = {mi:.1f} MB | "
+                f"opt = {ot:.2f} ms | full = {ft:.2f} ms | val = {vl:.4f}"
+            )
+    sec_ver = summary.get("secondary_checkpoint_verification")
+    if sec_ver:
+        print(
+            f"  Secondary Checkpoint Stage ({sec_ver['checkpoint_path']}, step={sec_ver['training_step']}, "
+            f"tokens={sec_ver['cumulative_tokens_trained']:,}):"
+        )
+        sq = sec_ver["static_5batch_qr_evaluation"]
+        sc = sec_ver["continuation_evaluation_3seed_latin_square"]
+        print(
+            f"    - Static 5-Batch QR: {sq['cholesky_fast_path_survivals']}/{sq['total_qr_operations']} "
+            f"({sq['cholesky_fast_path_survival_rate_pct']}%) sCholQR2 | FP32 orth={sq['max_fp32_orthogonality_error']:.2e} | "
+            f"FP32 subdiag={sq['max_fp32_relative_residual']:.2e}"
+        )
+        sc_agg = sc["aggregated_metrics"]["final_val_loss"]
+        sc_pt = sc["paired_val_loss_test"]
+        print(
+            f"    - 3-Seed Continuation Val Loss (init={sc['initial_val_loss']}): "
+            f"Tri={sc_agg['triangular_centroidsteer']['mean']:.4f}, "
+            f"Unc={sc_agg['unconstrained_centroidsteer']['mean']:.4f}, "
+            f"AdamW={sc_agg['standard_2d_adamw']['mean']:.4f} "
+            f"(diff={sc_pt['paired_mean_diff']:+.4f}, min_eq=+/-{sc_pt['minimum_equivalence_margin_alpha_0_05_nats']}n)"
+        )
     print(f"  Live Training QR Telemetry (Triangular Core across {p_qr['total_qr_calls']} calls):")
     print(f"    - Cholesky fast-path survival: {p_qr['cholesky_fast_path_survivals']} ({p_qr['cholesky_survival_rate_pct']}%)")
     print(f"    - Householder fallbacks:      {p_qr['householder_fallbacks']} ({p_qr['householder_fallback_rate_pct']}%)")
@@ -1219,3 +1964,105 @@ if __name__ == "__main__":
     print(f"Synthetic FP32 Max Orthogonality Error:           {summary['synthetic_max_fp32_orthogonality_error']:.3e}")
     print(f"Synthetic BF16 Max Orthogonality Error:           {summary['synthetic_max_bf16_orthogonality_error']:.3e}")
     print("======================================================================")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Triune Numerical QR & Residual Verification")
+    parser.add_argument("--_subprocess-worker", action="store_true", dest="subprocess_worker")
+    parser.add_argument("--_augment-existing-json", action="store_true", dest="augment_existing_json")
+    parser.add_argument("--checkpoint-path", type=str, default="checkpoints/triune_studio_step_36500.pt")
+    parser.add_argument("--tokens-cache", type=str, default="")
+    parser.add_argument("--output-json", type=str, default="")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--opt-key", type=str, default="triangular_centroidsteer")
+    parser.add_argument("--opt-steps", type=int, default=DEFAULT_OPT_STEPS)
+    parser.add_argument("--train-pool-batches", type=int, default=DEFAULT_TRAIN_POOL_BATCHES)
+    parser.add_argument("--val-batches", type=int, default=DEFAULT_VAL_BATCHES)
+    parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
+    parser.add_argument("--seq-len", type=int, default=DEFAULT_SEQ_LEN)
+    parser.add_argument("--subspace-rank", type=int, default=DEFAULT_SUBSPACE_RANK)
+    parser.add_argument("--subspace-update-gap", type=int, default=DEFAULT_SUBSPACE_UPDATE_GAP)
+    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
+    cli_args = parser.parse_args()
+
+    if cli_args.subprocess_worker:
+        _execute_single_subprocess_worker(cli_args)
+        sys.exit(0)
+
+    out_dir = Path("benchmarks")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "triangular_qr_residual_results.json"
+
+    if cli_args.augment_existing_json and out_path.exists():
+        with open(out_path, "r", encoding="utf-8") as f:
+            res = json.load(f)
+        opt_eval = res["production_optimizer_comparison"]
+        seed_runs = opt_eval["seed_runs"]
+        t_train = [r["final_train_loss"]["triangular_centroidsteer"] for r in seed_runs]
+        a_train = [r["final_train_loss"]["standard_2d_adamw"] for r in seed_runs]
+        t_mtrain = [r["mean_train_loss"]["triangular_centroidsteer"] for r in seed_runs]
+        a_mtrain = [r["mean_train_loss"]["standard_2d_adamw"] for r in seed_runs]
+        t_val = [r["final_val_loss"]["triangular_centroidsteer"] for r in seed_runs]
+        a_val = [r["final_val_loss"]["standard_2d_adamw"] for r in seed_runs]
+        paired_tests = {
+            "final_train_loss": compute_paired_and_tost(t_train, a_train, eq_margin=0.10, margin_grid=DEFAULT_TRAIN_TOST_MARGINS),
+            "mean_train_loss": compute_paired_and_tost(t_mtrain, a_mtrain, eq_margin=0.05, margin_grid=DEFAULT_VAL_TOST_MARGINS),
+            "final_val_loss": compute_paired_and_tost(t_val, a_val, eq_margin=0.05, margin_grid=DEFAULT_VAL_TOST_MARGINS),
+        }
+        opt_eval["paired_statistical_tests"] = paired_tests
+        res["summary"]["production_optimizer_paired_tests"] = paired_tests
+
+        B, T = DEFAULT_BATCH_SIZE, DEFAULT_SEQ_LEN
+        total_tokens_needed = (DEFAULT_TRAIN_POOL_BATCHES + DEFAULT_VAL_BATCHES + 5) * B * T + 64
+        full_tokens = load_fineweb_tokens(Path("data/fineweb_edu_real.jsonl"), Path("triune_tokenizer.json"), num_tokens=total_tokens_needed)
+        train_tokens_cpu = torch.tensor(full_tokens[: DEFAULT_TRAIN_POOL_BATCHES * B * T + 1], dtype=torch.long)
+        val_tokens_cpu = torch.tensor(
+            full_tokens[DEFAULT_TRAIN_POOL_BATCHES * B * T : (DEFAULT_TRAIN_POOL_BATCHES + DEFAULT_VAL_BATCHES) * B * T + 1],
+            dtype=torch.long,
+        )
+        sub_iso = run_subprocess_isolated_verification(
+            checkpoint_path=cli_args.checkpoint_path,
+            train_tokens_cpu=train_tokens_cpu,
+            val_tokens_cpu=val_tokens_cpu,
+            sub_seeds=DEFAULT_SUBPROCESS_ISOLATION_SEEDS,
+            opt_steps=DEFAULT_OPT_STEPS,
+            train_pool_batches=DEFAULT_TRAIN_POOL_BATCHES,
+            val_batches=DEFAULT_VAL_BATCHES,
+            batch_size=B,
+            seq_len=T,
+            subspace_rank=DEFAULT_SUBSPACE_RANK,
+            subspace_update_gap=DEFAULT_SUBSPACE_UPDATE_GAP,
+            device_str=cli_args.device,
+        )
+        opt_eval["subprocess_isolated_verification"] = sub_iso
+        res["summary"]["production_optimizer_subprocess_isolated_verification"] = sub_iso
+
+        if Path(DEFAULT_SECONDARY_CHECKPOINT_PATH).exists():
+            sec_ver = run_secondary_checkpoint_verification(
+                secondary_checkpoint_path=DEFAULT_SECONDARY_CHECKPOINT_PATH,
+                train_tokens_cpu=train_tokens_cpu,
+                val_tokens_cpu=val_tokens_cpu,
+                static_tokens=full_tokens[: (DEFAULT_STATIC_FINEWEB_BATCHES + 2) * B * T + 20],
+                sub_seeds=DEFAULT_SUBPROCESS_ISOLATION_SEEDS,
+                num_fineweb_batches=DEFAULT_STATIC_FINEWEB_BATCHES,
+                opt_steps=DEFAULT_OPT_STEPS,
+                train_pool_batches=DEFAULT_TRAIN_POOL_BATCHES,
+                val_batches=DEFAULT_VAL_BATCHES,
+                batch_size=B,
+                seq_len=T,
+                subspace_rank=DEFAULT_SUBSPACE_RANK,
+                subspace_update_gap=DEFAULT_SUBSPACE_UPDATE_GAP,
+                device=torch.device(cli_args.device),
+            )
+            res["secondary_checkpoint_verification"] = sec_ver
+            res["summary"]["secondary_checkpoint_verification"] = sec_ver
+
+        res["experiment_configuration"]["secondary_checkpoint_path"] = DEFAULT_SECONDARY_CHECKPOINT_PATH
+        res["experiment_configuration"]["subprocess_isolation_seeds"] = list(DEFAULT_SUBPROCESS_ISOLATION_SEEDS)
+    else:
+        res = run_numerical_qr_residual_verification()
+
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(res, f, indent=2)
+
+    _print_verification_report(res, out_path)
