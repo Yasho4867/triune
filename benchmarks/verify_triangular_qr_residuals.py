@@ -21,11 +21,13 @@ Directly validates the empirical bounds and invariant claims in CentroidSteer (P
 
 from __future__ import annotations
 
+import gc
 import hashlib
 import json
 import time
 from pathlib import Path
 
+import scipy.stats as stats
 import torch
 from tokenizers import Tokenizer
 
@@ -488,152 +490,213 @@ def run_numerical_qr_residual_verification(
     seed_runs = []
 
     for seed_idx, run_seed in enumerate(eval_seeds):
-        torch.manual_seed(run_seed)
-        print(f"  --> Running Optimizer Trajectory Seed {run_seed} ({seed_idx + 1}/{len(eval_seeds)})...")
-
-        # Instantiate 3 independent copies with identical initial weights
-        model_triu = build_model(cfg).to(device=device, dtype=torch.bfloat16)
-        model_triu.load_state_dict(ckpt["model_state"], strict=True)
-        model_unconstr = build_model(cfg).to(device=device, dtype=torch.bfloat16)
-        model_unconstr.load_state_dict(ckpt["model_state"], strict=True)
-        model_adamw = build_model(cfg).to(device=device, dtype=torch.bfloat16)
-        model_adamw.load_state_dict(ckpt["model_state"], strict=True)
-
-        opt_triu = CentroidSteerOptimizer(model_triu, lr=1e-4, rank=16, use_triangular_core=True, update_gap=20)
-        opt_unconstr = CentroidSteerOptimizer(model_unconstr, lr=1e-4, rank=16, use_triangular_core=False, update_gap=20)
-        opt_adamw = torch.optim.AdamW(model_adamw.parameters(), lr=1e-4, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.01)
-
-        losses_triu, losses_unconstr, losses_adamw = [], [], []
-        step_times_triu, step_times_unconstr, step_times_adamw = [], [], []
-        refresh_step_times_triu, non_refresh_step_times_triu = [], []
-
-        if device.type == "cuda":
-            torch.cuda.reset_peak_memory_stats(device)
-            torch.cuda.synchronize()
-
-        for s_idx in range(opt_steps):
-            sub_tokens = train_tokens[s_idx * B * T : (s_idx + 1) * B * T + 1]
-            tt = torch.tensor(sub_tokens, device=device, dtype=torch.long)
-            inp, tgt = tt[:-1].view(B, T), tt[1:].view(B, T)
-
-            # 1. Triangular CentroidSteer
-            out_t = model_triu(inp)
-            logits_t = out_t[0] if isinstance(out_t, tuple) else out_t
-            loss_t = torch.nn.functional.cross_entropy(logits_t.view(-1, logits_t.size(-1)), tgt.view(-1))
-            loss_t.backward()
-
-            torch.cuda.synchronize() if device.type == "cuda" else None
-            t0 = time.perf_counter()
-            opt_triu.step_parameters(model_triu.parameters(), is_global_step_end=True)
-            torch.cuda.synchronize() if device.type == "cuda" else None
-            t_elapsed_ms = (time.perf_counter() - t0) * 1000.0
-            step_times_triu.append(t_elapsed_ms)
-            if s_idx > 0 and s_idx % 20 == 0:
-                refresh_step_times_triu.append(t_elapsed_ms)
-            elif s_idx > 1:
-                non_refresh_step_times_triu.append(t_elapsed_ms)
-            opt_triu.zero_grad()
-            losses_triu.append(loss_t.item())
-
-            # 2. Unconstrained CentroidSteer
-            out_u = model_unconstr(inp)
-            logits_u = out_u[0] if isinstance(out_u, tuple) else out_u
-            loss_u = torch.nn.functional.cross_entropy(logits_u.view(-1, logits_u.size(-1)), tgt.view(-1))
-            loss_u.backward()
-            torch.cuda.synchronize() if device.type == "cuda" else None
-            t0 = time.perf_counter()
-            opt_unconstr.step_parameters(model_unconstr.parameters(), is_global_step_end=True)
-            torch.cuda.synchronize() if device.type == "cuda" else None
-            step_times_unconstr.append((time.perf_counter() - t0) * 1000.0)
-            opt_unconstr.zero_grad()
-            losses_unconstr.append(loss_u.item())
-
-            # 3. Standard 2D AdamW
-            out_a = model_adamw(inp)
-            logits_a = out_a[0] if isinstance(out_a, tuple) else out_a
-            loss_a = torch.nn.functional.cross_entropy(logits_a.view(-1, logits_a.size(-1)), tgt.view(-1))
-            loss_a.backward()
-            torch.cuda.synchronize() if device.type == "cuda" else None
-            t0 = time.perf_counter()
-            opt_adamw.step()
-            torch.cuda.synchronize() if device.type == "cuda" else None
-            step_times_adamw.append((time.perf_counter() - t0) * 1000.0)
-            opt_adamw.zero_grad()
-            losses_adamw.append(loss_a.item())
-
-        val_loss_triu = evaluate_validation_loss(model_triu)
-        val_loss_unconstr = evaluate_validation_loss(model_unconstr)
-        val_loss_adamw = evaluate_validation_loss(model_adamw)
-
-        peak_vram_mb = torch.cuda.max_memory_allocated(device) / (1024 * 1024) if device.type == "cuda" else 0.0
-
-        non_ref_mean = sum(non_refresh_step_times_triu) / max(len(non_refresh_step_times_triu), 1)
-        ref_mean = sum(refresh_step_times_triu) / max(len(refresh_step_times_triu), 1)
-        amortized_overhead = max(0.0, ref_mean - non_ref_mean) / 20.0
-
-        seed_runs.append({
+        print(f"  --> Running Isolated Optimizer Trajectory Seed {run_seed} ({seed_idx + 1}/{len(eval_seeds)})...")
+        seed_result = {
             "seed": run_seed,
-            "final_train_loss": {
-                "triangular_centroidsteer": round(losses_triu[-1], 4),
-                "unconstrained_centroidsteer": round(losses_unconstr[-1], 4),
-                "standard_2d_adamw": round(losses_adamw[-1], 4),
-            },
-            "mean_train_loss": {
-                "triangular_centroidsteer": round(sum(losses_triu) / len(losses_triu), 4),
-                "unconstrained_centroidsteer": round(sum(losses_unconstr) / len(losses_unconstr), 4),
-                "standard_2d_adamw": round(sum(losses_adamw) / len(losses_adamw), 4),
-            },
-            "final_val_loss": {
-                "triangular_centroidsteer": round(val_loss_triu, 4),
-                "unconstrained_centroidsteer": round(val_loss_unconstr, 4),
-                "standard_2d_adamw": round(val_loss_adamw, 4),
-            },
-            "mean_step_time_ms": {
-                "triangular_centroidsteer": round(sum(step_times_triu[2:]) / max(len(step_times_triu[2:]), 1), 2),
-                "unconstrained_centroidsteer": round(sum(step_times_unconstr[2:]) / max(len(step_times_unconstr[2:]), 1), 2),
-                "standard_2d_adamw": round(sum(step_times_adamw[2:]) / max(len(step_times_adamw[2:]), 1), 2),
-            },
-            "triangular_timing_breakdown_ms": {
-                "non_refresh_mean_ms": round(non_ref_mean, 2),
-                "refresh_mean_ms": round(ref_mean, 2),
-                "amortized_refresh_overhead_per_step_ms": round(amortized_overhead, 3),
-            },
-            "peak_vram_mb": round(peak_vram_mb, 2),
-            "triangular_qr_telemetry": opt_triu.get_qr_telemetry(),
-        })
-        del model_triu, model_unconstr, model_adamw, opt_triu, opt_unconstr, opt_adamw
-        if device.type == "cuda":
-            torch.cuda.empty_cache()
+            "final_train_loss": {},
+            "mean_train_loss": {},
+            "final_val_loss": {},
+            "optimizer_step_time_ms": {},
+            "full_step_time_ms": {},
+            "peak_vram_mb": {},
+        }
 
-    # Aggregate across seeds
-    def calc_mean_std(vals):
-        m = sum(vals) / len(vals)
-        s = (sum((x - m) ** 2 for x in vals) / max(len(vals) - 1, 1)) ** 0.5
-        return round(m, 4), round(s, 4)
+        # Evaluate each optimizer in strict isolation
+        optimizer_configs = [
+            ("triangular_centroidsteer", True, False),
+            ("unconstrained_centroidsteer", False, False),
+            ("standard_2d_adamw", False, True),
+        ]
+
+        for opt_key, use_triu, is_adamw in optimizer_configs:
+            gc.collect()
+            if device.type == "cuda":
+                torch.cuda.empty_cache()
+                torch.cuda.reset_peak_memory_stats(device)
+                torch.cuda.synchronize()
+
+            # Seed RNG identically for this optimizer
+            torch.manual_seed(run_seed)
+
+            # Build fresh model
+            model_cur = build_model(cfg).to(device=device, dtype=torch.bfloat16)
+            model_cur.load_state_dict(ckpt["model_state"], strict=True)
+            model_cur.train()
+
+            if is_adamw:
+                opt_cur = torch.optim.AdamW(model_cur.parameters(), lr=1e-4, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.01)
+            else:
+                opt_cur = CentroidSteerOptimizer(model_cur, lr=1e-4, rank=16, use_triangular_core=use_triu, update_gap=20)
+
+            losses = []
+            opt_times = []
+            full_times = []
+            refresh_opt_times, non_refresh_opt_times = [], []
+
+            for s_idx in range(opt_steps):
+                sub_tokens = train_tokens[s_idx * B * T : (s_idx + 1) * B * T + 1]
+                tt = torch.tensor(sub_tokens, device=device, dtype=torch.long)
+                inp, tgt = tt[:-1].view(B, T), tt[1:].view(B, T)
+
+                torch.cuda.synchronize() if device.type == "cuda" else None
+                t_full_start = time.perf_counter()
+
+                out = model_cur(inp)
+                logits = out[0] if isinstance(out, tuple) else out
+                loss = torch.nn.functional.cross_entropy(logits.view(-1, logits.size(-1)), tgt.view(-1))
+                loss.backward()
+
+                torch.cuda.synchronize() if device.type == "cuda" else None
+                t_opt_start = time.perf_counter()
+
+                if is_adamw:
+                    opt_cur.step()
+                else:
+                    opt_cur.step_parameters(model_cur.parameters(), is_global_step_end=True)
+
+                torch.cuda.synchronize() if device.type == "cuda" else None
+                t_opt_ms = (time.perf_counter() - t_opt_start) * 1000.0
+                opt_times.append(t_opt_ms)
+
+                if opt_key == "triangular_centroidsteer":
+                    if s_idx > 0 and s_idx % 20 == 0:
+                        refresh_opt_times.append(t_opt_ms)
+                    elif s_idx > 1:
+                        non_refresh_opt_times.append(t_opt_ms)
+
+                opt_cur.zero_grad()
+
+                torch.cuda.synchronize() if device.type == "cuda" else None
+                t_full_ms = (time.perf_counter() - t_full_start) * 1000.0
+                full_times.append(t_full_ms)
+                losses.append(loss.item())
+
+            val_loss = evaluate_validation_loss(model_cur)
+            peak_vram = torch.cuda.max_memory_allocated(device) / (1024 * 1024) if device.type == "cuda" else 0.0
+
+            seed_result["final_train_loss"][opt_key] = round(losses[-1], 4)
+            seed_result["mean_train_loss"][opt_key] = round(sum(losses) / len(losses), 4)
+            seed_result["final_val_loss"][opt_key] = round(val_loss, 4)
+            seed_result["optimizer_step_time_ms"][opt_key] = round(sum(opt_times[2:]) / max(len(opt_times[2:]), 1), 2)
+            seed_result["full_step_time_ms"][opt_key] = round(sum(full_times[2:]) / max(len(full_times[2:]), 1), 2)
+            seed_result["peak_vram_mb"][opt_key] = round(peak_vram, 2)
+
+            if opt_key == "triangular_centroidsteer":
+                seed_result["triangular_qr_telemetry"] = opt_cur.get_qr_telemetry()
+                non_ref_m = sum(non_refresh_opt_times) / max(len(non_refresh_opt_times), 1)
+                ref_m = sum(refresh_opt_times) / max(len(refresh_opt_times), 1)
+                seed_result["triangular_timing_breakdown_ms"] = {
+                    "non_refresh_mean_ms": round(non_ref_m, 2),
+                    "refresh_mean_ms": round(ref_m, 2),
+                    "amortized_refresh_overhead_per_step_ms": round(max(0.0, ref_m - non_ref_m) / 20.0, 3),
+                }
+
+            del model_cur, opt_cur
+            gc.collect()
+            if device.type == "cuda":
+                torch.cuda.empty_cache()
+
+        seed_runs.append(seed_result)
+
+    # Statistical aggregations across seeds (Mean, Std, SEM, 95% Confidence Interval)
+    def calc_stats(vals):
+        n = len(vals)
+        m = float(sum(vals) / n)
+        if n > 1:
+            s = float((sum((x - m) ** 2 for x in vals) / (n - 1)) ** 0.5)
+            sem = s / (n ** 0.5)
+            ci95 = 1.96 * sem
+        else:
+            s, sem, ci95 = 0.0, 0.0, 0.0
+        return {
+            "mean": round(m, 4),
+            "std": round(s, 4),
+            "sem": round(sem, 4),
+            "ci95_margin": round(ci95, 4),
+            "ci95": [round(m - ci95, 4), round(m + ci95, 4)],
+        }
 
     agg = {
         "final_train_loss": {
-            "triangular_centroidsteer": calc_mean_std([r["final_train_loss"]["triangular_centroidsteer"] for r in seed_runs]),
-            "unconstrained_centroidsteer": calc_mean_std([r["final_train_loss"]["unconstrained_centroidsteer"] for r in seed_runs]),
-            "standard_2d_adamw": calc_mean_std([r["final_train_loss"]["standard_2d_adamw"] for r in seed_runs]),
+            "triangular_centroidsteer": calc_stats([r["final_train_loss"]["triangular_centroidsteer"] for r in seed_runs]),
+            "unconstrained_centroidsteer": calc_stats([r["final_train_loss"]["unconstrained_centroidsteer"] for r in seed_runs]),
+            "standard_2d_adamw": calc_stats([r["final_train_loss"]["standard_2d_adamw"] for r in seed_runs]),
         },
         "mean_train_loss": {
-            "triangular_centroidsteer": calc_mean_std([r["mean_train_loss"]["triangular_centroidsteer"] for r in seed_runs]),
-            "unconstrained_centroidsteer": calc_mean_std([r["mean_train_loss"]["unconstrained_centroidsteer"] for r in seed_runs]),
-            "standard_2d_adamw": calc_mean_std([r["mean_train_loss"]["standard_2d_adamw"] for r in seed_runs]),
+            "triangular_centroidsteer": calc_stats([r["mean_train_loss"]["triangular_centroidsteer"] for r in seed_runs]),
+            "unconstrained_centroidsteer": calc_stats([r["mean_train_loss"]["unconstrained_centroidsteer"] for r in seed_runs]),
+            "standard_2d_adamw": calc_stats([r["mean_train_loss"]["standard_2d_adamw"] for r in seed_runs]),
         },
         "final_val_loss": {
-            "triangular_centroidsteer": calc_mean_std([r["final_val_loss"]["triangular_centroidsteer"] for r in seed_runs]),
-            "unconstrained_centroidsteer": calc_mean_std([r["final_val_loss"]["unconstrained_centroidsteer"] for r in seed_runs]),
-            "standard_2d_adamw": calc_mean_std([r["final_val_loss"]["standard_2d_adamw"] for r in seed_runs]),
+            "triangular_centroidsteer": calc_stats([r["final_val_loss"]["triangular_centroidsteer"] for r in seed_runs]),
+            "unconstrained_centroidsteer": calc_stats([r["final_val_loss"]["unconstrained_centroidsteer"] for r in seed_runs]),
+            "standard_2d_adamw": calc_stats([r["final_val_loss"]["standard_2d_adamw"] for r in seed_runs]),
         },
-        "mean_step_time_ms": {
-            "triangular_centroidsteer": calc_mean_std([r["mean_step_time_ms"]["triangular_centroidsteer"] for r in seed_runs]),
-            "unconstrained_centroidsteer": calc_mean_std([r["mean_step_time_ms"]["unconstrained_centroidsteer"] for r in seed_runs]),
-            "standard_2d_adamw": calc_mean_std([r["mean_step_time_ms"]["standard_2d_adamw"] for r in seed_runs]),
+        "optimizer_step_time_ms": {
+            "triangular_centroidsteer": calc_stats([r["optimizer_step_time_ms"]["triangular_centroidsteer"] for r in seed_runs]),
+            "unconstrained_centroidsteer": calc_stats([r["optimizer_step_time_ms"]["unconstrained_centroidsteer"] for r in seed_runs]),
+            "standard_2d_adamw": calc_stats([r["optimizer_step_time_ms"]["standard_2d_adamw"] for r in seed_runs]),
         },
-        "peak_vram_mb": calc_mean_std([r["peak_vram_mb"] for r in seed_runs]),
+        "full_step_time_ms": {
+            "triangular_centroidsteer": calc_stats([r["full_step_time_ms"]["triangular_centroidsteer"] for r in seed_runs]),
+            "unconstrained_centroidsteer": calc_stats([r["full_step_time_ms"]["unconstrained_centroidsteer"] for r in seed_runs]),
+            "standard_2d_adamw": calc_stats([r["full_step_time_ms"]["standard_2d_adamw"] for r in seed_runs]),
+        },
+        "peak_vram_mb": {
+            "triangular_centroidsteer": calc_stats([r["peak_vram_mb"]["triangular_centroidsteer"] for r in seed_runs]),
+            "unconstrained_centroidsteer": calc_stats([r["peak_vram_mb"]["unconstrained_centroidsteer"] for r in seed_runs]),
+            "standard_2d_adamw": calc_stats([r["peak_vram_mb"]["standard_2d_adamw"] for r in seed_runs]),
+        },
     }
+
+    # Two-tailed Paired Student's t-test between Triangular CentroidSteer and Standard 2D AdamW
+    t_train = [r["final_train_loss"]["triangular_centroidsteer"] for r in seed_runs]
+    a_train = [r["final_train_loss"]["standard_2d_adamw"] for r in seed_runs]
+    res_train = stats.ttest_rel(t_train, a_train)
+
+    t_val = [r["final_val_loss"]["triangular_centroidsteer"] for r in seed_runs]
+    a_val = [r["final_val_loss"]["standard_2d_adamw"] for r in seed_runs]
+    res_val = stats.ttest_rel(t_val, a_val)
+
+    paired_tests = {
+        "final_train_loss": {
+            "t_statistic": round(float(res_train.statistic), 4),
+            "p_value": round(float(res_train.pvalue), 4),
+            "null_hypothesis_rejected_alpha_0_05": bool(res_train.pvalue < 0.05),
+        },
+        "final_val_loss": {
+            "t_statistic": round(float(res_val.statistic), 4),
+            "p_value": round(float(res_val.pvalue), 4),
+            "null_hypothesis_rejected_alpha_0_05": bool(res_val.pvalue < 0.05),
+        },
+    }
+
+    # Live Production QR Telemetry Aggregation across seeds
+    prod_qr_total = sum(r["triangular_qr_telemetry"]["total_qr_calls"] for r in seed_runs)
+    prod_qr_survivals = sum(r["triangular_qr_telemetry"]["cholesky_fast_path_survivals"] for r in seed_runs)
+    prod_qr_fallbacks = sum(r["triangular_qr_telemetry"]["householder_fallbacks"] for r in seed_runs)
+    prod_primary_reasons = {
+        k: sum(r["triangular_qr_telemetry"]["primary_fallback_reasons"][k] for r in seed_runs)
+        for k in ["degenerate_columns", "cholesky_non_positive_definite", "condition_ratio_exceeded", "orthogonality_tolerance_exceeded"]
+    }
+    prod_overlapping_triggers = {
+        k: sum(r["triangular_qr_telemetry"]["overlapping_triggers"][k] for r in seed_runs)
+        for k in ["degenerate_columns", "cholesky_non_positive_definite", "condition_ratio_exceeded", "orthogonality_tolerance_exceeded"]
+    }
+    prod_qr_agg = {
+        "total_qr_calls": prod_qr_total,
+        "cholesky_fast_path_survivals": prod_qr_survivals,
+        "cholesky_survival_rate_pct": round(100.0 * prod_qr_survivals / max(1, prod_qr_total), 2),
+        "householder_fallbacks": prod_qr_fallbacks,
+        "householder_fallback_rate_pct": round(100.0 * prod_qr_fallbacks / max(1, prod_qr_total), 2),
+        "primary_fallback_reasons": prod_primary_reasons,
+        "overlapping_triggers": prod_overlapping_triggers,
+    }
+
+    non_ref_ms = [r["triangular_timing_breakdown_ms"]["non_refresh_mean_ms"] for r in seed_runs]
+    ref_ms = [r["triangular_timing_breakdown_ms"]["refresh_mean_ms"] for r in seed_runs]
+    mean_non_ref = float(sum(non_ref_ms) / len(non_ref_ms))
+    mean_ref = float(sum(ref_ms) / len(ref_ms))
 
     results["production_optimizer_comparison"] = {
         "steps_per_seed": opt_steps,
@@ -642,15 +705,17 @@ def run_numerical_qr_residual_verification(
         "initial_val_loss": round(initial_val_loss, 4),
         "seed_runs": seed_runs,
         "aggregated_metrics": agg,
+        "paired_statistical_tests": paired_tests,
+        "production_qr_telemetry_aggregate": prod_qr_agg,
         "final_losses": {
-            "triangular_centroidsteer": agg["final_train_loss"]["triangular_centroidsteer"][0],
-            "unconstrained_centroidsteer": agg["final_train_loss"]["unconstrained_centroidsteer"][0],
-            "standard_2d_adamw": agg["final_train_loss"]["standard_2d_adamw"][0],
+            "triangular_centroidsteer": agg["final_train_loss"]["triangular_centroidsteer"]["mean"],
+            "unconstrained_centroidsteer": agg["final_train_loss"]["unconstrained_centroidsteer"]["mean"],
+            "standard_2d_adamw": agg["final_train_loss"]["standard_2d_adamw"]["mean"],
         },
         "mean_losses_across_steps": {
-            "triangular_centroidsteer": agg["mean_train_loss"]["triangular_centroidsteer"][0],
-            "unconstrained_centroidsteer": agg["mean_train_loss"]["unconstrained_centroidsteer"][0],
-            "standard_2d_adamw": agg["mean_train_loss"]["standard_2d_adamw"][0],
+            "triangular_centroidsteer": agg["mean_train_loss"]["triangular_centroidsteer"]["mean"],
+            "unconstrained_centroidsteer": agg["mean_train_loss"]["unconstrained_centroidsteer"]["mean"],
+            "standard_2d_adamw": agg["mean_train_loss"]["standard_2d_adamw"]["mean"],
         },
         "optimizer_memory_bytes_per_param": {
             "centroidsteer": 0.128,
@@ -659,11 +724,12 @@ def run_numerical_qr_residual_verification(
             "memory_reduction_vs_adamw_pct": 98.4,
         },
         "step_runtime_ms": {
-            "non_refresh_step_mean_ms": seed_runs[0]["triangular_timing_breakdown_ms"]["non_refresh_mean_ms"],
-            "refresh_step_mean_ms": seed_runs[0]["triangular_timing_breakdown_ms"]["refresh_mean_ms"],
-            "amortized_qr_overhead_per_step_ms": seed_runs[0]["triangular_timing_breakdown_ms"]["amortized_refresh_overhead_per_step_ms"],
-            "batched_cholesky_qr_latency_ms": 0.25,
-            "batched_householder_qr_latency_ms": 4.00,
+            "optimizer_step_non_refresh_mean_ms": round(mean_non_ref, 2),
+            "optimizer_step_refresh_mean_ms": round(mean_ref, 2),
+            "amortized_refresh_overhead_at_tau_20_ms": round(max(0.0, mean_ref - mean_non_ref) / 20.0, 3),
+            "amortized_refresh_overhead_at_tau_200_ms": round(max(0.0, mean_ref - mean_non_ref) / 200.0, 3),
+            "batched_cholesky_qr_microbenchmark_latency_ms": 0.25,
+            "batched_householder_qr_microbenchmark_latency_ms": 4.00,
         },
     }
 
@@ -777,6 +843,8 @@ def run_numerical_qr_residual_verification(
         "production_optimizer_final_losses": opt_eval["final_losses"],
         "production_optimizer_mean_losses": opt_eval["mean_losses_across_steps"],
         "production_optimizer_aggregated": opt_eval["aggregated_metrics"],
+        "production_optimizer_paired_tests": opt_eval["paired_statistical_tests"],
+        "production_optimizer_qr_telemetry": opt_eval["production_qr_telemetry_aggregate"],
         "synthetic_max_fp32_relative_residual": max(s["fp32_relative_subdiag_residual"] for s in synth_runs),
         "synthetic_max_bf16_relative_residual": max(s["bf16_relative_subdiag_residual"] for s in synth_runs),
         "synthetic_max_fp32_orthogonality_error": max(s["fp32_orthogonality_error"] for s in synth_runs),
@@ -821,31 +889,64 @@ if __name__ == "__main__":
         print(f"FineWeb BF16 Max Basis Orthogonality Error:     {summary['fineweb_gradients_max_bf16_orthogonality_error']:.3e}")
     print("----------------------------------------------------------------------")
     print(f"PRODUCTION OPTIMIZER COMPARISON ({summary['production_optimizer_steps_per_seed']} Steps Across Seeds {summary['production_optimizer_seeds']}):")
-    opt = summary["production_optimizer_final_losses"]
-    mean_opt = summary["production_optimizer_mean_losses"]
     agg = summary["production_optimizer_aggregated"]
+    ttest = summary["production_optimizer_paired_tests"]
+    p_qr = summary["production_optimizer_qr_telemetry"]
     print(f"  Initial Held-out Validation Loss: {summary['production_optimizer_initial_val_loss']}")
-    print(f"  Final Train Loss (Mean +/- Std):")
-    print(f"    - Triangular Core:    {agg['final_train_loss']['triangular_centroidsteer'][0]} +/- {agg['final_train_loss']['triangular_centroidsteer'][1]}")
-    print(f"    - Unconstrained Core: {agg['final_train_loss']['unconstrained_centroidsteer'][0]} +/- {agg['final_train_loss']['unconstrained_centroidsteer'][1]}")
-    print(f"    - Standard 2D AdamW:  {agg['final_train_loss']['standard_2d_adamw'][0]} +/- {agg['final_train_loss']['standard_2d_adamw'][1]}")
-    print(f"  Final Held-out Validation Loss (Mean +/- Std):")
-    print(f"    - Triangular Core:    {agg['final_val_loss']['triangular_centroidsteer'][0]} +/- {agg['final_val_loss']['triangular_centroidsteer'][1]}")
-    print(f"    - Unconstrained Core: {agg['final_val_loss']['unconstrained_centroidsteer'][0]} +/- {agg['final_val_loss']['unconstrained_centroidsteer'][1]}")
-    print(f"    - Standard 2D AdamW:  {agg['final_val_loss']['standard_2d_adamw'][0]} +/- {agg['final_val_loss']['standard_2d_adamw'][1]}")
-    print(f"  Step Times (ms): Triu = {agg['mean_step_time_ms']['triangular_centroidsteer'][0]}ms, Unconstr = {agg['mean_step_time_ms']['unconstrained_centroidsteer'][0]}ms, AdamW = {agg['mean_step_time_ms']['standard_2d_adamw'][0]}ms")
-    print(f"  Peak VRAM: {agg['peak_vram_mb'][0]} MB")
+    print(f"  Final Train Loss (Mean +/- Std, [95% CI]):")
+    for name, label in [
+        ("triangular_centroidsteer", "Triangular Core"),
+        ("unconstrained_centroidsteer", "Unconstrained Core"),
+        ("standard_2d_adamw", "Standard 2D AdamW"),
+    ]:
+        m = agg["final_train_loss"][name]["mean"]
+        s = agg["final_train_loss"][name]["std"]
+        ci = agg["final_train_loss"][name]["ci95"]
+        print(f"    - {label:<20}: {m:.4f} +/- {s:.4f} [{ci[0]:.4f}, {ci[1]:.4f}]")
+    print(f"  Final Held-out Validation Loss (Mean +/- Std, [95% CI]):")
+    for name, label in [
+        ("triangular_centroidsteer", "Triangular Core"),
+        ("unconstrained_centroidsteer", "Unconstrained Core"),
+        ("standard_2d_adamw", "Standard 2D AdamW"),
+    ]:
+        m = agg["final_val_loss"][name]["mean"]
+        s = agg["final_val_loss"][name]["std"]
+        ci = agg["final_val_loss"][name]["ci95"]
+        print(f"    - {label:<20}: {m:.4f} +/- {s:.4f} [{ci[0]:.4f}, {ci[1]:.4f}]")
+    print("  Two-Tailed Paired Student's t-test (Triangular CentroidSteer vs AdamW):")
+    print(f"    - Train Loss: t = {ttest['final_train_loss']['t_statistic']}, p = {ttest['final_train_loss']['p_value']} (H0 rejected at alpha=0.05: {ttest['final_train_loss']['null_hypothesis_rejected_alpha_0_05']})")
+    print(f"    - Val Loss:   t = {ttest['final_val_loss']['t_statistic']}, p = {ttest['final_val_loss']['p_value']} (H0 rejected at alpha=0.05: {ttest['final_val_loss']['null_hypothesis_rejected_alpha_0_05']})")
+    print("  Optimizer Step Time (ms):")
+    for name, label in [
+        ("triangular_centroidsteer", "Triangular Core"),
+        ("unconstrained_centroidsteer", "Unconstrained Core"),
+        ("standard_2d_adamw", "Standard 2D AdamW"),
+    ]:
+        m = agg["optimizer_step_time_ms"][name]["mean"]
+        s = agg["optimizer_step_time_ms"][name]["std"]
+        print(f"    - {label:<20}: {m:.2f} +/- {s:.2f} ms")
+    print("  Full Step Time (Fwd + Bwd + Opt) (ms):")
+    for name, label in [
+        ("triangular_centroidsteer", "Triangular Core"),
+        ("unconstrained_centroidsteer", "Unconstrained Core"),
+        ("standard_2d_adamw", "Standard 2D AdamW"),
+    ]:
+        m = agg["full_step_time_ms"][name]["mean"]
+        s = agg["full_step_time_ms"][name]["std"]
+        print(f"    - {label:<20}: {m:.2f} +/- {s:.2f} ms")
+    print("  Peak VRAM in Strict Isolated Execution (MB):")
+    for name, label in [
+        ("triangular_centroidsteer", "Triangular Core"),
+        ("unconstrained_centroidsteer", "Unconstrained Core"),
+        ("standard_2d_adamw", "Standard 2D AdamW"),
+    ]:
+        m = agg["peak_vram_mb"][name]["mean"]
+        print(f"    - {label:<20}: {m:.1f} MB")
+    print(f"  Live Training QR Telemetry (Triangular Core across {p_qr['total_qr_calls']} calls):")
+    print(f"    - Cholesky fast-path survival: {p_qr['cholesky_fast_path_survivals']} ({p_qr['cholesky_survival_rate_pct']}%)")
+    print(f"    - Householder fallbacks:      {p_qr['householder_fallbacks']} ({p_qr['householder_fallback_rate_pct']}%)")
     print(f"  Persistent State Memory: CentroidSteer = 0.128 B/p vs AdamW = 8.00 B/p (98.4% reduction)")
     print("----------------------------------------------------------------------")
-    print(f"Stress-Test FP32 Max Basis Orthogonality Error: {summary['stress_test_max_fp32_orthogonality_error']:.3e}")
-    print(f"Stress-Test BF16 Max Basis Orthogonality Error: {summary['stress_test_max_bf16_orthogonality_error']:.3e}")
-    print(f"Stress-Test Householder Fallbacks Triggered:   {summary['stress_test_householder_fallbacks']} / {summary['stress_test_active_layers']}")
-    print("----------------------------------------------------------------------")
-    print(f"Synthetic FP32 Max Relative Subdiagonal Residual: {summary['synthetic_max_fp32_relative_residual']:.3e}")
-    print(f"Synthetic BF16 Max Relative Subdiagonal Residual: {summary['synthetic_max_bf16_relative_residual']:.3e}")
-    print(f"Synthetic FP32 Max Orthogonality Error:           {summary['synthetic_max_fp32_orthogonality_error']:.3e}")
-    print(f"Synthetic BF16 Max Orthogonality Error:           {summary['synthetic_max_bf16_orthogonality_error']:.3e}")
-    print("======================================================================")
     print(f"Stress-Test FP32 Max Basis Orthogonality Error: {summary['stress_test_max_fp32_orthogonality_error']:.3e}")
     print(f"Stress-Test BF16 Max Basis Orthogonality Error: {summary['stress_test_max_bf16_orthogonality_error']:.3e}")
     print(f"Stress-Test Householder Fallbacks Triggered:   {summary['stress_test_householder_fallbacks']} / {summary['stress_test_active_layers']}")

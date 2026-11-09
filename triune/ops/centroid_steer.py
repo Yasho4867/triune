@@ -57,9 +57,15 @@ def batched_qr(
 
     fallback_mask = cond_fail_mask | degen_mask | cholesky_fail_mask | orth_fail_mask
 
-    if bool(fallback_mask.any()):
-        Q_householder, _ = torch.linalg.qr(Y_f)
-        Q = torch.where(fallback_mask.view(-1, 1, 1), Q_householder, Q)
+    failed_idx = torch.nonzero(fallback_mask, as_tuple=False).reshape(-1)
+    num_failed = failed_idx.numel()
+    if num_failed > 0:
+        if num_failed == K:
+            Q_householder, _ = torch.linalg.qr(Y_f)
+            Q = Q_householder
+        else:
+            Q_failed, _ = torch.linalg.qr(Y_f[failed_idx])
+            Q[failed_idx] = Q_failed
 
     Q_out = Q.to(dtype=dtype)
     if return_diagnostics:
