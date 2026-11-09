@@ -355,3 +355,65 @@ def test_triangular_adamw_noise_filtering_and_update_equivalence():
     assert subdiag_filt_max == 0.0, f"Filtered subdiagonal update must be identically zero, got {subdiag_filt_max}"
 
     print("✅ AdamW exact core equivalence and noise suppression verified!")
+
+
+def test_scholqr2_shift_bias_elimination_and_zero_grad_skip():
+    """Verifies that Two-Pass Shifted Cholesky-QR (sCholQR2) eliminates shift bias on kappa~100 matrices without fallback, and skips unrouted zero-grad experts."""
+    from triune.ops.centroid_steer import batched_qr
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    torch.manual_seed(123)
+
+    # 1. Construct a full-rank matrix with condition number ~100 (where single-pass eps_shift=1e-7 has orth error > 1e-4)
+    m, r = 384, 16
+    U, _ = torch.linalg.qr(torch.randn(m, r, device=device, dtype=torch.float32), mode="reduced")
+    V, _ = torch.linalg.qr(torch.randn(r, r, device=device, dtype=torch.float32), mode="reduced")
+    # Singular values geometrically spaced from 1.0 down to 0.01 (kappa = 100)
+    s = torch.logspace(0.0, -2.0, steps=r, device=device, dtype=torch.float32)
+    Y_mod = (U * s.unsqueeze(0)) @ V.t()
+    Y_batch = Y_mod.unsqueeze(0)
+
+    Q, diag = batched_qr(Y_batch, cond_threshold=1e4, eps_shift=1e-7, orth_tol=1e-4, return_diagnostics=True)
+    assert not diag["fallback_mask"][0].item(), (
+        "sCholQR2 must survive on full-rank kappa=100 matrix without Householder fallback"
+    )
+    orth_err = (torch.mm(Q[0].t(), Q[0]) - torch.eye(r, device=device)).norm().item()
+    assert orth_err < 1e-5, f"sCholQR2 orthogonality error must be < 1e-5, got {orth_err:.3e}"
+
+    # 2. Verify that zero-gradient experts are skipped and non-refresh steps invoke 0 QR calls
+    model = DummyMoEModel(d_model=128, num_experts=4, expert_dim=256).to(device=device, dtype=torch.bfloat16)
+    opt = CentroidSteerOptimizer(
+        model, rank=8, update_gap=5, use_triangular_core=True, adaptive_subspace_refresh=False
+    )
+
+    x = torch.randn(2, 8, 128, device=device, dtype=torch.bfloat16)
+    out, _ = model(x)
+    out.sum().backward()
+
+    # Zero out one expert's gradients to simulate an unrouted expert
+    expert_groups = [g for g in opt.layer_groups if g["module"] is not None]
+    expert_groups[0]["param"].grad.zero_()
+
+    opt.step_parameters(model.parameters(), is_global_step_end=True)
+    opt.zero_grad()
+
+    telem_step1 = opt.get_qr_telemetry()
+    assert telem_step1["primary_fallback_reasons"]["degenerate_columns"] == 0, (
+        "Unrouted zero-gradient experts must be skipped before QR, causing 0 degenerate_columns fallbacks"
+    )
+    qr_calls_step1 = telem_step1["total_qr_calls"]
+    assert qr_calls_step1 > 0
+
+    # Step 2 (non-refresh step, since update_gap=5): all already-initialized experts should reuse bases with 0 new QR calls
+    out, _ = model(x)
+    out.sum().backward()
+    expert_groups[0]["param"].grad.zero_()  # keep same expert unrouted
+    opt.step_parameters(model.parameters(), is_global_step_end=True)
+    opt.zero_grad()
+
+    telem_step2 = opt.get_qr_telemetry()
+    assert telem_step2["total_qr_calls"] == qr_calls_step1, (
+        f"Non-refresh step must execute 0 new QR calls, expected {qr_calls_step1}, got {telem_step2['total_qr_calls']}"
+    )
+    print("✅ sCholQR2 shift-bias elimination and zero-grad/non-refresh QR skipping verified!")
+

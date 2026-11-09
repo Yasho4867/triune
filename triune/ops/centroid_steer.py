@@ -34,20 +34,29 @@ def batched_qr(
     col_norms = torch.linalg.norm(Y_f, dim=1, keepdim=True)
     degen_mask = (col_norms.squeeze(1) <= 1e-12).any(dim=-1)
 
+    # Pass 1: Shifted Cholesky-QR preconditioning (reduces kappa(Y) <= 1e4 down to kappa(Q_1) ~ 1)
     Y_norm = Y_f / col_norms.clamp_min(1e-12)
-    Gram = torch.bmm(Y_norm.transpose(1, 2), Y_norm)
-    Gram.diagonal(dim1=1, dim2=2).add_(eps_shift)
-    L, info = torch.linalg.cholesky_ex(Gram)
-    cholesky_fail_mask = (info != 0)
+    Gram1 = torch.bmm(Y_norm.transpose(1, 2), Y_norm)
+    Gram1.diagonal(dim1=1, dim2=2).add_(eps_shift)
+    L1, info1 = torch.linalg.cholesky_ex(Gram1)
+    Q1 = torch.linalg.solve_triangular(L1, Y_norm.transpose(1, 2), upper=False).transpose(1, 2)
 
-    # Condition ratio monitoring: kappa(A) approx max(L_ii^2) / min(L_ii^2)
-    L_diag = L.diagonal(dim1=1, dim2=2)
-    L_diag_sq = L_diag * L_diag
-    cond_ratio = L_diag_sq.max(dim=-1).values / L_diag_sq.min(dim=-1).values.clamp_min(1e-12)
+    # Pass 2: Cholesky-QR refinement on Q_1 (sCholQR2: eliminates O(eps_shift / sigma_min^2) shift bias)
+    q1_norms = torch.linalg.norm(Q1, dim=1, keepdim=True)
+    Q1_norm = Q1 / q1_norms.clamp_min(1e-12)
+    Gram2 = torch.bmm(Q1_norm.transpose(1, 2), Q1_norm)
+    Gram2.diagonal(dim1=1, dim2=2).add_(eps_shift)
+    L2, info2 = torch.linalg.cholesky_ex(Gram2)
+    cholesky_fail_mask = (info1 != 0) | (info2 != 0)
+
+    # Condition ratio monitoring on refined Cholesky factor: kappa(A_2) approx max(L2_ii^2) / min(L2_ii^2)
+    L2_diag = L2.diagonal(dim1=1, dim2=2)
+    L2_diag_sq = L2_diag * L2_diag
+    cond_ratio = L2_diag_sq.max(dim=-1).values / L2_diag_sq.min(dim=-1).values.clamp_min(1e-12)
     cond_fail_mask = (cond_ratio >= cond_threshold)
 
-    # Solve triangular system L Q^T = Y_norm^T
-    Q = torch.linalg.solve_triangular(L, Y_norm.transpose(1, 2), upper=False).transpose(1, 2)
+    # Solve triangular system L2 Q^T = Q1_norm^T
+    Q = torch.linalg.solve_triangular(L2, Q1_norm.transpose(1, 2), upper=False).transpose(1, 2)
 
     # Post-QR basis orthogonality check: ||Q^T Q - I||_F
     I = torch.eye(r, device=Y_mat.device, dtype=torch.float32).unsqueeze(0).expand(K, -1, -1)

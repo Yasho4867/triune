@@ -115,7 +115,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
         use_triangular_core=getattr(defaults, "USE_TRIANGULAR_CORE", True),
         use_8bit_base: bool = getattr(defaults, "USE_8BIT_BASE", False),
         subspace_stride: int = 1,
-        adaptive_subspace_refresh: bool = True,
+        adaptive_subspace_refresh: bool = False,
         energy_threshold: float = 0.50,
         min_subspace_gap: int = 5,
         max_subspace_gap: int = 50,
@@ -156,6 +156,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
         self.max_subspace_gap = max_subspace_gap
         self.param_roles = param_roles or {}
         self._triangular_buffers = {}
+        self._qr_telemetry_gpu: torch.Tensor | None = None
         self.qr_telemetry = {
             "total_qr_calls": 0,
             "cholesky_fast_path_survivals": 0,
@@ -610,14 +611,14 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                 shape_buckets.append((key, cursor, cursor + K, g_list))
                 cursor += K
 
-            def _batched_qr(Y_mat: torch.Tensor) -> torch.Tensor:
+            def _batched_qr(Y_mat: torch.Tensor, target_dtype: torch.dtype = dtype) -> torch.Tensor:
                 Q, diag = batched_qr(
                     Y_mat,
                     cond_threshold=1e4,
                     eps_shift=1e-7,
                     orth_tol=1e-4,
                     return_diagnostics=True,
-                    out_dtype=dtype,
+                    out_dtype=target_dtype,
                 )
                 self._record_qr_diagnostics(diag)
                 return Q
@@ -662,40 +663,72 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                 any_refresh = any(init_flags) or any(upd_flags)
 
                 if any_refresh:
-                    has_preset_proj = all(
-                        (
-                            init_flags[b_idx]
-                            and g.get("projection") is not None
-                            and tuple(g["projection"].shape) == (d_small, r)
-                        )
-                        for b_idx, g in enumerate(g_list)
-                    )
-                    if has_preset_proj:
-                        ql = torch.stack([g["projection"].to(device=device, dtype=dtype) for g in g_list], dim=0)
-                        Z = torch.bmm(G_stack.transpose(1, 2), ql)
-                        qr = _batched_qr(Z)
-                    else:
-                        Omega = torch.randn(K, d_large, r, device=device, dtype=dtype)
-                        Y = torch.bmm(G_stack, Omega)
-                        ql = _batched_qr(Y)
-                        Z = torch.bmm(G_stack.transpose(1, 2), ql)
-                        qr = _batched_qr(Z)
-                        Y = torch.bmm(G_stack, qr)
-                        ql = _batched_qr(Y)
+                    refresh_indices = [b_idx for b_idx in range(K) if init_flags[b_idx] or upd_flags[b_idx]]
+                    G_ref_all = G_stack[refresh_indices].float()
+                    g_norms = torch.linalg.norm(G_ref_all, dim=(1, 2))
+                    nz_flags = (g_norms > 1e-12).tolist()
+                    qr_sub_indices = [i for i, nz in enumerate(nz_flags) if nz]
+                    qr_bucket_indices = [refresh_indices[i] for i in qr_sub_indices]
 
+                    qr_map: dict[int, int] = {}
+                    ql_out: torch.Tensor | None = None
+                    qr_out: torch.Tensor | None = None
+
+                    if qr_bucket_indices:
+                        G_qr = G_ref_all[qr_sub_indices]
+                        has_preset_proj = all(
+                            (
+                                init_flags[b_idx]
+                                and g_list[b_idx].get("projection") is not None
+                                and tuple(g_list[b_idx]["projection"].shape) == (d_small, r)
+                            )
+                            for b_idx in qr_bucket_indices
+                        )
+                        if has_preset_proj:
+                            ql_f32 = torch.stack(
+                                [g_list[b_idx]["projection"].to(device=device, dtype=torch.float32) for b_idx in qr_bucket_indices],
+                                dim=0,
+                            )
+                            Z = torch.bmm(G_qr.transpose(1, 2), ql_f32)
+                            qr_out = _batched_qr(Z, target_dtype=dtype)
+                            ql_out = ql_f32.to(dtype=dtype)
+                        else:
+                            K_qr = len(qr_bucket_indices)
+                            Omega = torch.randn(K_qr, d_large, r, device=device, dtype=torch.float32)
+                            Y = torch.bmm(G_qr, Omega)
+                            ql_f32 = _batched_qr(Y, target_dtype=torch.float32)
+                            Z = torch.bmm(G_qr.transpose(1, 2), ql_f32)
+                            qr_f32 = _batched_qr(Z, target_dtype=torch.float32)
+                            Y = torch.bmm(G_qr, qr_f32)
+                            ql_out = _batched_qr(Y, target_dtype=dtype)
+                            qr_out = qr_f32.to(dtype=dtype)
+                        qr_map = {b_idx: i for i, b_idx in enumerate(qr_bucket_indices)}
+
+                    aligned_proj_step = (self.step_count // max(1, self.update_gap)) * self.update_gap
                     for b_idx, g in enumerate(g_list):
                         idx = start + b_idx
                         st = g["state"]
                         if init_flags[b_idx] or upd_flags[b_idx]:
-                            QL_stack[b_idx].zero_()
-                            QL_stack[b_idx, :, :r].copy_(ql[b_idx])
-                            QR_stack[b_idx].zero_()
-                            QR_stack[b_idx, :, :r].copy_(qr[b_idx])
+                            if b_idx in qr_map and ql_out is not None and qr_out is not None:
+                                q_i = qr_map[b_idx]
+                                QL_stack[b_idx].zero_()
+                                QL_stack[b_idx, :, :r].copy_(ql_out[q_i])
+                                QR_stack[b_idx].zero_()
+                                QR_stack[b_idx, :, :r].copy_(qr_out[q_i])
+                            elif init_flags[b_idx]:
+                                QL_stack[b_idx].zero_()
+                                QL_stack[b_idx, :r, :r].copy_(torch.eye(r, device=device, dtype=dtype))
+                                QR_stack[b_idx].zero_()
+                                QR_stack[b_idx, :r, :r].copy_(torch.eye(r, device=device, dtype=dtype))
+                            else:
+                                if g["Q_L"].data_ptr() != QL_stack[b_idx].data_ptr():
+                                    QL_stack[b_idx].copy_(g["Q_L"])
+                                    QR_stack[b_idx].copy_(g["Q_R"])
                             g["Q_L"] = QL_stack[b_idx]
                             g["Q_R"] = QR_stack[b_idx]
                             g["projection"] = QL_stack[b_idx, :, :r]
                             g["projection_side"] = side
-                            g["proj_step"] = self.step_count
+                            g["proj_step"] = aligned_proj_step if not self.adaptive_subspace_refresh else self.step_count
                             batch_mom[idx].zero_()
                             batch_var[idx].zero_()
                             st["momentum"] = batch_mom[idx]
@@ -1277,29 +1310,46 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
             g["state"].update(restored_state)
 
     def _record_qr_diagnostics(self, diag: dict[str, torch.Tensor]) -> None:
-        """Records telemetry from a batched_qr call."""
+        """Records telemetry from a batched_qr call on GPU without host-device synchronization."""
         fb = diag["fallback_mask"]
         K = fb.numel()
-        fallbacks = int(fb.sum().item())
-        survivals = K - fallbacks
         self.qr_telemetry["total_qr_calls"] += K
-        self.qr_telemetry["cholesky_fast_path_survivals"] += survivals
+        stacked = torch.stack(
+            [
+                fb,
+                diag["primary_degen_mask"],
+                diag["primary_cholesky_mask"],
+                diag["primary_cond_mask"],
+                diag["primary_orth_mask"],
+                diag["degen_mask"],
+                diag["cholesky_fail_mask"],
+                diag["cond_fail_mask"],
+                diag["orth_fail_mask"],
+            ],
+            dim=0,
+        ).sum(dim=-1, dtype=torch.long)
+        if self._qr_telemetry_gpu is None or self._qr_telemetry_gpu.device != stacked.device:
+            if self._qr_telemetry_gpu is not None:
+                self._flush_qr_telemetry_gpu()
+            self._qr_telemetry_gpu = stacked
+        else:
+            self._qr_telemetry_gpu.add_(stacked)
+
+    def _flush_qr_telemetry_gpu(self) -> None:
+        """Materializes accumulated GPU telemetry counters to CPU dictionary."""
+        if self._qr_telemetry_gpu is None:
+            return
+        vals = self._qr_telemetry_gpu.tolist()
+        self._qr_telemetry_gpu = None
+        fallbacks, p_deg, p_chol, p_cond, p_orth, o_deg, o_chol, o_cond, o_orth = [int(v) for v in vals]
         self.qr_telemetry["householder_fallbacks"] += fallbacks
-
-        p_deg = int(diag["primary_degen_mask"].sum().item())
-        p_chol = int(diag["primary_cholesky_mask"].sum().item())
-        p_cond = int(diag["primary_cond_mask"].sum().item())
-        p_orth = int(diag["primary_orth_mask"].sum().item())
-
+        self.qr_telemetry["cholesky_fast_path_survivals"] = (
+            self.qr_telemetry["total_qr_calls"] - self.qr_telemetry["householder_fallbacks"]
+        )
         self.qr_telemetry["primary_fallback_reasons"]["degenerate_columns"] += p_deg
         self.qr_telemetry["primary_fallback_reasons"]["cholesky_non_positive_definite"] += p_chol
         self.qr_telemetry["primary_fallback_reasons"]["condition_ratio_exceeded"] += p_cond
         self.qr_telemetry["primary_fallback_reasons"]["orthogonality_tolerance_exceeded"] += p_orth
-
-        o_deg = int(diag["degen_mask"].sum().item())
-        o_chol = int(diag["cholesky_fail_mask"].sum().item())
-        o_cond = int(diag["cond_fail_mask"].sum().item())
-        o_orth = int(diag["orth_fail_mask"].sum().item())
 
         self.qr_telemetry["overlapping_triggers"]["degenerate_columns"] += o_deg
         self.qr_telemetry["overlapping_triggers"]["cholesky_non_positive_definite"] += o_chol
@@ -1308,9 +1358,11 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
 
     def get_qr_telemetry(self) -> dict[str, Any]:
         """Returns live telemetry of QR fast-path survivals vs Householder fallbacks."""
+        self._flush_qr_telemetry_gpu()
         total = self.qr_telemetry["total_qr_calls"]
-        survivals = self.qr_telemetry["cholesky_fast_path_survivals"]
         fallbacks = self.qr_telemetry["householder_fallbacks"]
+        survivals = total - fallbacks
+        self.qr_telemetry["cholesky_fast_path_survivals"] = survivals
         return {
             "total_qr_calls": total,
             "cholesky_fast_path_survivals": survivals,
