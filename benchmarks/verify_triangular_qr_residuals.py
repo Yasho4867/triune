@@ -45,7 +45,11 @@ from triune.optim.centroid import CentroidSteerOptimizer, batched_qr
 
 # Centralized Reproducibility Configuration (12 seeds = 4 complete 3x3 Latin squares, df=11)
 DEFAULT_SEEDS: list[int] = [42, 1337, 2026, 7777, 9999, 31415, 27182, 16180, 86753, 54321, 65537, 90001]
-DEFAULT_SUBPROCESS_ISOLATION_SEEDS: list[int] = [42, 1337, 2026]
+DEFAULT_SUBPROCESS_ISOLATION_SEEDS: list[int] = list(DEFAULT_SEEDS)
+DEFAULT_SECONDARY_CHECKPOINT_SEEDS: list[int] = [42, 1337, 2026]
+DEFAULT_EXTENDED_HORIZON_SEEDS: list[int] = [42, 1337, 2026]
+DEFAULT_EXTENDED_HORIZON_STEPS: int = 600
+DEFAULT_EXTENDED_HORIZON_VAL_INTERVAL: int = 200
 DEFAULT_SECONDARY_CHECKPOINT_PATH: str = "checkpoints/triune_studio_step_35500.pt"
 DEFAULT_SYNTHETIC_SHAPES: list[tuple[int, int, int]] = [(384, 1024, 16), (128, 256, 8)]
 DEFAULT_BATCH_SIZE: int = 4
@@ -58,6 +62,11 @@ DEFAULT_SUBSPACE_RANK: int = 16
 DEFAULT_SUBSPACE_UPDATE_GAP: int = 20
 DEFAULT_VAL_TOST_MARGINS: tuple[float, ...] = (0.01, 0.02, 0.05)
 DEFAULT_TRAIN_TOST_MARGINS: tuple[float, ...] = (0.02, 0.05, 0.10)
+MEMORY_MEASUREMENT_SEMANTICS: str = (
+    "PyTorch CUDA tensor allocator via torch.cuda.max_memory_allocated() and caching-allocator pool via "
+    "torch.cuda.max_memory_reserved(); 0.00 MB baseline in a fresh subprocess indicates zero pre-allocated "
+    "PyTorch tensors prior to model instantiation (excluding non-PyTorch CUDA driver/cuBLAS context footprint)."
+)
 
 
 def format_p_value(p: float) -> str:
@@ -76,7 +85,7 @@ def compute_paired_and_tost(
     eq_margin: float = 0.05,
     margin_grid: tuple[float, ...] = DEFAULT_VAL_TOST_MARGINS,
 ) -> dict:
-    """Computes two-tailed paired Student-t test and multi-margin Schuirmann TOST with unrounded scientific p-values."""
+    """Computes two-tailed paired Student-t test and multi-margin Schuirmann TOST with unrounded IEEE-754 float64 p-values."""
     if len(vals_a) != len(vals_b) or len(vals_a) < 2:
         raise ValueError(f"Paired test requires equal-length sequences with N >= 2, got {len(vals_a)} and {len(vals_b)}")
     n = len(vals_a)
@@ -86,13 +95,13 @@ def compute_paired_and_tost(
     d_std = float((sum((x - d_mean) ** 2 for x in diffs) / df) ** 0.5) if df > 0 else 0.0
     d_sem = max(d_std / (n ** 0.5), 1e-12)
     res_2tail = stats.ttest_rel(vals_a, vals_b)
-    p_2tail = float(f"{float(res_2tail.pvalue):.6e}")
+    p_2tail = float(res_2tail.pvalue)
 
     def eval_tost_at_margin(margin_val: float) -> dict:
         t_l = (d_mean - (-margin_val)) / d_sem
-        p_l = float(f"{float(stats.t.sf(t_l, df=df)):.6e}")
+        p_l = float(stats.t.sf(t_l, df=df))
         t_u = (d_mean - margin_val) / d_sem
-        p_u = float(f"{float(stats.t.cdf(t_u, df=df)):.6e}")
+        p_u = float(stats.t.cdf(t_u, df=df))
         p_t = max(p_l, p_u)
         return {
             "equivalence_margin_nats": margin_val,
@@ -262,24 +271,29 @@ def calc_seed_summary_stats(vals: list[float]) -> dict:
 
 
 def _execute_single_subprocess_worker(args: argparse.Namespace) -> None:
-    """Executes a single (seed, optimizer) 200-step trajectory in a fresh OS process and CUDA context."""
+    """Executes a single (seed, optimizer) trajectory in a fresh OS process and CUDA allocator context."""
     device = torch.device(args.device)
     gc.collect()
     if device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(device)
         torch.cuda.synchronize()
         baseline_vram = torch.cuda.memory_allocated(device) / (1024 * 1024)
+        baseline_reserved = torch.cuda.memory_reserved(device) / (1024 * 1024)
     else:
         baseline_vram = 0.0
-
-    ckpt = torch.load(args.checkpoint_path, map_location="cpu", weights_only=False)
-    cfg = ckpt.get("config", {})
-    cpu_model_state = {k: v.cpu() for k, v in ckpt["model_state"].items()}
-    del ckpt
+        baseline_reserved = 0.0
 
     token_bundle = torch.load(args.tokens_cache, map_location="cpu", weights_only=False)
     train_tokens_cpu = token_bundle["train_tokens_cpu"]
     val_tokens_cpu = token_bundle["val_tokens_cpu"]
+    if "cpu_model_state" in token_bundle and "config" in token_bundle:
+        cfg = token_bundle["config"]
+        cpu_model_state = token_bundle["cpu_model_state"]
+    else:
+        ckpt = torch.load(args.checkpoint_path, map_location="cpu", weights_only=False)
+        cfg = ckpt.get("config", {})
+        cpu_model_state = {k: v.cpu() for k, v in ckpt["model_state"].items()}
+        del ckpt
     del token_bundle
     gc.collect()
 
@@ -290,6 +304,7 @@ def _execute_single_subprocess_worker(args: argparse.Namespace) -> None:
     subspace_update_gap = args.subspace_update_gap
     run_seed = args.seed
     opt_key = args.opt_key
+    eval_val_every = getattr(args, "eval_val_every", 0)
 
     perm_gen = torch.Generator().manual_seed(run_seed)
     batch_perm = torch.randperm(args.train_pool_batches, generator=perm_gen)[:opt_steps].tolist()
@@ -313,10 +328,33 @@ def _execute_single_subprocess_worker(args: argparse.Namespace) -> None:
         )
         is_adamw = False
 
+    def _eval_val_loss_preserving_rng() -> float:
+        cpu_rng = torch.get_rng_state()
+        cuda_rng = torch.cuda.get_rng_state(device) if device.type == "cuda" else None
+        model_cur.eval()
+        v_losses_gpu = []
+        with torch.no_grad():
+            for v_idx in range(val_batches):
+                tt_v = val_tokens_cpu[v_idx * B * T : (v_idx + 1) * B * T + 1].to(device=device, non_blocking=True)
+                inp_v, tgt_v = tt_v[:-1].view(B, T), tt_v[1:].view(B, T)
+                out_v = model_cur(inp_v)
+                logits_v = out_v[0] if isinstance(out_v, tuple) else out_v
+                v_loss = torch.nn.functional.cross_entropy(logits_v.view(-1, logits_v.size(-1)).float(), tgt_v.view(-1))
+                v_losses_gpu.append(v_loss.detach().float())
+                del tt_v, inp_v, tgt_v, out_v, logits_v, v_loss
+            val_m = float(torch.stack(v_losses_gpu).float().mean().item())
+        del v_losses_gpu
+        model_cur.train()
+        torch.set_rng_state(cpu_rng)
+        if cuda_rng is not None:
+            torch.cuda.set_rng_state(cuda_rng, device)
+        return val_m
+
     losses_gpu = []
     opt_times = []
     full_times = []
     refresh_opt_times, non_refresh_opt_times = [], []
+    val_loss_curve: dict[str, float] = {}
 
     for s_idx in range(opt_steps):
         b_slot = batch_perm[s_idx]
@@ -356,24 +394,21 @@ def _execute_single_subprocess_worker(args: argparse.Namespace) -> None:
         losses_gpu.append(loss.detach().float())
         del tt, inp, tgt, out, logits, loss
 
+        if eval_val_every > 0 and ((s_idx + 1) % eval_val_every == 0):
+            val_loss_curve[f"step_{s_idx + 1}"] = round(_eval_val_loss_preserving_rng(), 6)
+
     losses = torch.stack(losses_gpu).float().tolist()
     del losses_gpu
 
-    model_cur.eval()
-    v_losses_gpu = []
-    with torch.no_grad():
-        for v_idx in range(val_batches):
-            tt_v = val_tokens_cpu[v_idx * B * T : (v_idx + 1) * B * T + 1].to(device=device, non_blocking=True)
-            inp_v, tgt_v = tt_v[:-1].view(B, T), tt_v[1:].view(B, T)
-            out_v = model_cur(inp_v)
-            logits_v = out_v[0] if isinstance(out_v, tuple) else out_v
-            v_loss = torch.nn.functional.cross_entropy(logits_v.view(-1, logits_v.size(-1)).float(), tgt_v.view(-1))
-            v_losses_gpu.append(v_loss.detach().float())
-            del tt_v, inp_v, tgt_v, out_v, logits_v, v_loss
-        val_loss = float(torch.stack(v_losses_gpu).float().mean().item())
-    del v_losses_gpu
+    if f"step_{opt_steps}" in val_loss_curve:
+        val_loss = val_loss_curve[f"step_{opt_steps}"]
+    else:
+        val_loss = _eval_val_loss_preserving_rng()
+        if eval_val_every > 0:
+            val_loss_curve[f"step_{opt_steps}"] = round(val_loss, 6)
 
     peak_vram = torch.cuda.max_memory_allocated(device) / (1024 * 1024) if device.type == "cuda" else 0.0
+    peak_reserved = torch.cuda.max_memory_reserved(device) / (1024 * 1024) if device.type == "cuda" else 0.0
     inc_peak_vram = max(0.0, peak_vram - baseline_vram)
 
     out_payload = {
@@ -385,10 +420,17 @@ def _execute_single_subprocess_worker(args: argparse.Namespace) -> None:
         "final_val_loss": round(val_loss, 6),
         "optimizer_step_time_ms": round(sum(opt_times[5:]) / max(len(opt_times[5:]), 1), 2),
         "full_step_time_ms": round(sum(full_times[5:]) / max(len(full_times[5:]), 1), 2),
+        "baseline_pytorch_allocated_mb": round(baseline_vram, 2),
+        "peak_pytorch_allocated_mb": round(peak_vram, 2),
+        "incremental_peak_pytorch_allocated_mb": round(inc_peak_vram, 2),
+        "baseline_pytorch_reserved_mb": round(baseline_reserved, 2),
+        "peak_pytorch_reserved_mb": round(peak_reserved, 2),
         "baseline_vram_mb": round(baseline_vram, 2),
         "peak_vram_mb": round(peak_vram, 2),
         "incremental_peak_vram_mb": round(inc_peak_vram, 2),
     }
+    if eval_val_every > 0:
+        out_payload["val_loss_curve"] = val_loss_curve
     if opt_key == "triangular_centroidsteer":
         out_payload["triangular_qr_telemetry"] = opt_cur.get_qr_telemetry()
         non_ref_m = sum(non_refresh_opt_times) / max(len(non_refresh_opt_times), 1)
@@ -401,6 +443,84 @@ def _execute_single_subprocess_worker(args: argparse.Namespace) -> None:
 
     with open(args.output_json, "w", encoding="utf-8") as f:
         json.dump(out_payload, f)
+
+
+def validate_and_load_worker_output(
+    worker_out_path: Path,
+    expected_seed: int,
+    expected_opt_key: str,
+) -> dict:
+    """Validates worker output file existence, JSON schema, seed/optimizer identity, and PyTorch memory invariants."""
+    if not worker_out_path.is_file() or worker_out_path.stat().st_size == 0:
+        raise RuntimeError(
+            f"Subprocess worker output file is missing or empty for seed={expected_seed}, "
+            f"opt_key={expected_opt_key!r}: {worker_out_path}"
+        )
+    try:
+        with open(worker_out_path, "r", encoding="utf-8") as wf:
+            wres = json.load(wf)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"Malformed JSON in subprocess worker output for seed={expected_seed}, "
+            f"opt_key={expected_opt_key!r} ({worker_out_path}): {exc}"
+        ) from exc
+
+    if not isinstance(wres, dict):
+        raise ValueError(f"Worker output must be a JSON object (dict), got {type(wres).__name__}.")
+
+    required_keys = [
+        "seed",
+        "opt_key",
+        "batch_permutation_first5",
+        "final_train_loss",
+        "mean_train_loss",
+        "final_val_loss",
+        "optimizer_step_time_ms",
+        "full_step_time_ms",
+        "baseline_pytorch_allocated_mb",
+        "peak_pytorch_allocated_mb",
+        "incremental_peak_pytorch_allocated_mb",
+        "baseline_pytorch_reserved_mb",
+        "peak_pytorch_reserved_mb",
+        "baseline_vram_mb",
+        "peak_vram_mb",
+        "incremental_peak_vram_mb",
+    ]
+    if expected_opt_key == "triangular_centroidsteer":
+        required_keys.extend(["triangular_qr_telemetry", "triangular_timing_breakdown_ms"])
+
+    missing_keys = [k for k in required_keys if k not in wres]
+    if missing_keys:
+        raise ValueError(
+            f"Worker output for seed={expected_seed}, opt_key={expected_opt_key!r} is missing required keys: {missing_keys}"
+        )
+
+    if wres["seed"] != expected_seed:
+        raise ValueError(
+            f"Worker seed identity mismatch: expected seed={expected_seed}, got {wres['seed']!r} in {worker_out_path}"
+        )
+    if wres["opt_key"] != expected_opt_key:
+        raise ValueError(
+            f"Worker optimizer identity mismatch: expected opt_key={expected_opt_key!r}, got {wres['opt_key']!r} in {worker_out_path}"
+        )
+
+    b_alloc = float(wres["baseline_pytorch_allocated_mb"])
+    p_alloc = float(wres["peak_pytorch_allocated_mb"])
+    i_alloc = float(wres["incremental_peak_pytorch_allocated_mb"])
+    p_res = float(wres["peak_pytorch_reserved_mb"])
+    if b_alloc < 0.0 or p_alloc < b_alloc or p_res + 1e-3 < p_alloc:
+        raise ValueError(
+            f"Invalid PyTorch allocator memory invariants in worker output: "
+            f"baseline_allocated={b_alloc}, peak_allocated={p_alloc}, peak_reserved={p_res}"
+        )
+    expected_inc = round(max(0.0, p_alloc - b_alloc), 2)
+    if abs(i_alloc - expected_inc) > 0.05:
+        raise ValueError(
+            f"Inconsistent incremental_peak_pytorch_allocated_mb: got {i_alloc}, expected {expected_inc} "
+            f"(peak={p_alloc} - baseline={b_alloc})"
+        )
+
+    return wres
 
 
 def run_subprocess_isolated_verification(
@@ -416,9 +536,11 @@ def run_subprocess_isolated_verification(
     seq_len: int = DEFAULT_SEQ_LEN,
     subspace_rank: int = DEFAULT_SUBSPACE_RANK,
     subspace_update_gap: int = DEFAULT_SUBSPACE_UPDATE_GAP,
+    eval_val_every: int = 0,
+    initial_val_loss: float | None = None,
     device_str: str = "cuda",
 ) -> dict:
-    """Spawns a fresh OS child process per (seed, optimizer) trajectory to eliminate CUDA context carryover."""
+    """Spawns a fresh OS child process per (seed, optimizer) trajectory to eliminate PyTorch CUDA allocator carryover."""
     base_optimizer_configs = [
         ("triangular_centroidsteer", True, False),
         ("unconstrained_centroidsteer", False, False),
@@ -429,7 +551,16 @@ def run_subprocess_isolated_verification(
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tokens_cache_path = Path(tmpdir) / "tokens_cache.pt"
-        torch.save({"train_tokens_cpu": train_tokens_cpu, "val_tokens_cpu": val_tokens_cpu}, tokens_cache_path)
+        cache_bundle: dict = {"train_tokens_cpu": train_tokens_cpu, "val_tokens_cpu": val_tokens_cpu}
+        if Path(checkpoint_path).is_file():
+            ckpt_parent = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+            cache_bundle["config"] = ckpt_parent.get("config", {})
+            cache_bundle["cpu_model_state"] = {k: v.cpu() for k, v in ckpt_parent["model_state"].items()}
+            del ckpt_parent
+            gc.collect()
+        torch.save(cache_bundle, tokens_cache_path)
+        del cache_bundle
+        gc.collect()
 
         for seed_idx, run_seed in enumerate(sub_seeds):
             rot = seed_idx % len(base_optimizer_configs)
@@ -446,10 +577,17 @@ def run_subprocess_isolated_verification(
                 "final_val_loss": {},
                 "optimizer_step_time_ms": {},
                 "full_step_time_ms": {},
+                "baseline_pytorch_allocated_mb": {},
+                "peak_pytorch_allocated_mb": {},
+                "incremental_peak_pytorch_allocated_mb": {},
+                "baseline_pytorch_reserved_mb": {},
+                "peak_pytorch_reserved_mb": {},
                 "baseline_vram_mb": {},
                 "peak_vram_mb": {},
                 "incremental_peak_vram_mb": {},
             }
+            if eval_val_every > 0:
+                seed_rec["val_loss_curve"] = {}
 
             for opt_key, _, _ in optimizer_configs:
                 worker_out_path = Path(tmpdir) / f"worker_{run_seed}_{opt_key}.json"
@@ -481,23 +619,55 @@ def run_subprocess_isolated_verification(
                     str(subspace_rank),
                     "--subspace-update-gap",
                     str(subspace_update_gap),
+                    "--eval-val-every",
+                    str(eval_val_every),
                     "--device",
                     device_str,
                 ]
-                print(f"    [Subprocess Worker] Spawning fresh OS process for seed={run_seed}, opt={opt_key}...")
-                subprocess.run(cmd, check=True)
-                with open(worker_out_path, "r", encoding="utf-8") as wf:
-                    wres = json.load(wf)
+                print(
+                    f"    [Subprocess Worker] Spawning fresh OS process for seed={run_seed}, "
+                    f"opt={opt_key}, steps={opt_steps}...",
+                    flush=True,
+                )
+                try:
+                    subprocess.run(cmd, check=True, capture_output=True, text=True)
+                except subprocess.CalledProcessError as exc:
+                    stderr_snippet = (exc.stderr or "").strip()[-500:]
+                    raise RuntimeError(
+                        f"Subprocess worker failed with exit code {exc.returncode} for seed={run_seed}, "
+                        f"opt_key={opt_key!r}: {stderr_snippet}"
+                    ) from exc
+
+                wres = validate_and_load_worker_output(
+                    worker_out_path=worker_out_path,
+                    expected_seed=run_seed,
+                    expected_opt_key=opt_key,
+                )
 
                 seed_rec["batch_permutation_first5"] = wres["batch_permutation_first5"]
-                seed_rec["final_train_loss"][opt_key] = wres["final_train_loss"]
-                seed_rec["mean_train_loss"][opt_key] = wres["mean_train_loss"]
-                seed_rec["final_val_loss"][opt_key] = wres["final_val_loss"]
-                seed_rec["optimizer_step_time_ms"][opt_key] = wres["optimizer_step_time_ms"]
-                seed_rec["full_step_time_ms"][opt_key] = wres["full_step_time_ms"]
-                seed_rec["baseline_vram_mb"][opt_key] = wres["baseline_vram_mb"]
-                seed_rec["peak_vram_mb"][opt_key] = wres["peak_vram_mb"]
-                seed_rec["incremental_peak_vram_mb"][opt_key] = wres["incremental_peak_vram_mb"]
+                for metric_field in [
+                    "final_train_loss",
+                    "mean_train_loss",
+                    "final_val_loss",
+                    "optimizer_step_time_ms",
+                    "full_step_time_ms",
+                    "baseline_pytorch_allocated_mb",
+                    "peak_pytorch_allocated_mb",
+                    "incremental_peak_pytorch_allocated_mb",
+                    "baseline_pytorch_reserved_mb",
+                    "peak_pytorch_reserved_mb",
+                    "baseline_vram_mb",
+                    "peak_vram_mb",
+                    "incremental_peak_vram_mb",
+                ]:
+                    seed_rec[metric_field][opt_key] = wres[metric_field]
+
+                if eval_val_every > 0 and "val_loss_curve" in wres:
+                    curve = dict(wres["val_loss_curve"])
+                    if initial_val_loss is not None:
+                        curve = {"step_0": round(float(initial_val_loss), 6), **curve}
+                    seed_rec["val_loss_curve"][opt_key] = curve
+
                 if opt_key == "triangular_centroidsteer":
                     seed_rec["triangular_qr_telemetry"] = wres["triangular_qr_telemetry"]
                     seed_rec["triangular_timing_breakdown_ms"] = wres["triangular_timing_breakdown_ms"]
@@ -511,6 +681,11 @@ def run_subprocess_isolated_verification(
         "final_val_loss",
         "optimizer_step_time_ms",
         "full_step_time_ms",
+        "baseline_pytorch_allocated_mb",
+        "peak_pytorch_allocated_mb",
+        "incremental_peak_pytorch_allocated_mb",
+        "baseline_pytorch_reserved_mb",
+        "peak_pytorch_reserved_mb",
         "baseline_vram_mb",
         "peak_vram_mb",
         "incremental_peak_vram_mb",
@@ -520,11 +695,47 @@ def run_subprocess_isolated_verification(
             for opt_k, _, _ in base_optimizer_configs
         }
 
-    return {
+    paired_tests = {
+        "final_train_loss": compute_paired_and_tost(
+            [r["final_train_loss"]["triangular_centroidsteer"] for r in sub_seed_runs],
+            [r["final_train_loss"]["standard_2d_adamw"] for r in sub_seed_runs],
+            eq_margin=0.10,
+            margin_grid=DEFAULT_TRAIN_TOST_MARGINS,
+        ),
+        "mean_train_loss": compute_paired_and_tost(
+            [r["mean_train_loss"]["triangular_centroidsteer"] for r in sub_seed_runs],
+            [r["mean_train_loss"]["standard_2d_adamw"] for r in sub_seed_runs],
+            eq_margin=0.05,
+            margin_grid=DEFAULT_VAL_TOST_MARGINS,
+        ),
+        "final_val_loss": compute_paired_and_tost(
+            [r["final_val_loss"]["triangular_centroidsteer"] for r in sub_seed_runs],
+            [r["final_val_loss"]["standard_2d_adamw"] for r in sub_seed_runs],
+            eq_margin=0.05,
+            margin_grid=DEFAULT_VAL_TOST_MARGINS,
+        ),
+    }
+
+    qr_total = sum(r["triangular_qr_telemetry"]["total_qr_calls"] for r in sub_seed_runs)
+    qr_surv = sum(r["triangular_qr_telemetry"]["cholesky_fast_path_survivals"] for r in sub_seed_runs)
+    qr_fb = sum(r["triangular_qr_telemetry"]["householder_fallbacks"] for r in sub_seed_runs)
+    live_qr_telemetry = {
+        "total_qr_calls": qr_total,
+        "cholesky_fast_path_survivals": qr_surv,
+        "cholesky_survival_rate_pct": round(100.0 * qr_surv / max(1, qr_total), 2),
+        "householder_fallbacks": qr_fb,
+        "householder_fallback_rate_pct": round(100.0 * qr_fb / max(1, qr_total), 2),
+    }
+
+    out_dict = {
         "isolation_mode": "separate_os_subprocess_per_trajectory",
+        "memory_measurement_semantics": MEMORY_MEASUREMENT_SEMANTICS,
         "num_subprocesses_spawned": len(sub_seeds) * len(base_optimizer_configs),
         "seeds_evaluated": list(sub_seeds),
+        "num_seeds": len(sub_seeds),
+        "degrees_of_freedom": len(sub_seeds) - 1,
         "steps_per_seed": opt_steps,
+        "tokens_trained_per_seed": opt_steps * batch_size * seq_len,
         "execution_schedule_balance": {
             "is_balanced_latin_square": len(sub_seeds) % 3 == 0,
             "num_complete_latin_squares": len(sub_seeds) // 3,
@@ -532,13 +743,33 @@ def run_subprocess_isolated_verification(
         },
         "seed_runs": sub_seed_runs,
         "aggregated_metrics": sub_agg,
-        "paired_val_loss_test": compute_paired_and_tost(
-            [r["final_val_loss"]["triangular_centroidsteer"] for r in sub_seed_runs],
-            [r["final_val_loss"]["standard_2d_adamw"] for r in sub_seed_runs],
-            eq_margin=0.05,
-            margin_grid=DEFAULT_VAL_TOST_MARGINS,
-        ),
+        "paired_statistical_tests": paired_tests,
+        "paired_val_loss_test": paired_tests["final_val_loss"],
+        "live_qr_telemetry": live_qr_telemetry,
     }
+    if initial_val_loss is not None:
+        out_dict["initial_val_loss"] = round(float(initial_val_loss), 4)
+
+    if eval_val_every > 0 and sub_seed_runs and "val_loss_curve" in sub_seed_runs[0]:
+        step_keys = list(sub_seed_runs[0]["val_loss_curve"]["triangular_centroidsteer"].keys())
+        curve_agg = {}
+        curve_paired = {}
+        for sk in step_keys:
+            curve_agg[sk] = {
+                opt_k: calc_seed_summary_stats([r["val_loss_curve"][opt_k][sk] for r in sub_seed_runs])
+                for opt_k, _, _ in base_optimizer_configs
+            }
+            if sk != "step_0":
+                curve_paired[sk] = compute_paired_and_tost(
+                    [r["val_loss_curve"]["triangular_centroidsteer"][sk] for r in sub_seed_runs],
+                    [r["val_loss_curve"]["standard_2d_adamw"][sk] for r in sub_seed_runs],
+                    eq_margin=0.05,
+                    margin_grid=DEFAULT_VAL_TOST_MARGINS,
+                )
+        out_dict["val_loss_curve_aggregated"] = curve_agg
+        out_dict["paired_val_loss_tests_by_step"] = curve_paired
+
+    return out_dict
 
 
 def run_secondary_checkpoint_verification(
@@ -547,7 +778,7 @@ def run_secondary_checkpoint_verification(
     train_tokens_cpu: torch.Tensor,
     val_tokens_cpu: torch.Tensor,
     static_tokens: list[int],
-    sub_seeds: list[int] = DEFAULT_SUBPROCESS_ISOLATION_SEEDS,
+    sub_seeds: list[int] = DEFAULT_SECONDARY_CHECKPOINT_SEEDS,
     num_fineweb_batches: int = DEFAULT_STATIC_FINEWEB_BATCHES,
     opt_steps: int = DEFAULT_OPT_STEPS,
     train_pool_batches: int = DEFAULT_TRAIN_POOL_BATCHES,
@@ -558,7 +789,7 @@ def run_secondary_checkpoint_verification(
     subspace_update_gap: int = DEFAULT_SUBSPACE_UPDATE_GAP,
     device: torch.device,
 ) -> dict:
-    """Evaluates static QR bounds and 200-step continuation trajectories on an earlier pre-training checkpoint stage."""
+    """Evaluates static QR bounds and subprocess-isolated continuation trajectories on an earlier checkpoint stage."""
     sec_file = Path(secondary_checkpoint_path)
     if not sec_file.exists():
         raise FileNotFoundError(f"Secondary checkpoint file missing: {sec_file}")
@@ -686,77 +917,27 @@ def run_secondary_checkpoint_verification(
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
 
-    base_optimizer_configs = [
-        ("triangular_centroidsteer", True, False),
-        ("unconstrained_centroidsteer", False, False),
-        ("standard_2d_adamw", False, True),
-    ]
-    sec_seed_runs = []
-    for seed_idx, run_seed in enumerate(sub_seeds):
-        perm_gen = torch.Generator().manual_seed(run_seed)
-        batch_perm = torch.randperm(train_pool_batches, generator=perm_gen)[:opt_steps].tolist()
-        rot = seed_idx % 3
-        optimizer_configs = base_optimizer_configs[rot:] + base_optimizer_configs[:rot]
-        s_res = {
-            "seed": run_seed,
-            "execution_order": [k for k, _, _ in optimizer_configs],
-            "final_train_loss": {},
-            "mean_train_loss": {},
-            "final_val_loss": {},
-        }
-        for opt_key, use_triu, is_adamw in optimizer_configs:
-            torch.manual_seed(run_seed)
-            m_cur = build_model(cfg).to(device=device, dtype=torch.bfloat16)
-            m_cur.load_state_dict(cpu_model_state, strict=True)
-            m_cur.train()
-            if is_adamw:
-                o_cur = torch.optim.AdamW(m_cur.parameters(), lr=1e-4, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.01)
-            else:
-                o_cur = CentroidSteerOptimizer(
-                    m_cur, lr=1e-4, rank=subspace_rank, use_triangular_core=use_triu, update_gap=subspace_update_gap
-                )
-            losses_gpu = []
-            for s_idx in range(opt_steps):
-                b_slot = batch_perm[s_idx]
-                tt = train_tokens_cpu[b_slot * B * T : (b_slot + 1) * B * T + 1].to(device=device, non_blocking=True)
-                inp, tgt = tt[:-1].view(B, T), tt[1:].view(B, T)
-                out = m_cur(inp)
-                logits = out[0] if isinstance(out, tuple) else out
-                loss = torch.nn.functional.cross_entropy(logits.view(-1, logits.size(-1)), tgt.view(-1))
-                loss.backward()
-                if is_adamw:
-                    o_cur.step()
-                else:
-                    o_cur.step_parameters(m_cur.parameters(), is_global_step_end=True)
-                o_cur.zero_grad(set_to_none=True)
-                losses_gpu.append(loss.detach().float())
-            losses = torch.stack(losses_gpu).float().tolist()
-            v_loss = eval_val(m_cur)
-            s_res["final_train_loss"][opt_key] = round(float(losses[-1]), 6)
-            s_res["mean_train_loss"][opt_key] = round(float(sum(losses) / len(losses)), 6)
-            s_res["final_val_loss"][opt_key] = round(v_loss, 6)
-            if opt_key == "triangular_centroidsteer":
-                s_res["triangular_qr_telemetry"] = o_cur.get_qr_telemetry()
-            del m_cur, o_cur
-            gc.collect()
-            if device.type == "cuda":
-                torch.cuda.empty_cache()
-        sec_seed_runs.append(s_res)
-
-    sec_agg = {
-        metric_k: {
-            opt_k: calc_seed_summary_stats([r[metric_k][opt_k] for r in sec_seed_runs])
-            for opt_k, _, _ in base_optimizer_configs
-        }
-        for metric_k in ["final_train_loss", "mean_train_loss", "final_val_loss"]
-    }
-    sec_qr_calls = sum(r["triangular_qr_telemetry"]["total_qr_calls"] for r in sec_seed_runs)
-    sec_qr_surv = sum(r["triangular_qr_telemetry"]["cholesky_fast_path_survivals"] for r in sec_seed_runs)
+    continuation_sub = run_subprocess_isolated_verification(
+        checkpoint_path=str(sec_file),
+        train_tokens_cpu=train_tokens_cpu,
+        val_tokens_cpu=val_tokens_cpu,
+        sub_seeds=sub_seeds,
+        opt_steps=opt_steps,
+        train_pool_batches=train_pool_batches,
+        val_batches=val_batches,
+        batch_size=B,
+        seq_len=T,
+        subspace_rank=subspace_rank,
+        subspace_update_gap=subspace_update_gap,
+        initial_val_loss=initial_val_loss,
+        device_str=str(device),
+    )
 
     return {
         "checkpoint_path": str(sec_file),
         "training_step": ckpt_step,
         "cumulative_tokens_trained": ckpt_tokens,
+        "evidence_role": "supplementary_stage_consistency_evaluation_df2",
         "static_5batch_qr_evaluation": {
             "active_expert_layers_evaluated": len(active_layers),
             "total_qr_operations": total_qr_calls,
@@ -769,27 +950,45 @@ def run_secondary_checkpoint_verification(
             "max_fp32_relative_residual": max_fp32_rel_subdiag,
             "max_bf16_relative_residual": max_bf16_rel_subdiag,
         },
-        "continuation_evaluation_3seed_latin_square": {
-            "seeds_evaluated": list(sub_seeds),
-            "steps_per_seed": opt_steps,
-            "initial_val_loss": round(initial_val_loss, 4),
-            "seed_runs": sec_seed_runs,
-            "aggregated_metrics": sec_agg,
-            "paired_val_loss_test": compute_paired_and_tost(
-                [r["final_val_loss"]["triangular_centroidsteer"] for r in sec_seed_runs],
-                [r["final_val_loss"]["standard_2d_adamw"] for r in sec_seed_runs],
-                eq_margin=0.05,
-                margin_grid=DEFAULT_VAL_TOST_MARGINS,
-            ),
-            "live_qr_telemetry": {
-                "total_qr_calls": sec_qr_calls,
-                "cholesky_fast_path_survivals": sec_qr_surv,
-                "cholesky_survival_rate_pct": round(100.0 * sec_qr_surv / max(1, sec_qr_calls), 2),
-                "householder_fallbacks": sec_qr_calls - sec_qr_surv,
-                "householder_fallback_rate_pct": round(100.0 * (sec_qr_calls - sec_qr_surv) / max(1, sec_qr_calls), 2),
-            },
-        },
+        "continuation_evaluation_3seed_latin_square": continuation_sub,
     }
+
+
+def run_extended_horizon_continuation_verification(
+    *,
+    checkpoint_path: str = "checkpoints/triune_studio_step_36500.pt",
+    train_tokens_cpu: torch.Tensor,
+    val_tokens_cpu: torch.Tensor,
+    sub_seeds: list[int] = DEFAULT_EXTENDED_HORIZON_SEEDS,
+    opt_steps: int = DEFAULT_EXTENDED_HORIZON_STEPS,
+    eval_val_every: int = DEFAULT_EXTENDED_HORIZON_VAL_INTERVAL,
+    train_pool_batches: int = DEFAULT_TRAIN_POOL_BATCHES,
+    val_batches: int = DEFAULT_VAL_BATCHES,
+    batch_size: int = DEFAULT_BATCH_SIZE,
+    seq_len: int = DEFAULT_SEQ_LEN,
+    subspace_rank: int = DEFAULT_SUBSPACE_RANK,
+    subspace_update_gap: int = DEFAULT_SUBSPACE_UPDATE_GAP,
+    initial_val_loss: float | None = None,
+    device_str: str = "cuda",
+) -> dict:
+    """Evaluates longer-horizon (e.g. 600-step) continuation trajectories in fresh OS subprocesses with intermediate validation curves."""
+    print(f"Evaluating extended-horizon ({opt_steps}-step) continuation across seeds {sub_seeds} in fresh OS subprocesses...")
+    return run_subprocess_isolated_verification(
+        checkpoint_path=checkpoint_path,
+        train_tokens_cpu=train_tokens_cpu,
+        val_tokens_cpu=val_tokens_cpu,
+        sub_seeds=sub_seeds,
+        opt_steps=opt_steps,
+        train_pool_batches=train_pool_batches,
+        val_batches=val_batches,
+        batch_size=batch_size,
+        seq_len=seq_len,
+        subspace_rank=subspace_rank,
+        subspace_update_gap=subspace_update_gap,
+        eval_val_every=eval_val_every,
+        initial_val_loss=initial_val_loss,
+        device_str=device_str,
+    )
 
 
 def run_numerical_qr_residual_verification(
@@ -841,6 +1040,8 @@ def run_numerical_qr_residual_verification(
             "subspace_rank": subspace_rank,
             "subspace_update_gap": subspace_update_gap,
             "opt_steps_per_seed": opt_steps,
+            "extended_horizon_steps_per_seed": DEFAULT_EXTENDED_HORIZON_STEPS,
+            "extended_horizon_seeds": list(DEFAULT_EXTENDED_HORIZON_SEEDS),
             "train_pool_batches": train_pool_batches,
             "train_pool_tokens": train_pool_batches * batch_size * seq_len,
             "val_batches": val_batches,
@@ -848,13 +1049,16 @@ def run_numerical_qr_residual_verification(
             "seeds": list(seeds),
             "opt_eval_seeds": eval_seeds,
             "subprocess_isolation_seeds": list(DEFAULT_SUBPROCESS_ISOLATION_SEEDS),
+            "secondary_checkpoint_seeds": list(DEFAULT_SECONDARY_CHECKPOINT_SEEDS),
             "synthetic_shapes": [list(s) for s in synthetic_shapes],
             "val_tost_margins_nats": list(DEFAULT_VAL_TOST_MARGINS),
             "train_tost_margins_nats": list(DEFAULT_TRAIN_TOST_MARGINS),
+            "memory_measurement_semantics": MEMORY_MEASUREMENT_SEMANTICS,
         },
         "checkpoint_evaluation": None,
         "stress_test_evaluation": None,
         "production_optimizer_comparison": None,
+        "extended_horizon_continuation_verification": None,
         "secondary_checkpoint_verification": None,
         "synthetic_runs": [],
         "summary": {},
@@ -1344,6 +1548,11 @@ def run_numerical_qr_residual_verification(
             "final_val_loss": {},
             "optimizer_step_time_ms": {},
             "full_step_time_ms": {},
+            "baseline_pytorch_allocated_mb": {},
+            "peak_pytorch_allocated_mb": {},
+            "incremental_peak_pytorch_allocated_mb": {},
+            "baseline_pytorch_reserved_mb": {},
+            "peak_pytorch_reserved_mb": {},
             "baseline_vram_mb": {},
             "peak_vram_mb": {},
             "incremental_peak_vram_mb": {},
@@ -1356,8 +1565,10 @@ def run_numerical_qr_residual_verification(
                 torch.cuda.reset_peak_memory_stats(device)
                 torch.cuda.synchronize()
                 baseline_vram = torch.cuda.memory_allocated(device) / (1024 * 1024)
+                baseline_reserved = torch.cuda.memory_reserved(device) / (1024 * 1024)
             else:
                 baseline_vram = 0.0
+                baseline_reserved = 0.0
 
             # Seed RNG identically for this optimizer within the paired seed
             torch.manual_seed(run_seed)
@@ -1425,6 +1636,7 @@ def run_numerical_qr_residual_verification(
             del losses_gpu
             val_loss = evaluate_validation_loss(model_cur)
             peak_vram = torch.cuda.max_memory_allocated(device) / (1024 * 1024) if device.type == "cuda" else 0.0
+            peak_reserved = torch.cuda.max_memory_reserved(device) / (1024 * 1024) if device.type == "cuda" else 0.0
             inc_peak_vram = max(0.0, peak_vram - baseline_vram)
 
             seed_result["final_train_loss"][opt_key] = round(float(losses[-1]), 6)
@@ -1432,6 +1644,11 @@ def run_numerical_qr_residual_verification(
             seed_result["final_val_loss"][opt_key] = round(val_loss, 6)
             seed_result["optimizer_step_time_ms"][opt_key] = round(sum(opt_times[5:]) / max(len(opt_times[5:]), 1), 2)
             seed_result["full_step_time_ms"][opt_key] = round(sum(full_times[5:]) / max(len(full_times[5:]), 1), 2)
+            seed_result["baseline_pytorch_allocated_mb"][opt_key] = round(baseline_vram, 2)
+            seed_result["peak_pytorch_allocated_mb"][opt_key] = round(peak_vram, 2)
+            seed_result["incremental_peak_pytorch_allocated_mb"][opt_key] = round(inc_peak_vram, 2)
+            seed_result["baseline_pytorch_reserved_mb"][opt_key] = round(baseline_reserved, 2)
+            seed_result["peak_pytorch_reserved_mb"][opt_key] = round(peak_reserved, 2)
             seed_result["baseline_vram_mb"][opt_key] = round(baseline_vram, 2)
             seed_result["peak_vram_mb"][opt_key] = round(peak_vram, 2)
             seed_result["incremental_peak_vram_mb"][opt_key] = round(inc_peak_vram, 2)
@@ -1483,46 +1700,25 @@ def run_numerical_qr_residual_verification(
         }
 
     agg = {
-        "final_train_loss": {
-            "triangular_centroidsteer": calc_stats([r["final_train_loss"]["triangular_centroidsteer"] for r in seed_runs]),
-            "unconstrained_centroidsteer": calc_stats([r["final_train_loss"]["unconstrained_centroidsteer"] for r in seed_runs]),
-            "standard_2d_adamw": calc_stats([r["final_train_loss"]["standard_2d_adamw"] for r in seed_runs]),
-        },
-        "mean_train_loss": {
-            "triangular_centroidsteer": calc_stats([r["mean_train_loss"]["triangular_centroidsteer"] for r in seed_runs]),
-            "unconstrained_centroidsteer": calc_stats([r["mean_train_loss"]["unconstrained_centroidsteer"] for r in seed_runs]),
-            "standard_2d_adamw": calc_stats([r["mean_train_loss"]["standard_2d_adamw"] for r in seed_runs]),
-        },
-        "final_val_loss": {
-            "triangular_centroidsteer": calc_stats([r["final_val_loss"]["triangular_centroidsteer"] for r in seed_runs]),
-            "unconstrained_centroidsteer": calc_stats([r["final_val_loss"]["unconstrained_centroidsteer"] for r in seed_runs]),
-            "standard_2d_adamw": calc_stats([r["final_val_loss"]["standard_2d_adamw"] for r in seed_runs]),
-        },
-        "optimizer_step_time_ms": {
-            "triangular_centroidsteer": calc_stats([r["optimizer_step_time_ms"]["triangular_centroidsteer"] for r in seed_runs]),
-            "unconstrained_centroidsteer": calc_stats([r["optimizer_step_time_ms"]["unconstrained_centroidsteer"] for r in seed_runs]),
-            "standard_2d_adamw": calc_stats([r["optimizer_step_time_ms"]["standard_2d_adamw"] for r in seed_runs]),
-        },
-        "full_step_time_ms": {
-            "triangular_centroidsteer": calc_stats([r["full_step_time_ms"]["triangular_centroidsteer"] for r in seed_runs]),
-            "unconstrained_centroidsteer": calc_stats([r["full_step_time_ms"]["unconstrained_centroidsteer"] for r in seed_runs]),
-            "standard_2d_adamw": calc_stats([r["full_step_time_ms"]["standard_2d_adamw"] for r in seed_runs]),
-        },
-        "baseline_vram_mb": {
-            "triangular_centroidsteer": calc_stats([r["baseline_vram_mb"]["triangular_centroidsteer"] for r in seed_runs]),
-            "unconstrained_centroidsteer": calc_stats([r["baseline_vram_mb"]["unconstrained_centroidsteer"] for r in seed_runs]),
-            "standard_2d_adamw": calc_stats([r["baseline_vram_mb"]["standard_2d_adamw"] for r in seed_runs]),
-        },
-        "peak_vram_mb": {
-            "triangular_centroidsteer": calc_stats([r["peak_vram_mb"]["triangular_centroidsteer"] for r in seed_runs]),
-            "unconstrained_centroidsteer": calc_stats([r["peak_vram_mb"]["unconstrained_centroidsteer"] for r in seed_runs]),
-            "standard_2d_adamw": calc_stats([r["peak_vram_mb"]["standard_2d_adamw"] for r in seed_runs]),
-        },
-        "incremental_peak_vram_mb": {
-            "triangular_centroidsteer": calc_stats([r["incremental_peak_vram_mb"]["triangular_centroidsteer"] for r in seed_runs]),
-            "unconstrained_centroidsteer": calc_stats([r["incremental_peak_vram_mb"]["unconstrained_centroidsteer"] for r in seed_runs]),
-            "standard_2d_adamw": calc_stats([r["incremental_peak_vram_mb"]["standard_2d_adamw"] for r in seed_runs]),
-        },
+        metric_k: {
+            opt_k: calc_stats([r[metric_k][opt_k] for r in seed_runs])
+            for opt_k, _, _ in base_optimizer_configs
+        }
+        for metric_k in [
+            "final_train_loss",
+            "mean_train_loss",
+            "final_val_loss",
+            "optimizer_step_time_ms",
+            "full_step_time_ms",
+            "baseline_pytorch_allocated_mb",
+            "peak_pytorch_allocated_mb",
+            "incremental_peak_pytorch_allocated_mb",
+            "baseline_pytorch_reserved_mb",
+            "peak_pytorch_reserved_mb",
+            "baseline_vram_mb",
+            "peak_vram_mb",
+            "incremental_peak_vram_mb",
+        ]
     }
 
     t_train = [r["final_train_loss"]["triangular_centroidsteer"] for r in seed_runs]
@@ -1572,8 +1768,9 @@ def run_numerical_qr_residual_verification(
     mean_ref = float(sum(ref_ms) / len(ref_ms))
 
     subprocess_iso_res = None
+    ext_horizon_res = None
     if run_subprocess_isolation_check:
-        sub_seeds_to_use = [s for s in DEFAULT_SUBPROCESS_ISOLATION_SEEDS if s in eval_seeds] or eval_seeds[:3]
+        sub_seeds_to_use = [s for s in DEFAULT_SUBPROCESS_ISOLATION_SEEDS if s in eval_seeds] or list(eval_seeds)
         subprocess_iso_res = run_subprocess_isolated_verification(
             checkpoint_path=str(ckpt_file),
             train_tokens_cpu=train_tokens_cpu,
@@ -1586,17 +1783,37 @@ def run_numerical_qr_residual_verification(
             seq_len=T,
             subspace_rank=subspace_rank,
             subspace_update_gap=subspace_update_gap,
+            initial_val_loss=initial_val_loss,
             device_str=device_str,
         )
+        if train_pool_batches >= DEFAULT_EXTENDED_HORIZON_STEPS:
+            ext_seeds = [s for s in DEFAULT_EXTENDED_HORIZON_SEEDS if s in eval_seeds] or eval_seeds[:3]
+            ext_horizon_res = run_extended_horizon_continuation_verification(
+                checkpoint_path=str(ckpt_file),
+                train_tokens_cpu=train_tokens_cpu,
+                val_tokens_cpu=val_tokens_cpu,
+                sub_seeds=ext_seeds,
+                opt_steps=DEFAULT_EXTENDED_HORIZON_STEPS,
+                eval_val_every=DEFAULT_EXTENDED_HORIZON_VAL_INTERVAL,
+                train_pool_batches=train_pool_batches,
+                val_batches=val_batches,
+                batch_size=B,
+                seq_len=T,
+                subspace_rank=subspace_rank,
+                subspace_update_gap=subspace_update_gap,
+                initial_val_loss=initial_val_loss,
+                device_str=device_str,
+            )
+            results["extended_horizon_continuation_verification"] = ext_horizon_res
 
     if secondary_checkpoint_path and Path(secondary_checkpoint_path).exists():
-        sub_seeds_to_use = [s for s in DEFAULT_SUBPROCESS_ISOLATION_SEEDS if s in eval_seeds] or eval_seeds[:3]
+        sec_seeds_to_use = [s for s in DEFAULT_SECONDARY_CHECKPOINT_SEEDS if s in eval_seeds] or eval_seeds[:3]
         results["secondary_checkpoint_verification"] = run_secondary_checkpoint_verification(
             secondary_checkpoint_path=secondary_checkpoint_path,
             train_tokens_cpu=train_tokens_cpu,
             val_tokens_cpu=val_tokens_cpu,
             static_tokens=all_tokens,
-            sub_seeds=sub_seeds_to_use,
+            sub_seeds=sec_seeds_to_use,
             num_fineweb_batches=num_fineweb_batches,
             opt_steps=opt_steps,
             train_pool_batches=train_pool_batches,
@@ -1609,6 +1826,8 @@ def run_numerical_qr_residual_verification(
         )
 
     results["production_optimizer_comparison"] = {
+        "isolation_mode": "same_process_sequential_with_explicit_cache_cleanup",
+        "memory_measurement_semantics": MEMORY_MEASUREMENT_SEMANTICS,
         "steps_per_seed": opt_steps,
         "seeds_evaluated": eval_seeds,
         "num_seeds": len(eval_seeds),
@@ -1629,6 +1848,7 @@ def run_numerical_qr_residual_verification(
         "aggregated_metrics": agg,
         "paired_statistical_tests": paired_tests,
         "subprocess_isolated_verification": subprocess_iso_res,
+        "extended_horizon_continuation_verification": ext_horizon_res,
         "production_qr_telemetry_aggregate": prod_qr_agg,
         "final_losses": {
             "triangular_centroidsteer": agg["final_train_loss"]["triangular_centroidsteer"]["mean"],
@@ -1771,6 +1991,7 @@ def run_numerical_qr_residual_verification(
         "production_optimizer_aggregated": opt_eval["aggregated_metrics"],
         "production_optimizer_paired_tests": opt_eval["paired_statistical_tests"],
         "production_optimizer_subprocess_isolated_verification": opt_eval["subprocess_isolated_verification"],
+        "extended_horizon_continuation_verification": results["extended_horizon_continuation_verification"],
         "production_optimizer_qr_telemetry": opt_eval["production_qr_telemetry_aggregate"],
         "production_optimizer_step_runtime_ms": opt_eval["step_runtime_ms"],
         "secondary_checkpoint_verification": results["secondary_checkpoint_verification"],
@@ -1863,7 +2084,7 @@ def _print_verification_report(res: dict, out_path: Path) -> None:
             f"(95% CI {mt['paired_ci95_t']}, 90% CI {mt['paired_ci90_t']})"
         )
         print(
-            f"      Two-tailed paired t = {mt['t_statistic']}, p = {mt['p_value_formatted']} (exact={mt['p_value']:.3e}) | "
+            f"      Two-tailed paired t = {mt['t_statistic']}, p = {mt['p_value_formatted']} (float64={mt['p_value']!r}) | "
             f"Min Equiv Margin (alpha=0.05) = +/-{mt['minimum_equivalence_margin_alpha_0_05_nats']} nats "
             f"(+/-{mt['minimum_equivalence_relative_ppl_pct']}% PPL)"
         )
@@ -1899,7 +2120,7 @@ def _print_verification_report(res: dict, out_path: Path) -> None:
         m = agg["full_step_time_ms"][name]["mean"]
         s = agg["full_step_time_ms"][name]["std"]
         print(f"    - {label:<20}: {m:.2f} +/- {s:.2f} ms")
-    print("  VRAM in Same-Process Sequential Isolation (Baseline | Total Peak | Incremental Peak):")
+    print("  PyTorch CUDA Allocator Memory in Same-Process Sequential Mode (Baseline | Peak Allocated | Incremental):")
     for name, label in [
         ("triangular_centroidsteer", "Triangular Core"),
         ("unconstrained_centroidsteer", "Unconstrained Core"),
@@ -1908,31 +2129,52 @@ def _print_verification_report(res: dict, out_path: Path) -> None:
         mb = agg["baseline_vram_mb"][name]["mean"]
         mp = agg["peak_vram_mb"][name]["mean"]
         mi = agg["incremental_peak_vram_mb"][name]["mean"]
-        print(f"    - {label:<20}: baseline = {mb:.2f} MB | total peak = {mp:.1f} MB | incremental = {mi:.1f} MB")
+        print(f"    - {label:<20}: baseline = {mb:.2f} MB | peak allocated = {mp:.1f} MB | incremental = {mi:.1f} MB")
     sub_iso = summary.get("production_optimizer_subprocess_isolated_verification")
     if sub_iso:
-        print(f"  VRAM & Latency in Separate-OS-Subprocess Isolation ({sub_iso['num_subprocesses_spawned']} fresh child processes):")
+        print(
+            f"  PyTorch CUDA Allocator Memory & Latency in Separate-OS-Subprocess Isolation "
+            f"({sub_iso['num_subprocesses_spawned']} fresh child processes across {len(sub_iso['seeds_evaluated'])} seeds):"
+        )
         sagg = sub_iso["aggregated_metrics"]
         for name, label in [
             ("triangular_centroidsteer", "Triangular Core"),
             ("unconstrained_centroidsteer", "Unconstrained Core"),
             ("standard_2d_adamw", "Standard 2D AdamW"),
         ]:
-            mb = sagg["baseline_vram_mb"][name]["mean"]
-            mp = sagg["peak_vram_mb"][name]["mean"]
-            mi = sagg["incremental_peak_vram_mb"][name]["mean"]
+            mb = sagg["baseline_pytorch_allocated_mb"][name]["mean"]
+            mp = sagg["peak_pytorch_allocated_mb"][name]["mean"]
+            mr = sagg["peak_pytorch_reserved_mb"][name]["mean"]
+            mi = sagg["incremental_peak_pytorch_allocated_mb"][name]["mean"]
             ot = sagg["optimizer_step_time_ms"][name]["mean"]
             ft = sagg["full_step_time_ms"][name]["mean"]
             vl = sagg["final_val_loss"][name]["mean"]
             print(
-                f"    - {label:<20}: baseline = {mb:.2f} MB | peak = {mp:.1f} MB | inc = {mi:.1f} MB | "
-                f"opt = {ot:.2f} ms | full = {ft:.2f} ms | val = {vl:.4f}"
+                f"    - {label:<20}: base_alloc = {mb:.2f} MB | peak_alloc = {mp:.1f} MB | peak_res = {mr:.1f} MB | "
+                f"inc_alloc = {mi:.1f} MB | opt = {ot:.2f} ms | full = {ft:.2f} ms | val = {vl:.4f}"
             )
+    ext_ver = summary.get("extended_horizon_continuation_verification")
+    if ext_ver:
+        print(
+            f"  Extended-Horizon Continuation ({ext_ver['steps_per_seed']} steps/seed, "
+            f"{ext_ver['num_subprocesses_spawned']} fresh OS subprocesses across seeds {ext_ver['seeds_evaluated']}):"
+        )
+        if "val_loss_curve_aggregated" in ext_ver:
+            for sk, sdict in ext_ver["val_loss_curve_aggregated"].items():
+                tri_m = sdict["triangular_centroidsteer"]["mean"]
+                unc_m = sdict["unconstrained_centroidsteer"]["mean"]
+                adm_m = sdict["standard_2d_adamw"]["mean"]
+                print(f"    - {sk:<10}: Tri={tri_m:.4f} | Unc={unc_m:.4f} | AdamW={adm_m:.4f}")
+        ext_pt = ext_ver["paired_val_loss_test"]
+        print(
+            f"    - Step-{ext_ver['steps_per_seed']} Paired Val Diff: {ext_pt['paired_mean_diff']:+.4f} +/- {ext_pt['paired_std']:.4f} "
+            f"(min_eq=+/-{ext_pt['minimum_equivalence_margin_alpha_0_05_nats']}n, p_TOST@0.05={ext_pt['tost_equivalence']['p_tost_formatted']})"
+        )
     sec_ver = summary.get("secondary_checkpoint_verification")
     if sec_ver:
         print(
             f"  Secondary Checkpoint Stage ({sec_ver['checkpoint_path']}, step={sec_ver['training_step']}, "
-            f"tokens={sec_ver['cumulative_tokens_trained']:,}):"
+            f"tokens={sec_ver['cumulative_tokens_trained']:,}, role={sec_ver.get('evidence_role', 'supplementary')}):"
         )
         sq = sec_ver["static_5batch_qr_evaluation"]
         sc = sec_ver["continuation_evaluation_3seed_latin_square"]
@@ -1944,7 +2186,7 @@ def _print_verification_report(res: dict, out_path: Path) -> None:
         sc_agg = sc["aggregated_metrics"]["final_val_loss"]
         sc_pt = sc["paired_val_loss_test"]
         print(
-            f"    - 3-Seed Continuation Val Loss (init={sc['initial_val_loss']}): "
+            f"    - 3-Seed Subprocess Continuation Val Loss (init={sc['initial_val_loss']}): "
             f"Tri={sc_agg['triangular_centroidsteer']['mean']:.4f}, "
             f"Unc={sc_agg['unconstrained_centroidsteer']['mean']:.4f}, "
             f"AdamW={sc_agg['standard_2d_adamw']['mean']:.4f} "
@@ -1966,10 +2208,98 @@ def _print_verification_report(res: dict, out_path: Path) -> None:
     print("======================================================================")
 
 
+def _rebuild_sub_iso_from_seed_runs(sub_seed_runs: list[dict], opt_steps: int, B: int, T: int, initial_val_loss: float) -> dict:
+    base_optimizer_configs = [
+        ("triangular_centroidsteer", True, False),
+        ("unconstrained_centroidsteer", False, False),
+        ("standard_2d_adamw", False, True),
+    ]
+    position_counts = {k: [0, 0, 0] for k, _, _ in base_optimizer_configs}
+    for r in sub_seed_runs:
+        for pos_idx, opt_k in enumerate(r["execution_order"]):
+            position_counts[opt_k][pos_idx] += 1
+
+    sub_agg = {}
+    for metric_k in [
+        "final_train_loss",
+        "mean_train_loss",
+        "final_val_loss",
+        "optimizer_step_time_ms",
+        "full_step_time_ms",
+        "baseline_pytorch_allocated_mb",
+        "peak_pytorch_allocated_mb",
+        "incremental_peak_pytorch_allocated_mb",
+        "baseline_pytorch_reserved_mb",
+        "peak_pytorch_reserved_mb",
+        "baseline_vram_mb",
+        "peak_vram_mb",
+        "incremental_peak_vram_mb",
+    ]:
+        sub_agg[metric_k] = {
+            opt_k: calc_seed_summary_stats([r[metric_k][opt_k] for r in sub_seed_runs])
+            for opt_k, _, _ in base_optimizer_configs
+        }
+
+    paired_tests = {
+        "final_train_loss": compute_paired_and_tost(
+            [r["final_train_loss"]["triangular_centroidsteer"] for r in sub_seed_runs],
+            [r["final_train_loss"]["standard_2d_adamw"] for r in sub_seed_runs],
+            eq_margin=0.10,
+            margin_grid=DEFAULT_TRAIN_TOST_MARGINS,
+        ),
+        "mean_train_loss": compute_paired_and_tost(
+            [r["mean_train_loss"]["triangular_centroidsteer"] for r in sub_seed_runs],
+            [r["mean_train_loss"]["standard_2d_adamw"] for r in sub_seed_runs],
+            eq_margin=0.05,
+            margin_grid=DEFAULT_VAL_TOST_MARGINS,
+        ),
+        "final_val_loss": compute_paired_and_tost(
+            [r["final_val_loss"]["triangular_centroidsteer"] for r in sub_seed_runs],
+            [r["final_val_loss"]["standard_2d_adamw"] for r in sub_seed_runs],
+            eq_margin=0.05,
+            margin_grid=DEFAULT_VAL_TOST_MARGINS,
+        ),
+    }
+
+    qr_total = sum(r["triangular_qr_telemetry"]["total_qr_calls"] for r in sub_seed_runs)
+    qr_surv = sum(r["triangular_qr_telemetry"]["cholesky_fast_path_survivals"] for r in sub_seed_runs)
+    qr_fb = sum(r["triangular_qr_telemetry"]["householder_fallbacks"] for r in sub_seed_runs)
+    sub_seeds = [r["seed"] for r in sub_seed_runs]
+
+    return {
+        "isolation_mode": "separate_os_subprocess_per_trajectory",
+        "memory_measurement_semantics": MEMORY_MEASUREMENT_SEMANTICS,
+        "num_subprocesses_spawned": len(sub_seeds) * len(base_optimizer_configs),
+        "seeds_evaluated": sub_seeds,
+        "num_seeds": len(sub_seeds),
+        "degrees_of_freedom": len(sub_seeds) - 1,
+        "steps_per_seed": opt_steps,
+        "tokens_trained_per_seed": opt_steps * B * T,
+        "initial_val_loss": round(float(initial_val_loss), 4),
+        "execution_schedule_balance": {
+            "is_balanced_latin_square": len(sub_seeds) % 3 == 0,
+            "num_complete_latin_squares": len(sub_seeds) // 3,
+            "position_counts_by_optimizer": position_counts,
+        },
+        "seed_runs": sub_seed_runs,
+        "aggregated_metrics": sub_agg,
+        "paired_statistical_tests": paired_tests,
+        "paired_val_loss_test": paired_tests["final_val_loss"],
+        "live_qr_telemetry": {
+            "total_qr_calls": qr_total,
+            "cholesky_fast_path_survivals": qr_surv,
+            "cholesky_survival_rate_pct": round(100.0 * qr_surv / max(1, qr_total), 2),
+            "householder_fallbacks": qr_fb,
+            "householder_fallback_rate_pct": round(100.0 * qr_fb / max(1, qr_total), 2),
+        },
+    }
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Triune Numerical QR & Residual Verification")
     parser.add_argument("--_subprocess-worker", action="store_true", dest="subprocess_worker")
     parser.add_argument("--_augment-existing-json", action="store_true", dest="augment_existing_json")
+    parser.add_argument("--_augment-stage", type=str, default="all", dest="augment_stage")
     parser.add_argument("--checkpoint-path", type=str, default="checkpoints/triune_studio_step_36500.pt")
     parser.add_argument("--tokens-cache", type=str, default="")
     parser.add_argument("--output-json", type=str, default="")
@@ -1982,6 +2312,7 @@ if __name__ == "__main__":
     parser.add_argument("--seq-len", type=int, default=DEFAULT_SEQ_LEN)
     parser.add_argument("--subspace-rank", type=int, default=DEFAULT_SUBSPACE_RANK)
     parser.add_argument("--subspace-update-gap", type=int, default=DEFAULT_SUBSPACE_UPDATE_GAP)
+    parser.add_argument("--eval-val-every", type=int, default=0)
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     cli_args = parser.parse_args()
 
@@ -1997,7 +2328,23 @@ if __name__ == "__main__":
         with open(out_path, "r", encoding="utf-8") as f:
             res = json.load(f)
         opt_eval = res["production_optimizer_comparison"]
+        opt_eval["isolation_mode"] = "same_process_sequential_with_explicit_cache_cleanup"
+        opt_eval["memory_measurement_semantics"] = MEMORY_MEASUREMENT_SEMANTICS
         seed_runs = opt_eval["seed_runs"]
+        for sr in seed_runs:
+            sr.setdefault("baseline_pytorch_allocated_mb", dict(sr["baseline_vram_mb"]))
+            sr.setdefault("peak_pytorch_allocated_mb", dict(sr["peak_vram_mb"]))
+            sr.setdefault("incremental_peak_pytorch_allocated_mb", dict(sr["incremental_peak_vram_mb"]))
+        opt_eval["aggregated_metrics"].setdefault(
+            "baseline_pytorch_allocated_mb", opt_eval["aggregated_metrics"]["baseline_vram_mb"]
+        )
+        opt_eval["aggregated_metrics"].setdefault(
+            "peak_pytorch_allocated_mb", opt_eval["aggregated_metrics"]["peak_vram_mb"]
+        )
+        opt_eval["aggregated_metrics"].setdefault(
+            "incremental_peak_pytorch_allocated_mb", opt_eval["aggregated_metrics"]["incremental_peak_vram_mb"]
+        )
+
         t_train = [r["final_train_loss"]["triangular_centroidsteer"] for r in seed_runs]
         a_train = [r["final_train_loss"]["standard_2d_adamw"] for r in seed_runs]
         t_mtrain = [r["mean_train_loss"]["triangular_centroidsteer"] for r in seed_runs]
@@ -2020,30 +2367,55 @@ if __name__ == "__main__":
             full_tokens[DEFAULT_TRAIN_POOL_BATCHES * B * T : (DEFAULT_TRAIN_POOL_BATCHES + DEFAULT_VAL_BATCHES) * B * T + 1],
             dtype=torch.long,
         )
-        sub_iso = run_subprocess_isolated_verification(
-            checkpoint_path=cli_args.checkpoint_path,
-            train_tokens_cpu=train_tokens_cpu,
-            val_tokens_cpu=val_tokens_cpu,
-            sub_seeds=DEFAULT_SUBPROCESS_ISOLATION_SEEDS,
-            opt_steps=DEFAULT_OPT_STEPS,
-            train_pool_batches=DEFAULT_TRAIN_POOL_BATCHES,
-            val_batches=DEFAULT_VAL_BATCHES,
-            batch_size=B,
-            seq_len=T,
-            subspace_rank=DEFAULT_SUBSPACE_RANK,
-            subspace_update_gap=DEFAULT_SUBSPACE_UPDATE_GAP,
-            device_str=cli_args.device,
-        )
-        opt_eval["subprocess_isolated_verification"] = sub_iso
-        res["summary"]["production_optimizer_subprocess_isolated_verification"] = sub_iso
+        init_val = float(opt_eval.get("initial_val_loss", 6.0686))
+        stage = cli_args.augment_stage
 
-        if Path(DEFAULT_SECONDARY_CHECKPOINT_PATH).exists():
+        stage_seed_map = {
+            "all": DEFAULT_SUBPROCESS_ISOLATION_SEEDS,
+            "sub12_part1": DEFAULT_SUBPROCESS_ISOLATION_SEEDS[:6],
+            "sub12_part2": DEFAULT_SUBPROCESS_ISOLATION_SEEDS[6:],
+            "sub12_q1": DEFAULT_SUBPROCESS_ISOLATION_SEEDS[0:3],
+            "sub12_q2": DEFAULT_SUBPROCESS_ISOLATION_SEEDS[3:6],
+            "sub12_q3": DEFAULT_SUBPROCESS_ISOLATION_SEEDS[6:9],
+            "sub12_q4": DEFAULT_SUBPROCESS_ISOLATION_SEEDS[9:12],
+        }
+        if stage in stage_seed_map:
+            target_seeds = stage_seed_map[stage]
+            part_sub = run_subprocess_isolated_verification(
+                checkpoint_path=cli_args.checkpoint_path,
+                train_tokens_cpu=train_tokens_cpu,
+                val_tokens_cpu=val_tokens_cpu,
+                sub_seeds=target_seeds,
+                opt_steps=DEFAULT_OPT_STEPS,
+                train_pool_batches=DEFAULT_TRAIN_POOL_BATCHES,
+                val_batches=DEFAULT_VAL_BATCHES,
+                batch_size=B,
+                seq_len=T,
+                subspace_rank=DEFAULT_SUBSPACE_RANK,
+                subspace_update_gap=DEFAULT_SUBSPACE_UPDATE_GAP,
+                initial_val_loss=init_val,
+                device_str=cli_args.device,
+            )
+            existing_sub = opt_eval.get("subprocess_isolated_verification") or {}
+            existing_map = {
+                r["seed"]: r
+                for r in existing_sub.get("seed_runs", [])
+                if "peak_pytorch_reserved_mb" in r
+            }
+            for r in part_sub["seed_runs"]:
+                existing_map[r["seed"]] = r
+            ordered_runs = [existing_map[s] for s in DEFAULT_SUBPROCESS_ISOLATION_SEEDS if s in existing_map]
+            sub_iso = _rebuild_sub_iso_from_seed_runs(ordered_runs, DEFAULT_OPT_STEPS, B, T, init_val)
+            opt_eval["subprocess_isolated_verification"] = sub_iso
+            res["summary"]["production_optimizer_subprocess_isolated_verification"] = sub_iso
+
+        if stage in ("all", "secondary_ckpt") and Path(DEFAULT_SECONDARY_CHECKPOINT_PATH).exists():
             sec_ver = run_secondary_checkpoint_verification(
                 secondary_checkpoint_path=DEFAULT_SECONDARY_CHECKPOINT_PATH,
                 train_tokens_cpu=train_tokens_cpu,
                 val_tokens_cpu=val_tokens_cpu,
                 static_tokens=full_tokens[: (DEFAULT_STATIC_FINEWEB_BATCHES + 2) * B * T + 20],
-                sub_seeds=DEFAULT_SUBPROCESS_ISOLATION_SEEDS,
+                sub_seeds=DEFAULT_SECONDARY_CHECKPOINT_SEEDS,
                 num_fineweb_batches=DEFAULT_STATIC_FINEWEB_BATCHES,
                 opt_steps=DEFAULT_OPT_STEPS,
                 train_pool_batches=DEFAULT_TRAIN_POOL_BATCHES,
@@ -2057,8 +2429,33 @@ if __name__ == "__main__":
             res["secondary_checkpoint_verification"] = sec_ver
             res["summary"]["secondary_checkpoint_verification"] = sec_ver
 
+        if stage in ("all", "extended_horizon"):
+            ext_ver = run_extended_horizon_continuation_verification(
+                checkpoint_path=cli_args.checkpoint_path,
+                train_tokens_cpu=train_tokens_cpu,
+                val_tokens_cpu=val_tokens_cpu,
+                sub_seeds=DEFAULT_EXTENDED_HORIZON_SEEDS,
+                opt_steps=DEFAULT_EXTENDED_HORIZON_STEPS,
+                eval_val_every=DEFAULT_EXTENDED_HORIZON_VAL_INTERVAL,
+                train_pool_batches=DEFAULT_TRAIN_POOL_BATCHES,
+                val_batches=DEFAULT_VAL_BATCHES,
+                batch_size=B,
+                seq_len=T,
+                subspace_rank=DEFAULT_SUBSPACE_RANK,
+                subspace_update_gap=DEFAULT_SUBSPACE_UPDATE_GAP,
+                initial_val_loss=init_val,
+                device_str=cli_args.device,
+            )
+            res["extended_horizon_continuation_verification"] = ext_ver
+            opt_eval["extended_horizon_continuation_verification"] = ext_ver
+            res["summary"]["extended_horizon_continuation_verification"] = ext_ver
+
         res["experiment_configuration"]["secondary_checkpoint_path"] = DEFAULT_SECONDARY_CHECKPOINT_PATH
         res["experiment_configuration"]["subprocess_isolation_seeds"] = list(DEFAULT_SUBPROCESS_ISOLATION_SEEDS)
+        res["experiment_configuration"]["secondary_checkpoint_seeds"] = list(DEFAULT_SECONDARY_CHECKPOINT_SEEDS)
+        res["experiment_configuration"]["extended_horizon_steps_per_seed"] = DEFAULT_EXTENDED_HORIZON_STEPS
+        res["experiment_configuration"]["extended_horizon_seeds"] = list(DEFAULT_EXTENDED_HORIZON_SEEDS)
+        res["experiment_configuration"]["memory_measurement_semantics"] = MEMORY_MEASUREMENT_SEMANTICS
     else:
         res = run_numerical_qr_residual_verification()
 

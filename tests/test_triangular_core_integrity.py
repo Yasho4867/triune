@@ -477,6 +477,189 @@ def test_benchmark_config_validation_and_scientific_pvalues():
 
     assert format_p_value(1.5129e-7) == "1.513e-07 (<0.0001)"
     assert format_p_value(0.0200) == "0.0200"
-    print("✅ Benchmark configuration validation and scientific p-value formatting verified!")
+
+    # 4. Verify raw IEEE-754 float64 precision is preserved without 6-digit string rounding
+    import scipy.stats as stats
+    raw_expected_p = float(stats.ttest_rel(vals_tri, vals_adm).pvalue)
+    assert stats_out["p_value"] == raw_expected_p, (
+        f"p_value must preserve full IEEE-754 float64 precision ({raw_expected_p!r}), got {stats_out['p_value']!r}"
+    )
+    assert stats_out["p_value"] != float(f"{raw_expected_p:.6e}"), (
+        "p_value must not be rounded through a 6-digit scientific format string"
+    )
+    print("✅ Benchmark configuration validation and unrounded IEEE-754 float64 p-value precision verified!")
+
+
+def test_subprocess_worker_validation_memory_semantics_and_aggregation(tmp_path, monkeypatch):
+    """Tests worker failure handling, malformed JSON rejection, seed/optimizer identity checks, and memory semantics."""
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    import pytest
+    import torch
+
+    repo_root = str(Path(__file__).resolve().parent.parent)
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+
+    from benchmarks.verify_triangular_qr_residuals import (
+        MEMORY_MEASUREMENT_SEMANTICS,
+        _rebuild_sub_iso_from_seed_runs,
+        run_secondary_checkpoint_verification,
+        run_subprocess_isolated_verification,
+        validate_and_load_worker_output,
+    )
+
+    valid_payload = {
+        "seed": 42,
+        "opt_key": "triangular_centroidsteer",
+        "batch_permutation_first5": [1, 2, 3, 4, 5],
+        "final_train_loss": 4.25,
+        "mean_train_loss": 4.46,
+        "final_val_loss": 4.17,
+        "optimizer_step_time_ms": 14.3,
+        "full_step_time_ms": 71.2,
+        "baseline_pytorch_allocated_mb": 0.0,
+        "peak_pytorch_allocated_mb": 176.27,
+        "incremental_peak_pytorch_allocated_mb": 176.27,
+        "baseline_pytorch_reserved_mb": 0.0,
+        "peak_pytorch_reserved_mb": 208.0,
+        "baseline_vram_mb": 0.0,
+        "peak_vram_mb": 176.27,
+        "incremental_peak_vram_mb": 176.27,
+        "triangular_qr_telemetry": {
+            "total_qr_calls": 960,
+            "cholesky_fast_path_survivals": 958,
+            "householder_fallbacks": 2,
+        },
+        "triangular_timing_breakdown_ms": {
+            "non_refresh_mean_ms": 13.7,
+            "refresh_mean_ms": 26.8,
+            "amortized_refresh_overhead_per_step_ms": 0.655,
+        },
+    }
+
+    # 1. Missing or empty worker file must raise RuntimeError
+    missing_file = tmp_path / "missing.json"
+    with pytest.raises(RuntimeError, match="missing or empty"):
+        validate_and_load_worker_output(missing_file, expected_seed=42, expected_opt_key="triangular_centroidsteer")
+
+    empty_file = tmp_path / "empty.json"
+    empty_file.write_text("", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="missing or empty"):
+        validate_and_load_worker_output(empty_file, expected_seed=42, expected_opt_key="triangular_centroidsteer")
+
+    # 2. Malformed JSON must raise ValueError
+    malformed_file = tmp_path / "malformed.json"
+    malformed_file.write_text("{not_valid_json", encoding="utf-8")
+    with pytest.raises(ValueError, match="Malformed JSON"):
+        validate_and_load_worker_output(malformed_file, expected_seed=42, expected_opt_key="triangular_centroidsteer")
+
+    # 3. Valid payload passes validation; seed or optimizer identity mismatch must raise ValueError
+    valid_file = tmp_path / "valid.json"
+    valid_file.write_text(json.dumps(valid_payload), encoding="utf-8")
+    loaded = validate_and_load_worker_output(valid_file, expected_seed=42, expected_opt_key="triangular_centroidsteer")
+    assert loaded["seed"] == 42 and loaded["opt_key"] == "triangular_centroidsteer"
+
+    with pytest.raises(ValueError, match="seed identity mismatch"):
+        validate_and_load_worker_output(valid_file, expected_seed=1337, expected_opt_key="triangular_centroidsteer")
+
+    with pytest.raises(ValueError, match="optimizer identity mismatch"):
+        validate_and_load_worker_output(valid_file, expected_seed=42, expected_opt_key="standard_2d_adamw")
+
+    # 4. Violated PyTorch allocator memory invariants (reserved < allocated or bad incremental) must raise ValueError
+    bad_mem = dict(valid_payload, peak_pytorch_reserved_mb=150.0)
+    bad_mem_file = tmp_path / "bad_mem.json"
+    bad_mem_file.write_text(json.dumps(bad_mem), encoding="utf-8")
+    with pytest.raises(ValueError, match="Invalid PyTorch allocator memory invariants"):
+        validate_and_load_worker_output(bad_mem_file, expected_seed=42, expected_opt_key="triangular_centroidsteer")
+
+    bad_inc = dict(valid_payload, incremental_peak_pytorch_allocated_mb=10.0)
+    bad_inc_file = tmp_path / "bad_inc.json"
+    bad_inc_file.write_text(json.dumps(bad_inc), encoding="utf-8")
+    with pytest.raises(ValueError, match="Inconsistent incremental_peak_pytorch_allocated_mb"):
+        validate_and_load_worker_output(bad_inc_file, expected_seed=42, expected_opt_key="triangular_centroidsteer")
+
+    # 5. Subprocess worker non-zero exit status must raise descriptive RuntimeError
+    def mock_failed_run(cmd, **kwargs):
+        raise subprocess.CalledProcessError(returncode=1, cmd=cmd, stderr="CUDA OOM in child worker")
+
+    monkeypatch.setattr(subprocess, "run", mock_failed_run)
+    dummy_tokens = torch.zeros(1024, dtype=torch.long)
+    with pytest.raises(RuntimeError, match="Subprocess worker failed with exit code 1.*CUDA OOM"):
+        run_subprocess_isolated_verification(
+            checkpoint_path="dummy.pt",
+            train_tokens_cpu=dummy_tokens,
+            val_tokens_cpu=dummy_tokens,
+            sub_seeds=[42, 1337, 2026],
+            opt_steps=10,
+            train_pool_batches=20,
+            val_batches=2,
+            batch_size=2,
+            seq_len=8,
+        )
+
+    # 6. Subprocess aggregation with intermediate validation curves and memory measurement semantics
+    def mock_success_run(cmd, **kwargs):
+        out_idx = cmd.index("--output-json") + 1
+        seed_val = int(cmd[cmd.index("--seed") + 1])
+        opt_val = cmd[cmd.index("--opt-key") + 1]
+        jitter = 0.0002 * ((seed_val % 7) - 3)
+        p = dict(
+            valid_payload,
+            seed=seed_val,
+            opt_key=opt_val,
+            final_val_loss=(4.170 + jitter) if opt_val != "standard_2d_adamw" else (4.166 - 0.5 * jitter),
+            peak_pytorch_allocated_mb=176.27 if opt_val != "standard_2d_adamw" else 756.20,
+            incremental_peak_pytorch_allocated_mb=176.27 if opt_val != "standard_2d_adamw" else 756.20,
+            peak_pytorch_reserved_mb=208.0 if opt_val != "standard_2d_adamw" else 812.0,
+            peak_vram_mb=176.27 if opt_val != "standard_2d_adamw" else 756.20,
+            incremental_peak_vram_mb=176.27 if opt_val != "standard_2d_adamw" else 756.20,
+            val_loss_curve={
+                "step_200": (4.170 + jitter) if opt_val != "standard_2d_adamw" else (4.166 - 0.5 * jitter),
+                "step_400": (4.120 + jitter) if opt_val != "standard_2d_adamw" else (4.115 - 0.5 * jitter),
+                "step_600": (4.090 + jitter) if opt_val != "standard_2d_adamw" else (4.085 - 0.5 * jitter),
+            },
+        )
+        Path(cmd[out_idx]).write_text(json.dumps(p), encoding="utf-8")
+
+    monkeypatch.setattr(subprocess, "run", mock_success_run)
+    agg_out = run_subprocess_isolated_verification(
+        checkpoint_path="dummy.pt",
+        train_tokens_cpu=dummy_tokens,
+        val_tokens_cpu=dummy_tokens,
+        sub_seeds=[42, 1337, 2026],
+        opt_steps=600,
+        train_pool_batches=1000,
+        val_batches=2,
+        batch_size=2,
+        seq_len=8,
+        eval_val_every=200,
+        initial_val_loss=6.0686,
+    )
+    assert agg_out["num_subprocesses_spawned"] == 9
+    assert agg_out["memory_measurement_semantics"] == MEMORY_MEASUREMENT_SEMANTICS
+    assert agg_out["aggregated_metrics"]["baseline_pytorch_allocated_mb"]["triangular_centroidsteer"]["mean"] == 0.0
+    assert agg_out["aggregated_metrics"]["peak_pytorch_reserved_mb"]["standard_2d_adamw"]["mean"] == 812.0
+    assert "step_0" in agg_out["val_loss_curve_aggregated"]
+    assert "step_600" in agg_out["paired_val_loss_tests_by_step"]
+
+    rebuilt = _rebuild_sub_iso_from_seed_runs(agg_out["seed_runs"], 600, 2, 8, 6.0686)
+    assert rebuilt["num_subprocesses_spawned"] == 9
+    assert rebuilt["execution_schedule_balance"]["is_balanced_latin_square"] is True
+
+    # 7. Secondary checkpoint fail-fast missing file check
+    with pytest.raises(FileNotFoundError, match="Secondary checkpoint file missing"):
+        run_secondary_checkpoint_verification(
+            secondary_checkpoint_path=str(tmp_path / "nonexistent_ckpt.pt"),
+            train_tokens_cpu=dummy_tokens,
+            val_tokens_cpu=dummy_tokens,
+            static_tokens=[1] * 256,
+            device=torch.device("cpu"),
+        )
+    print("✅ Subprocess worker validation, memory semantics, and secondary/extended aggregation verified!")
+
 
 
