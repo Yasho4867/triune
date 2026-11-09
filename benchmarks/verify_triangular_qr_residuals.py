@@ -6,11 +6,12 @@ Evaluates on:
     dataset: data/fineweb_edu_real.jsonl, SHA-256 aed10d4c98afb6da4f55ee3aa295981465b9fd49edb1e5886c36fb6fe3ae8e9c;
     5 independent batches, 2,560 tokens total).
 2. Exact causal breakdown of QR fallback triggers (condition ratio, orthogonality tolerance, Cholesky non-PD, degenerate columns).
-3. Production CentroidSteerOptimizer comparison (Triangular vs Unconstrained vs standard 2D AdamW) across 200 steps and 5 seeds
-   with seed-specific FineWeb-Edu batch permutations, same-process sequential GPU memory cleanup, Student-t confidence intervals (df=4),
-   and multi-margin Schuirmann TOST equivalence profiles.
+3. Production CentroidSteerOptimizer comparison (Triangular vs Unconstrained vs standard 2D AdamW) across 200 steps and 12 seeds
+   (df=11, 4 complete 3x3 Latin squares) sampling seed-specific 200-batch trajectories from a 1,000-batch (512,000-token)
+   FineWeb-Edu pool and evaluating on a disjoint 64-batch (32,768-token) held-out validation set, with same-process sequential
+   GPU memory cleanup, Student-t confidence intervals, empirical minimum equivalence margins, and multi-margin Schuirmann TOST profiles.
 4. Stress-test evaluation on high-entropy random token batches.
-5. Multi-seed synthetic matrices for shape and rank generalization.
+5. Multi-seed synthetic matrices across the centralized 12-seed cohort for shape and rank generalization.
 
 Directly validates the empirical bounds and invariant claims in CentroidSteer (Paper 1):
 - Basis Orthogonality: ||Q_L^T Q_L - I||_F and ||Q_R^T Q_R - I||_F in FP32 (< 1e-4) and BF16 (< 1e-2).
@@ -26,6 +27,7 @@ from __future__ import annotations
 import gc
 import hashlib
 import json
+import math
 import time
 from pathlib import Path
 
@@ -36,6 +38,20 @@ from tokenizers import Tokenizer
 from triune.kernels.fast_triangular import fast_triangular_adamw
 from triune.model.factory import build_model
 from triune.optim.centroid import CentroidSteerOptimizer, batched_qr
+
+# Centralized Reproducibility Configuration (12 seeds = 4 complete 3x3 Latin squares, df=11)
+DEFAULT_SEEDS: list[int] = [42, 1337, 2026, 7777, 9999, 31415, 27182, 16180, 86753, 54321, 65537, 90001]
+DEFAULT_SYNTHETIC_SHAPES: list[tuple[int, int, int]] = [(384, 1024, 16), (128, 256, 8)]
+DEFAULT_BATCH_SIZE: int = 4
+DEFAULT_SEQ_LEN: int = 128
+DEFAULT_STATIC_FINEWEB_BATCHES: int = 5
+DEFAULT_OPT_STEPS: int = 200
+DEFAULT_TRAIN_POOL_BATCHES: int = 1000
+DEFAULT_VAL_BATCHES: int = 64
+DEFAULT_SUBSPACE_RANK: int = 16
+DEFAULT_SUBSPACE_UPDATE_GAP: int = 20
+DEFAULT_VAL_TOST_MARGINS: tuple[float, ...] = (0.01, 0.02, 0.05)
+DEFAULT_TRAIN_TOST_MARGINS: tuple[float, ...] = (0.02, 0.05, 0.10)
 
 
 def compute_sha256(path: Path) -> str:
@@ -80,14 +96,44 @@ def run_numerical_qr_residual_verification(
     checkpoint_path: str = "checkpoints/triune_studio_step_36500.pt",
     fineweb_path: str = "data/fineweb_edu_real.jsonl",
     tokenizer_path: str = "triune_tokenizer.json",
-    num_fineweb_batches: int = 5,
-    seeds: list[int] = [42, 1337, 2026],
-    synthetic_shapes: list[tuple[int, int, int]] = [(384, 1024, 16), (128, 256, 8)],
+    num_fineweb_batches: int = DEFAULT_STATIC_FINEWEB_BATCHES,
+    seeds: list[int] = DEFAULT_SEEDS,
+    opt_eval_seeds: list[int] | None = None,
+    opt_steps: int = DEFAULT_OPT_STEPS,
+    train_pool_batches: int = DEFAULT_TRAIN_POOL_BATCHES,
+    val_batches: int = DEFAULT_VAL_BATCHES,
+    batch_size: int = DEFAULT_BATCH_SIZE,
+    seq_len: int = DEFAULT_SEQ_LEN,
+    subspace_rank: int = DEFAULT_SUBSPACE_RANK,
+    subspace_update_gap: int = DEFAULT_SUBSPACE_UPDATE_GAP,
+    synthetic_shapes: list[tuple[int, int, int]] = DEFAULT_SYNTHETIC_SHAPES,
     device_str: str = "cuda" if torch.cuda.is_available() else "cpu",
 ) -> dict:
     device = torch.device(device_str)
+    eval_seeds = list(opt_eval_seeds) if opt_eval_seeds is not None else list(seeds)
     results = {
         "device": device_str,
+        "experiment_configuration": {
+            "checkpoint_path": checkpoint_path,
+            "fineweb_path": fineweb_path,
+            "tokenizer_path": tokenizer_path,
+            "batch_size": batch_size,
+            "seq_len": seq_len,
+            "tokens_per_batch": batch_size * seq_len,
+            "static_fineweb_batches": num_fineweb_batches,
+            "subspace_rank": subspace_rank,
+            "subspace_update_gap": subspace_update_gap,
+            "opt_steps_per_seed": opt_steps,
+            "train_pool_batches": train_pool_batches,
+            "train_pool_tokens": train_pool_batches * batch_size * seq_len,
+            "val_batches": val_batches,
+            "val_tokens": val_batches * batch_size * seq_len,
+            "seeds": list(seeds),
+            "opt_eval_seeds": eval_seeds,
+            "synthetic_shapes": [list(s) for s in synthetic_shapes],
+            "val_tost_margins_nats": list(DEFAULT_VAL_TOST_MARGINS),
+            "train_tost_margins_nats": list(DEFAULT_TRAIN_TOST_MARGINS),
+        },
         "checkpoint_evaluation": None,
         "stress_test_evaluation": None,
         "production_optimizer_comparison": None,
@@ -129,11 +175,11 @@ def run_numerical_qr_residual_verification(
     assert len(missing) == 0 and len(unexpected) == 0, f"Checkpoint mismatch: missing={missing}, unexpected={unexpected}"
     model.train()
 
-    B, T = 4, 128
+    B, T = batch_size, seq_len
     req_tokens = (num_fineweb_batches + 2) * B * T + 20
     all_tokens = load_fineweb_tokens(data_file, tok_file, num_tokens=req_tokens)
 
-    r = 16
+    r = subspace_rank
     real_layers_map = {}
     total_qr_calls = 0
     total_fallbacks = 0
@@ -500,36 +546,47 @@ def run_numerical_qr_residual_verification(
 
     # =========================================================================
     # Part 3: True Production Optimizer Comparison on FineWeb-Edu Batches
-    # Multi-Seed (5 Seeds, df=4), 200 Steps/Seed, Seed-Specific Batch Orderings,
-    # Same-Process Sequential GPU Memory Cleanup, & Multi-Margin TOST Profile
+    # Multi-Seed (12 Seeds, df=11, 4 Complete 3x3 Latin Squares), 200 Steps/Seed
+    # Sampling from a 1,000-Batch (512,000-Token) Training Pool, Disjoint 64-Batch
+    # (32,768-Token) Held-Out Validation Set, Same-Process Sequential GPU Cleanup
     # =========================================================================
     print("Evaluating production CentroidSteerOptimizer vs unconstrained vs AdamW on FineWeb-Edu...")
-    opt_steps = 200
-    eval_seeds = [42, 1337, 2026, 7777, 9999]
-    val_batches = 10
-    total_tokens_needed = (opt_steps + val_batches + 5) * B * T + 50
+    total_tokens_needed = (train_pool_batches + val_batches + 5) * B * T + 64
     full_tokens = load_fineweb_tokens(data_file, tok_file, num_tokens=total_tokens_needed)
+    if len(full_tokens) < (train_pool_batches + val_batches) * B * T + 2:
+        raise ValueError(
+            f"Insufficient FineWeb-Edu tokens ({len(full_tokens)}) for {train_pool_batches} train pool batches "
+            f"+ {val_batches} val batches at B={B}, T={T}."
+        )
 
-    train_tokens = full_tokens[: opt_steps * B * T + 1]
-    val_tokens = full_tokens[opt_steps * B * T :]
+    train_tokens_cpu = torch.tensor(full_tokens[: train_pool_batches * B * T + 1], dtype=torch.long)
+    val_tokens_cpu = torch.tensor(
+        full_tokens[train_pool_batches * B * T : (train_pool_batches + val_batches) * B * T + 1],
+        dtype=torch.long,
+    )
+    del full_tokens
+    gc.collect()
 
     def evaluate_validation_loss(model_eval):
         model_eval.eval()
-        v_losses = []
+        v_losses_gpu = []
         with torch.no_grad():
             for v_idx in range(val_batches):
-                sub_v = val_tokens[v_idx * B * T : (v_idx + 1) * B * T + 1]
-                tt_v = torch.tensor(sub_v, device=device, dtype=torch.long)
+                tt_v = val_tokens_cpu[v_idx * B * T : (v_idx + 1) * B * T + 1].to(device=device, non_blocking=True)
                 inp_v, tgt_v = tt_v[:-1].view(B, T), tt_v[1:].view(B, T)
                 out_v = model_eval(inp_v)
                 logits_v = out_v[0] if isinstance(out_v, tuple) else out_v
-                v_loss = torch.nn.functional.cross_entropy(logits_v.view(-1, logits_v.size(-1)), tgt_v.view(-1))
-                v_losses.append(v_loss.item())
+                v_loss = torch.nn.functional.cross_entropy(
+                    logits_v.view(-1, logits_v.size(-1)).float(), tgt_v.view(-1)
+                )
+                v_losses_gpu.append(v_loss.detach().float())
                 del tt_v, inp_v, tgt_v, out_v, logits_v, v_loss
+            mean_val = float(torch.stack(v_losses_gpu).float().mean().item())
+        del v_losses_gpu
         model_eval.train()
-        return float(sum(v_losses) / len(v_losses))
+        return mean_val
 
-    # Evaluate initial checkpoint validation loss and release model before optimizer runs
+    # Evaluate initial checkpoint validation loss across the 64 held-out batches and release model before optimizer runs
     model_init = build_model(cfg).to(device=device, dtype=torch.bfloat16)
     model_init.load_state_dict(cpu_model_state, strict=True)
     initial_val_loss = evaluate_validation_loss(model_init)
@@ -545,15 +602,23 @@ def run_numerical_qr_residual_verification(
         ("unconstrained_centroidsteer", False, False),
         ("standard_2d_adamw", False, True),
     ]
+    position_counts = {k: [0, 0, 0] for k, _, _ in base_optimizer_configs}
 
     for seed_idx, run_seed in enumerate(eval_seeds):
         print(f"  --> Running Isolated Optimizer Trajectory Seed {run_seed} ({seed_idx + 1}/{len(eval_seeds)})...")
-        # Seed-specific deterministic permutation of the 200 FineWeb-Edu micro-batches
+        # Seed-specific deterministic sample without replacement of opt_steps batches from the 1,000-batch training pool
         perm_gen = torch.Generator().manual_seed(run_seed)
-        batch_perm = torch.randperm(opt_steps, generator=perm_gen).tolist()
+        batch_perm = torch.randperm(train_pool_batches, generator=perm_gen)[:opt_steps].tolist()
+
+        # Balanced Latin-square rotation across seeds (exact 4x4x4 position counts over 12 seeds)
+        rot = seed_idx % len(base_optimizer_configs)
+        optimizer_configs = base_optimizer_configs[rot:] + base_optimizer_configs[:rot]
+        for pos_idx, (opt_k, _, _) in enumerate(optimizer_configs):
+            position_counts[opt_k][pos_idx] += 1
 
         seed_result = {
             "seed": run_seed,
+            "execution_order": [opt_k for opt_k, _, _ in optimizer_configs],
             "batch_permutation_first5": batch_perm[:5],
             "final_train_loss": {},
             "mean_train_loss": {},
@@ -564,10 +629,6 @@ def run_numerical_qr_residual_verification(
             "peak_vram_mb": {},
             "incremental_peak_vram_mb": {},
         }
-
-        # Rotate execution order across seeds (Latin-square counterbalancing) to eliminate thermal drift bias
-        rot = seed_idx % len(base_optimizer_configs)
-        optimizer_configs = base_optimizer_configs[rot:] + base_optimizer_configs[:rot]
 
         for opt_key, use_triu, is_adamw in optimizer_configs:
             gc.collect()
@@ -590,17 +651,22 @@ def run_numerical_qr_residual_verification(
             if is_adamw:
                 opt_cur = torch.optim.AdamW(model_cur.parameters(), lr=1e-4, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.01)
             else:
-                opt_cur = CentroidSteerOptimizer(model_cur, lr=1e-4, rank=16, use_triangular_core=use_triu, update_gap=20)
+                opt_cur = CentroidSteerOptimizer(
+                    model_cur,
+                    lr=1e-4,
+                    rank=subspace_rank,
+                    use_triangular_core=use_triu,
+                    update_gap=subspace_update_gap,
+                )
 
-            losses = []
+            losses_gpu = []
             opt_times = []
             full_times = []
             refresh_opt_times, non_refresh_opt_times = [], []
 
             for s_idx in range(opt_steps):
                 b_slot = batch_perm[s_idx]
-                sub_tokens = train_tokens[b_slot * B * T : (b_slot + 1) * B * T + 1]
-                tt = torch.tensor(sub_tokens, device=device, dtype=torch.long)
+                tt = train_tokens_cpu[b_slot * B * T : (b_slot + 1) * B * T + 1].to(device=device, non_blocking=True)
                 inp, tgt = tt[:-1].view(B, T), tt[1:].view(B, T)
 
                 torch.cuda.synchronize() if device.type == "cuda" else None
@@ -624,26 +690,27 @@ def run_numerical_qr_residual_verification(
                 opt_times.append(t_opt_ms)
 
                 if opt_key == "triangular_centroidsteer":
-                    if s_idx > 0 and s_idx % 20 == 0:
+                    if s_idx > 0 and s_idx % subspace_update_gap == 0:
                         refresh_opt_times.append(t_opt_ms)
                     elif s_idx >= 5:
                         non_refresh_opt_times.append(t_opt_ms)
 
                 opt_cur.zero_grad(set_to_none=True)
 
-                torch.cuda.synchronize() if device.type == "cuda" else None
                 t_full_ms = (time.perf_counter() - t_full_start) * 1000.0
                 full_times.append(t_full_ms)
-                losses.append(loss.item())
+                losses_gpu.append(loss.detach().float())
                 del tt, inp, tgt, out, logits, loss
 
+            losses = torch.stack(losses_gpu).float().tolist()
+            del losses_gpu
             val_loss = evaluate_validation_loss(model_cur)
             peak_vram = torch.cuda.max_memory_allocated(device) / (1024 * 1024) if device.type == "cuda" else 0.0
             inc_peak_vram = max(0.0, peak_vram - baseline_vram)
 
-            seed_result["final_train_loss"][opt_key] = round(losses[-1], 4)
-            seed_result["mean_train_loss"][opt_key] = round(sum(losses) / len(losses), 4)
-            seed_result["final_val_loss"][opt_key] = round(val_loss, 4)
+            seed_result["final_train_loss"][opt_key] = round(float(losses[-1]), 6)
+            seed_result["mean_train_loss"][opt_key] = round(float(sum(losses) / len(losses)), 6)
+            seed_result["final_val_loss"][opt_key] = round(val_loss, 6)
             seed_result["optimizer_step_time_ms"][opt_key] = round(sum(opt_times[5:]) / max(len(opt_times[5:]), 1), 2)
             seed_result["full_step_time_ms"][opt_key] = round(sum(full_times[5:]) / max(len(full_times[5:]), 1), 2)
             seed_result["baseline_vram_mb"][opt_key] = round(baseline_vram, 2)
@@ -657,7 +724,7 @@ def run_numerical_qr_residual_verification(
                 seed_result["triangular_timing_breakdown_ms"] = {
                     "non_refresh_mean_ms": round(non_ref_m, 2),
                     "refresh_mean_ms": round(ref_m, 2),
-                    "amortized_refresh_overhead_per_step_ms": round(max(0.0, ref_m - non_ref_m) / 20.0, 3),
+                    "amortized_refresh_overhead_per_step_ms": round(max(0.0, ref_m - non_ref_m) / float(subspace_update_gap), 3),
                 }
 
             del model_cur, opt_cur
@@ -668,7 +735,13 @@ def run_numerical_qr_residual_verification(
 
         seed_runs.append(seed_result)
 
-    # Statistical aggregations across seeds using exact small-sample Student-t critical values
+    is_balanced_latin = (len(eval_seeds) % len(base_optimizer_configs) == 0) and all(
+        c == len(eval_seeds) // len(base_optimizer_configs)
+        for counts in position_counts.values()
+        for c in counts
+    )
+
+    # Statistical aggregations across seeds using exact Student-t critical values
     def calc_stats(vals):
         n = len(vals)
         m = float(sum(vals) / n)
@@ -734,9 +807,7 @@ def run_numerical_qr_residual_verification(
     }
 
     # Two-tailed Paired Student's t-test + Multi-Margin Schuirmann TOST Equivalence Profile
-    import math
-
-    def compute_paired_and_tost(vals_a, vals_b, eq_margin=0.05, margin_grid=(0.01, 0.02, 0.05)):
+    def compute_paired_and_tost(vals_a, vals_b, eq_margin=0.05, margin_grid=DEFAULT_VAL_TOST_MARGINS):
         n = len(vals_a)
         df = n - 1
         diffs = [float(a - b) for a, b in zip(vals_a, vals_b)]
@@ -784,12 +855,21 @@ def run_numerical_qr_residual_verification(
 
     t_train = [r["final_train_loss"]["triangular_centroidsteer"] for r in seed_runs]
     a_train = [r["final_train_loss"]["standard_2d_adamw"] for r in seed_runs]
+    t_mtrain = [r["mean_train_loss"]["triangular_centroidsteer"] for r in seed_runs]
+    a_mtrain = [r["mean_train_loss"]["standard_2d_adamw"] for r in seed_runs]
     t_val = [r["final_val_loss"]["triangular_centroidsteer"] for r in seed_runs]
     a_val = [r["final_val_loss"]["standard_2d_adamw"] for r in seed_runs]
 
     paired_tests = {
-        "final_train_loss": compute_paired_and_tost(t_train, a_train, eq_margin=0.10, margin_grid=(0.02, 0.05, 0.10)),
-        "final_val_loss": compute_paired_and_tost(t_val, a_val, eq_margin=0.05, margin_grid=(0.01, 0.02, 0.05)),
+        "final_train_loss": compute_paired_and_tost(
+            t_train, a_train, eq_margin=0.10, margin_grid=DEFAULT_TRAIN_TOST_MARGINS
+        ),
+        "mean_train_loss": compute_paired_and_tost(
+            t_mtrain, a_mtrain, eq_margin=0.05, margin_grid=DEFAULT_VAL_TOST_MARGINS
+        ),
+        "final_val_loss": compute_paired_and_tost(
+            t_val, a_val, eq_margin=0.05, margin_grid=DEFAULT_VAL_TOST_MARGINS
+        ),
     }
 
     # Live Production QR Telemetry Aggregation across seeds
@@ -822,6 +902,18 @@ def run_numerical_qr_residual_verification(
     results["production_optimizer_comparison"] = {
         "steps_per_seed": opt_steps,
         "seeds_evaluated": eval_seeds,
+        "num_seeds": len(eval_seeds),
+        "degrees_of_freedom": len(eval_seeds) - 1,
+        "train_pool_batches": train_pool_batches,
+        "train_pool_tokens": train_pool_batches * B * T,
+        "tokens_trained_per_seed": opt_steps * B * T,
+        "val_batches": val_batches,
+        "val_tokens": val_batches * B * T,
+        "execution_schedule_balance": {
+            "is_balanced_latin_square": is_balanced_latin,
+            "num_complete_latin_squares": len(eval_seeds) // len(base_optimizer_configs),
+            "position_counts_by_optimizer": position_counts,
+        },
         "dataset_mode": "fineweb_edu_real",
         "initial_val_loss": round(initial_val_loss, 4),
         "seed_runs": seed_runs,
@@ -960,6 +1052,9 @@ def run_numerical_qr_residual_verification(
         "stress_test_max_bf16_orthogonality_error": stress_eval["max_bf16_orthogonality_error"],
         "production_optimizer_seeds": opt_eval["seeds_evaluated"],
         "production_optimizer_steps_per_seed": opt_eval["steps_per_seed"],
+        "production_optimizer_train_pool_batches": opt_eval["train_pool_batches"],
+        "production_optimizer_val_batches": opt_eval["val_batches"],
+        "production_optimizer_execution_schedule_balance": opt_eval["execution_schedule_balance"],
         "production_optimizer_initial_val_loss": opt_eval["initial_val_loss"],
         "production_optimizer_final_losses": opt_eval["final_losses"],
         "production_optimizer_mean_losses": opt_eval["mean_losses_across_steps"],
@@ -1010,12 +1105,28 @@ if __name__ == "__main__":
         print(f"FineWeb FP32 Max Basis Orthogonality Error:     {summary['fineweb_gradients_max_fp32_orthogonality_error']:.3e}")
         print(f"FineWeb BF16 Max Basis Orthogonality Error:     {summary['fineweb_gradients_max_bf16_orthogonality_error']:.3e}")
     print("----------------------------------------------------------------------")
-    print(f"PRODUCTION OPTIMIZER COMPARISON ({summary['production_optimizer_steps_per_seed']} Steps Across Seeds {summary['production_optimizer_seeds']}):")
+    df_val = len(summary["production_optimizer_seeds"]) - 1
+    print(
+        f"PRODUCTION OPTIMIZER COMPARISON ({summary['production_optimizer_steps_per_seed']} Steps Across "
+        f"{len(summary['production_optimizer_seeds'])} Seeds, df={df_val}, "
+        f"Val Batches={summary['production_optimizer_val_batches']}):"
+    )
+    print(f"  Balanced Latin Square Schedule: {summary['production_optimizer_execution_schedule_balance']}")
     agg = summary["production_optimizer_aggregated"]
     ttest = summary["production_optimizer_paired_tests"]
     p_qr = summary["production_optimizer_qr_telemetry"]
     print(f"  Initial Held-out Validation Loss: {summary['production_optimizer_initial_val_loss']}")
-    print(f"  Final Train Loss (Mean +/- Std, [95% Student-t CI, df=4]):")
+    print(f"  Mean Train Loss Across 200 Steps (Mean +/- Std, [95% Student-t CI, df={df_val}]):")
+    for name, label in [
+        ("triangular_centroidsteer", "Triangular Core"),
+        ("unconstrained_centroidsteer", "Unconstrained Core"),
+        ("standard_2d_adamw", "Standard 2D AdamW"),
+    ]:
+        m = agg["mean_train_loss"][name]["mean"]
+        s = agg["mean_train_loss"][name]["std"]
+        ci = agg["mean_train_loss"][name]["ci95"]
+        print(f"    - {label:<20}: {m:.4f} +/- {s:.4f} [{ci[0]:.4f}, {ci[1]:.4f}]")
+    print(f"  Final Step-200 Train Loss (Mean +/- Std, [95% Student-t CI, df={df_val}]):")
     for name, label in [
         ("triangular_centroidsteer", "Triangular Core"),
         ("unconstrained_centroidsteer", "Unconstrained Core"),
@@ -1025,7 +1136,7 @@ if __name__ == "__main__":
         s = agg["final_train_loss"][name]["std"]
         ci = agg["final_train_loss"][name]["ci95"]
         print(f"    - {label:<20}: {m:.4f} +/- {s:.4f} [{ci[0]:.4f}, {ci[1]:.4f}]")
-    print(f"  Final Held-out Validation Loss (Mean +/- Std, [95% Student-t CI, df=4]):")
+    print(f"  Final Held-out Validation Loss (64 Batches, 32,768 Tokens, Mean +/- Std, [95% Student-t CI, df={df_val}]):")
     for name, label in [
         ("triangular_centroidsteer", "Triangular Core"),
         ("unconstrained_centroidsteer", "Unconstrained Core"),
@@ -1035,8 +1146,12 @@ if __name__ == "__main__":
         s = agg["final_val_loss"][name]["std"]
         ci = agg["final_val_loss"][name]["ci95"]
         print(f"    - {label:<20}: {m:.4f} +/- {s:.4f} [{ci[0]:.4f}, {ci[1]:.4f}]")
-    print("  Paired Statistical Analysis (Triangular CentroidSteer - Standard 2D AdamW, df=4):")
-    for metric_key, metric_label in [("final_train_loss", "Train Loss"), ("final_val_loss", "Val Loss")]:
+    print(f"  Paired Statistical Analysis (Triangular CentroidSteer - Standard 2D AdamW, df={df_val}):")
+    for metric_key, metric_label in [
+        ("mean_train_loss", "Mean Train"),
+        ("final_train_loss", "Final Train"),
+        ("final_val_loss", "Val Loss"),
+    ]:
         mt = ttest[metric_key]
         tost = mt["tost_equivalence"]
         print(

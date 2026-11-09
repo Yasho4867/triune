@@ -71,7 +71,8 @@ def batched_qr(
         Q_householder, _ = torch.linalg.qr(Y_f)
         Q = torch.where(fallback_mask.view(K, 1, 1), Q_householder, Q)
     elif bool(fallback_mask.any()):
-        # Eager refresh branch: avoid dynamic index allocation when 0 or all K matrices fail
+        # Eager refresh branch: performs one scalar boolean readback per batched_qr call
+        # (avoiding dynamic torch.nonzero index allocation and skipping Householder QR on clean batches)
         if K == 1 or bool(fallback_mask.all()):
             Q, _ = torch.linalg.qr(Y_f)
         else:

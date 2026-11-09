@@ -1317,7 +1317,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
             g["state"].update(restored_state)
 
     def _record_qr_diagnostics(self, diag: dict[str, torch.Tensor]) -> None:
-        """Records telemetry from a batched_qr call on GPU without host-device synchronization."""
+        """Accumulates telemetry from a batched_qr call into a GPU-resident tensor without host-device synchronization during training."""
         fb = diag["fallback_mask"]
         K = fb.numel()
         self.qr_telemetry["total_qr_calls"] += K
@@ -1343,7 +1343,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
             self._qr_telemetry_gpu.add_(stacked)
 
     def _flush_qr_telemetry_gpu(self) -> None:
-        """Materializes accumulated GPU telemetry counters to CPU dictionary."""
+        """Materializes accumulated GPU telemetry counters to CPU dictionary via .tolist() at the reporting boundary."""
         if self._qr_telemetry_gpu is None:
             return
         vals = self._qr_telemetry_gpu.tolist()
