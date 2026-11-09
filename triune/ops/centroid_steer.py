@@ -66,15 +66,17 @@ def batched_qr(
 
     fallback_mask = cond_fail_mask | degen_mask | cholesky_fail_mask | orth_fail_mask
 
-    failed_idx = torch.nonzero(fallback_mask, as_tuple=False).reshape(-1)
-    num_failed = failed_idx.numel()
-    if num_failed > 0:
-        if num_failed == K:
-            Q_householder, _ = torch.linalg.qr(Y_f)
-            Q = Q_householder
+    if Y_mat.is_cuda and torch.cuda.is_current_stream_capturing():
+        # Synchronization-free static graph branch for CUDA Graph capture
+        Q_householder, _ = torch.linalg.qr(Y_f)
+        Q = torch.where(fallback_mask.view(K, 1, 1), Q_householder, Q)
+    elif bool(fallback_mask.any()):
+        # Eager refresh branch: avoid dynamic index allocation when 0 or all K matrices fail
+        if K == 1 or bool(fallback_mask.all()):
+            Q, _ = torch.linalg.qr(Y_f)
         else:
-            Q_failed, _ = torch.linalg.qr(Y_f[failed_idx])
-            Q[failed_idx] = Q_failed
+            Q_failed, _ = torch.linalg.qr(Y_f[fallback_mask])
+            Q[fallback_mask] = Q_failed
 
     Q_out = Q.to(dtype=dtype)
     if return_diagnostics:

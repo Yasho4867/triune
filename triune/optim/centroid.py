@@ -583,13 +583,18 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                 self._triangular_buffers[buf_key] = {
                     "batch_mom": torch.zeros(N, self.rank + 1, self.rank + 1, device=device, dtype=torch.float32),
                     "batch_var": torch.zeros(N, self.rank + 1, self.rank + 1, device=device, dtype=torch.float32),
+                    "R_batch": torch.zeros(N, self.rank + 1, self.rank + 1, device=device, dtype=dtype),
+                    "batch_delta_R": torch.zeros(N, self.rank + 1, self.rank + 1, device=device, dtype=dtype),
+                    "step_vals": torch.zeros(N, 1, 1, device=device, dtype=torch.float32),
                 }
             buf = self._triangular_buffers[buf_key]
             batch_mom = buf["batch_mom"]
             batch_var = buf["batch_var"]
-
-            R_batch = torch.zeros(N, self.rank + 1, self.rank + 1, device=device, dtype=dtype)
-            batch_delta_R = torch.zeros(N, self.rank + 1, self.rank + 1, device=device, dtype=dtype)
+            R_batch = buf["R_batch"]
+            batch_delta_R = buf["batch_delta_R"]
+            step_vals = buf["step_vals"]
+            R_batch.zero_()
+            batch_delta_R.zero_()
 
             if not hasattr(self, "_bucket_buffers"):
                 self._bucket_buffers = {}
@@ -715,15 +720,18 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                                 QL_stack[b_idx, :, :r].copy_(ql_out[q_i])
                                 QR_stack[b_idx].zero_()
                                 QR_stack[b_idx, :, :r].copy_(qr_out[q_i])
+                                g["_has_nonzero_grad"] = True
                             elif init_flags[b_idx]:
                                 QL_stack[b_idx].zero_()
                                 QL_stack[b_idx, :r, :r].copy_(torch.eye(r, device=device, dtype=dtype))
                                 QR_stack[b_idx].zero_()
                                 QR_stack[b_idx, :r, :r].copy_(torch.eye(r, device=device, dtype=dtype))
+                                g["_has_nonzero_grad"] = False
                             else:
                                 if g["Q_L"].data_ptr() != QL_stack[b_idx].data_ptr():
                                     QL_stack[b_idx].copy_(g["Q_L"])
                                     QR_stack[b_idx].copy_(g["Q_R"])
+                                g["_has_nonzero_grad"] = False
                             g["Q_L"] = QL_stack[b_idx]
                             g["Q_R"] = QR_stack[b_idx]
                             g["projection"] = QL_stack[b_idx, :, :r]
@@ -814,9 +822,8 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
 
                         QL_stack[:, :, r].copy_(c_orth)
                         QR_stack[:, :, r].copy_(v_orth)
-                        steer_flags = steer_mask.tolist()
-                        for b_idx, g in enumerate(g_list):
-                            g["steer_applied"] = bool(steer_flags[b_idx])
+                        for g in g_list:
+                            g["steer_applied"] = bool(g.get("_has_nonzero_grad", True))
                             g["last_steer_step"] = self.step_count
                     else:
                         QL_stack[:, :, r].zero_()
@@ -849,7 +856,11 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
 
                 bucket_cache.append((m, n, r, start, end, g_list, QL_act, QR_act, QL_stack, QR_stack))
 
-            step_vals = torch.tensor(step_list, device=device, dtype=torch.float32).view(N, 1, 1)
+            first_sub = step_list[0]
+            if all(s == first_sub for s in step_list):
+                step_vals.fill_(first_sub)
+            else:
+                step_vals.copy_(torch.tensor(step_list, device=device, dtype=torch.float32).view(N, 1, 1))
 
             # 3. Unified Fused Triton Triangular AdamW Step with PyTorch Vectorized Fallback
             from triune.kernels.fast_triangular import fast_triangular_adamw
@@ -870,13 +881,9 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
             alpha_upd = -expert_lr
             for m, n, r, start, end, g_list, QL_act, QR_act, QL_stack, QR_stack in bucket_cache:
                 delta_stack = batch_delta_R[start:end, : r + 1, : r + 1]
-                if any(g.get("steer_applied", False) for g in g_list):
-                    if all(g.get("steer_applied", False) for g in g_list):
-                        delta_stack[:, : r + 1, r].mul_(1.0 + self.steer_scale)
-                    else:
-                        for b_idx, g in enumerate(g_list):
-                            if g.get("steer_applied", False):
-                                delta_stack[b_idx, : r + 1, r].mul_(1.0 + self.steer_scale)
+                if self.steer_scale > 0 and any(g.get("steer_applied", False) for g in g_list):
+                    # Unsteered matrices already have column r zeroed on GPU via steer_mask
+                    delta_stack[:, : r + 1, r].mul_(1.0 + self.steer_scale)
 
                 if m <= n:
                     temp_recon = torch.bmm(QL_act, delta_stack)

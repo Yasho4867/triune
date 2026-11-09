@@ -13,10 +13,10 @@ This directory contains research preprints, vector figures, and LaTeX manuscript
 - **Primary Artifacts**:
   - Theorem 1 proving upper-triangular Krylov projection core identity $\bar{S} = \bar{Q}_L^T G \bar{Q}_R = \begin{bmatrix} R_L & Q_L^T G \tilde{v}_\perp \\ \mathbf{0} & \tilde{c}_\perp^T G \tilde{v}_\perp \end{bmatrix}$.
   - Proposition 1 establishing basis isometricity and robust fallback to effective rank $r$ under degeneracy.
-  - Multi-seed FineWeb-Edu convergence evaluation ($N=3$ seeds: 42, 1337, 2026) under bitwise identical initial weights.
+  - Multi-seed FineWeb-Edu convergence evaluation ($N=3$ seeds from scratch; $N=5$ seeds, $200$ steps from a 75.8M checkpoint with seed-specific batch permutations, Latin-square counterbalancing, empirical minimum equivalence margin $\Delta_{\min}$, and multi-margin Schuirmann TOST).
   - Paired per-seed steering ablation analysis with confidence intervals and hypothesis testing.
-  - Scale-invariant Cholesky-QR Gram orthogonalization ($6.8\times$ faster than SVD, $3.1\times$ lower transient VRAM).
-  - Exact memory accounting: **0.128 bytes/param** on Tier 2 expert weights ($98.4\%$ reduction vs.\ AdamW), $4.54$ bytes/param model-wide with standard Tier 3 AdamW, or $1.27$ bytes/param with 8-bit AdamW.
+  - Two-pass shifted Cholesky-QR (`sCholQR2`) with synchronization-free sliced Householder fallback ($15.2\times$ faster than Householder QR on full-rank matrices, $84.75\%$ fast-path survival across $4,905$ live training QR calls).
+  - Exact memory accounting: **0.128 bytes/param** on Tier 2 expert weights ($98.4\%$ persistent state reduction vs.\ AdamW), $4.54$ bytes/param model-wide with standard Tier 3 AdamW ($1.27$ bytes/param with 8-bit AdamW), and $12.0\%$ incremental peak training VRAM reduction ($119.9\text{ MB}$ saved on the 75.8M checkpoint).
 
 ```bibtex
 @article{bhardwaj2026centroidsteer,

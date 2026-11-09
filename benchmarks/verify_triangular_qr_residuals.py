@@ -6,8 +6,9 @@ Evaluates on:
     dataset: data/fineweb_edu_real.jsonl, SHA-256 aed10d4c98afb6da4f55ee3aa295981465b9fd49edb1e5886c36fb6fe3ae8e9c;
     5 independent batches, 2,560 tokens total).
 2. Exact causal breakdown of QR fallback triggers (condition ratio, orthogonality tolerance, Cholesky non-PD, degenerate columns).
-3. Production CentroidSteerOptimizer comparison (Triangular vs Unconstrained vs standard 2D AdamW) across 100 steps and 3 seeds
-   with process-level GPU memory cleanup, Student-t confidence intervals, and Schuirmann's TOST equivalence tests.
+3. Production CentroidSteerOptimizer comparison (Triangular vs Unconstrained vs standard 2D AdamW) across 200 steps and 5 seeds
+   with seed-specific FineWeb-Edu batch permutations, same-process sequential GPU memory cleanup, Student-t confidence intervals (df=4),
+   and multi-margin Schuirmann TOST equivalence profiles.
 4. Stress-test evaluation on high-entropy random token batches.
 5. Multi-seed synthetic matrices for shape and rank generalization.
 
@@ -499,11 +500,12 @@ def run_numerical_qr_residual_verification(
 
     # =========================================================================
     # Part 3: True Production Optimizer Comparison on FineWeb-Edu Batches
-    # Multi-Seed (3 Seeds), 100 Steps, Held-Out Validation, Timing & Memory
+    # Multi-Seed (5 Seeds, df=4), 200 Steps/Seed, Seed-Specific Batch Orderings,
+    # Same-Process Sequential GPU Memory Cleanup, & Multi-Margin TOST Profile
     # =========================================================================
     print("Evaluating production CentroidSteerOptimizer vs unconstrained vs AdamW on FineWeb-Edu...")
-    opt_steps = 100
-    eval_seeds = [42, 1337, 2026]
+    opt_steps = 200
+    eval_seeds = [42, 1337, 2026, 7777, 9999]
     val_batches = 10
     total_tokens_needed = (opt_steps + val_batches + 5) * B * T + 50
     full_tokens = load_fineweb_tokens(data_file, tok_file, num_tokens=total_tokens_needed)
@@ -538,11 +540,21 @@ def run_numerical_qr_residual_verification(
         torch.cuda.synchronize()
 
     seed_runs = []
+    base_optimizer_configs = [
+        ("triangular_centroidsteer", True, False),
+        ("unconstrained_centroidsteer", False, False),
+        ("standard_2d_adamw", False, True),
+    ]
 
     for seed_idx, run_seed in enumerate(eval_seeds):
         print(f"  --> Running Isolated Optimizer Trajectory Seed {run_seed} ({seed_idx + 1}/{len(eval_seeds)})...")
+        # Seed-specific deterministic permutation of the 200 FineWeb-Edu micro-batches
+        perm_gen = torch.Generator().manual_seed(run_seed)
+        batch_perm = torch.randperm(opt_steps, generator=perm_gen).tolist()
+
         seed_result = {
             "seed": run_seed,
+            "batch_permutation_first5": batch_perm[:5],
             "final_train_loss": {},
             "mean_train_loss": {},
             "final_val_loss": {},
@@ -553,12 +565,9 @@ def run_numerical_qr_residual_verification(
             "incremental_peak_vram_mb": {},
         }
 
-        # Evaluate each optimizer in strict isolation with zero background model allocations
-        optimizer_configs = [
-            ("triangular_centroidsteer", True, False),
-            ("unconstrained_centroidsteer", False, False),
-            ("standard_2d_adamw", False, True),
-        ]
+        # Rotate execution order across seeds (Latin-square counterbalancing) to eliminate thermal drift bias
+        rot = seed_idx % len(base_optimizer_configs)
+        optimizer_configs = base_optimizer_configs[rot:] + base_optimizer_configs[:rot]
 
         for opt_key, use_triu, is_adamw in optimizer_configs:
             gc.collect()
@@ -570,7 +579,7 @@ def run_numerical_qr_residual_verification(
             else:
                 baseline_vram = 0.0
 
-            # Seed RNG identically for this optimizer
+            # Seed RNG identically for this optimizer within the paired seed
             torch.manual_seed(run_seed)
 
             # Build fresh model from CPU state dict
@@ -589,7 +598,8 @@ def run_numerical_qr_residual_verification(
             refresh_opt_times, non_refresh_opt_times = [], []
 
             for s_idx in range(opt_steps):
-                sub_tokens = train_tokens[s_idx * B * T : (s_idx + 1) * B * T + 1]
+                b_slot = batch_perm[s_idx]
+                sub_tokens = train_tokens[b_slot * B * T : (b_slot + 1) * B * T + 1]
                 tt = torch.tensor(sub_tokens, device=device, dtype=torch.long)
                 inp, tgt = tt[:-1].view(B, T), tt[1:].view(B, T)
 
@@ -616,7 +626,7 @@ def run_numerical_qr_residual_verification(
                 if opt_key == "triangular_centroidsteer":
                     if s_idx > 0 and s_idx % 20 == 0:
                         refresh_opt_times.append(t_opt_ms)
-                    elif s_idx > 1:
+                    elif s_idx >= 5:
                         non_refresh_opt_times.append(t_opt_ms)
 
                 opt_cur.zero_grad(set_to_none=True)
@@ -634,8 +644,8 @@ def run_numerical_qr_residual_verification(
             seed_result["final_train_loss"][opt_key] = round(losses[-1], 4)
             seed_result["mean_train_loss"][opt_key] = round(sum(losses) / len(losses), 4)
             seed_result["final_val_loss"][opt_key] = round(val_loss, 4)
-            seed_result["optimizer_step_time_ms"][opt_key] = round(sum(opt_times[2:]) / max(len(opt_times[2:]), 1), 2)
-            seed_result["full_step_time_ms"][opt_key] = round(sum(full_times[2:]) / max(len(full_times[2:]), 1), 2)
+            seed_result["optimizer_step_time_ms"][opt_key] = round(sum(opt_times[5:]) / max(len(opt_times[5:]), 1), 2)
+            seed_result["full_step_time_ms"][opt_key] = round(sum(full_times[5:]) / max(len(full_times[5:]), 1), 2)
             seed_result["baseline_vram_mb"][opt_key] = round(baseline_vram, 2)
             seed_result["peak_vram_mb"][opt_key] = round(peak_vram, 2)
             seed_result["incremental_peak_vram_mb"][opt_key] = round(inc_peak_vram, 2)
@@ -723,8 +733,10 @@ def run_numerical_qr_residual_verification(
         },
     }
 
-    # Two-tailed Paired Student's t-test + Schuirmann's TOST Equivalence Test (Triangular CentroidSteer vs Standard 2D AdamW)
-    def compute_paired_and_tost(vals_a, vals_b, eq_margin=0.05):
+    # Two-tailed Paired Student's t-test + Multi-Margin Schuirmann TOST Equivalence Profile
+    import math
+
+    def compute_paired_and_tost(vals_a, vals_b, eq_margin=0.05, margin_grid=(0.01, 0.02, 0.05)):
         n = len(vals_a)
         df = n - 1
         diffs = [float(a - b) for a, b in zip(vals_a, vals_b)]
@@ -733,15 +745,27 @@ def run_numerical_qr_residual_verification(
         d_sem = max(d_std / (n ** 0.5), 1e-12)
         res_2tail = stats.ttest_rel(vals_a, vals_b)
 
-        # Schuirmann's Two One-Sided Tests (TOST) for [-eq_margin, +eq_margin]
-        t_lower = (d_mean - (-eq_margin)) / d_sem
-        p_lower = float(1.0 - stats.t.cdf(t_lower, df=df))
-        t_upper = (d_mean - eq_margin) / d_sem
-        p_upper = float(stats.t.cdf(t_upper, df=df))
-        p_tost = max(p_lower, p_upper)
+        def eval_tost_at_margin(margin_val: float) -> dict:
+            t_l = (d_mean - (-margin_val)) / d_sem
+            p_l = float(1.0 - stats.t.cdf(t_l, df=df))
+            t_u = (d_mean - margin_val) / d_sem
+            p_u = float(stats.t.cdf(t_u, df=df))
+            p_t = max(p_l, p_u)
+            return {
+                "equivalence_margin_nats": margin_val,
+                "relative_perplexity_tolerance_pct": round((math.exp(margin_val) - 1.0) * 100.0, 2),
+                "t_lower": round(float(t_l), 4),
+                "p_lower": round(p_l, 4),
+                "t_upper": round(float(t_u), 4),
+                "p_upper": round(p_u, 4),
+                "p_tost": round(p_t, 4),
+                "equivalent_within_margin_alpha_0_05": bool(p_t < 0.05),
+            }
 
         t_crit_90 = float(stats.t.ppf(0.95, df=df))
         t_crit_95 = float(stats.t.ppf(0.975, df=df))
+        min_eq_margin = abs(d_mean) + t_crit_90 * d_sem
+
         return {
             "paired_mean_diff": round(d_mean, 4),
             "paired_std": round(d_std, 4),
@@ -749,18 +773,13 @@ def run_numerical_qr_residual_verification(
             "df": df,
             "paired_ci90_t": [round(d_mean - t_crit_90 * d_sem, 4), round(d_mean + t_crit_90 * d_sem, 4)],
             "paired_ci95_t": [round(d_mean - t_crit_95 * d_sem, 4), round(d_mean + t_crit_95 * d_sem, 4)],
+            "minimum_equivalence_margin_alpha_0_05_nats": round(min_eq_margin, 4),
+            "minimum_equivalence_relative_ppl_pct": round((math.exp(min_eq_margin) - 1.0) * 100.0, 2),
             "t_statistic": round(float(res_2tail.statistic), 4),
             "p_value": round(float(res_2tail.pvalue), 4),
             "null_hypothesis_rejected_alpha_0_05": bool(res_2tail.pvalue < 0.05),
-            "tost_equivalence": {
-                "equivalence_margin_nats": eq_margin,
-                "t_lower": round(float(t_lower), 4),
-                "p_lower": round(p_lower, 4),
-                "t_upper": round(float(t_upper), 4),
-                "p_upper": round(p_upper, 4),
-                "p_tost": round(p_tost, 4),
-                "equivalent_within_margin_alpha_0_05": bool(p_tost < 0.05),
-            },
+            "tost_equivalence": eval_tost_at_margin(eq_margin),
+            "tost_sensitivity_profile": {f"{m:.2f}_nats": eval_tost_at_margin(m) for m in margin_grid},
         }
 
     t_train = [r["final_train_loss"]["triangular_centroidsteer"] for r in seed_runs]
@@ -769,8 +788,8 @@ def run_numerical_qr_residual_verification(
     a_val = [r["final_val_loss"]["standard_2d_adamw"] for r in seed_runs]
 
     paired_tests = {
-        "final_train_loss": compute_paired_and_tost(t_train, a_train, eq_margin=0.10),
-        "final_val_loss": compute_paired_and_tost(t_val, a_val, eq_margin=0.05),
+        "final_train_loss": compute_paired_and_tost(t_train, a_train, eq_margin=0.10, margin_grid=(0.02, 0.05, 0.10)),
+        "final_val_loss": compute_paired_and_tost(t_val, a_val, eq_margin=0.05, margin_grid=(0.01, 0.02, 0.05)),
     }
 
     # Live Production QR Telemetry Aggregation across seeds
@@ -996,7 +1015,7 @@ if __name__ == "__main__":
     ttest = summary["production_optimizer_paired_tests"]
     p_qr = summary["production_optimizer_qr_telemetry"]
     print(f"  Initial Held-out Validation Loss: {summary['production_optimizer_initial_val_loss']}")
-    print(f"  Final Train Loss (Mean +/- Std, [95% Student-t CI, df=2]):")
+    print(f"  Final Train Loss (Mean +/- Std, [95% Student-t CI, df=4]):")
     for name, label in [
         ("triangular_centroidsteer", "Triangular Core"),
         ("unconstrained_centroidsteer", "Unconstrained Core"),
@@ -1006,7 +1025,7 @@ if __name__ == "__main__":
         s = agg["final_train_loss"][name]["std"]
         ci = agg["final_train_loss"][name]["ci95"]
         print(f"    - {label:<20}: {m:.4f} +/- {s:.4f} [{ci[0]:.4f}, {ci[1]:.4f}]")
-    print(f"  Final Held-out Validation Loss (Mean +/- Std, [95% Student-t CI, df=2]):")
+    print(f"  Final Held-out Validation Loss (Mean +/- Std, [95% Student-t CI, df=4]):")
     for name, label in [
         ("triangular_centroidsteer", "Triangular Core"),
         ("unconstrained_centroidsteer", "Unconstrained Core"),
@@ -1016,7 +1035,7 @@ if __name__ == "__main__":
         s = agg["final_val_loss"][name]["std"]
         ci = agg["final_val_loss"][name]["ci95"]
         print(f"    - {label:<20}: {m:.4f} +/- {s:.4f} [{ci[0]:.4f}, {ci[1]:.4f}]")
-    print("  Paired Statistical Analysis (Triangular CentroidSteer - Standard 2D AdamW, df=2):")
+    print("  Paired Statistical Analysis (Triangular CentroidSteer - Standard 2D AdamW, df=4):")
     for metric_key, metric_label in [("final_train_loss", "Train Loss"), ("final_val_loss", "Val Loss")]:
         mt = ttest[metric_key]
         tost = mt["tost_equivalence"]
@@ -1026,9 +1045,14 @@ if __name__ == "__main__":
         )
         print(
             f"      Two-tailed paired t = {mt['t_statistic']}, p = {mt['p_value']} | "
-            f"TOST (+/-{tost['equivalence_margin_nats']} nats): p_TOST = {tost['p_tost']} "
-            f"(equivalent: {tost['equivalent_within_margin_alpha_0_05']})"
+            f"Min Equiv Margin (alpha=0.05) = +/-{mt['minimum_equivalence_margin_alpha_0_05_nats']} nats "
+            f"(+/-{mt['minimum_equivalence_relative_ppl_pct']}% PPL)"
         )
+        prof_str = " | ".join(
+            f"+/-{v['equivalence_margin_nats']}n ({v['relative_perplexity_tolerance_pct']}% PPL): p_TOST={v['p_tost']}"
+            for v in mt["tost_sensitivity_profile"].values()
+        )
+        print(f"      TOST Profile: {prof_str}")
     print("  Optimizer Step Time (ms):")
     step_rt = summary["production_optimizer_step_runtime_ms"]
     for name, label in [
@@ -1056,7 +1080,7 @@ if __name__ == "__main__":
         m = agg["full_step_time_ms"][name]["mean"]
         s = agg["full_step_time_ms"][name]["std"]
         print(f"    - {label:<20}: {m:.2f} +/- {s:.2f} ms")
-    print("  VRAM in Strict Isolated Execution (Baseline | Total Peak | Incremental Peak):")
+    print("  VRAM in Same-Process Sequential Isolation (Baseline | Total Peak | Incremental Peak):")
     for name, label in [
         ("triangular_centroidsteer", "Triangular Core"),
         ("unconstrained_centroidsteer", "Unconstrained Core"),
