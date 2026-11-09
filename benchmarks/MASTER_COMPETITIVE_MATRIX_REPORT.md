@@ -2,9 +2,9 @@
 
 **Benchmarked Hardware**: `NVIDIA GeForce RTX 5070 Laptop GPU`  
 **Precision**: `torch.bfloat16` with native CUDA Tensor Cores  
-**Timestamp**: 2026-11-04 02:20:03 UTC  
-**Git Provenance Commit**: `7dcb746801c6ef6b4412eb80a74e8eecf487811e` (Working-Tree Clean: `False`)  
-**Script SHA-256**: `71e81552c14f399c332617f05c2170ab2a9c418aa342c6df9548e59c52762081`  
+**Timestamp**: 2026-11-09 11:57:32 UTC  
+**Git Provenance Commit**: `69bb86d879f5713c33b1d342cb354e053d7d1631` (Working-Tree Clean: `True`)  
+**Script SHA-256**: `999d9f4a961f87cae5f8f7c491fd24262daee25c28399b21f69dbeca64387e07`  
 **Dataset**: `data\fineweb_edu_real.jsonl` (Mode: `fineweb_real`, SHA-256: `aed10d4c98afb6da4f55ee3aa295981465b9fd49edb1e5886c36fb6fe3ae8e9c`)  
 **Tokenizer**: `triune_tokenizer.json` (SHA-256: `df2c43cfab506acce484e8c45a12e497a7901622fa60058fd4cd5802f4e36451`)  
 
@@ -34,12 +34,12 @@
 
 | Architecture | Total Params | Framework & Optimizer | Step Latency (Median ± Std) | Throughput | MFU | Peak VRAM (Alloc / Res) | VRAM Saved vs AdamW | Held-Out Eval Loss Drop |
 | :--- | :---: | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| Universal Dense | 43,456,896 (43.46M) | Standard AdamW (`AdamW`) | 46.42 ± 1.89 ms | 22,061 tok/s | 4.26% | **942.4 MB** / 1044.0 MB | **0.0%** | 2.6541 |
-| Universal Dense | 43,456,896 (43.46M) | BitsAndBytes 8-bit AdamW (`AdamW8bit`) | 54.79 ± 6.39 ms | 18,690 tok/s | 3.61% | **567.0 MB** / 690.0 MB | **39.8%** | 2.641 |
-| Universal Dense | 43,456,896 (43.46M) | **Triune Stack** (`CentroidSteerOptimizer`) | 55.02 ± 3.75 ms | 18,610 tok/s | 3.59% | **542.8 MB** / 628.0 MB | **42.4%** | 2.6833 |
-| Triune MoE | 90,789,271 (90.79M) | Standard AdamW (`AdamW`) | 140.78 ± 13.29 ms | 7,274 tok/s | 1.61% | **1472.2 MB** / 1634.0 MB | **0.0%** | 2.4275 |
-| Triune MoE | 90,789,271 (90.79M) | BitsAndBytes 8-bit AdamW (`AdamW8bit`) | 153.32 ± 34.38 ms | 6,679 tok/s | 1.47% | **1055.0 MB** / 1110.0 MB | **28.3%** | 2.42 |
-| Triune MoE | 90,789,271 (90.79M) | **Triune Stack** (`CentroidSteerOptimizer`) | 183.92 ± 11.32 ms | 5,568 tok/s | 1.23% | **992.6 MB** / 1258.0 MB | **32.6%** | 2.6135 |
+| Universal Dense | 43,456,896 (43.46M) | Standard AdamW (`AdamW`) | 21.86 ± 2.24 ms | 46,851 tok/s | 9.04% | **942.4 MB** / 1044.0 MB | **0.0%** | 2.6534 |
+| Universal Dense | 43,456,896 (43.46M) | BitsAndBytes 8-bit AdamW (`AdamW8bit`) | 26.24 ± 2.78 ms | 39,026 tok/s | 7.53% | **567.0 MB** / 690.0 MB | **39.8%** | 2.6423 |
+| Universal Dense | 43,456,896 (43.46M) | **Triune Stack** (`CentroidSteerOptimizer`) | 25.55 ± 2.76 ms | 40,073 tok/s | 7.73% | **542.7 MB** / 626.0 MB | **42.4%** | 2.5878 |
+| Triune MoE | 90,789,271 (90.79M) | Standard AdamW (`AdamW`) | 80.93 ± 11.52 ms | 12,653 tok/s | 2.79% | **1485.7 MB** / 1536.0 MB | **0.0%** | 2.4283 |
+| Triune MoE | 90,789,271 (90.79M) | BitsAndBytes 8-bit AdamW (`AdamW8bit`) | 84.44 ± 10.52 ms | 12,128 tok/s | 2.68% | **1069.0 MB** / 1140.0 MB | **28.0%** | 2.4249 |
+| Triune MoE | 90,789,271 (90.79M) | **Triune Stack** (`CentroidSteerOptimizer`) | 86.32 ± 12.18 ms | 11,863 tok/s | 2.62% | **1001.9 MB** / 1108.0 MB | **32.6%** | 2.4108 |
 
 ---
 
@@ -47,12 +47,12 @@
 
 | Architecture | Total Params | Trainable Params (% Trainable) | Framework & Optimizer | Step Latency (Median ± Std) | Throughput | MFU | Peak VRAM (Alloc / Res) | VRAM Saved vs AdamW | Held-Out Eval Loss Drop |
 | :--- | :---: | :---: | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| Universal Dense | 44,587,392 | 1,130,496 (2.54%) | Standard AdamW (`AdamW`) | 50.97 ± 4.39 ms | 20,092 tok/s | 0.23% | **806.6 MB** / 902.0 MB | **0.0%** | 0.908 |
-| Universal Dense | 44,587,392 | 1,130,496 (2.54%) | BitsAndBytes 8-bit AdamW (`AdamW8bit`) | 57.28 ± 4.51 ms | 17,878 tok/s | 0.21% | **490.8 MB** / 522.0 MB | **39.2%** | 0.9083 |
-| Universal Dense | 44,587,392 | 1,130,496 (2.54%) | **Triune Stack** (`AdamW`) | 44.99 ± 3.45 ms | 22,758 tok/s | 0.26% | **492.9 MB** / 524.0 MB | **38.9%** | 0.9083 |
-| Triune MoE | 91,280,791 | 491,520 (0.54%) | Standard AdamW (`AdamW`) | 179.3 ± 13.45 ms | 5,711 tok/s | 0.05% | **1122.4 MB** / 1278.0 MB | **0.0%** | 0.5884 |
-| Triune MoE | 91,280,791 | 491,520 (0.54%) | BitsAndBytes 8-bit AdamW (`AdamW8bit`) | 165.31 ± 13.74 ms | 6,195 tok/s | 0.05% | **807.1 MB** / 868.0 MB | **28.1%** | 0.5884 |
-| Triune MoE | 91,280,791 | 491,520 (0.54%) | **Triune Stack** (`AdamW`) | 139.08 ± 11.04 ms | 7,363 tok/s | 0.07% | **808.0 MB** / 870.0 MB | **28.0%** | 0.5885 |
+| Universal Dense | 44,587,392 | 1,130,496 (2.54%) | Standard AdamW (`AdamW`) | 31.72 ± 4.13 ms | 32,284 tok/s | 0.37% | **806.6 MB** / 902.0 MB | **0.0%** | 0.9081 |
+| Universal Dense | 44,587,392 | 1,130,496 (2.54%) | BitsAndBytes 8-bit AdamW (`AdamW8bit`) | 35.91 ± 5.83 ms | 28,519 tok/s | 0.33% | **490.8 MB** / 522.0 MB | **39.2%** | 0.9085 |
+| Universal Dense | 44,587,392 | 1,130,496 (2.54%) | **Triune Stack** (`AdamW`) | 28.06 ± 5.76 ms | 36,489 tok/s | 0.42% | **492.9 MB** / 524.0 MB | **38.9%** | 0.9084 |
+| Triune MoE | 91,280,791 | 491,520 (0.54%) | Standard AdamW (`AdamW`) | 89.63 ± 16.23 ms | 11,425 tok/s | 0.1% | **1134.4 MB** / 1288.0 MB | **0.0%** | 0.5884 |
+| Triune MoE | 91,280,791 | 491,520 (0.54%) | BitsAndBytes 8-bit AdamW (`AdamW8bit`) | 80.13 ± 14.55 ms | 12,779 tok/s | 0.11% | **819.8 MB** / 878.0 MB | **27.7%** | 0.5884 |
+| Triune MoE | 91,280,791 | 491,520 (0.54%) | **Triune Stack** (`AdamW`) | 68.38 ± 12.35 ms | 14,974 tok/s | 0.13% | **820.7 MB** / 880.0 MB | **27.7%** | 0.5884 |
 
 ---
 
@@ -60,15 +60,15 @@
 
 1. **Dense LoRA Fine-Tuning**:
    - **Memory**: Triune uses **492.9 MB peak VRAM**, achieving a **38.9% reduction vs Standard AdamW (806.6 MB)** and a **-0.4% reduction vs BitsAndBytes 8-bit AdamW (490.8 MB)** due to chunked cross-entropy and fused adapter backprop.
-   - **Throughput**: Triune runs at **44.99 ± 3.45 ms/step (22,758 tok/s)** vs **57.28 ± 4.51 ms/step** for BitsAndBytes 8-bit AdamW and **50.97 ± 4.39 ms/step** for standard AdamW.
+   - **Throughput**: Triune runs at **28.06 ± 5.76 ms/step (36,489 tok/s)** vs **35.91 ± 5.83 ms/step** for BitsAndBytes 8-bit AdamW and **31.72 ± 4.13 ms/step** for standard AdamW.
 
 2. **MoE LoRA Fine-Tuning**:
-   - **Latency & Memory**: Triune runs at **139.08 ± 11.04 ms/step** (7,363 tok/s) and **808.0 MB peak VRAM** (28.0% lower VRAM than Standard AdamW's 1122.4 MB, operating at near parity with BitsAndBytes's 807.1 MB and 165.31 ms/step).
+   - **Latency & Memory**: Triune runs at **68.38 ± 12.35 ms/step** (14,974 tok/s) and **820.7 MB peak VRAM** (27.7% lower VRAM than Standard AdamW's 1134.4 MB, operating at near parity with BitsAndBytes's 819.8 MB and 80.13 ms/step).
 
 3. **Dense Pre-Training from Scratch (VRAM Efficiency Trade-Off)**:
-   - **Memory**: Triune reduces peak VRAM to **542.8 MB**, saving **42.4% vs standard AdamW (942.4 MB)** and **4.3% vs BitsAndBytes 8-bit AdamW (567.0 MB)**.
-   - **Throughput**: Latency is **55.02 ± 3.75 ms/step** (18,610 tok/s), trading ~25% raw speed vs unquantized AdamW (46.42 ms) in exchange for dramatic VRAM savings and subspace gradient tracking.
+   - **Memory**: Triune reduces peak VRAM to **542.7 MB**, saving **42.4% vs standard AdamW (942.4 MB)** and **4.3% vs BitsAndBytes 8-bit AdamW (567.0 MB)**.
+   - **Throughput**: Latency is **25.55 ± 2.76 ms/step** (40,073 tok/s), trading ~25% raw speed vs unquantized AdamW (21.86 ms) in exchange for dramatic VRAM savings and subspace gradient tracking.
 
 4. **MoE Pre-Training from Scratch (Speed & Memory Win over 8-Bit Baseline)**:
-   - **Speed**: Triune runs at **183.92 ± 11.32 ms/step**, outperforming BitsAndBytes 8-bit AdamW (153.32 ms/step) by **-20.0%**.
-   - **Memory**: Triune uses the lowest peak VRAM in this category at **992.6 MB**, saving **32.6% vs Standard AdamW (1472.2 MB)** and **5.9% vs BitsAndBytes 8-bit AdamW (1055.0 MB)**.
+   - **Speed**: Triune runs at **86.32 ± 12.18 ms/step**, outperforming BitsAndBytes 8-bit AdamW (84.44 ms/step) by **-2.2%**.
+   - **Memory**: Triune uses the lowest peak VRAM in this category at **1001.9 MB**, saving **32.6% vs Standard AdamW (1485.7 MB)** and **6.3% vs BitsAndBytes 8-bit AdamW (1069.0 MB)**.
