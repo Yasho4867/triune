@@ -103,5 +103,45 @@ unprecedented context scaling with strict mathematical guarantees.
         self.assertEqual(dec_prose.strip(), prose_sample.strip())
 
 
+class TestFullModelInference(unittest.TestCase):
+    def test_last_token_only_parity(self):
+        from triune.model.transformer import TriuneTransformer
+        from triune.runtime.parallel_engine import ParallelEngine
+
+        m = TriuneTransformer(
+            vocab_size=1000,
+            hidden_dim=128,
+            num_layers=4,
+            num_heads=4,
+            head_dim=32,
+            num_experts=2,
+            router_prefix_layers=1,
+            reflex_exit_layer=2,
+            limbic_exit_layer=3,
+        )
+        m.eval()
+        x = torch.randint(0, 1000, (2, 16))
+
+        # 1. Full sequence forward
+        logits_full, _ = m(x, last_token_only=False, force_depth=2)
+        self.assertEqual(logits_full.shape, (2, 16, 1000))
+
+        # 2. Last token only forward
+        logits_last, _ = m(x, last_token_only=True, force_depth=2)
+        self.assertEqual(logits_last.shape, (2, 1, 1000))
+
+        # Parity on final position
+        diff = (logits_full[:, -1:, :] - logits_last).abs().max().item()
+        self.assertLess(diff, 1e-4)
+
+        # 3. ParallelEngine batched model forward
+        engine = ParallelEngine(model=m, dim=128, heads=4, head_dim=32)
+        out_batched = engine.forward_model_batched(x, last_token_only=True, force_depth=2)
+        self.assertEqual(out_batched.shape, (2, 1, 1000))
+        logits_ref, _ = engine.model(x.to(engine.device), last_token_only=True, force_depth=2)
+        diff_engine = (out_batched - logits_ref).abs().max().item()
+        self.assertLess(diff_engine, 1e-4)
+
+
 if __name__ == "__main__":
     unittest.main()

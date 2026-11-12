@@ -277,8 +277,25 @@ class ParallelEngine:
         # Model components
         if model is not None:
             self.model = model.to(device=self.device, dtype=self.dtype)
-            self.gla_block = getattr(model, "attention", None) or getattr(model, "gla", None)
-            self.moe_block = getattr(model, "moe", None) or getattr(model, "ffn", None)
+            if hasattr(model, "layers") and len(model.layers) > 0:
+                self.gla_block = getattr(model.layers[0], "attn", None)
+                self.moe_block = getattr(model.layers[-1], "ffn", None)
+            else:
+                self.gla_block = getattr(model, "attention", None) or getattr(model, "gla", None)
+                self.moe_block = getattr(model, "moe", None) or getattr(model, "ffn", None)
+            if self.gla_block is None:
+                self.gla_block = GLAPipelineBlock(
+                    dim=self.dim,
+                    heads=self.heads,
+                    head_dim=self.head_dim,
+                    chunk_size=self.chunk_size,
+                ).to(device=self.device, dtype=self.dtype)
+            if self.moe_block is None:
+                self.moe_block = MoERoutingBlock(
+                    dim=self.dim,
+                    num_experts=self.num_experts,
+                    top_k=self.top_k,
+                ).to(device=self.device, dtype=self.dtype)
         else:
             self.gla_block = GLAPipelineBlock(
                 dim=self.dim,
@@ -452,6 +469,55 @@ class ParallelEngine:
         self.telemetry["prefill_passes"] += 1
         self.telemetry["total_tokens_processed"] += B * T
         return out, state
+
+    def forward_model_batched(
+        self,
+        input_ids: torch.Tensor,
+        last_token_only: bool = True,
+        force_depth: Optional[int] = None,
+    ) -> torch.Tensor:
+        """Execute full-model forward pass partitioned across parallel CUDA streams.
+        
+        Args:
+            input_ids: Token ID tensor [B, T]
+            last_token_only: If True, projects only the final position through the LM head.
+            force_depth: Optional depth override (0=Reflex, 1=Limbic, 2=Cortex).
+            
+        Returns:
+            Logits tensor [B, 1, V] or [B, T, V]
+        """
+        if self.model is None:
+            raise RuntimeError("ParallelEngine: forward_model_batched requires an attached model.")
+
+        input_ids = input_ids.to(device=self.device)
+        B, T = input_ids.shape
+        num_active = len(self.streams)
+
+        if self.device.type == "cuda" and num_active > 1 and B >= num_active:
+            slice_size = (B + num_active - 1) // num_active
+            outputs: List[Optional[torch.Tensor]] = [None] * num_active
+
+            for s_idx, stream in enumerate(self.streams):
+                b_start = s_idx * slice_size
+                b_end = min(b_start + slice_size, B)
+                if b_start >= B:
+                    break
+                ids_slice = input_ids[b_start:b_end]
+                with torch.cuda.stream(stream), torch.no_grad():
+                    res = self.model(ids_slice, force_depth=force_depth, last_token_only=last_token_only)
+                    outputs[s_idx] = res[0] if isinstance(res, tuple) else res
+
+            torch.cuda.synchronize()
+            valid_outputs = [o for o in outputs if o is not None]
+            out = torch.cat(valid_outputs, dim=0)
+        else:
+            with torch.no_grad():
+                res = self.model(input_ids, force_depth=force_depth, last_token_only=last_token_only)
+                out = res[0] if isinstance(res, tuple) else res
+
+        self.telemetry["prefill_passes"] += 1
+        self.telemetry["total_tokens_processed"] += B * T
+        return out
 
     def forward(
         self,
