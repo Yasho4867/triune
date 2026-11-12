@@ -189,7 +189,7 @@ def benchmark_full_model_prefill(
             try:
                 for _ in range(warmup):
                     with torch.no_grad():
-                        _ = model(input_ids)
+                        _ = model(input_ids, last_token_only=True)
                 if device.type == "cuda":
                     torch.cuda.synchronize()
 
@@ -199,13 +199,13 @@ def benchmark_full_model_prefill(
                     if device.type == "cuda":
                         t0 = time.perf_counter()
                         with torch.no_grad():
-                            _ = model(input_ids)
+                            _ = model(input_ids, last_token_only=True)
                         torch.cuda.synchronize()
                         t1 = time.perf_counter()
                     else:
                         t0 = time.perf_counter()
                         with torch.no_grad():
-                            _ = model(input_ids)
+                            _ = model(input_ids, last_token_only=True)
                         t1 = time.perf_counter()
                     latencies_ms.append((t1 - t0) * 1000.0)
 
@@ -314,7 +314,7 @@ def benchmark_dynamic_exit_latency(
         # Warmup
         for _ in range(3):
             with torch.no_grad():
-                _ = model(input_ids, force_depth=depth_idx)
+                _ = model(input_ids, force_depth=depth_idx, last_token_only=True)
         if device.type == "cuda":
             torch.cuda.synchronize()
 
@@ -322,7 +322,7 @@ def benchmark_dynamic_exit_latency(
         for _ in range(iters):
             t0 = time.perf_counter()
             with torch.no_grad():
-                _ = model(input_ids, force_depth=depth_idx)
+                _ = model(input_ids, force_depth=depth_idx, last_token_only=True)
             if device.type == "cuda":
                 torch.cuda.synchronize()
             t1 = time.perf_counter()
