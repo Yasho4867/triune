@@ -15,13 +15,6 @@
 - **Native C/AVX2/CUDA/Triton Operator Engine (`csrc/` & `triune.ops`)**: Zero-copy `ctypes` / P/Invoke C ABI (`triune_core.dll` / `libtriune_core.so`) and Triton/Tensor Core kernels for RMSNorm, RoPE, GLA recurrent decode, chunked vocabulary-projection Cross-Entropy (**up to 91.3% peak transient VRAM saved**), and Neuron Scope activation telemetry.
 - **Triune AI Studio (`TriuneStudio.exe`)**: Self-contained native Windows desktop application (`.NET 10` + `WebView2` + `triune_core.dll`) and visual DAG IDE for interactive training, LoRA/QLoRA fine-tuning, live Neuron Scope inspection, and OpenAI-compatible serving.
 
-## 🛠️ Contributor & Agentic Development Protocol
-
-> [!IMPORTANT]
-> **Core Directive for Agentic Work & Development**:  
-> **Review your work. Make sure everything is concrete before presenting. No useless comments and maximum efficiency coding.**  
-> Every optimization, kernel modification, or architectural claim must be backed by empirical evidence on physical silicon, strict mathematical proofs, and deterministic tests before landing. Perform zero performative edits and eliminate dead boilerplate.
-
 ## 3-Tier Refactored Repository Structure
 
 ```text

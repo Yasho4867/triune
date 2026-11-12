@@ -77,3 +77,8 @@ TransformerEngine_Native/
 cutlass/
 ~/
 
+# Agentic / Workspace private directives
+WORKSPACE_RULES.md
+AGENTIC_RULES.md
+.agentic_rules.md
+
