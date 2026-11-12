@@ -12,6 +12,39 @@ import sys
 import time
 from pathlib import Path
 
+_IS_TTY = sys.stdout.isatty()
+
+
+def _bold(text: str) -> str:
+    return f"\033[1m{text}\033[0m" if _IS_TTY else str(text)
+
+
+def _green(text: str) -> str:
+    return f"\033[32m{text}\033[0m" if _IS_TTY else str(text)
+
+
+def _cyan(text: str) -> str:
+    return f"\033[36m{text}\033[0m" if _IS_TTY else str(text)
+
+
+def _yellow(text: str) -> str:
+    return f"\033[33m{text}\033[0m" if _IS_TTY else str(text)
+
+
+def _magenta(text: str) -> str:
+    return f"\033[35m{text}\033[0m" if _IS_TTY else str(text)
+
+
+def _route_badge(route: str) -> str:
+    r = str(route).upper()
+    if "REFLEX" in r:
+        return f"\033[1;36m[REFLEX]\033[0m" if _IS_TTY else "[REFLEX]"
+    elif "LIMBIC" in r:
+        return f"\033[1;33m[LIMBIC]\033[0m" if _IS_TTY else "[LIMBIC]"
+    elif "CORTEX" in r:
+        return f"\033[1;35m[CORTEX]\033[0m" if _IS_TTY else "[CORTEX]"
+    return f"\033[1;32m[{r}]\033[0m" if _IS_TTY else f"[{r}]"
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -37,6 +70,8 @@ def main() -> None:
     )
     serve_parser.add_argument("--host", default="127.0.0.1", help="Host address (default: 127.0.0.1)")
     serve_parser.add_argument("--port", type=int, default=8000, help="Port number (default: 8000)")
+    serve_parser.add_argument("--concurrency", type=int, default=16, help="Maximum concurrent requests (default: 16)")
+    serve_parser.add_argument("--api-key", default=None, help="Bearer token for remote API authentication")
 
     # 3. Chat command
     chat_parser = subparsers.add_parser(
@@ -57,7 +92,31 @@ def main() -> None:
         "--k-draft", type=int, default=3, help="Draft tokens per cycle for speculative decoding (default: 3)"
     )
 
-    # 4. Fine-Tuning command
+    # 4. Infer / Generate command
+    infer_parser = subparsers.add_parser(
+        "infer",
+        aliases=["inference", "generate"],
+        help="Run high-performance streaming inference with exit depth routing & live telemetry",
+    )
+    infer_parser.add_argument("prompt_pos", nargs="?", default=None, help="Inference prompt text (positional)")
+    infer_parser.add_argument("-p", "--prompt", default=None, help="Inference prompt text")
+    infer_parser.add_argument("--checkpoint", default="checkpoints_full/best.pt", help="Model checkpoint path")
+    infer_parser.add_argument("--tokenizer", default="triune_tokenizer.json", help="Tokenizer path")
+    infer_parser.add_argument("--adapter", default=None, help="LoRA adapter directory or safetensors path (optional)")
+    infer_parser.add_argument("--max-tokens", type=int, default=100, help="Maximum generated tokens (default: 100)")
+    infer_parser.add_argument("--temperature", type=float, default=0.7, help="Sampling temperature (default: 0.7)")
+    infer_parser.add_argument("--top-k", type=int, default=50, help="Top-k filtering (default: 50)")
+    infer_parser.add_argument("--repetition-penalty", type=float, default=1.1, help="Repetition penalty (default: 1.1)")
+    infer_parser.add_argument(
+        "--depth",
+        default="auto",
+        choices=("auto", "reflex", "limbic", "cortex"),
+        help="Exit depth routing (default: auto)",
+    )
+    infer_parser.add_argument("--device", default=None, help="Target device (cuda / cpu)")
+    infer_parser.add_argument("--no-stream", action="store_true", help="Disable live token streaming")
+
+    # 5. Fine-Tuning command
     finetune_parser = subparsers.add_parser(
         "finetune", help="Fine-tune Triune models with LoRA or QLoRA parameter-efficient adaptation"
     )
@@ -108,7 +167,19 @@ def main() -> None:
         "--format", default="safetensors", choices=("safetensors", "gguf", "onnx", "hf"), help="Target format"
     )
 
-    # 7. Model Zoo command
+    # 7. Top-Level Export / Convert command
+    export_parser = subparsers.add_parser(
+        "export",
+        aliases=["convert"],
+        help="Export model checkpoint directly to SafeTensors, GGUF, ONNX, or Hugging Face format",
+    )
+    export_parser.add_argument("--checkpoint", required=True, help="Source checkpoint path")
+    export_parser.add_argument("--output", default=None, help="Destination output path")
+    export_parser.add_argument(
+        "--format", default="safetensors", choices=("safetensors", "gguf", "onnx", "hf"), help="Target format"
+    )
+
+    # 8. Model Zoo command
     subparsers.add_parser("models", help="Display architecture presets from the Triune Model Zoo")
 
     # 8. Train command
@@ -183,6 +254,8 @@ def main() -> None:
     prof_parser.add_argument("--output", default="profiler_output.txt", help="Profiler output report path")
     prof_parser.add_argument("--batch-size", type=int, default=4, help="Batch size")
     prof_parser.add_argument("--seq-len", type=int, default=256, help="Sequence length")
+    prof_parser.add_argument("--warmup-steps", type=int, default=5, help="Number of warmup steps (default: 5)")
+    prof_parser.add_argument("--active-steps", type=int, default=10, help="Number of active profiling steps (default: 10)")
 
     # 16. Tokenizer command
     tok_parser = subparsers.add_parser("tokenizer", help="Build or train a BPE tokenizer")
@@ -202,9 +275,12 @@ def main() -> None:
         )
 
     elif args.command == "serve":
+        import os
         from triune.api import run_server
 
-        print(f"[Triune] Starting Triune API Server on http://{args.host}:{args.port}")
+        if args.api_key:
+            os.environ["TRIUNE_API_TOKEN"] = args.api_key
+        print(f"[Triune] Starting Triune API Server on http://{args.host}:{args.port} (concurrency: {args.concurrency})")
         run_server(host=args.host, port=args.port)
 
     elif args.command == "chat":
@@ -229,6 +305,89 @@ def main() -> None:
         if getattr(args, "k_draft", None):
             chat_args.extend(["--k-draft", str(args.k_draft)])
         chat_main(chat_args)
+
+    elif args.command in ("infer", "inference", "generate"):
+        prompt = args.prompt or args.prompt_pos
+        if not prompt:
+            print("[Triune CLI] Error: Please provide a prompt via positional argument or --prompt.")
+            return
+
+        import torch
+
+        from triune.inference import generate_response, load_checkpoint_model
+
+        depth_map = {"auto": None, "reflex": 0, "limbic": 1, "cortex": 2}
+        force_depth = depth_map.get(args.depth)
+
+        print(f"\n{_bold('Triune High-Performance Inference Engine')}")
+        print(f"  Checkpoint  : {args.checkpoint}")
+        print(f"  Target Route: {args.depth.upper()} | Temp: {args.temperature} | Max Tokens: {args.max_tokens}")
+        if args.adapter:
+            print(f"  LoRA Adapter: {args.adapter}")
+
+        load_t0 = time.perf_counter()
+        model, tokenizer, _, device, pad_id, eos_id = load_checkpoint_model(
+            args.checkpoint,
+            args.tokenizer,
+            adapter_path=args.adapter,
+            device=args.device,
+        )
+        load_time = time.perf_counter() - load_t0
+
+        stream = not args.no_stream
+        print(f"\n{_bold('Prompt:')} {prompt}")
+        print(f"{_bold('Output:')} ", end="", flush=True)
+
+        last_route = [args.depth.upper()]
+        printed_len = [0]
+
+        def _on_text(cum_text, **kwargs):
+            if kwargs.get("route"):
+                last_route[0] = kwargs["route"]
+            new_text = str(cum_text)[printed_len[0] :]
+            if new_text:
+                sys.stdout.write(new_text)
+                sys.stdout.flush()
+                printed_len[0] = len(str(cum_text))
+
+        res = generate_response(
+            model,
+            tokenizer,
+            prompt,
+            device=device,
+            pad_token_id=pad_id,
+            eos_token_id=eos_id,
+            force_depth=force_depth,
+            temperature=args.temperature,
+            top_k=args.top_k,
+            repetition_penalty=args.repetition_penalty,
+            max_new_tokens=args.max_tokens,
+            on_text=_on_text if stream else None,
+            return_info=True,
+        )
+
+        if not stream:
+            print(res["text"])
+        else:
+            print()
+
+        route_used = res.get("route", last_route[0])
+        vram_gb = round(torch.cuda.memory_allocated(device) / (1024**3), 2) if device.type == "cuda" else 0.0
+        tok_count = res.get("tokens_count", 0)
+        tok_sec = res.get("tokens_per_sec", 0.0)
+        ttft_ms = res.get("ttft_ms", 0.0)
+        lat_ms = res.get("latency_ms", 0.0)
+
+        print(f"\n{'-'*70}")
+        print(
+            f"Telemetry: {_route_badge(route_used)} | "
+            f"{_cyan(f'{tok_sec:.1f} tok/s')} | "
+            f"TTFT: {_yellow(f'{ttft_ms:.1f}ms' if ttft_ms else 'N/A')} | "
+            f"Total: {tok_count} tokens in {lat_ms:.0f}ms | "
+            f"VRAM: {vram_gb:.2f} GB | "
+            f"Load: {load_time:.2f}s"
+        )
+        print(f"{'-'*70}\n")
 
     elif args.command == "finetune":
         import torch
@@ -341,6 +500,23 @@ def main() -> None:
                 print(f"[Triune CLI] Successfully exported to: {out_p}\n")
         else:
             ckpt_parser.print_help()
+
+    elif args.command in ("export", "convert"):
+        from triune.export import export_model
+        from triune.inference import load_checkpoint_model
+
+        print(f"[Triune CLI] Loading checkpoint: {args.checkpoint}")
+        model, tokenizer, _, _, _, _ = load_checkpoint_model(args.checkpoint)
+        if args.format == "hf":
+            from triune.export.hf_compat import export_to_huggingface
+
+            out = args.output or f"exports/{Path(args.checkpoint).stem}_hf"
+            out_p = export_to_huggingface(model, out, tokenizer=tokenizer)
+            print(f"[Triune CLI] Successfully exported Hugging Face bundle to: {out_p}\n")
+        else:
+            out = args.output or f"exports/{Path(args.checkpoint).stem}.{args.format}"
+            out_p = export_model(model, out, fmt=args.format)
+            print(f"[Triune CLI] Successfully exported to: {out_p}\n")
 
     elif args.command == "models":
         from triune.model.base import CANONICAL_MODEL_SPECS
@@ -504,6 +680,10 @@ def main() -> None:
                 str(args.batch_size),
                 "--seq_len",
                 str(args.seq_len),
+                "--warmup_steps",
+                str(args.warmup_steps),
+                "--active_steps",
+                str(args.active_steps),
             ]
         )
 

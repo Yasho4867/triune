@@ -27,3 +27,14 @@
 - [ ] Real-time training dashboard: loss curves, exit distribution, and expert load telemetry.
 - [ ] Graph-based pipeline editor for dataset ingestion, fine-tuning, and export.
 - [ ] GGUF export for local inference runtimes.
+
+---
+
+## Frontier Research & Next-Generation Architecture
+
+See [FRONTIER_RESEARCH_ROADMAP.md](FRONTIER_RESEARCH_ROADMAP.md) for the 2024–2026 frontier architecture roadmap:
+- Non-Generative Joint-Embedding Predictive Architecture (JEPA / JEV / Semantic Tube Prediction) for Reflex/Limbic exits.
+- Gated DeltaNet & Mamba-2 / SSD hybrid linear recurrence.
+- DeepSeek-V3 auxiliary-loss-free dynamic bias routing & Multi-Head Latent Attention (MLA).
+- Constant-State Radix prompt caching ($48.0\text{ KiB}$ state) & chunked prefill scheduling.
+

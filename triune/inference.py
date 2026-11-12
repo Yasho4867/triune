@@ -88,6 +88,40 @@ def load_checkpoint_model(
     return model, tokenizer, checkpoint, device, pad_token_id, eos_token_id
 
 
+class IncrementalStreamingDecoder:
+    def __init__(self, tokenizer, skip_special_tokens: bool = True):
+        self.tokenizer = tokenizer
+        self.skip_special_tokens = skip_special_tokens
+        self.token_cache: list[int] = []
+        self.print_len = 0
+        self.cumulative_text = ""
+
+    def step(self, token_id: int) -> tuple[str, str]:
+        self.token_cache.append(token_id)
+        text = self.tokenizer.decode(self.token_cache, skip_special_tokens=self.skip_special_tokens)
+        if text.endswith("\ufffd"):
+            return self.cumulative_text, ""
+        delta = text[self.print_len:]
+        self.cumulative_text += delta
+        if text.endswith(" ") or text.endswith("\n") or len(self.token_cache) >= 16:
+            self.token_cache = []
+            self.print_len = 0
+        else:
+            self.print_len = len(text)
+        return self.cumulative_text, delta
+
+    def flush(self) -> tuple[str, str]:
+        if self.token_cache:
+            text = self.tokenizer.decode(self.token_cache, skip_special_tokens=self.skip_special_tokens)
+            if self.print_len < len(text):
+                delta = text[self.print_len:]
+                self.cumulative_text += delta
+                self.token_cache = []
+                self.print_len = 0
+                return self.cumulative_text, delta
+        return self.cumulative_text, ""
+
+
 @torch.inference_mode()
 def generate_response(
     model,
@@ -106,6 +140,7 @@ def generate_response(
     cancel_event=None,
     on_text=None,
     return_info: bool = False,
+    cache=None,
 ) -> str | dict[str, object]:
     """Generate a response using the model's established depth-routing options."""
     if temperature < 0:
@@ -129,12 +164,38 @@ def generate_response(
     generated: list[int] = []
     seen = torch.zeros(vocab_size, dtype=torch.bool, device=device)
     token_counts = torch.zeros(vocab_size, dtype=torch.float32, device=device)
-    cache = model.init_cache(batch_size=1) if hasattr(model, "init_cache") else None
+    if cache is None and hasattr(model, "init_cache"):
+        cache = model.init_cache(batch_size=1)
+    stream_decoder = IncrementalStreamingDecoder(tokenizer) if on_text is not None else None
     started = time.perf_counter()
     first_token_latency_ms: float | None = None
     decode_started: float | None = None
     with torch.inference_mode():
-        if cache is not None:
+        prompt_len = ids.size(1)
+        prefill_chunk_size = 1024
+        if prompt_len > prefill_chunk_size and cache is not None:
+            # Chunked prompt prefill: processes long texts (up to 8,192+ tokens) in constant-memory slices
+            # Keeps peak activation VRAM bounded and enables responsive early cancellation
+            for start_idx in range(0, prompt_len - prefill_chunk_size, prefill_chunk_size):
+                if cancel_event is not None and cancel_event.is_set():
+                    return (
+                        {
+                            "text": "",
+                            "cancelled": True,
+                            "tokens_count": 0,
+                            "tokens_per_sec": 0.0,
+                            "latency_ms": 0.0,
+                            "route": "AUTO",
+                        }
+                        if return_info
+                        else ""
+                    )
+                chunk_ids = ids[:, start_idx : start_idx + prefill_chunk_size]
+                _, cache = model(chunk_ids, cache=cache, force_depth=force_depth)
+            last_start = ((prompt_len - 1) // prefill_chunk_size) * prefill_chunk_size
+            rem_ids = ids[:, last_start:]
+            logits, cache = model(rem_ids, cache=cache, force_depth=force_depth)
+        elif cache is not None:
             logits, cache = model(ids, cache=cache, force_depth=force_depth)
         else:
             logits, _ = model(ids, force_depth=force_depth)
@@ -182,21 +243,28 @@ def generate_response(
                 # work, so this includes prompt prefill and first-token sampling.
                 decode_started = time.perf_counter()
                 first_token_latency_ms = (decode_started - started) * 1000.0
-            if on_text is not None:
-                # Send a cumulative decoded snapshot. Some tokenizers revise the
-                # visible suffix as byte-level tokens arrive, so callers can
-                # safely replace a snapshot instead of corrupting partial UTF-8.
-                decoded_so_far = tokenizer.decode(generated, skip_special_tokens=True)
-                for stop_seq in ("\nUser:", "\nSystem:", "User:", "Assistant:"):
-                    if stop_seq in decoded_so_far:
-                        decoded_so_far = decoded_so_far.split(stop_seq, 1)[0]
-                        on_text(decoded_so_far)
+            if stream_decoder is not None:
+                cur_tier = 0 if decode_depth is None else int(decode_depth)
+                cur_route = "AUTO" if decode_depth is None else ("REFLEX", "LIMBIC", "CORTEX")[decode_depth]
+                def _emit_text(txt: str) -> None:
+                    if on_text is not None:
+                        try:
+                            on_text(txt, tier=cur_tier, route=cur_route, token_id=next_id)
+                        except TypeError:
+                            on_text(txt)
+
+                cum_text, delta = stream_decoder.step(next_id)
+                if delta:
+                    hit_stop = False
+                    for stop_seq in ("\nUser:", "\nSystem:", "User:", "Assistant:"):
+                        if stop_seq in cum_text:
+                            clean_text = cum_text.split(stop_seq, 1)[0]
+                            _emit_text(clean_text)
+                            hit_stop = True
+                            break
+                    if hit_stop:
                         break
-                else:
-                    on_text(decoded_so_far)
-                    decoded_so_far = None
-                if decoded_so_far is not None:
-                    break
+                    _emit_text(cum_text)
             seen[next_id] = True
             token_counts[next_id] += 1.0
             if cache is not None:
@@ -204,6 +272,11 @@ def generate_response(
             else:
                 ids = torch.cat((ids, next_input), dim=1)
                 logits, _ = model(ids, force_depth=decode_depth)
+
+        if stream_decoder is not None:
+            cum_text, delta = stream_decoder.flush()
+            if delta:
+                _emit_text(cum_text)
 
     finished = time.perf_counter()
     elapsed = max(finished - started, 1e-3)
@@ -224,4 +297,5 @@ def generate_response(
         "decode_tokens_per_sec": round(max(0, len(generated) - 1) / decode_elapsed, 2) if decode_elapsed else None,
         "route": route_name,
         "cancelled": cancelled,
+        "cache": cache,
     }

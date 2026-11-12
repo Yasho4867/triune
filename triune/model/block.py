@@ -27,9 +27,18 @@ class TransformerBlock(nn.Module):
         use_moe: bool = True,
         use_fp4: bool = False,
         use_fp8: bool = False,
+        use_sdpa: bool = False,
     ):
         super().__init__()
-        self.attn = HybridAttention(dim, heads, use_fp4=use_fp4, use_fp8=use_fp8)
+        self.attn = HybridAttention(
+            dim,
+            heads,
+            use_fp4=use_fp4,
+            use_fp8=use_fp8,
+            use_sdpa=use_sdpa,
+            layer_idx=layer_idx,
+            reflex_exit_layer=min(exit_layers) if exit_layers else None,
+        )
         if use_moe:
             self.ffn = MoE_FFN(dim, num_experts=num_experts, use_fp4=use_fp4, use_fp8=use_fp8)
         else:

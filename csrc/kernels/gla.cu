@@ -33,37 +33,44 @@ __global__ void gla_decode_step_kernel(
 ) {
     int b = blockIdx.z;
     int h = blockIdx.y;
-    int i = threadIdx.y; // Row in State [0..HD-1]
-    int j = threadIdx.x; // Col in State [0..HD-1]
+    if (b >= B || h >= H) return;
 
-    if (b >= B || h >= H || i >= HD || j >= HD) return;
+    int bh_offset = (b * H + h);
+    const __nv_bfloat16* q_bh = Q + bh_offset * HD;
+    const __nv_bfloat16* k_bh = K + bh_offset * HD;
+    const __nv_bfloat16* v_bh = V + bh_offset * HD;
+    const float* g_bh = G + bh_offset * HD;
+    float* state_bh = State + bh_offset * HD * HD;
+    __nv_bfloat16* out_bh = Out + bh_offset * HD;
 
-    int state_idx = ((b * H + h) * HD + i) * HD + j;
-    int q_idx = ((b * H + h) * 1) * HD + i;
-    int k_idx = ((b * H + h) * 1) * HD + i;
-    int v_idx = ((b * H + h) * 1) * HD + j;
-    int g_idx = ((b * H + h) * 1) * HD + i;
+    // 2D warp-strided recurrent state update:
+    // S[i, j] = S[i, j] * exp(G[i]) + K[i] * V[j]
+    for (int i = threadIdx.y; i < HD; i += blockDim.y) {
+        float decay = expf(g_bh[i]);
+        float k_val = __bfloat162float(k_bh[i]);
 
-    // Read log-decay gate and inputs
-    float decay = expf(G[g_idx]);
-    float k_val = __bfloat162float(K[k_idx]);
-    float v_val = __bfloat162float(V[v_idx]);
-
-    // Recurrent state update: S = S * decay + K^T * V
-    float s = State[state_idx] * decay + (k_val * v_val);
-    State[state_idx] = s;
+        for (int j = threadIdx.x; j < HD; j += blockDim.x) {
+            int state_idx = i * HD + j;
+            float v_val = __bfloat162float(v_bh[j]);
+            float s = state_bh[state_idx] * decay + (k_val * v_val);
+            state_bh[state_idx] = s;
+        }
+    }
 
     __syncthreads();
 
-    // Query matrix multiplication: Out = Q * S
-    if (j == 0) {
+    // Query matrix multiplication: Out[j] = sum_i Q[i] * S[i, j]
+    int tid = threadIdx.y * blockDim.x + threadIdx.x;
+    int num_threads = blockDim.x * blockDim.y;
+
+    for (int j = tid; j < HD; j += num_threads) {
         float accum = 0.0f;
         #pragma unroll
-        for (int k_step = 0; k_step < HD; ++k_step) {
-            float q_val = __bfloat162float(Q[((b * H + h) * 1) * HD + k_step]);
-            accum += q_val * State[((b * H + h) * HD + k_step) * HD + i];
+        for (int i = 0; i < HD; ++i) {
+            float q_val = __bfloat162float(q_bh[i]);
+            accum += q_val * state_bh[i * HD + j];
         }
-        Out[q_idx] = __float2bfloat16(accum);
+        out_bh[j] = __float2bfloat16(accum);
     }
 }
 
@@ -99,7 +106,7 @@ void launch_gla_decode_step(
     int HD,
     cudaStream_t stream
 ) {
-    dim3 block(HEAD_DIM, HEAD_DIM);
+    dim3 block(32, 16); // 512 threads per block, strictly <= 1024 CUDA limit
     dim3 grid(1, H, B);
     gla_decode_step_kernel<<<grid, block, 0, stream>>>(
         Q, K, V, G, State, Out, B, H, HD

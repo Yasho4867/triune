@@ -152,7 +152,7 @@ class DynamicResourceManager:
         except ImportError:
             has_te = False
 
-        if not torch.cuda.is_available():
+        if not torch.cuda.is_available() or (device is not None and getattr(device, "type", str(device)) == "cpu"):
             return HardwareProfile(
                 device_name="CPU",
                 total_vram_gb=16.0,

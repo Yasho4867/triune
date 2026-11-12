@@ -17,6 +17,7 @@ from .block import TransformerBlock
 from .factory import build_model
 from .fp4 import FP4Linear
 from .fp8 import FP8Linear
+from .manifold_embedding import UniversalAdaptiveEmbedding
 from .moe import MoE_FFN, RoutingResult
 from .norms import RMSNorm
 from .rotary import RotaryEmbedding, apply_rotary, rotate_half
@@ -52,4 +53,5 @@ __all__ = [
     "WeightTiedExitProjection",
     "attach_early_exits",
     "generate_adaptive",
+    "UniversalAdaptiveEmbedding",
 ]

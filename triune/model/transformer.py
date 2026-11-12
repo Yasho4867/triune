@@ -40,6 +40,7 @@ class TriuneTransformer(nn.Module):
         use_fp8: bool = False,
         streaming_fp8_weights: bool = False,
         scale_residual_projections: bool = False,
+        use_reflex_sdpa: bool = False,
     ):
         super().__init__()
         if not (0 < router_prefix_layers < reflex_exit_layer < limbic_exit_layer < num_layers):
@@ -94,6 +95,7 @@ class TriuneTransformer(nn.Module):
                     use_moe=(i > reflex_exit_layer),
                     use_fp4=use_fp4,
                     use_fp8=use_fp8,
+                    use_sdpa=use_reflex_sdpa and (i <= reflex_exit_layer),
                 )
                 for i in range(num_layers)
             ]

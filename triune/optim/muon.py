@@ -47,15 +47,26 @@ def zeropower_via_newtonschulz5(
     else:
         X = G.to(device=compute_device, dtype=torch.float32).clone()
 
-    norm = X.norm()
-    X = X / (norm + eps)
-
     transposed = False
     if X.size(0) > X.size(1):
         X = X.T
         transposed = True
 
-    a, b, c = (3.4445, -4.7750, 2.0315)
+    m, n = X.shape
+
+    v = torch.ones((n, 1), device=compute_device, dtype=X.dtype) / (float(n) ** 0.5)
+    u = X @ v
+    u = u / torch.linalg.vector_norm(u).clamp_min(1e-12)
+    v = X.T @ u
+    v = v / torch.linalg.vector_norm(v).clamp_min(1e-12)
+    u = X @ v
+    sigma_est = torch.linalg.vector_norm(u).clamp_min(1e-12)
+    f_norm = torch.linalg.vector_norm(X)
+    sigma_safe = torch.maximum(1.15 * sigma_est, f_norm / (float(min(m, n)) ** 0.5))
+    sigma_safe = torch.maximum(sigma_safe, f_norm * 0.70).clamp_min(eps)
+    X = X / sigma_safe
+
+    a, b, c = (1.8750, -1.2500, 0.3750)
     for _ in range(steps):
         A = X @ X.T
         B = b * A + c * (A @ A)

@@ -130,6 +130,36 @@ def cholesky_qr(
     )
 
 
+def polar_stiefel_retraction(P: torch.Tensor, eps: float = 1e-7) -> torch.Tensor:
+    """Retracts matrix P back onto the Stiefel manifold St(r, d) using polar Cholesky factor.
+    
+    Guarantees strict isometry P^T P = I_r in O(r^3) operations without Stiefel manifold drift.
+    """
+    orig_dtype = P.dtype
+    P_f = P.float()
+    if P.ndim == 2:
+        G = torch.mm(P_f.t(), P_f)
+        G.diagonal().add_(eps)
+        L, info = torch.linalg.cholesky_ex(G)
+        if info == 0:
+            P_ortho = torch.linalg.solve_triangular(L, P_f.t(), upper=False).t()
+            return P_ortho.to(orig_dtype)
+        else:
+            Q, _ = torch.linalg.qr(P_f)
+            return Q.to(orig_dtype)
+    elif P.ndim == 3:
+        G = torch.bmm(P_f.transpose(1, 2), P_f)
+        G.diagonal(dim1=1, dim2=2).add_(eps)
+        L, info = torch.linalg.cholesky_ex(G)
+        if (info == 0).all():
+            P_ortho = torch.linalg.solve_triangular(L, P_f.transpose(1, 2), upper=False).transpose(1, 2)
+            return P_ortho.to(orig_dtype)
+        else:
+            Q, _ = torch.linalg.qr(P_f)
+            return Q.to(orig_dtype)
+    return P
+
+
 def subspace_projection(
     grad: torch.Tensor,
     rank: int,
@@ -138,7 +168,7 @@ def subspace_projection(
     eps_shift: float = 1e-7,
     orth_tol: float = 1e-4,
 ) -> torch.Tensor:
-    """Tensor Core Subspace Iteration via condition-monitored QR with Householder fallback."""
+    """Tensor Core Subspace Iteration with Randomized SVD Core Eigendecomposition."""
     m, n = grad.shape
     q = min(rank + 10, m, n)
     side = "left" if m <= n else "right"
@@ -152,7 +182,13 @@ def subspace_projection(
             Q_z = cholesky_qr(Z.float(), cond_threshold=cond_threshold, eps_shift=eps_shift, orth_tol=orth_tol).to(dtype)
             Y = torch.mm(grad, Q_z)
             Q = cholesky_qr(Y.float(), cond_threshold=cond_threshold, eps_shift=eps_shift, orth_tol=orth_tol).to(dtype)
-        return Q[:, :rank]
+        
+        B = torch.mm(Q.t(), grad)
+        B_small = torch.mm(B, B.t())
+        S, U_B = torch.linalg.eigh(B_small.float())
+        idx = torch.argsort(S, descending=True)
+        U_core = U_B[:, idx[:rank]].to(dtype)
+        return torch.mm(Q, U_core)
     else:
         Omega = torch.randn(m, q, device=device, dtype=dtype)
         Y = torch.mm(grad.t(), Omega)
@@ -162,7 +198,13 @@ def subspace_projection(
             Q_z = cholesky_qr(Z.float(), cond_threshold=cond_threshold, eps_shift=eps_shift, orth_tol=orth_tol).to(dtype)
             Y = torch.mm(grad.t(), Q_z)
             Q = cholesky_qr(Y.float(), cond_threshold=cond_threshold, eps_shift=eps_shift, orth_tol=orth_tol).to(dtype)
-        return Q[:, :rank]
+        
+        B = torch.mm(grad, Q)
+        B_small = torch.mm(B.t(), B)
+        S, V_B = torch.linalg.eigh(B_small.float())
+        idx = torch.argsort(S, descending=True)
+        V_core = V_B[:, idx[:rank]].to(dtype)
+        return torch.mm(Q, V_core)
 
 
 def batched_subspace_projection(
@@ -174,7 +216,7 @@ def batched_subspace_projection(
     orth_tol: float = 1e-4,
     return_diagnostics: bool = False,
 ) -> tuple[torch.Tensor, str] | tuple[torch.Tensor, str, list[dict[str, torch.Tensor]]]:
-    """Batched Tensor Core Subspace Iteration via condition-monitored QR with Householder fallback."""
+    """Batched Tensor Core Subspace Iteration with Randomized SVD Core Eigendecomposition."""
     N, m, n = grads.shape
     q = min(rank + 10, m, n)
     side = "left" if m <= n else "right"
@@ -211,7 +253,14 @@ def batched_subspace_projection(
             Q_z = _qr_call(Z)
             Y = torch.bmm(grads, Q_z)
             Q = _qr_call(Y)
-        proj = Q[:, :, :rank]
+        
+        B = torch.bmm(Q.transpose(1, 2), grads)
+        B_small = torch.bmm(B, B.transpose(1, 2))
+        S, U_B = torch.linalg.eigh(B_small.float())
+        idx = torch.argsort(S, dim=-1, descending=True)
+        U_B_sorted = torch.gather(U_B, 2, idx.unsqueeze(1).expand(-1, q, -1))
+        U_core = U_B_sorted[:, :, :rank].to(dtype)
+        proj = torch.bmm(Q, U_core)
     else:
         Omega = torch.randn(N, m, q, device=device, dtype=dtype)
         Y = torch.bmm(grads.transpose(1, 2), Omega)
@@ -221,7 +270,14 @@ def batched_subspace_projection(
             Q_z = _qr_call(Z)
             Y = torch.bmm(grads.transpose(1, 2), Q_z)
             Q = _qr_call(Y)
-        proj = Q[:, :, :rank]
+        
+        B = torch.bmm(grads, Q)
+        B_small = torch.bmm(B.transpose(1, 2), B)
+        S, V_B = torch.linalg.eigh(B_small.float())
+        idx = torch.argsort(S, dim=-1, descending=True)
+        V_B_sorted = torch.gather(V_B, 2, idx.unsqueeze(1).expand(-1, q, -1))
+        V_core = V_B_sorted[:, :, :rank].to(dtype)
+        proj = torch.bmm(Q, V_core)
 
     if return_diagnostics:
         return proj, side, diag_history
@@ -233,12 +289,19 @@ def triangular_steer_update(
     Grad_proj: torch.Tensor,
     steer_scale: float = 1.0,
     momentum: float = 0.9,
+    retract_stiefel: bool = False,
 ) -> torch.Tensor:
-    """Fused triangular CentroidSteer projection update (dispatches to native C/AVX2 on CPU f32)."""
+    """Fused triangular CentroidSteer projection update with optional Polar Stiefel Retraction."""
     from ._c_bridge import c_centroid_steer_update_f32
 
     if c_centroid_steer_update_f32(P, Grad_proj, steer_scale, momentum):
+        if retract_stiefel:
+            P_retract = polar_stiefel_retraction(P)
+            P.copy_(P_retract)
         return P
     delta = (Grad_proj - P) * steer_scale
     P.mul_(momentum).add_(delta)
+    if retract_stiefel:
+        P_retract = polar_stiefel_retraction(P)
+        P.copy_(P_retract)
     return P

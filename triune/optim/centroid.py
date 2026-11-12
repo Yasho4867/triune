@@ -21,6 +21,7 @@ from triune.ops.centroid_steer import (
     batched_qr,
     batched_subspace_projection as batched_fast_subspace_projection,
     cholesky_qr,
+    polar_stiefel_retraction,
     subspace_projection,
 )
 
@@ -51,8 +52,8 @@ def fast_subspace_projection(
     return proj, side
 
 
-# Re-export batched_qr at module level for full backward compatibility
 batched_qr = batched_qr
+polar_stiefel_retraction = polar_stiefel_retraction
 
 
 class _SyncedParamGroup(dict):

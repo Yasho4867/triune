@@ -311,7 +311,7 @@ TRIUNE_API int triune_cuda_graph_replay(TriuneEngine* engine) {
     return (g_cuda.GraphLaunch(engine->graph_exec, engine->stream) == cudaSuccess) ? 0 : -1;
 }
 
-// AVX2-accelerated CentroidSteer projection update: P = momentum * P + steer_scale * (Grad_proj - P)
+// AVX2/FMA3-accelerated CentroidSteer projection update: P = momentum * P + steer_scale * (Grad_proj - P)
 TRIUNE_API void triune_centroid_steer_update_f32(
     float* P,
     const float* Grad_proj,
@@ -324,15 +324,18 @@ TRIUNE_API void triune_centroid_steer_update_f32(
     int total = rows * cols;
     __m256 v_steer = _mm256_set1_ps(steer_scale);
     __m256 v_mom   = _mm256_set1_ps(momentum);
-    int idx = 0;
-    for (; idx + 8 <= total; idx += 8) {
+
+#if defined(_OPENMP)
+    #pragma omp parallel for schedule(static)
+#endif
+    for (int idx = 0; idx < total - 7; idx += 8) {
         __m256 vp = _mm256_loadu_ps(P + idx);
         __m256 vg = _mm256_loadu_ps(Grad_proj + idx);
-        __m256 vdelta = _mm256_mul_ps(_mm256_sub_ps(vg, vp), v_steer);
-        __m256 vres = _mm256_add_ps(_mm256_mul_ps(vp, v_mom), vdelta);
+        __m256 vdelta = _mm256_sub_ps(vg, vp);
+        __m256 vres = _mm256_fmadd_ps(v_steer, vdelta, _mm256_mul_ps(vp, v_mom));
         _mm256_storeu_ps(P + idx, vres);
     }
-    for (; idx < total; ++idx) {
+    for (int idx = total - (total % 8); idx < total; ++idx) {
         float g = Grad_proj[idx];
         float p_val = P[idx];
         P[idx] = momentum * p_val + (g - p_val) * steer_scale;
@@ -410,7 +413,7 @@ TRIUNE_API void triune_compute_neuron_heatmap_f32(
     }
 }
 
-// AVX2-accelerated O(1) Custom GLA Recurrent Decode Step:
+// AVX2/FMA3/OpenMP-accelerated O(1) Custom GLA Recurrent Decode Step:
 // S[bh, i, j] = exp(g[bh, i]) * S[bh, i, j] + k[bh, i] * v[bh, j]
 // out[bh, j]  = sum_i q[bh, i] * S[bh, i, j]
 TRIUNE_API void triune_gla_recurrent_step_f32(
@@ -424,6 +427,10 @@ TRIUNE_API void triune_gla_recurrent_step_f32(
     int head_dim
 ) {
     if (!q || !k || !v || !g || !state || !out || head_dim <= 0) return;
+
+#if defined(_OPENMP)
+    #pragma omp parallel for schedule(static)
+#endif
     for (int bh = 0; bh < batch_heads; ++bh) {
         const float* q_bh = q + bh * head_dim;
         const float* k_bh = k + bh * head_dim;
@@ -450,8 +457,10 @@ TRIUNE_API void triune_gla_recurrent_step_f32(
                 __m256 vv = _mm256_loadu_ps(v_bh + j);
                 __m256 vo = _mm256_loadu_ps(o_bh + j);
 
-                vs = _mm256_add_ps(_mm256_mul_ps(vs, v_decay), _mm256_mul_ps(v_ki, vv));
-                vo = _mm256_add_ps(vo, _mm256_mul_ps(v_qi, vs));
+                // FMA3: vs = vs * decay + ki * vv
+                vs = _mm256_fmadd_ps(v_ki, vv, _mm256_mul_ps(vs, v_decay));
+                // FMA3: vo = vo + qi * vs
+                vo = _mm256_fmadd_ps(v_qi, vs, vo);
 
                 _mm256_storeu_ps(s_row + j, vs);
                 _mm256_storeu_ps(o_bh + j, vo);

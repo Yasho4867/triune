@@ -21,6 +21,12 @@ __device__ __forceinline__ float warp_max(float val) {
     return val;
 }
 
+__global__ void init_early_exit_flag_kernel(int* GlobalEarlyExitFlag, int B) {
+    if (threadIdx.x == 0 && blockIdx.x == 0) {
+        *GlobalEarlyExitFlag = (B > 0) ? 1 : 0;
+    }
+}
+
 /**
  * Fused Router Gating & Warp-Level Early-Exit Evaluation
  * Tier 0: Reflex (Early exit at Layer 2)
@@ -67,10 +73,11 @@ __global__ void evaluate_triune_routing_kernel(
     }
     SelectedTiers[b] = choice;
 
-    // Warp-level vote for global early-exit shortcut
-    unsigned int reflex_mask = __ballot_sync(0xffffffff, choice == 0);
-    if (threadIdx.x == 0 && reflex_mask == 0xffffffff) {
-        atomicExch(GlobalEarlyExitFlag, 1);
+    // Active warp-level vote: if any token in this warp is not Reflex, clear global flag
+    unsigned int active = __activemask();
+    unsigned int reflex_mask = __ballot_sync(active, choice == 0);
+    if (reflex_mask != active) {
+        atomicExch(GlobalEarlyExitFlag, 0);
     }
 }
 
@@ -85,6 +92,7 @@ void launch_triune_router(
     int B,
     cudaStream_t stream
 ) {
+    init_early_exit_flag_kernel<<<1, 1, 0, stream>>>(GlobalEarlyExitFlag, B);
     int threads = 128;
     int blocks = (B + threads - 1) / threads;
     evaluate_triune_routing_kernel<<<blocks, threads, 0, stream>>>(

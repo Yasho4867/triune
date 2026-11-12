@@ -23,6 +23,7 @@ def _is_port_in_use(port: int, host: str = "127.0.0.1") -> bool:
     """Check if a network port is already in use."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         try:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             s.bind((host, port))
             return False
         except OSError:
@@ -129,13 +130,12 @@ def launch_desktop_app(
     if _is_port_in_use(port):
         if native_host:
             raise RuntimeError(
-                f"Studio port {port} is already in use. Close the existing Studio window or choose another port, then retry."
+                f"Studio port {port} is already in use. Choose another port, then retry."
             )
         if _is_triune_server_alive(port):
             print(f"[Studio] Connected to existing Triune Studio backend on http://127.0.0.1:{port}/")
             server_already_running = True
         else:
-            # Port is occupied by a foreign application; allocate the next free port
             free_p = _find_free_port(start_port=port)
             if free_p != port:
                 print(f"[Studio] Port {port} is occupied by another application. Reallocating to port {free_p}...")

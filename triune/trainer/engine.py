@@ -137,6 +137,7 @@ class TrainingEngine:
             f"| Best Eval: {self.best_eval_loss:.4f} | Overflow: {overflow}",
             flush=True,
         )
+        usage_vals = self.depth_usage_ema.tolist()
         self.trainer.logger.log(
             {
                 "train/loss": loss,
@@ -144,9 +145,9 @@ class TrainingEngine:
                 "train/router_loss": router_loss,
                 "train/balance_loss": balance_loss,
                 "train/lr": lr,
-                "usage/reflex": self.depth_usage_ema[0].item(),
-                "usage/limbic": self.depth_usage_ema[1].item(),
-                "usage/cortex": self.depth_usage_ema[2].item(),
+                "usage/reflex": usage_vals[0],
+                "usage/limbic": usage_vals[1],
+                "usage/cortex": usage_vals[2],
                 "vram": vram_gib,
                 "best_eval_loss": self.best_eval_loss,
                 "exploration_rate": exploration_rate,
@@ -183,6 +184,7 @@ class TrainingEngine:
             streaming_engine.zero_grad()
 
         totals = {"loss": 0.0, "lm": 0.0, "router": 0.0, "balance": 0.0, "z_loss": 0.0, "overflow": 0, "tokens": 0}
+        loss_accum = torch.zeros(5, device=self.trainer.device, dtype=torch.float32)
         last_labels = last_route_logits = None
         exploration_rate = self._exploration_rate()
         depth_mode = self.config.get("depth_mode", "dynamic")
@@ -362,7 +364,7 @@ class TrainingEngine:
                             streaming_engine is None
                             and chosen_depth is None
                             and last_choice is not None
-                            and (last_choice == 2).sum().item() == 0
+                            and not (last_choice == 2).any()
                         ):
                             c_logits, _ = self.model(x[:1], force_depth=2)
                             self.model.last_route_logits = route_logits
@@ -383,11 +385,11 @@ class TrainingEngine:
                     micro_loss = lm_loss + 0.5 * router_loss + z_loss_coef * z_loss + balance_coef * balance_loss
                     (micro_loss / grad_accum).backward()
 
-            totals["loss"] += micro_loss.item()
-            totals["lm"] += lm_loss.item()
-            totals["router"] += router_loss.item()
-            totals["balance"] += balance_loss.item()
-            totals["z_loss"] += z_loss.item()
+            loss_accum[0] += micro_loss.detach()
+            loss_accum[1] += lm_loss.detach()
+            loss_accum[2] += router_loss.detach()
+            loss_accum[3] += balance_loss.detach()
+            loss_accum[4] += z_loss.detach()
             for module in self.model.modules():
                 if isinstance(module, MoE_FFN):
                     totals["overflow"] += module.overflow_counter
@@ -406,9 +408,12 @@ class TrainingEngine:
         self.model.last_route_logits = None
         self.model.last_depth_choice = None
         self.model.last_balance_loss = None
-        # overflow is a cumulative count, not an average
-        for key in ("loss", "lm", "router", "balance", "z_loss"):
-            totals[key] /= grad_accum
+        loss_vals = (loss_accum / grad_accum).tolist()
+        totals["loss"] = loss_vals[0]
+        totals["lm"] = loss_vals[1]
+        totals["router"] = loss_vals[2]
+        totals["balance"] = loss_vals[3]
+        totals["z_loss"] = loss_vals[4]
 
         executed_step = self.step
         if advance_step:

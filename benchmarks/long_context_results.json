@@ -22,106 +22,106 @@
     {
       "seq_len": 512,
       "sdpa": {
-        "latency_ms": 0.39,
-        "peak_vram_mb": 40.5,
-        "tokens_per_sec": 1329041.6
+        "latency_ms": 0.31,
+        "peak_vram_mb": 41.5,
+        "tokens_per_sec": 1634425.1
       },
       "gla": {
-        "latency_ms": 2.81,
-        "peak_vram_mb": 51.09,
-        "tokens_per_sec": 182279.1
+        "latency_ms": 2.58,
+        "peak_vram_mb": 207.07,
+        "tokens_per_sec": 198718.4
       }
     },
     {
       "seq_len": 1024,
       "sdpa": {
-        "latency_ms": 0.4,
-        "peak_vram_mb": 45.5,
-        "tokens_per_sec": 2580320.0
+        "latency_ms": 0.19,
+        "peak_vram_mb": 46.5,
+        "tokens_per_sec": 5312581.4
       },
       "gla": {
-        "latency_ms": 1.36,
-        "peak_vram_mb": 62.61,
-        "tokens_per_sec": 752039.8
+        "latency_ms": 4.84,
+        "peak_vram_mb": 213.57,
+        "tokens_per_sec": 211596.0
       }
     },
     {
       "seq_len": 2048,
       "sdpa": {
-        "latency_ms": 0.44,
-        "peak_vram_mb": 51.5,
-        "tokens_per_sec": 4621147.1
+        "latency_ms": 0.47,
+        "peak_vram_mb": 52.5,
+        "tokens_per_sec": 4392399.2
       },
       "gla": {
-        "latency_ms": 2.96,
-        "peak_vram_mb": 85.66,
-        "tokens_per_sec": 693022.7
+        "latency_ms": 9.46,
+        "peak_vram_mb": 226.57,
+        "tokens_per_sec": 216564.0
       }
     },
     {
       "seq_len": 4096,
       "sdpa": {
-        "latency_ms": 1.27,
-        "peak_vram_mb": 63.5,
-        "tokens_per_sec": 3220227.1
+        "latency_ms": 1.25,
+        "peak_vram_mb": 64.5,
+        "tokens_per_sec": 3268067.7
       },
       "gla": {
-        "latency_ms": 3.03,
-        "peak_vram_mb": 131.75,
-        "tokens_per_sec": 1349610.4
+        "latency_ms": 18.73,
+        "peak_vram_mb": 252.57,
+        "tokens_per_sec": 218671.3
       }
     },
     {
       "seq_len": 8192,
       "sdpa": {
-        "latency_ms": 4.14,
-        "peak_vram_mb": 87.5,
-        "tokens_per_sec": 1977745.5
+        "latency_ms": 3.91,
+        "peak_vram_mb": 88.5,
+        "tokens_per_sec": 2094583.5
       },
       "gla": {
-        "latency_ms": 2.95,
-        "peak_vram_mb": 224.94,
-        "tokens_per_sec": 2775190.0
+        "latency_ms": 36.36,
+        "peak_vram_mb": 321.13,
+        "tokens_per_sec": 225295.3
       }
     },
     {
       "seq_len": 16384,
       "sdpa": {
-        "latency_ms": 14.2,
+        "latency_ms": 13.6,
         "peak_vram_mb": 136.5,
-        "tokens_per_sec": 1154113.3
+        "tokens_per_sec": 1204566.8
       },
       "gla": {
-        "latency_ms": 7.25,
-        "peak_vram_mb": 411.32,
-        "tokens_per_sec": 2259862.1
+        "latency_ms": 73.88,
+        "peak_vram_mb": 507.25,
+        "tokens_per_sec": 221779.3
       }
     }
   ],
   "decode_benchmarks": [
     {
       "prompt_len": 512,
-      "sdpa_decode_ms": 0.467,
+      "sdpa_decode_ms": 0.296,
       "sdpa_kv_cache_kb": 1024.0,
-      "gla_decode_ms": 0.486,
+      "gla_decode_ms": 0.617,
       "gla_state_kb": 64.0,
-      "decode_speedup": 0.96
+      "decode_speedup": 0.48
     },
     {
       "prompt_len": 2048,
-      "sdpa_decode_ms": 0.351,
+      "sdpa_decode_ms": 0.352,
       "sdpa_kv_cache_kb": 4096.0,
-      "gla_decode_ms": 0.954,
+      "gla_decode_ms": 0.981,
       "gla_state_kb": 64.0,
-      "decode_speedup": 0.37
+      "decode_speedup": 0.36
     },
     {
       "prompt_len": 8192,
-      "sdpa_decode_ms": 0.469,
+      "sdpa_decode_ms": 0.442,
       "sdpa_kv_cache_kb": 16384.0,
-      "gla_decode_ms": 0.416,
+      "gla_decode_ms": 0.976,
       "gla_state_kb": 64.0,
-      "decode_speedup": 1.13
+      "decode_speedup": 0.45
     }
   ]
 }

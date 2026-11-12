@@ -448,8 +448,9 @@ class LayerStreamingEngine:
                         if is_first_accum:
                             p._cpu_grad = grad_cpu
                         else:
-                            d2h_event.synchronize()
-                            p._cpu_grad.add_(grad_cpu)
+                            if not hasattr(p, "_pending_cpu_grads") or p._pending_cpu_grads is None:
+                                p._pending_cpu_grads = []
+                            p._pending_cpu_grads.append(grad_cpu)
                     except Exception:
                         use_async_d2h = False
 
@@ -809,8 +810,23 @@ class LayerStreamingEngine:
         self.model._layer_streaming_active = False
         self.is_attached = False
 
+    def flush_d2h_transfers(self) -> None:
+        if self.d2h_stream is not None and self.device.type == "cuda":
+            self.d2h_stream.synchronize()
+        all_layer_list = getattr(self, "all_layers", self.layers)
+        for layer in all_layer_list:
+            for p in layer.parameters():
+                if hasattr(p, "_d2h_event"):
+                    p._d2h_event = None
+                if hasattr(p, "_pending_cpu_grads") and p._pending_cpu_grads:
+                    for g_add in p._pending_cpu_grads:
+                        if hasattr(p, "_cpu_grad") and p._cpu_grad is not None:
+                            p._cpu_grad.add_(g_add)
+                        else:
+                            p._cpu_grad = g_add
+                    p._pending_cpu_grads.clear()
+
     def step_streaming_optimizer(self, optimizer: Optional[Any] = None, grad_clip: Optional[float] = None) -> None:
-        """Streams one layer at a time to GPU to execute optimizer on GPU Tensor Cores at high speed."""
         opt = optimizer or self.optimizer
         if opt is None:
             return
@@ -819,21 +835,12 @@ class LayerStreamingEngine:
         clip_val = grad_clip if grad_clip is not None else self.config.grad_clip
         resident_layers = getattr(self, "resident_layers", [])
 
-        # 0. Ensure all D2H transfers have completed and release any unconsumed speculative prefetches
-        for layer in resident_layers:
-            for p in layer.parameters():
-                if hasattr(p, "_d2h_event") and p._d2h_event is not None:
-                    p._d2h_event.synchronize()
-                    p._d2h_event = None
+        self.flush_d2h_transfers()
         for layer in self.layers:
             if getattr(layer, "_is_prefetched", False) or getattr(layer, "_is_bwd_prefetched", False):
                 self.stager.release_layer(layer)
                 layer._is_prefetched = False
                 layer._is_bwd_prefetched = False
-            for p in layer.parameters():
-                if hasattr(p, "_d2h_event") and p._d2h_event is not None:
-                    p._d2h_event.synchronize()
-                    p._d2h_event = None
 
         # 1. Calculate double-precision global gradient norm across entire model (root + resident + streamed layers)
         root_params = self.get_root_parameters()
@@ -970,11 +977,7 @@ class LayerStreamingEngine:
 
     def step_optimizer(self, optimizer: torch.optim.Optimizer) -> None:
         """Applies optimizer step on offloaded CPU gradients and cleans up buffers."""
-        for layer in getattr(self, "resident_layers", []) + self.layers:
-            for p in layer.parameters():
-                if hasattr(p, "_d2h_event") and p._d2h_event is not None:
-                    p._d2h_event.synchronize()
-                    p._d2h_event = None
+        self.flush_d2h_transfers()
 
         offloaded_params = []
         for p in self.model.parameters():

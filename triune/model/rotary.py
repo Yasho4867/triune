@@ -18,12 +18,13 @@ class RotaryEmbedding(nn.Module):
         base = float(base)
         if max_seq_len <= 0 or not math.isfinite(base) or base <= 0:
             raise ValueError("RoPE max_seq_len and base must be positive, with a finite base.")
+        effective_max = max(max_seq_len, 8192)
         self.dim = dim
-        self.max_seq_len = max_seq_len
+        self.max_seq_len = effective_max
         self.base = float(base)
         inv_freq = 1.0 / (self.base ** (torch.arange(0, dim, 2).float() / dim))
         self.register_buffer("inv_freq", inv_freq, persistent=False)
-        t = torch.arange(max_seq_len, dtype=torch.float32)
+        t = torch.arange(effective_max, dtype=torch.float32)
         freqs = torch.einsum("i,j->ij", t, inv_freq)
         emb = torch.cat((freqs, freqs), dim=-1)
         self.register_buffer("cos_cached", emb.cos(), persistent=False)
@@ -32,7 +33,7 @@ class RotaryEmbedding(nn.Module):
     def forward(self, seq_len: int, device: torch.device, offset: int = 0) -> tuple[torch.Tensor, torch.Tensor]:
         total_len = offset + seq_len
         if total_len > self.cos_cached.size(0):
-            new_max = max(total_len, self.cos_cached.size(0) * 2)
+            new_max = max(total_len, self.cos_cached.size(0) * 2, 8192)
             self.max_seq_len = new_max
             t = torch.arange(new_max, device=device, dtype=torch.float32)
             freqs = torch.outer(t, self.inv_freq.to(device=device, dtype=torch.float32))

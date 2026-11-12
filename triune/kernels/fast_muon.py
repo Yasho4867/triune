@@ -1,25 +1,11 @@
-"""High-Performance Fused Muon Newton-Schulz Optimizer Kernel.
-
-Optimizes 5th-order matrix orthogonalization (zeropower_via_newtonschulz5) by:
-1. Complete buffer reuse: Reusing (A, A2, B) across all parameter updates.
-2. Fused polynomial evaluation via in-place addmm / baddbmm.
-3. Automatic Tensor Core precision routing (BF16 on Ampere/Ada/Blackwell, FP32 fallback).
-"""
-
 from __future__ import annotations
 
 import torch
 
-# Optimal quintic polynomial coefficients for Newton-Schulz / Polar Express
-NS5_COEFFS = (3.4445, -4.7750, 2.0315)
+NS5_COEFFS = (1.8750, -1.2500, 0.3750)
 
 
 def compute_muon_update_scale(d_out: int, d_in: int, rms_target: float | None = None) -> float:
-    """Compute aspect-ratio and RMS-matched update scaling factor for Muon.
-
-    Standard Muon uses scale = sqrt(max(1, d_out / d_in)).
-    When rms_target is provided, scales the update to match AdamW coordinate-wise variance.
-    """
     aspect = max(1.0, float(d_out) / float(d_in)) ** 0.5
     if rms_target is not None and rms_target > 0:
         return aspect * float(rms_target)
@@ -33,19 +19,12 @@ def fast_zeropower_via_newtonschulz5(
     scratch_buffer: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | torch.Tensor | None = None,
     return_scratch: bool = False,
 ) -> torch.Tensor | tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
-    """Fast, memory-efficient Newton-Schulz orthogonalization.
-
-    Uses the optimized quintic polynomial coefficients:
-      a = 3.4445, b = -4.7750, c = 2.0315
-    for fast convergence to the polar decomposition (semi-orthogonal matrix).
-    """
     if G.ndim != 2:
         raise ValueError(f"Matrix orthogonalization requires 2D tensor, got ndim={G.ndim}")
 
     orig_device = G.device
     orig_dtype = G.dtype
 
-    # Determine execution dtype
     if orig_device.type == "cuda" and torch.cuda.is_bf16_supported():
         compute_dtype = torch.bfloat16
     else:
@@ -53,20 +32,29 @@ def fast_zeropower_via_newtonschulz5(
 
     X = G.to(device=orig_device, dtype=compute_dtype).clone()
 
-    # In-place normalization on owned scratch tensor
-    norm = torch.linalg.vector_norm(X)
-    X = X.div_(norm + eps)
-
-    # Ensure rows <= cols for efficiency
     transposed = False
     if X.size(0) > X.size(1):
         X = X.t()
         transposed = True
 
     m, n = X.shape
-    a, b, c = 3.4445, -4.7750, 2.0315
 
-    # Allocate or reuse scratch buffers for A, A2, B [m, m]
+    v = torch.ones((n, 1), device=orig_device, dtype=compute_dtype) / (float(n) ** 0.5)
+    u = X @ v
+    u = u / torch.linalg.vector_norm(u).clamp_min(1e-12)
+    v = X.t() @ u
+    v = v / torch.linalg.vector_norm(v).clamp_min(1e-12)
+    u = X @ v
+    sigma_est = torch.linalg.vector_norm(u).clamp_min(1e-12)
+    f_norm = torch.linalg.vector_norm(X)
+    sigma_safe = torch.maximum(1.15 * sigma_est, f_norm / (float(min(m, n)) ** 0.5))
+    # Invariant: sigma_safe must not be below 0.70 * ||X||_F to guarantee spectral norm <= 1/0.70 < sqrt(7/3),
+    # strictly preventing Newton-Schulz polynomial divergence on low-rank/sparse gradients.
+    sigma_safe = torch.maximum(sigma_safe, f_norm * 0.70).clamp_min(eps)
+    X = X.div_(sigma_safe)
+
+    a, b, c = NS5_COEFFS
+
     if (
         isinstance(scratch_buffer, (tuple, list))
         and len(scratch_buffer) == 3
@@ -90,13 +78,8 @@ def fast_zeropower_via_newtonschulz5(
         B = torch.empty((m, m), device=orig_device, dtype=compute_dtype)
 
     for _ in range(steps):
-        # A = X @ X.T
         torch.mm(X, X.t(), out=A)
-
-        # Fused B = b * A + c * (A @ A) in a single GEMM kernel
         torch.addmm(A, A, A, beta=b, alpha=c, out=B)
-
-        # X = a * X + B @ X
         X = torch.addmm(X, B, X, beta=a, alpha=1.0)
 
     if transposed:
@@ -115,18 +98,6 @@ def fast_zeropower_via_newtonschulz5_batched(
     scratch_buffer: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None = None,
     return_scratch: bool = False,
 ) -> torch.Tensor | tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
-    """Batched Newton-Schulz orthogonalization across a batch of matching-shape 2D matrices.
-
-    Args:
-        G_batch: 3D tensor of shape [B, M, N].
-        steps: Number of Newton-Schulz iterations (default: 5).
-        eps: Small constant for vector norm stability.
-        scratch_buffer: Optional tuple of (A, A2, B) preallocated scratch tensors.
-        return_scratch: Whether to return scratch buffer for zero-allocation reuse.
-
-    Returns:
-        Orthogonalized tensor of shape [B, M, N] in original device and dtype.
-    """
     if G_batch.ndim != 3:
         raise ValueError(f"Batched orthogonalization requires 3D tensor [B, M, N], got ndim={G_batch.ndim}")
 
@@ -140,18 +111,28 @@ def fast_zeropower_via_newtonschulz5_batched(
 
     X = G_batch.to(device=orig_device, dtype=compute_dtype).clone()
 
-    # In-place normalization across rows and cols on owned scratch batch
-    norm = torch.linalg.vector_norm(X, dim=(-2, -1), keepdim=True)
-    X = X.div_(norm + eps)
-
-    # Ensure rows <= cols for efficiency
     transposed = False
     if X.size(1) > X.size(2):
         X = X.transpose(1, 2)
         transposed = True
 
     B_sz, M, N = X.shape
-    a, b, c = 3.4445, -4.7750, 2.0315
+
+    v = torch.ones((B_sz, N, 1), device=orig_device, dtype=compute_dtype) / (float(N) ** 0.5)
+    u = torch.bmm(X, v)
+    u = u / torch.linalg.vector_norm(u, dim=1, keepdim=True).clamp_min(1e-12)
+    v = torch.bmm(X.transpose(1, 2), u)
+    v = v / torch.linalg.vector_norm(v, dim=1, keepdim=True).clamp_min(1e-12)
+    u = torch.bmm(X, v)
+    sigma_est = torch.linalg.vector_norm(u, dim=1, keepdim=True).clamp_min(1e-12)
+    f_norm = torch.linalg.vector_norm(X, dim=(-2, -1), keepdim=True)
+    sigma_safe = torch.maximum(1.15 * sigma_est, f_norm / (float(min(M, N)) ** 0.5))
+    # Invariant: sigma_safe must not be below 0.70 * ||X||_F to guarantee spectral norm <= 1/0.70 < sqrt(7/3),
+    # strictly preventing Newton-Schulz polynomial divergence on low-rank/sparse gradients.
+    sigma_safe = torch.maximum(sigma_safe, f_norm * 0.70).clamp_min(eps)
+    X = X.div_(sigma_safe)
+
+    a, b, c = NS5_COEFFS
 
     if (
         isinstance(scratch_buffer, (tuple, list))
@@ -167,7 +148,6 @@ def fast_zeropower_via_newtonschulz5_batched(
         B = torch.empty((B_sz, M, M), device=orig_device, dtype=compute_dtype)
 
     for _ in range(steps):
-        # In-place GEMM and fused polynomial evaluation with zero allocations
         torch.bmm(X, X.transpose(1, 2), out=A)
         torch.baddbmm(A, A, A, beta=b, alpha=c, out=B)
         X = torch.baddbmm(X, B, X, beta=a, alpha=1.0)

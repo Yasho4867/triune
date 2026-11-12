@@ -237,6 +237,8 @@ class _FusedLinearCrossEntropy(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_out):
         grad_h, grad_w, grad_b = ctx.saved_tensors
+        if grad_out.numel() == 1 and bool((grad_out == 1.0).item()):
+            return grad_h, grad_w, grad_b, None, None, None
         scale = grad_out
         return (
             grad_h * scale.to(grad_h.dtype) if grad_h is not None else None,
@@ -303,11 +305,11 @@ def chunked_cross_entropy_from_hidden(
     weight = lm_head.weight if isinstance(lm_head, nn.Linear) else lm_head
     bias = lm_head.bias if isinstance(lm_head, nn.Linear) else None
 
-    total_elements = (hidden_states.numel() // hidden_states.size(-1)) * weight.size(0)
+    total_tokens = hidden_states.numel() // hidden_states.size(-1)
     is_capturing = bool(hidden_states.is_cuda and torch.cuda.is_current_stream_capturing())
 
-    # Fast path: when total logits memory <= 256 MB (134 million elements in BF16) and not forced
-    if (total_elements <= 134_217_728 and not force_chunked) or is_capturing:
+    # Fast unchunked path: when sequence length is within a single chunk and chunking not forced
+    if is_capturing or (not force_chunked and total_tokens <= int(chunk_size)):
         logits = F.linear(hidden_states, weight, bias)
         return fast_cross_entropy(
             logits.reshape(-1, weight.size(0)), targets.reshape(-1), chunk_size=chunk_size, ignore_index=ignore_index

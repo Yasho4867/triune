@@ -1,6 +1,6 @@
 # Triune Category D: Long-Context Inference & Generation Report
 
-**Date**: November 03, 2026
+**Date**: November 12, 2026
 **Hardware**: NVIDIA GeForce RTX 5070 Laptop GPU (7.93 GB VRAM)
 **Software**: PyTorch 2.14.1+cu132, CUDA 13.2, Python 3.14.7
 
@@ -15,20 +15,20 @@ and sub-millisecond per-token latency even at context lengths exceeding 16,384 t
 
 | Context Length ($L$) | Standard SDPA Latency | GLA Latency | SDPA Peak VRAM | GLA Peak VRAM | VRAM Reduction | Speedup |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **512** | 0.39 ms | 2.81 ms | 40.5 MB | 51.09 MB | -26.1% | **0.14x** |
-| **1024** | 0.4 ms | 1.36 ms | 45.5 MB | 62.61 MB | -37.6% | **0.29x** |
-| **2048** | 0.44 ms | 2.96 ms | 51.5 MB | 85.66 MB | -66.3% | **0.15x** |
-| **4096** | 1.27 ms | 3.03 ms | 63.5 MB | 131.75 MB | -107.5% | **0.42x** |
-| **8192** | 4.14 ms | 2.95 ms | 87.5 MB | 224.94 MB | -157.1% | **1.4x** |
-| **16384** | 14.2 ms | 7.25 ms | 136.5 MB | 411.32 MB | -201.3% | **1.96x** |
+| **512** | 0.31 ms | 2.58 ms | 41.5 MB | 207.07 MB | -399.0% | **0.12x** |
+| **1024** | 0.19 ms | 4.84 ms | 46.5 MB | 213.57 MB | -359.3% | **0.04x** |
+| **2048** | 0.47 ms | 9.46 ms | 52.5 MB | 226.57 MB | -331.6% | **0.05x** |
+| **4096** | 1.25 ms | 18.73 ms | 64.5 MB | 252.57 MB | -291.6% | **0.07x** |
+| **8192** | 3.91 ms | 36.36 ms | 88.5 MB | 321.13 MB | -262.9% | **0.11x** |
+| **16384** | 13.6 ms | 73.88 ms | 136.5 MB | 507.25 MB | -271.6% | **0.18x** |
 
 ## 3. Autoregressive Decode Scaling ($O(1)$ vs $O(L)$)
 
 | Prompt Context Length | SDPA KV-Cache Memory | GLA Recurrent State Memory | SDPA Decode Latency | GLA Decode Latency | Decode Latency Advantage |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **512** | 1024.0 KB | **64.0 KB (Fixed)** | 0.467 ms/tok | **0.486 ms/tok** | **0.96x faster** |
-| **2048** | 4096.0 KB | **64.0 KB (Fixed)** | 0.351 ms/tok | **0.954 ms/tok** | **0.37x faster** |
-| **8192** | 16384.0 KB | **64.0 KB (Fixed)** | 0.469 ms/tok | **0.416 ms/tok** | **1.13x faster** |
+| **512** | 1024.0 KB | **64.0 KB (Fixed)** | 0.296 ms/tok | **0.617 ms/tok** | **0.48x faster** |
+| **2048** | 4096.0 KB | **64.0 KB (Fixed)** | 0.352 ms/tok | **0.981 ms/tok** | **0.36x faster** |
+| **8192** | 16384.0 KB | **64.0 KB (Fixed)** | 0.442 ms/tok | **0.976 ms/tok** | **0.45x faster** |
 
 ## 4. Key Takeaways
 

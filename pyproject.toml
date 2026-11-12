@@ -79,6 +79,11 @@ where = ["."]
 include = ["triune", "triune.*", "scripts", "scripts.*"]
 exclude = ["tests*", "studio*", "models*", "triune_fast*"]
 
+[tool.setuptools.package-data]
+"triune.ops" = ["*.dll", "*.so", "*.dylib", "*.h", "*.def"]
+"triune" = ["*.json"]
+
+
 [tool.ruff]
 line-length = 120
 target-version = "py310"

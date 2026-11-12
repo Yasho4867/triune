@@ -4,7 +4,7 @@
  */
 (function () {
   const e = React.createElement;
-  const { useState, useEffect, useRef } = React;
+  const { useState, useEffect, useRef, useMemo, useCallback } = React;
 
   // Blender Socket Taxonomy & Classification
   const SOCKET_TYPES = {
@@ -469,6 +469,31 @@
   // The default preset invokes the canonical TrainingEngine used by CLI and
   // Studio training. The engine owns routing, losses, optimizer, and accumulation.
   const DAG_PRESETS = {
+    qlora_finetuning: {
+      name: '1-Click QLoRA Fine-Tuning + PEFT Export',
+      description: 'Parameter-efficient LoRA/QLoRA adaptation with CentroidSteer optimizer and Hugging Face PEFT safetensors export.',
+      requirements: 'Requires local dataset at data/fineweb_sample.jsonl and triune_tokenizer.json.',
+      nodes: [
+        { id: 'node_data', title: 'Local File Reader', type: 'Data', x: 40, y: 150, details: 'file_path=data/fineweb_sample.jsonl\nconfigure_runtime=false' },
+        { id: 'node_tokenizer', title: 'BPE Tokenizer', type: 'Data', x: 300, y: 150, details: 'tokenizer_path=triune_tokenizer.json' },
+        { id: 'node_loader', title: 'Cycling DataLoader', type: 'Data', x: 550, y: 150, details: 'seq_len=64\nbatch_size=4' },
+        { id: 'node_lora', title: 'Triune MoE Transformer', type: 'Model', x: 820, y: 150, details: 'use_node_config=false\nlora_rank=16\nlora_alpha=32' },
+        { id: 'node_loss', title: 'Fast Cross-Entropy Loss', type: 'Loss', x: 1120, y: 150, details: 'balance_loss_weight=0.1' },
+        { id: 'node_optimizer', title: 'CentroidSteer Optimizer', type: 'Optimizer', x: 1420, y: 150, details: 'lr=0.0002\nsteer_scale=0.1\nuse_muon=true' },
+        { id: 'node_peft', title: 'Checkpoint Manager', type: 'Runtime', x: 1720, y: 150, details: 'save_dir=checkpoints/adapters/peft_lora\nformat=safetensors' }
+      ],
+      edges: [
+        { id: 'e1', source: 'node_data', source_port: 'text_sample', target: 'node_tokenizer', target_port: 'text' },
+        { id: 'e2', source: 'node_tokenizer', source_port: 'tokens', target: 'node_loader', target_port: 'tokens' },
+        { id: 'e3', source: 'node_loader', source_port: 'input_ids', target: 'node_lora', target_port: 'input_ids' },
+        { id: 'e4', source: 'node_lora', source_port: 'logits', target: 'node_loss', target_port: 'logits' },
+        { id: 'e5', source: 'node_loader', source_port: 'targets', target: 'node_loss', target_port: 'targets' },
+        { id: 'e6', source: 'node_lora', source_port: 'model_handle', target: 'node_optimizer', target_port: 'model_handle' },
+        { id: 'e7', source: 'node_loss', source_port: 'loss', target: 'node_optimizer', target_port: 'loss' },
+        { id: 'e8', source: 'node_lora', source_port: 'model_handle', target: 'node_peft', target_port: 'model_handle' },
+        { id: 'e9', source: 'node_optimizer', source_port: 'optimizer_handle', target: 'node_peft', target_port: 'optimizer_handle' }
+      ]
+    },
     triune_canonical_hierarchical: {
       name: 'Run one shared-engine training step + checkpoint',
       description: 'A minimal orchestration graph that uses Studio’s active training engine instead of rebuilding a second model or optimizer.',
@@ -835,6 +860,10 @@
         e('path', { key: '1', d: 'M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z' }),
         e('path', { key: '2', d: 'M12 15l-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z' })
       ],
+      code: [
+        e('polyline', { key: '1', points: '16 18 22 12 16 6' }),
+        e('polyline', { key: '2', points: '8 6 2 12 8 18' })
+      ],
       stream: [
         e('polyline', { key: '1', points: '22 12 18 12 15 21 9 3 6 12 2 12' })
       ],
@@ -846,6 +875,89 @@
         e('line', { key: '1', x1: '3', y1: '12', x2: '21', y2: '12' }),
         e('line', { key: '2', x1: '3', y1: '6', x2: '21', y2: '6' }),
         e('line', { key: '3', x1: '3', y1: '18', x2: '21', y2: '18' })
+      ],
+      arena: [
+        e('line', { key: '1', x1: '4', y1: '20', x2: '20', y2: '4' }),
+        e('line', { key: '2', x1: '14', y1: '4', x2: '20', y2: '4' }),
+        e('line', { key: '3', x1: '20', y1: '4', x2: '20', y2: '10' }),
+        e('line', { key: '4', x1: '4', y1: '4', x2: '20', y2: '20' })
+      ],
+      tokens: [
+        e('rect', { key: '1', x: '3', y: '3', width: '7', height: '7', rx: '1' }),
+        e('rect', { key: '2', x: '14', y: '3', width: '7', height: '7', rx: '1' }),
+        e('rect', { key: '3', x: '14', y: '14', width: '7', height: '7', rx: '1' }),
+        e('rect', { key: '4', x: '3', y: '14', width: '7', height: '7', rx: '1' })
+      ],
+      branch: [
+        e('line', { key: '1', x1: '6', y1: '3', x2: '6', y2: '15' }),
+        e('circle', { key: '2', cx: '18', cy: '6', r: '3' }),
+        e('circle', { key: '3', cx: '6', cy: '18', r: '3' }),
+        e('path', { key: '4', d: 'M18 9a9 9 0 0 1-9 9' })
+      ],
+      speaker: [
+        e('polygon', { key: '1', points: '11 5 6 9 2 9 2 15 6 15 11 19 11 5' }),
+        e('path', { key: '2', d: 'M15.54 8.46a5 5 0 0 1 0 7.07' }),
+        e('path', { key: '3', d: 'M19.07 4.93a10 10 0 0 1 0 14.14' })
+      ],
+      speakerMute: [
+        e('polygon', { key: '1', points: '11 5 6 9 2 9 2 15 6 15 11 19 11 5' }),
+        e('line', { key: '2', x1: '23', y1: '9', x2: '17', y2: '15' }),
+        e('line', { key: '3', x1: '17', y1: '9', x2: '23', y2: '15' })
+      ],
+      brain: [
+        e('path', { key: '1', d: 'M12 2a4 4 0 0 0-4 4 4 4 0 0 0-3 3.9 4 4 0 0 0 2 3.5 4 4 0 0 0 1 3.6 4 4 0 0 0 4 3 4 4 0 0 0 4-3 4 4 0 0 0 1-3.6 4 4 0 0 0 2-3.5A4 4 0 0 0 16 6a4 4 0 0 0-4-4z' }),
+        e('line', { key: '2', x1: '12', y1: '2', x2: '12', y2: '22' })
+      ],
+      gauge: [
+        e('path', { key: '1', d: 'M12 2a10 10 0 1 0 10 10' }),
+        e('path', { key: '2', d: 'M12 12l4-4' }),
+        e('circle', { key: '3', cx: '12', cy: '12', r: '2' })
+      ],
+      palette: [
+        e('circle', { key: '1', cx: '13.5', cy: '6.5', r: '.5', fill: 'currentColor' }),
+        e('circle', { key: '2', cx: '17.5', cy: '10.5', r: '.5', fill: 'currentColor' }),
+        e('circle', { key: '3', cx: '8.5', cy: '7.5', r: '.5', fill: 'currentColor' }),
+        e('circle', { key: '4', cx: '6.5', cy: '12.5', r: '.5', fill: 'currentColor' }),
+        e('path', { key: '5', d: 'M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z' })
+      ],
+      crown: [
+        e('polygon', { key: '1', points: '2 4 5 20 19 20 22 4 15 11 12 2 9 11 2 4' })
+      ],
+      columns: [
+        e('rect', { key: '1', x: '4', y: '3', width: '7', height: '18', rx: '1' }),
+        e('rect', { key: '2', x: '13', y: '3', width: '7', height: '18', rx: '1' })
+      ],
+      dockRight: [
+        e('rect', { key: '1', x: '3', y: '3', width: '18', height: '18', rx: '2' }),
+        e('line', { key: '2', x1: '15', y1: '3', x2: '15', y2: '21' })
+      ],
+      dockTop: [
+        e('rect', { key: '1', x: '3', y: '3', width: '18', height: '18', rx: '2' }),
+        e('line', { key: '2', x1: '3', y1: '10', x2: '21', y2: '10' })
+      ],
+      dockFloat: [
+        e('rect', { key: '1', x: '3', y: '3', width: '12', height: '12', rx: '2' }),
+        e('rect', { key: '2', x: '9', y: '9', width: '12', height: '12', rx: '2' })
+      ],
+      maximize: [
+        e('polyline', { key: '1', points: '15 3 21 3 21 9' }),
+        e('polyline', { key: '2', points: '9 21 3 21 3 15' }),
+        e('line', { key: '3', x1: '21', y1: '3', x2: '14', y2: '10' }),
+        e('line', { key: '4', x1: '3', y1: '21', x2: '10', y2: '14' })
+      ],
+      grip: [
+        e('circle', { key: '1', cx: '9', cy: '6', r: '1.2', fill: 'currentColor' }),
+        e('circle', { key: '2', cx: '15', cy: '6', r: '1.2', fill: 'currentColor' }),
+        e('circle', { key: '3', cx: '9', cy: '12', r: '1.2', fill: 'currentColor' }),
+        e('circle', { key: '4', cx: '15', cy: '12', r: '1.2', fill: 'currentColor' }),
+        e('circle', { key: '5', cx: '9', cy: '18', r: '1.2', fill: 'currentColor' }),
+        e('circle', { key: '6', cx: '15', cy: '18', r: '1.2', fill: 'currentColor' })
+      ],
+      chevronUp: [
+        e('polyline', { key: '1', points: '18 15 12 9 6 15' })
+      ],
+      chevronDown: [
+        e('polyline', { key: '1', points: '6 9 12 15 18 9' })
       ]
     };
     return e('svg', {
@@ -862,6 +974,18 @@
       style: { display: 'inline-flex', verticalAlign: 'middle', flexShrink: 0, ...extraStyle }
     }, iconPaths[name] || null);
   };
+
+  const UPGRADEABLE_MODELS = [
+    { id: 'llama-3-8b', name: 'LLaMA 3 8B', layers: '32L Dense', fullLabel: 'LLaMA 3 8B (32L Dense → Triune 3-Tier)', desc: 'Meta LLaMA 3 8B (32L Dense)' },
+    { id: 'mistral-7b', name: 'Mistral 7B', layers: '32L Dense', fullLabel: 'Mistral 7B (32L Dense → Triune 3-Tier)', desc: 'Mistral 7B v0.3 (32L Dense)' },
+    { id: 'qwen-2.5-7b', name: 'Qwen 2.5 7B', layers: '28L Dense', fullLabel: 'Qwen 2.5 7B (28L Dense → Triune 3-Tier)', desc: 'Qwen 2.5 7B (28L Dense)' },
+    { id: 'gpt2', name: 'GPT-2 Small', layers: '12L Dense', fullLabel: 'GPT-2 Small (12L Dense → Triune 3-Tier)', desc: 'OpenAI GPT-2 Small (12L Dense)' },
+    { id: 'llama-70b', name: 'LLaMA 3 70B', layers: '80L Dense', fullLabel: 'LLaMA 3 70B (80L Dense → Triune 3-Tier)', desc: 'Meta LLaMA 3 70B (80L Dense)' },
+    { id: 'deepseek-v3', name: 'DeepSeek V3', layers: '61L Dense', fullLabel: 'DeepSeek V3 (61L Dense → Triune 3-Tier)', desc: 'DeepSeek V3 (61L Dense)' },
+    { id: 'gemma-2-9b', name: 'Gemma 2 9B', layers: '42L Dense', fullLabel: 'Gemma 2 9B (42L Dense → Triune 3-Tier)', desc: 'Google Gemma 2 9B (42L Dense)' },
+    { id: 'gpt2-medium', name: 'GPT-2 Medium', layers: '24L Dense', fullLabel: 'GPT-2 Medium (24L Dense → Triune 3-Tier)', desc: 'OpenAI GPT-2 Medium (24L Dense)' },
+    { id: 'triune-small', name: 'Triune Baseline', layers: '6L Canonical', fullLabel: 'Triune Baseline (6L Canonical)', desc: 'Triune Baseline (6L Canonical)' }
+  ];
 
   const MODEL_PRESETS = [
     {
@@ -1028,14 +1152,7 @@
     { name: 'Blackwell / Ada FP8 (r=32)', rank: 32, alpha: 64, quantization: 'FP8 E4M3', lr: '0.0002', epochs: 3, batch_size: 4, dropout: 0.05 }
   ];
 
-  const SYSTEM_PROMPT_PRESETS = [
-    { name: 'MoE Core System', prompt: 'You are Triune Transformer, an advanced Mixture-of-Experts AI engine with dynamic exit-head routing.' },
-    { name: 'Python Code Architect', prompt: 'You are an expert Python & PyTorch engineer specializing in deep learning performance, CUDA kernels, and clean code.' },
-    { name: 'Research Assistant', prompt: 'You are a meticulous AI research assistant focusing on transformer architecture analysis and mathematical precision.' },
-    { name: 'Uncensored / Objective Direct', prompt: 'You are an objective, uncensored AI assistant with refusal ablation. Answer technical and analytical inquiries with utmost candor, factual clarity, and zero boilerplate disclaimers.' },
-    { name: 'Mathematical & Formal Logic', prompt: 'You are a formal logic and mathematical reasoning assistant. Provide rigorous, step-by-step mathematical reasoning with clear intermediate steps and proofs.' },
-    { name: 'Creative Workshop', prompt: 'You are an imaginative creative writing partner skilled in literary tone, vivid world-building, and evocative prose.' }
-  ];
+  const DEFAULT_SYSTEM_PROMPT = 'You are Triune Transformer, an advanced Mixture-of-Experts AI engine with dynamic exit-head routing.';
 
   const POPULAR_DATASETS = [
     { name: 'FineWeb-Edu (10BT)', id: 'HuggingFaceFW/fineweb-edu', config: 'sample-10BT', split: 'train', col: 'text', desc: 'Highest quality educational web crawl', category: 'Reasoning' },
@@ -1079,11 +1196,15 @@
   };
 
   const APPEARANCE_THEMES = [
-    { id: 'modern-light', name: 'Studio Modern', mode: 'Light', edition: 'Modern', accent: '#635bff', description: 'Clean surfaces, compact navigation, and a focused technical workspace.' },
+    { id: 'obsidian-glass', name: 'Studio Carbon (Default)', mode: 'Dark', edition: 'Modern', accent: '#6366f1', description: 'Precision dark slate with deep charcoal surfaces, indigo accents, and crisp contrast.' },
+    { id: 'cyberpunk-dark', name: 'Graphite Pro', mode: 'Dark', edition: 'Modern', accent: '#38bdf8', description: 'High-contrast monochrome engineering dark theme with precision sky-blue telemetry highlights.' },
+    { id: 'emerald-terminal', name: 'Midnight Slate', mode: 'Dark', edition: 'Modern', accent: '#3b82f6', description: 'Deep slate midnight console with surgical cobalt accents for long research sessions.' },
+    { id: 'editorial-cream', name: 'Studio Light Pro', mode: 'Light', edition: 'Classic', accent: '#4f46e5', description: 'Clean Apple Pro studio daylight theme with razor-sharp contrast and clean typography.' },
     { id: 'modern-dark', name: 'Studio Midnight', mode: 'Dark', edition: 'Modern', accent: '#8b83ff', description: 'A low-glare dark workspace with clear hierarchy and high-contrast controls.' },
     { id: 'modern-forest', name: 'Studio Forest', mode: 'Dark', edition: 'Modern', accent: '#55b987', description: 'A calm green-accented dark theme for long training and debugging sessions.' },
-    { id: 'classic-light', name: 'Classic Editorial', mode: 'Light', edition: 'Classic', accent: '#9a3412', description: 'Keep the original warm paper, serif headings, and editorial character.' },
-    { id: 'classic-dark', name: 'Classic Ink', mode: 'Dark', edition: 'Classic', accent: '#e08a63', description: 'The original editorial style adapted for a comfortable dark workspace.' }
+    { id: 'classic-light', name: 'Classic Editorial', mode: 'Light', edition: 'Classic', accent: '#9a3412', description: 'Warm paper, serif headings, and editorial character.' },
+    { id: 'classic-dark', name: 'Classic Ink', mode: 'Dark', edition: 'Classic', accent: '#e08a63', description: 'The original editorial style adapted for a comfortable dark workspace.' },
+    { id: 'modern-light', name: 'Studio Modern', mode: 'Light', edition: 'Modern', accent: '#635bff', description: 'Clean surfaces, compact navigation, and a focused technical workspace.' }
   ];
 
   let activeApiBase = '';
@@ -1342,9 +1463,9 @@
               fontSize: '11px',
               fontFamily: 'var(--font-mono)',
               fontWeight: 600,
-              background: 'rgba(99, 199, 178, 0.15)',
-              color: '#0d9488',
-              border: '1px solid rgba(99, 199, 178, 0.4)'
+              background: 'rgba(16, 185, 129, 0.15)',
+              color: '#10b981',
+              border: '1px solid rgba(16, 185, 129, 0.4)'
             },
             title: 'Reflex Exit (L1)'
           }, `Reflex: ${(exitDist && exitDist.reflex !== undefined) ? exitDist.reflex : 34}%`),
@@ -1355,9 +1476,9 @@
               fontSize: '11px',
               fontFamily: 'var(--font-mono)',
               fontWeight: 600,
-              background: 'rgba(232, 203, 79, 0.15)',
-              color: '#b45309',
-              border: '1px solid rgba(232, 203, 79, 0.4)'
+              background: 'rgba(251, 191, 36, 0.15)',
+              color: '#fbbf24',
+              border: '1px solid rgba(251, 191, 36, 0.4)'
             },
             title: 'Limbic Exit (L3)'
           }, `Limbic: ${(exitDist && exitDist.limbic !== undefined) ? exitDist.limbic : 33}%`),
@@ -1368,9 +1489,9 @@
               fontSize: '11px',
               fontFamily: 'var(--font-mono)',
               fontWeight: 600,
-              background: 'rgba(122, 136, 207, 0.15)',
-              color: '#4338ca',
-              border: '1px solid rgba(122, 136, 207, 0.4)'
+              background: 'rgba(167, 139, 250, 0.15)',
+              color: '#a78bfa',
+              border: '1px solid rgba(167, 139, 250, 0.4)'
             },
             title: 'Cortex Exit (L5)'
           }, `Cortex: ${(exitDist && exitDist.cortex !== undefined) ? exitDist.cortex : 33}%`)
@@ -1378,6 +1499,1569 @@
       )
     );
   }
+
+  let sharedAudioCtx = null;
+  function getStudioAudioContext() {
+    if (!sharedAudioCtx) {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (AudioCtx) sharedAudioCtx = new AudioCtx();
+    }
+    if (sharedAudioCtx && sharedAudioCtx.state === 'suspended') {
+      sharedAudioCtx.resume().catch(() => {});
+    }
+    return sharedAudioCtx;
+  }
+
+  let lastSynthClickTime = 0;
+  function playTactileKeyClick() {
+    const ctx = getStudioAudioContext();
+    if (!ctx) return;
+    const now = performance.now();
+    if (now - lastSynthClickTime < 24) return;
+    lastSynthClickTime = now;
+    const t = ctx.currentTime;
+
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    const freq = 680 + (Math.random() - 0.5) * 160;
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(freq, t);
+    osc.frequency.exponentialRampToValueAtTime(130, t + 0.022);
+
+    gain.gain.setValueAtTime(0.065, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.022);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(t);
+    osc.stop(t + 0.025);
+  }
+
+  function parseReasoningThought(rawText, isGenerating) {
+    if (!rawText) return { hasThought: false, thoughtText: '', steps: [], cleanText: '', isLiveThinking: false };
+
+    let thoughtText = '';
+    let cleanText = rawText;
+    let hasThought = false;
+    let isLiveThinking = false;
+
+    const openMatch = rawText.match(/<\|thought\|>|<think>/i);
+    if (openMatch) {
+      const openIdx = openMatch.index;
+      const tagLen = openMatch[0].length;
+      const rest = rawText.slice(openIdx + tagLen);
+      const closeMatch = rest.match(/<\/\|thought\|>|<\|end_thought\|>|<\/think>/i);
+
+      if (closeMatch) {
+        thoughtText = rest.slice(0, closeMatch.index).trim();
+        cleanText = (rawText.slice(0, openIdx) + rest.slice(closeMatch.index + closeMatch[0].length)).trim();
+        hasThought = true;
+        isLiveThinking = false;
+      } else {
+        thoughtText = rest.trim();
+        cleanText = rawText.slice(0, openIdx).trim();
+        hasThought = true;
+        isLiveThinking = Boolean(isGenerating);
+      }
+    }
+
+    const steps = [];
+    if (thoughtText) {
+      const lines = thoughtText.split('\n').map(l => l.trim()).filter(Boolean);
+      for (const line of lines) {
+        const stepMatch = line.match(/^(?:(?:\d+\.|\*|-|•|Step\s*\d+:?|Phase\s*\d+:?|Lemma\s*\d+:?)\s+)(.+)/i);
+        if (stepMatch && stepMatch[1].length > 3) {
+          steps.push(stepMatch[1].slice(0, 85));
+        } else if (line.match(/^(?:First|Second|Third|Next|Then|Finally|Checking|Verifying|Calculating|Evaluating|Analyzing|Considering|Hypothesis|Conclusion)[\s:,]/i)) {
+          steps.push(line.slice(0, 85));
+        }
+      }
+      if (steps.length === 0 && thoughtText.length > 20) {
+        const sentences = thoughtText.split(/(?<=[.!?])\s+/).filter(s => s.length > 8);
+        steps.push(...sentences.slice(0, 4).map(s => s.slice(0, 85)));
+      }
+    }
+
+    return { hasThought, thoughtText, steps, cleanText, isLiveThinking };
+  }
+
+  function tokenizeTextWithEntropy(text) {
+    if (!text) return [];
+    const matches = text.match(/<\|[a-zA-Z0-9_-]+\|>|[A-Za-z]+|[0-9]+|\s+|[^\s\w]/g) || [text];
+    return matches.map((tok, idx) => {
+      const isWhitespace = /^\s+$/.test(tok);
+      const isSpecial = tok.startsWith('<|');
+      const isPunct = /^[^\s\w]$/.test(tok);
+      const isCommon = /^(the|and|is|in|to|of|that|it|for|on|with|as|at|by|from)$/i.test(tok.trim());
+
+      let entropy;
+      let confidence;
+      if (isWhitespace || isSpecial || isPunct || isCommon) {
+        entropy = +(0.08 + (Math.sin(idx * 7) * 0.5 + 0.5) * 0.25).toFixed(2);
+        confidence = +(92 + (Math.cos(idx * 3) * 0.5 + 0.5) * 7.5).toFixed(1);
+      } else if (tok.length > 5 || /^(def|class|return|function|import|export|const|let|var)$/.test(tok)) {
+        entropy = +(1.2 + (Math.sin(idx * 11) * 0.5 + 0.5) * 0.9).toFixed(2);
+        confidence = +(35 + (Math.cos(idx * 5) * 0.5 + 0.5) * 30).toFixed(1);
+      } else {
+        entropy = +(0.4 + (Math.sin(idx * 13) * 0.5 + 0.5) * 0.6).toFixed(2);
+        confidence = +(65 + (Math.cos(idx * 7) * 0.5 + 0.5) * 22).toFixed(1);
+      }
+
+      const topCandidates = [
+        { text: tok, prob: confidence },
+        { text: isWhitespace ? ' ' : `${tok}s`, prob: +((100 - confidence) * 0.55).toFixed(1) },
+        { text: isWhitespace ? '\n' : `${tok}_alt`, prob: +((100 - confidence) * 0.28).toFixed(1) },
+        { text: '...', prob: +((100 - confidence) * 0.17).toFixed(1) }
+      ];
+
+      return {
+        id: (Math.abs(tok.split('').reduce((acc, c) => (acc << 5) - acc + c.charCodeAt(0), 0)) % 32000) || (idx + 100),
+        text: tok,
+        entropy,
+        confidence,
+        topCandidates
+      };
+    });
+  }
+
+  function NeuronSynapseCanvas3D(props) {
+    const { neuronScopeData, activeTierIdx, route, streamVelocity, isGenerating, upgradeResult, activeModel, height: customHeight } = props;
+    const canvasRef = useRef(null);
+    const wrapRef = useRef(null);
+    const [isExpanded, setIsExpanded] = useState(false);
+    const [fps, setFps] = useState(120);
+
+    const rotXRef = useRef(0.22);
+    const rotYRef = useRef(-0.35);
+    const velXRef = useRef(0);
+    const velYRef = useRef(0);
+    const camDistRef = useRef(380);
+    const targetCamDistRef = useRef(380);
+    const isResettingRef = useRef(false);
+    const isDraggingRef = useRef(false);
+    const lastMouseRef = useRef({ x: 0, y: 0 });
+    const autoRotatePausedUntilRef = useRef(0);
+
+    const pulsesRef = useRef([]);
+    const ripplesRef = useRef([]);
+    const particlesRef = useRef(null);
+    const wiresRef = useRef(null);
+    const quantaRef = useRef(null);
+    const animIdRef = useRef(null);
+    const frameCountRef = useRef(0);
+    const lastFpsCalcRef = useRef(performance.now());
+    const modelSigRef = useRef('');
+    const lastPulseEmitTimeRef = useRef(0);
+
+    const activeSpec = (() => {
+      if (upgradeResult && !upgradeResult.activated && upgradeResult.layer_mapping && upgradeResult.layer_mapping.length > 0) {
+        const rCount = upgradeResult.layer_mapping.filter(l => l.upgraded_tier === 'reflex').length;
+        const lCount = upgradeResult.layer_mapping.filter(l => l.upgraded_tier === 'limbic').length;
+        const cCount = upgradeResult.layer_mapping.filter(l => l.upgraded_tier === 'cortex').length;
+        return {
+          id: upgradeResult.model_name || 'transmuted',
+          name: upgradeResult.model_name || 'Transmuted Architecture',
+          totalLayers: upgradeResult.layer_mapping.length,
+          reflexLayers: rCount,
+          limbicLayers: lCount,
+          cortexLayers: cCount,
+          numExperts: (upgradeResult.tier_summary && upgradeResult.tier_summary.limbic_experts) || 8,
+          heads: 8,
+          layerMapping: upgradeResult.layer_mapping
+        };
+      }
+      if (neuronScopeData && neuronScopeData.active_model_spec) {
+        const s = neuronScopeData.active_model_spec;
+        const ts = s.tier_summary || {};
+        return {
+          id: s.model_id || activeModel || 'triune-base',
+          name: s.model_name || activeModel || 'Triune-Base',
+          totalLayers: s.num_layers || 8,
+          reflexLayers: ts.reflex_layers || (s.reflex_exit_layer + 1) || 3,
+          limbicLayers: ts.limbic_layers || (s.limbic_exit_layer - s.reflex_exit_layer) || 3,
+          cortexLayers: ts.cortex_layers || (s.num_layers - s.limbic_exit_layer - 1) || 2,
+          numExperts: s.num_experts || 4,
+          heads: s.num_heads || 6,
+          layerMapping: s.layer_mapping
+        };
+      }
+      const preset = MODEL_PRESETS.find(p => p.id === activeModel) || MODEL_PRESETS[2];
+      const rL = preset.layers <= 4 ? 2 : (preset.layers <= 6 ? 3 : (preset.layers <= 8 ? 3 : 4));
+      const lL = preset.layers <= 4 ? 1 : (preset.layers <= 6 ? 2 : (preset.layers <= 8 ? 3 : 4));
+      const cL = Math.max(1, preset.layers - rL - lL);
+      return {
+        id: preset.id,
+        name: preset.name,
+        totalLayers: preset.layers || 8,
+        reflexLayers: rL,
+        limbicLayers: lL,
+        cortexLayers: cL,
+        numExperts: preset.experts_routed || 4,
+        heads: preset.heads || 6,
+        layerMapping: null
+      };
+    })();
+
+    const modelSig = `${activeSpec.id}-${activeSpec.totalLayers}-${activeSpec.reflexLayers}-${activeSpec.limbicLayers}-${activeSpec.cortexLayers}-${activeSpec.numExperts}`;
+    if (!particlesRef.current || !wiresRef.current || modelSigRef.current !== modelSig) {
+      modelSigRef.current = modelSig;
+      const particles = [];
+      const wires = [];
+
+      // 1. Input Embedding Node
+      particles.push({
+        id: 0,
+        tier: 0,
+        tierName: 'Input',
+        x: -185,
+        y: 0,
+        z: 0,
+        phaseX: 0,
+        phaseY: 0,
+        phaseZ: 0,
+        baseR: 5.6,
+        charge: 0,
+        color: '#00f0ff',
+        glowColor: '#38bdf8',
+        auraColor: 'rgba(0, 240, 255, 0.75)',
+        isInput: true,
+        label: 'Embed'
+      });
+
+      // 2. Tier 0: Reflex Layers & Exit Tap
+      const reflexNodeIds = [];
+      const reflexLayersCount = Math.max(1, activeSpec.reflexLayers);
+      for (let l = 0; l < reflexLayersCount; l++) {
+        const headsInLayer = Math.min(activeSpec.heads || 4, 4);
+        const layerX = -145 + l * (75 / Math.max(1, reflexLayersCount - 1));
+        for (let h = 0; h < headsInLayer; h++) {
+          const hAngle = (h / headsInLayer) * Math.PI * 2;
+          const pId = particles.length;
+          reflexNodeIds.push(pId);
+          particles.push({
+            id: pId,
+            tier: 0,
+            tierName: 'Reflex',
+            layerIdx: l,
+            headIdx: h,
+            x: layerX + (h % 2 === 1 ? 5 : -5),
+            y: (h - (headsInLayer - 1) / 2) * 26 + Math.sin(l * 1.5) * 4,
+            z: Math.sin(hAngle) * 26,
+            phaseX: pId * 0.45,
+            phaseY: pId * 0.72,
+            phaseZ: pId * 0.31,
+            baseR: 3.4,
+            charge: 0,
+            color: '#10b981',
+            glowColor: '#34d399',
+            auraColor: 'rgba(16, 185, 129, 0.65)',
+            label: `L${l}·H${h}`
+          });
+        }
+      }
+
+      // Reflex Exit Tap Node
+      const reflexExitId = particles.length;
+      particles.push({
+        id: reflexExitId,
+        tier: 0,
+        tierName: 'Reflex',
+        x: -65,
+        y: 38,
+        z: 0,
+        phaseX: 1.2,
+        phaseY: 0.8,
+        phaseZ: 1.4,
+        baseR: 5.2,
+        charge: 0,
+        color: '#10b981',
+        glowColor: '#00f0ff',
+        auraColor: 'rgba(16, 185, 129, 0.85)',
+        isExit: true,
+        label: 'Reflex Exit [T0]'
+      });
+
+      // 3. Tier 1: Limbic Centroid Router Hub & MoE Experts
+      const routerHubId = particles.length;
+      particles.push({
+        id: routerHubId,
+        tier: 1,
+        tierName: 'Limbic',
+        x: -15,
+        y: 0,
+        z: 0,
+        hubCenterX: -15,
+        hubCenterY: 0,
+        hubCenterZ: 0,
+        phaseX: 0.5,
+        phaseY: 0.9,
+        phaseZ: 0.3,
+        baseR: 6.4,
+        charge: 0,
+        color: '#f59e0b',
+        glowColor: '#fbbf24',
+        auraColor: 'rgba(245, 158, 11, 0.85)',
+        isExpertHub: true,
+        isRouterHub: true,
+        label: 'Centroid Router'
+      });
+
+      const expertNodeIds = [];
+      const numExp = Math.max(2, activeSpec.numExperts);
+      for (let e = 0; e < numExp; e++) {
+        const eAngle = (e / numExp) * Math.PI * 2;
+        const eRad = 34;
+        const pId = particles.length;
+        expertNodeIds.push(pId);
+        particles.push({
+          id: pId,
+          tier: 1,
+          tierName: 'Limbic',
+          expertIdx: e,
+          x: 10 + Math.sin(eAngle) * 8,
+          y: Math.sin(eAngle) * eRad,
+          z: Math.cos(eAngle) * eRad,
+          hubCenterX: 10,
+          hubCenterY: 0,
+          hubCenterZ: 0,
+          orbitAngle: eAngle,
+          orbitRad: eRad,
+          orbitDir: e % 2 === 0 ? 1 : -1,
+          phaseX: pId * 0.6,
+          phaseY: pId * 0.4,
+          phaseZ: pId * 0.8,
+          baseR: 3.8,
+          charge: 0,
+          color: '#fbbf24',
+          glowColor: '#f59e0b',
+          auraColor: 'rgba(251, 191, 36, 0.65)',
+          isExpert: true,
+          label: `E${e} (MoE)`
+        });
+      }
+
+      // Shared Expert
+      const sharedExpertId = particles.length;
+      particles.push({
+        id: sharedExpertId,
+        tier: 1,
+        tierName: 'Limbic',
+        x: 10,
+        y: -46,
+        z: 0,
+        phaseX: 2.1,
+        phaseY: 1.5,
+        phaseZ: 0.7,
+        baseR: 4.4,
+        charge: 0,
+        color: '#f59e0b',
+        glowColor: '#fbbf24',
+        auraColor: 'rgba(245, 158, 11, 0.7)',
+        isSharedExpert: true,
+        label: 'Shared Expert'
+      });
+
+      // Limbic Exit Tap Node
+      const limbicExitId = particles.length;
+      particles.push({
+        id: limbicExitId,
+        tier: 1,
+        tierName: 'Limbic',
+        x: 42,
+        y: 38,
+        z: 0,
+        phaseX: 1.8,
+        phaseY: 1.1,
+        phaseZ: 0.9,
+        baseR: 5.2,
+        charge: 0,
+        color: '#f59e0b',
+        glowColor: '#fbbf24',
+        auraColor: 'rgba(245, 158, 11, 0.85)',
+        isExit: true,
+        label: 'Limbic Exit [T1]'
+      });
+
+      // 4. Tier 2: Cortex GLA Deep Reasoning Layers
+      const cortexNodeIds = [];
+      const cortexLayerOffset = activeSpec.reflexLayers + activeSpec.limbicLayers;
+      const cortexLayersCount = Math.max(1, activeSpec.cortexLayers);
+      for (let c = 0; c < cortexLayersCount; c++) {
+        const nodesPerCortex = 3;
+        const cX = 75 + c * (65 / Math.max(1, cortexLayersCount - 1));
+        for (let i = 0; i < nodesPerCortex; i++) {
+          const pId = particles.length;
+          cortexNodeIds.push(pId);
+          particles.push({
+            id: pId,
+            tier: 2,
+            tierName: 'Cortex',
+            layerIdx: cortexLayerOffset + c,
+            nodeIdx: i,
+            x: cX + (i % 2 === 1 ? 5 : -5),
+            y: (i - 1) * 28 + Math.cos(c * 1.4) * 5,
+            z: Math.sin(i * 1.8) * 32,
+            phaseX: pId * 0.55,
+            phaseY: pId * 0.35,
+            phaseZ: pId * 0.75,
+            baseR: 3.8,
+            charge: 0,
+            color: '#8b5cf6',
+            glowColor: '#c084fc',
+            auraColor: 'rgba(139, 92, 246, 0.72)',
+            label: `L${cortexLayerOffset + c}·GLA`
+          });
+        }
+      }
+
+      // Output Head (Logits)
+      const outputHeadId = particles.length;
+      particles.push({
+        id: outputHeadId,
+        tier: 2,
+        tierName: 'Cortex',
+        x: 165,
+        y: 0,
+        z: 0,
+        phaseX: 0,
+        phaseY: 0,
+        phaseZ: 0,
+        baseR: 6.2,
+        charge: 0,
+        color: '#c084fc',
+        glowColor: '#8b5cf6',
+        auraColor: 'rgba(192, 132, 252, 0.85)',
+        isOutput: true,
+        label: 'Output Head'
+      });
+
+      // Synaptic Wires
+      // Input Embed -> initial Reflex nodes
+      const initialReflex = reflexNodeIds.slice(0, Math.min(4, reflexNodeIds.length));
+      initialReflex.forEach(rId => {
+        wires.push({ from: 0, to: rId, tierFrom: 0, tierTo: 0, isSkip: false });
+      });
+
+      // Inter-reflex layers connections
+      for (let i = 0; i < reflexNodeIds.length - 1; i++) {
+        wires.push({ from: reflexNodeIds[i], to: reflexNodeIds[i + 1], tierFrom: 0, tierTo: 0, isSkip: false });
+      }
+      // Reflex nodes connect to Reflex Exit
+      reflexNodeIds.forEach(rId => {
+        wires.push({ from: rId, to: reflexExitId, tierFrom: 0, tierTo: 0, isSkip: false });
+      });
+
+      // SHALLOW EARLY EXIT BYPASS WIRE: Reflex Exit -> Output Head
+      wires.push({ from: reflexExitId, to: outputHeadId, tierFrom: 0, tierTo: 2, isSkip: true, bypassTier: 0 });
+
+      // Forward to Limbic Router
+      const reflexNodes = particles.filter(p => p.tier === 0);
+      const limbicHubs = particles.filter(p => p.tier === 1 && p.isExpertHub);
+      const limbicNodes = particles.filter(p => p.tier === 1);
+      const cortexNodes = particles.filter(p => p.tier === 2);
+      reflexNodes.forEach(rNode => {
+        const targetHub = limbicHubs[0] || particles[routerHubId];
+        wires.push({ from: rNode.id, to: targetHub.id, tierFrom: 0, tierTo: 1, isSkip: false });
+      });
+
+      // Centroid Router -> Each Expert + Shared Expert
+      expertNodeIds.forEach(eId => {
+        wires.push({ from: routerHubId, to: eId, tierFrom: 1, tierTo: 1, isSkip: false });
+        wires.push({ from: eId, to: limbicExitId, tierFrom: 1, tierTo: 1, isSkip: false });
+      });
+      wires.push({ from: routerHubId, to: sharedExpertId, tierFrom: 1, tierTo: 1, isSkip: false });
+      wires.push({ from: sharedExpertId, to: limbicExitId, tierFrom: 1, tierTo: 1, isSkip: false });
+
+      // MID-DEPTH EXIT BYPASS WIRE: Limbic Exit -> Output Head
+      wires.push({ from: limbicExitId, to: outputHeadId, tierFrom: 1, tierTo: 2, isSkip: true, bypassTier: 1 });
+
+      // Limbic Exit -> Cortex GLA nodes
+      limbicNodes.forEach(lNode => {
+        const targetCortex1 = cortexNodes[0] || particles[outputHeadId];
+        wires.push({ from: lNode.id, to: targetCortex1.id, tierFrom: 1, tierTo: 2, isSkip: false });
+      });
+
+      // Inter-cortex layer connections and GLA recurrent loops
+      for (let i = 0; i < cortexNodeIds.length - 1; i++) {
+        wires.push({ from: cortexNodeIds[i], to: cortexNodeIds[i + 1], tierFrom: 2, tierTo: 2, isSkip: false });
+      }
+      // Final cortex nodes -> Output Head
+      cortexNodeIds.forEach(cId => {
+        wires.push({ from: cId, to: outputHeadId, tierFrom: 2, tierTo: 2, isSkip: false });
+      });
+
+      // Background ambient quanta
+      const quanta = [];
+      for (let q = 0; q < 34; q++) {
+        quanta.push({
+          x: (Math.random() - 0.5) * 420,
+          y: (Math.random() - 0.5) * 220,
+          z: (Math.random() - 0.5) * 160,
+          vx: (Math.random() - 0.5) * 0.14,
+          vy: (Math.random() - 0.5) * 0.14,
+          vz: (Math.random() - 0.5) * 0.14,
+          r: 1.0 + Math.random() * 1.2,
+          alpha: 0.15 + Math.random() * 0.25,
+          color: q % 3 === 0 ? '#10b981' : (q % 3 === 1 ? '#f59e0b' : '#8b5cf6')
+        });
+      }
+      quantaRef.current = quanta;
+
+      particlesRef.current = particles;
+      wiresRef.current = wires;
+    }
+
+    const emitRealtimePulse = (telemetry = {}) => {
+      const particles = particlesRef.current;
+      const pulses = pulsesRef.current;
+      const ripples = ripplesRef.current;
+      if (!particles || !pulses) return;
+
+      const now = performance.now();
+      // Throttle pulse creations when token stream velocity is very high so it doesn't flood requestAnimationFrame with thousands of particle objects:
+      // Minimum interval between pulses is 42ms (~24 pulses/sec), and maximum 24 active pulses in canvas
+      if (!telemetry.force && (now - lastPulseEmitTimeRef.current < 42)) {
+        return;
+      }
+      if (pulses.length >= 24) {
+        pulses.shift(); // Evict oldest pulse to maintain 120 FPS
+      }
+      lastPulseEmitTimeRef.current = now;
+
+      const tier = typeof telemetry.tier === 'number' ? telemetry.tier : (route === 'reflex' ? 0 : (route === 'limbic' ? 1 : 2));
+      const inputNode = particles.find(p => p.isInput) || particles[0];
+      const outputNode = particles.find(p => p.isOutput) || particles[particles.length - 1];
+      const reflexExitNode = particles.find(p => p.isExit && p.tier === 0);
+      const routerNode = particles.find(p => p.isRouterHub);
+      const limbicExitNode = particles.find(p => p.isExit && p.tier === 1);
+
+      let chain = [];
+      let pulseColor = '#10b981';
+      let pulseAura = 'rgba(16, 185, 129, 0.9)';
+
+      if (tier === 0 && reflexExitNode) {
+        pulseColor = '#10b981';
+        pulseAura = 'rgba(16, 185, 129, 0.9)';
+        const rNodes = particles.filter(p => p.tier === 0 && !p.isInput && !p.isExit);
+        const sampleR = rNodes.length > 0 ? rNodes[Math.floor(Math.random() * rNodes.length)] : null;
+        chain = [inputNode.id];
+        if (sampleR) chain.push(sampleR.id);
+        chain.push(reflexExitNode.id, outputNode.id);
+      } else if (tier === 1 && routerNode && limbicExitNode) {
+        pulseColor = '#fbbf24';
+        pulseAura = 'rgba(245, 158, 11, 0.92)';
+        const experts = particles.filter(p => p.tier === 1 && p.isExpert);
+        const activeExp = experts.length > 0 ? experts[Math.floor(Math.random() * experts.length)] : null;
+        chain = [inputNode.id];
+        if (reflexExitNode) chain.push(reflexExitNode.id);
+        chain.push(routerNode.id);
+        if (activeExp) chain.push(activeExp.id);
+        chain.push(limbicExitNode.id, outputNode.id);
+      } else {
+        pulseColor = '#8b5cf6';
+        pulseAura = 'rgba(139, 92, 246, 0.92)';
+        const cortexNodes = particles.filter(p => p.tier === 2 && !p.isOutput);
+        const sampleC = cortexNodes.length > 0 ? cortexNodes[Math.floor(Math.random() * cortexNodes.length)] : null;
+        chain = [inputNode.id];
+        if (reflexExitNode) chain.push(reflexExitNode.id);
+        if (limbicExitNode) chain.push(limbicExitNode.id);
+        if (sampleC) chain.push(sampleC.id);
+        chain.push(outputNode.id);
+      }
+
+      pulses.push({
+        id: Math.random(),
+        chain: chain,
+        legIndex: 0,
+        progress: 0,
+        speed: 0.05 + Math.random() * 0.025,
+        trailLen: 0.28,
+        color: pulseColor,
+        auraColor: pulseAura,
+        tier: tier
+      });
+    };
+
+    const triggerStimulate = () => {
+      emitRealtimePulse({ tier: 0, force: true });
+      emitRealtimePulse({ tier: 1, force: true });
+      emitRealtimePulse({ tier: 2, force: true });
+    };
+
+    useEffect(() => {
+      window.__triuneCanvasEmitPulse = (telemetry) => {
+        emitRealtimePulse(telemetry);
+      };
+      return () => {
+        delete window.__triuneCanvasEmitPulse;
+      };
+    }, []);
+
+    const resetCamera = () => {
+      isResettingRef.current = true;
+      velXRef.current = 0;
+      velYRef.current = 0;
+      targetCamDistRef.current = 380;
+    };
+
+    const prevUpgradeSigRef = useRef('');
+    useEffect(() => {
+      if (upgradeResult) {
+        const currentSig = `${upgradeResult.model_name || ''}-${upgradeResult.timestamp || ''}-${upgradeResult.activated ? '1' : '0'}`;
+        if (prevUpgradeSigRef.current && prevUpgradeSigRef.current !== currentSig) {
+          triggerStimulate();
+        }
+        prevUpgradeSigRef.current = currentSig;
+      }
+    }, [upgradeResult]);
+
+    const project = (x, y, z, cx, cy) => {
+      const cosY = Math.cos(rotYRef.current);
+      const sinY = Math.sin(rotYRef.current);
+      const x1 = x * cosY - z * sinY;
+      const z1 = x * sinY + z * cosY;
+
+      const cosX = Math.cos(rotXRef.current);
+      const sinX = Math.sin(rotXRef.current);
+      const y2 = y * cosX - z1 * sinX;
+      const z2 = y * sinX + z1 * cosX;
+
+      const zCam = z2 + camDistRef.current;
+      if (zCam <= 15) return null;
+      const scale = 350 / zCam;
+      return {
+        sx: cx + x1 * scale,
+        sy: cy + y2 * scale,
+        scale: scale,
+        depth: zCam
+      };
+    };
+
+    useEffect(() => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      let lastSpawn = 0;
+
+      const render = () => {
+        const rect = canvas.getBoundingClientRect();
+        const width = Math.max(300, Math.floor(rect.width || 600));
+        const height = Math.max(160, Math.floor(rect.height || (isExpanded ? 380 : 205)));
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+        if (canvas.width !== Math.floor(width * dpr) || canvas.height !== Math.floor(height * dpr)) {
+          canvas.width = Math.floor(width * dpr);
+          canvas.height = Math.floor(height * dpr);
+        }
+
+        ctx.save();
+        ctx.scale(dpr, dpr);
+
+        const now = performance.now();
+        frameCountRef.current++;
+        if (now - lastFpsCalcRef.current >= 500) {
+          const measuredFps = Math.round((frameCountRef.current * 1000) / (now - lastFpsCalcRef.current));
+          setFps(Math.min(120, Math.max(30, measuredFps)));
+          frameCountRef.current = 0;
+          lastFpsCalcRef.current = now;
+        }
+
+        if (isResettingRef.current) {
+          rotXRef.current += (0.22 - rotXRef.current) * 0.12;
+          rotYRef.current += (-0.35 - rotYRef.current) * 0.12;
+          camDistRef.current += (380 - camDistRef.current) * 0.14;
+          if (Math.abs(rotXRef.current - 0.22) < 0.005 && Math.abs(rotYRef.current - (-0.35)) < 0.005 && Math.abs(camDistRef.current - 380) < 1.0) {
+            rotXRef.current = 0.22;
+            rotYRef.current = -0.35;
+            camDistRef.current = 380;
+            targetCamDistRef.current = 380;
+            isResettingRef.current = false;
+          }
+        } else {
+          if (!isDraggingRef.current) {
+            rotYRef.current += velYRef.current;
+            rotXRef.current = Math.max(-1.15, Math.min(1.15, rotXRef.current + velXRef.current));
+            velYRef.current *= 0.91;
+            velXRef.current *= 0.91;
+
+            if (now > autoRotatePausedUntilRef.current && Math.abs(velYRef.current) < 0.0002) {
+              rotYRef.current += 0.0018;
+            }
+          }
+          camDistRef.current += (targetCamDistRef.current - camDistRef.current) * 0.15;
+        }
+
+        const cx = width / 2;
+        const cy = height / 2;
+
+        ctx.fillStyle = '#06080d';
+        ctx.fillRect(0, 0, width, height);
+
+        const bgGrad = ctx.createRadialGradient(cx, cy, 20, cx, cy, Math.max(width, height) * 0.7);
+        bgGrad.addColorStop(0, 'rgba(16, 22, 38, 0.55)');
+        bgGrad.addColorStop(0.5, 'rgba(10, 14, 24, 0.75)');
+        bgGrad.addColorStop(1, 'rgba(6, 8, 13, 0.98)');
+        ctx.fillStyle = bgGrad;
+        ctx.fillRect(0, 0, width, height);
+
+        const ringY = 72;
+        const ringP0 = project(-160, ringY, 0, cx, cy);
+        const ringP1 = project(160, ringY, 0, cx, cy);
+        if (ringP0 && ringP1) {
+          const ringCenterX = (ringP0.sx + ringP1.sx) / 2;
+          const ringCenterY = (ringP0.sy + ringP1.sy) / 2;
+          const ringRadiusX = Math.abs(ringP1.sx - ringP0.sx) / 2;
+          const ringRadiusY = ringRadiusX * 0.16;
+
+          ctx.beginPath();
+          ctx.ellipse(ringCenterX, ringCenterY, ringRadiusX, ringRadiusY, 0, 0, Math.PI * 2);
+          ctx.strokeStyle = 'rgba(0, 240, 255, 0.06)';
+          ctx.lineWidth = 1;
+          ctx.stroke();
+
+          ctx.beginPath();
+          ctx.ellipse(ringCenterX, ringCenterY, ringRadiusX * 0.5, ringRadiusY * 0.5, 0, 0, Math.PI * 2);
+          ctx.strokeStyle = 'rgba(139, 92, 246, 0.04)';
+          ctx.stroke();
+        }
+
+        const quanta = quantaRef.current;
+        if (quanta) {
+          quanta.forEach(q => {
+            q.x += q.vx;
+            q.y += q.vy;
+            q.z += q.vz;
+            if (q.x < -210) q.x = 210; else if (q.x > 210) q.x = -210;
+            if (q.y < -110) q.y = 110; else if (q.y > 110) q.y = -110;
+            if (q.z < -80) q.z = 80; else if (q.z > 80) q.z = -80;
+
+            const qProj = project(q.x, q.y, q.z, cx, cy);
+            if (qProj) {
+              ctx.beginPath();
+              ctx.arc(qProj.sx, qProj.sy, q.r * qProj.scale, 0, Math.PI * 2);
+              ctx.fillStyle = q.color;
+              ctx.globalAlpha = q.alpha * Math.min(1.0, qProj.scale * 1.2);
+              ctx.fill();
+              ctx.globalAlpha = 1.0;
+            }
+          });
+        }
+
+        const particles = particlesRef.current;
+        const wires = wiresRef.current;
+        const pulses = pulsesRef.current;
+        const ripples = ripplesRef.current;
+
+        const tokSpeed = (streamVelocity && typeof streamVelocity.current === 'number') ? streamVelocity.current : (typeof streamVelocity === 'number' ? streamVelocity : (isGenerating ? 24 : 0));
+        if (!isGenerating && (now - lastSpawn > 800)) {
+          lastSpawn = now;
+          emitRealtimePulse({ tier: Math.random() < 0.5 ? 0 : 1 });
+        }
+
+        const currentPos = [];
+        const layerBins = (neuronScopeData && neuronScopeData.layer_bins) || {};
+
+        particles.forEach(p => {
+          let px = p.x;
+          let py = p.y;
+          let pz = p.z;
+
+          if (p.orbitAngle !== undefined && p.hubCenterX !== undefined) {
+            const curOrbit = now * 0.0009 * p.orbitDir + p.orbitAngle;
+            px = p.hubCenterX + Math.sin(curOrbit) * 6;
+            py = p.hubCenterY + Math.sin(curOrbit) * p.orbitRad;
+            pz = p.hubCenterZ + Math.cos(curOrbit) * p.orbitRad;
+          }
+
+          const fx = Math.sin(now * 0.0016 + p.phaseX) * 2.8;
+          const fy = Math.cos(now * 0.0019 + p.phaseY) * 2.8;
+          const fz = Math.sin(now * 0.0014 + p.phaseZ) * 2.8;
+
+          let binBoost = 0;
+          if (layerBins) {
+            const lKey = p.tier === 0 ? '0' : (p.tier === 1 ? '3' : '6');
+            const bins = layerBins[lKey];
+            if (bins && bins.length > 0) {
+              binBoost = bins[p.id % bins.length] || 0;
+            }
+          }
+
+          if (p.charge < binBoost) p.charge = binBoost;
+          p.charge *= 0.94;
+
+          const proj = project(px + fx, py + fy, pz + fz, cx, cy);
+          currentPos.push({
+            p,
+            proj,
+            curX: px + fx,
+            curY: py + fy,
+            curZ: pz + fz
+          });
+        });
+
+        wires.forEach(w => {
+          const posA = currentPos[w.from];
+          const posB = currentPos[w.to];
+          if (!posA || !posB || !posA.proj || !posB.proj) return;
+
+          const avgDepth = (posA.proj.depth + posB.proj.depth) * 0.5;
+          const depthAlpha = Math.max(0.08, Math.min(1.0, 360 / avgDepth));
+
+          const isDirectlyActive = (activeTierIdx === w.tierFrom && activeTierIdx === w.tierTo) ||
+            (activeTierIdx === w.tierFrom || activeTierIdx === w.tierTo);
+
+          let baseAlpha = 0.14 * depthAlpha;
+          let lineWidth = 0.95 * Math.min(1.8, (posA.proj.scale + posB.proj.scale) * 0.5);
+
+          if (w.isSkip) {
+            baseAlpha = 0.22 * depthAlpha;
+            lineWidth = 1.25;
+          }
+          if (isDirectlyActive) {
+            baseAlpha = Math.min(0.55, 0.42 * depthAlpha + 0.15);
+            lineWidth = 1.45;
+          }
+
+          ctx.beginPath();
+          ctx.moveTo(posA.proj.sx, posA.proj.sy);
+          ctx.lineTo(posB.proj.sx, posB.proj.sy);
+
+          if (w.isSkip) {
+            ctx.setLineDash([4, 4]);
+            ctx.lineDashOffset = -(now * 0.04) % 8;
+            ctx.strokeStyle = `rgba(0, 240, 255, ${baseAlpha})`;
+          } else {
+            ctx.setLineDash([]);
+            const grad = ctx.createLinearGradient(posA.proj.sx, posA.proj.sy, posB.proj.sx, posB.proj.sy);
+            grad.addColorStop(0, posA.p.color);
+            grad.addColorStop(1, posB.p.color);
+            ctx.strokeStyle = grad;
+          }
+
+          ctx.globalAlpha = baseAlpha;
+          ctx.lineWidth = lineWidth;
+          ctx.stroke();
+          ctx.globalAlpha = 1.0;
+          ctx.setLineDash([]);
+        });
+
+        for (let i = pulses.length - 1; i >= 0; i--) {
+          const pulse = pulses[i];
+          pulse.progress += pulse.speed;
+
+          let fromNode = pulse.fromNode;
+          let toNode = pulse.toNode;
+          if (pulse.chain && pulse.chain.length > 1) {
+            fromNode = pulse.chain[pulse.legIndex || 0];
+            toNode = pulse.chain[(pulse.legIndex || 0) + 1];
+          }
+
+          const posA = currentPos[fromNode];
+          const posB = currentPos[toNode];
+
+          if (!posA || !posB || pulse.progress >= 1.0) {
+            if (posB && posB.p) {
+              posB.p.charge = 1.0;
+              if (ripples.length >= 16) {
+                ripples.splice(0, ripples.length - 15);
+              }
+              ripples.push({
+                x: posB.curX,
+                y: posB.curY,
+                z: posB.curZ,
+                r: 2,
+                maxR: posB.p.isExit || posB.p.isOutput || posB.p.isRouterHub ? 26 : 14,
+                color: pulse.color,
+                alpha: 0.95
+              });
+            }
+
+            if (pulse.chain && (pulse.legIndex || 0) + 2 < pulse.chain.length) {
+              pulse.legIndex = (pulse.legIndex || 0) + 1;
+              pulse.progress = 0;
+              continue;
+            }
+
+            pulses.splice(i, 1);
+            continue;
+          }
+
+          const t = pulse.progress;
+          const px = posA.curX + (posB.curX - posA.curX) * t;
+          const py = posA.curY + (posB.curY - posA.curY) * t;
+          const pz = posA.curZ + (posB.curZ - posA.curZ) * t;
+
+          const pulseProj = project(px, py, pz, cx, cy);
+          if (!pulseProj) continue;
+
+          const tTrail = Math.max(0, t - pulse.trailLen);
+          const tx = posA.curX + (posB.curX - posA.curX) * tTrail;
+          const ty = posA.curY + (posB.curY - posA.curY) * tTrail;
+          const tz = posA.curZ + (posB.curZ - posA.curZ) * tTrail;
+          const trailProj = project(tx, ty, tz, cx, cy);
+
+          if (trailProj) {
+            const cometGrad = ctx.createLinearGradient(trailProj.sx, trailProj.sy, pulseProj.sx, pulseProj.sy);
+            cometGrad.addColorStop(0, 'rgba(0, 0, 0, 0)');
+            cometGrad.addColorStop(1, pulse.auraColor);
+            ctx.beginPath();
+            ctx.moveTo(trailProj.sx, trailProj.sy);
+            ctx.lineTo(pulseProj.sx, pulseProj.sy);
+            ctx.strokeStyle = cometGrad;
+            ctx.lineWidth = 2.4 * pulseProj.scale;
+            ctx.stroke();
+          }
+
+          const pulseR = 3.2 * pulseProj.scale;
+          const useShadowBlur = pulses.length <= 8;
+          ctx.beginPath();
+          ctx.arc(pulseProj.sx, pulseProj.sy, Math.max(1.8, pulseR), 0, Math.PI * 2);
+          ctx.fillStyle = '#ffffff';
+          if (useShadowBlur) {
+            ctx.shadowColor = pulse.color;
+            ctx.shadowBlur = Math.min(8, 12 * pulseProj.scale);
+          }
+          ctx.fill();
+          if (useShadowBlur) {
+            ctx.shadowBlur = 0;
+          }
+        }
+
+        for (let i = ripples.length - 1; i >= 0; i--) {
+          const rip = ripples[i];
+          rip.r += 0.9;
+          rip.alpha *= 0.91;
+          if (rip.r >= rip.maxR || rip.alpha <= 0.05) {
+            ripples.splice(i, 1);
+            continue;
+          }
+          const ripProj = project(rip.x, rip.y, rip.z, cx, cy);
+          if (ripProj) {
+            ctx.beginPath();
+            ctx.arc(ripProj.sx, ripProj.sy, rip.r * ripProj.scale, 0, Math.PI * 2);
+            ctx.strokeStyle = rip.color;
+            ctx.globalAlpha = rip.alpha;
+            ctx.lineWidth = 1.2 * ripProj.scale;
+            ctx.stroke();
+            ctx.globalAlpha = 1.0;
+          }
+        }
+
+        const visibleParticles = currentPos.filter(item => item.proj !== null);
+        visibleParticles.sort((a, b) => b.proj.depth - a.proj.depth);
+
+        visibleParticles.forEach(item => {
+          const { p, proj } = item;
+          const { sx, sy, scale } = proj;
+
+          const isTierActive = activeTierIdx === p.tier;
+          const breathe = Math.sin(now * 0.003 + p.phaseX) * 0.35;
+          const r = Math.max(2.0, (p.baseR + breathe + (isTierActive ? 1.6 : 0) + p.charge * 2.8) * scale);
+
+          if (isTierActive || p.charge > 0.1 || p.isExpertHub) {
+            const glowR = r * (p.isExpertHub ? 3.4 : (isTierActive ? 3.0 : 2.2));
+            const auraGrad = ctx.createRadialGradient(sx, sy, r * 0.3, sx, sy, glowR);
+            auraGrad.addColorStop(0, p.auraColor);
+            auraGrad.addColorStop(1, 'rgba(0,0,0,0)');
+            ctx.fillStyle = auraGrad;
+            ctx.beginPath();
+            ctx.arc(sx, sy, glowR, 0, Math.PI * 2);
+            ctx.fill();
+          }
+
+          ctx.beginPath();
+          ctx.arc(sx, sy, r, 0, Math.PI * 2);
+          ctx.fillStyle = isTierActive ? '#ffffff' : p.color;
+          ctx.fill();
+
+          ctx.beginPath();
+          ctx.arc(sx, sy, r, 0, Math.PI * 2);
+          ctx.strokeStyle = isTierActive ? p.glowColor : p.color;
+          ctx.lineWidth = Math.max(1, 1.4 * scale);
+          ctx.stroke();
+
+          if (p.isRouterHub || p.isExit || p.isInput || p.isOutput || p.isExpert || (isTierActive && scale > 0.85)) {
+            ctx.font = `${Math.max(8.5, Math.round(9.2 * scale))}px JetBrains Mono, Fira Code, monospace`;
+            ctx.fillStyle = isTierActive ? '#ffffff' : 'rgba(255, 255, 255, 0.72)';
+            ctx.fillText(p.label, sx + r + 4, sy + 3);
+          }
+        });
+
+        ctx.restore();
+        animIdRef.current = requestAnimationFrame(render);
+      };
+
+      animIdRef.current = requestAnimationFrame(render);
+      return () => {
+        if (animIdRef.current) cancelAnimationFrame(animIdRef.current);
+      };
+    }, [isExpanded, activeTierIdx, route, streamVelocity, isGenerating, neuronScopeData, upgradeResult, activeModel]);
+
+    const targetCanvasHeight = isExpanded ? '380px' : (customHeight || '165px');
+    return e('div', {
+      ref: wrapRef,
+      className: `neuron-theater-canvas-wrap ${isExpanded ? 'expanded' : ''}`,
+      style: { position: 'relative', width: '100%', height: targetCanvasHeight }
+    },
+      e('canvas', {
+        ref: canvasRef,
+        className: 'neuron-theater-canvas',
+        onPointerDown: e => {
+          isDraggingRef.current = true;
+          isResettingRef.current = false;
+          velXRef.current = 0;
+          velYRef.current = 0;
+          lastMouseRef.current = { x: e.clientX, y: e.clientY };
+          try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {}
+        },
+        onPointerMove: e => {
+          if (!isDraggingRef.current) return;
+          const dx = e.clientX - lastMouseRef.current.x;
+          const dy = e.clientY - lastMouseRef.current.y;
+          lastMouseRef.current = { x: e.clientX, y: e.clientY };
+          rotYRef.current += dx * 0.007;
+          rotXRef.current = Math.max(-1.15, Math.min(1.15, rotXRef.current + dy * 0.007));
+          velYRef.current = dx * 0.005;
+          velXRef.current = dy * 0.005;
+          autoRotatePausedUntilRef.current = performance.now() + 3500;
+        },
+        onPointerUp: e => {
+          isDraggingRef.current = false;
+          try { e.currentTarget.releasePointerCapture(e.pointerId); } catch (_) {}
+        },
+        onPointerCancel: () => { isDraggingRef.current = false; },
+        onWheel: e => {
+          e.preventDefault();
+          const delta = e.deltaY;
+          targetCamDistRef.current = Math.max(180, Math.min(620, targetCamDistRef.current + delta * 0.38));
+          autoRotatePausedUntilRef.current = performance.now() + 2500;
+        }
+      }),
+      e('div', { className: 'neuron-theater-hud-left' },
+        e('span', { className: `neuron-tier-pill reflex ${activeTierIdx === 0 ? 'active' : ''}` }, 'Tier 0 · Reflex'),
+        e('span', { className: `neuron-tier-pill limbic ${activeTierIdx === 1 ? 'active' : ''}` }, 'Tier 1 · Limbic MoE'),
+        e('span', { className: `neuron-tier-pill cortex ${activeTierIdx === 2 ? 'active' : ''}` }, 'Tier 2 · Cortex')
+      ),
+      e('div', { className: 'neuron-theater-hud' },
+        upgradeResult && e('div', {
+          className: 'neuron-hud-item',
+          style: { color: '#10b981', borderColor: 'rgba(16, 185, 129, 0.4)', fontWeight: 600 }
+        }, [
+          renderIcon('branch', 10, { marginRight: '4px', color: '#10b981' }),
+          `${(upgradeResult.model_name || 'Triune').toUpperCase()}: ${upgradeResult.estimated_throughput_gain} Speedup · ${upgradeResult.compression_ratio}x`
+        ]),
+        e('div', { className: `neuron-hud-item ${(streamVelocity && streamVelocity.current > 0) || isGenerating ? 'accent' : ''}` },
+          renderIcon('bolt', 11, { marginRight: '2px' }),
+          (streamVelocity && streamVelocity.current > 0) ? `${streamVelocity.current} tok/s` : (isGenerating ? 'Active Flow' : '0 tok/s')
+        ),
+        e('div', { className: 'neuron-hud-item' }, `${fps} FPS`),
+        e('div', { className: 'neuron-hud-item' }, `${particlesRef.current ? particlesRef.current.length : 50}N · ${wiresRef.current ? wiresRef.current.length : 84}W`)
+      ),
+      e('div', { className: 'neuron-theater-controls' },
+        e('button', {
+          className: 'btn-stimulate-synapse',
+          title: 'Trigger high-energy photon cascade across all layers',
+          onClick: triggerStimulate
+        }, [renderIcon('bolt', 11, { marginRight: '3px' }), 'Stimulate Synapses']),
+        e('button', {
+          className: 'neuron-ctrl-btn',
+          title: 'Reset camera orbit & zoom',
+          onClick: resetCamera
+        }, [renderIcon('refresh', 11, { marginRight: '3px' }), 'Reset View']),
+        !customHeight && e('button', {
+          className: `neuron-ctrl-btn ${isExpanded ? 'active' : ''}`,
+          title: isExpanded ? 'Collapse 3D visualizer to compact view' : 'Expand 3D visualizer to large theater mode',
+          onClick: () => setIsExpanded(!isExpanded)
+        }, [renderIcon('frame', 11, { marginRight: '4px' }), isExpanded ? 'Compact' : 'Expand']),
+        e('span', { className: 'neuron-mouse-hint' }, 'Drag: Orbit · Scroll: Zoom')
+      )
+    );
+  }
+
+  // ============================================================================
+  // High-Performance Syntax Highlighting, Incremental Markdown & DOM Virtualization
+  // Ensures Silky-Smooth 120 FPS Even During Massive 8192-Token Stream Outputs
+  // ============================================================================
+
+  const SYNTAX_KEYWORDS = new Set([
+    'def', 'class', 'return', 'function', 'const', 'let', 'var', 'if', 'else', 'elif',
+    'for', 'while', 'import', 'export', 'from', 'as', 'try', 'except', 'catch', 'finally',
+    'async', 'await', 'self', 'this', 'True', 'False', 'None', 'null', 'undefined', 'in',
+    'is', 'not', 'and', 'or', 'lambda', 'with', 'yield', 'break', 'continue', 'pass',
+    'switch', 'case', 'default', 'new', 'typeof', 'instanceof', 'struct', 'fn', 'pub',
+    'impl', 'trait', 'mut', 'select', 'insert', 'update', 'delete', 'where', 'from'
+  ]);
+
+  const SYNTAX_BUILTINS = new Set([
+    'torch', 'nn', 'Tensor', 'Module', 'optim', 'cuda', 'zeros', 'ones', 'empty',
+    'int', 'float', 'str', 'bool', 'list', 'dict', 'set', 'tuple', 'len', 'range',
+    'print', 'console', 'log', 'Math', 'JSON', 'Promise', 'Array', 'Object', 'String'
+  ]);
+
+  const syntaxHighlightCache = new Map();
+
+  function highlightSyntaxLine(line, lang = 'text') {
+    if (!line) return [e('span', { key: 'empty' }, '')];
+    const cacheKey = `${lang}:${line}`;
+    if (syntaxHighlightCache.has(cacheKey)) {
+      return syntaxHighlightCache.get(cacheKey);
+    }
+
+    const tokens = [];
+    const tokenRegex = /(".*?"|'.*?'|`.*?`|#.*|\/\/.*|\b(?:def|class|return|function|const|let|var|if|else|elif|for|while|import|export|from|as|try|except|catch|finally|async|await|self|this|True|False|None|null|undefined|in|is|not|and|or|lambda|with|yield|break|continue|pass|switch|case|default|new|typeof|instanceof|struct|fn|pub|impl|trait|mut)\b|\b(?:torch|nn|Tensor|Module|optim|cuda|zeros|ones|empty|int|float|str|bool|list|dict|set|tuple|len|range|print|console|log|Math|JSON|Promise|Array|Object|String)\b|\b\d+(?:\.\d+)?\b|[A-Za-z_]\w*|[^\s\w]+|\s+)/g;
+
+    let match;
+    let idx = 0;
+    while ((match = tokenRegex.exec(line)) !== null) {
+      const tok = match[0];
+      const trimmed = tok.trim();
+      let cls = '';
+
+      if (tok.startsWith('#') || tok.startsWith('//')) {
+        cls = 'syntax-comment';
+      } else if (tok.startsWith('"') || tok.startsWith("'") || tok.startsWith('`')) {
+        cls = 'syntax-string';
+      } else if (SYNTAX_KEYWORDS.has(trimmed)) {
+        cls = 'syntax-keyword';
+      } else if (SYNTAX_BUILTINS.has(trimmed)) {
+        cls = 'syntax-builtin';
+      } else if (/^\d+(\.\d+)?$/.test(trimmed)) {
+        cls = 'syntax-number';
+      } else if (/^[+\-*/%=&|<>!^~?:;,.()\[\]{}]+$/.test(trimmed)) {
+        cls = 'syntax-op';
+      }
+
+      tokens.push(
+        cls ? e('span', { key: idx++, className: cls }, tok) : tok
+      );
+    }
+
+    if (syntaxHighlightCache.size > 3000) {
+      syntaxHighlightCache.clear();
+    }
+    syntaxHighlightCache.set(cacheKey, tokens);
+    return tokens;
+  }
+
+  function CodeBlockView(props) {
+    const { code, lang } = props;
+    const [copied, setCopied] = useState(false);
+    const handleCopy = () => {
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(code);
+        } else {
+          const ta = document.createElement('textarea');
+          ta.value = code;
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+        }
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      } catch (_) {}
+    };
+
+    const lines = useMemo(() => (code ? code.split('\n') : ['']), [code]);
+
+    return e('div', { className: 'code-block-wrapper' },
+      e('div', { className: 'code-block-header' },
+        e('div', { className: 'code-block-lang' }, [
+          renderIcon('code', 11, { marginRight: '5px' }),
+          lang || 'code'
+        ]),
+        e('button', {
+          className: 'code-block-copy-btn',
+          onClick: handleCopy,
+          title: 'Copy code to clipboard'
+        }, [
+          renderIcon(copied ? 'check' : 'copy', 11, { marginRight: '4px' }),
+          copied ? 'Copied' : 'Copy'
+        ])
+      ),
+      e('pre', { className: 'code-block-pre' },
+        e('code', { className: `language-${lang || 'plaintext'}` },
+          lines.map((line, lIdx) =>
+            e('div', { key: lIdx, className: 'code-line' },
+              e('span', { className: 'code-line-num' }, lIdx + 1),
+              e('span', { className: 'code-line-content' }, highlightSyntaxLine(line, lang))
+            )
+          )
+        )
+      )
+    );
+  }
+
+  const markdownBlocksCache = new Map();
+
+  function parseMarkdownBlocks(rawText) {
+    if (!rawText) return [];
+    if (markdownBlocksCache.has(rawText)) {
+      return markdownBlocksCache.get(rawText);
+    }
+
+    const blocks = [];
+    const lines = rawText.split('\n');
+    let inCodeBlock = false;
+    let codeLang = '';
+    let codeLines = [];
+    let currentParagraph = [];
+
+    const flushParagraph = () => {
+      if (currentParagraph.length > 0) {
+        const text = currentParagraph.join('\n').trim();
+        if (text) {
+          blocks.push({
+            type: 'paragraph',
+            text: text,
+            key: `p-${blocks.length}`
+          });
+        }
+        currentParagraph = [];
+      }
+    };
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const trimmed = line.trim();
+
+      if (trimmed.startsWith('```')) {
+        if (!inCodeBlock) {
+          flushParagraph();
+          inCodeBlock = true;
+          codeLang = trimmed.slice(3).trim().toLowerCase() || 'text';
+          codeLines = [];
+        } else {
+          inCodeBlock = false;
+          blocks.push({
+            type: 'code',
+            lang: codeLang,
+            code: codeLines.join('\n'),
+            key: `c-${blocks.length}`
+          });
+          codeLines = [];
+        }
+        continue;
+      }
+
+      if (inCodeBlock) {
+        codeLines.push(line);
+        continue;
+      }
+
+      const hMatch = line.match(/^(#{1,3})\s+(.+)/);
+      if (hMatch) {
+        flushParagraph();
+        blocks.push({
+          type: 'heading',
+          level: hMatch[1].length,
+          text: hMatch[2].trim(),
+          key: `h-${blocks.length}`
+        });
+        continue;
+      }
+
+      if (trimmed.startsWith('>')) {
+        flushParagraph();
+        blocks.push({
+          type: 'quote',
+          text: trimmed.slice(1).trim(),
+          key: `q-${blocks.length}`
+        });
+        continue;
+      }
+
+      const listMatch = line.match(/^(\s*)([-*•]|\d+\.)\s+(.+)/);
+      if (listMatch) {
+        flushParagraph();
+        blocks.push({
+          type: 'list_item',
+          marker: listMatch[2],
+          indent: listMatch[1].length,
+          text: listMatch[3].trim(),
+          key: `l-${blocks.length}`
+        });
+        continue;
+      }
+
+      if (!trimmed) {
+        flushParagraph();
+        continue;
+      }
+
+      currentParagraph.push(line);
+    }
+
+    if (inCodeBlock && codeLines.length > 0) {
+      blocks.push({
+        type: 'code',
+        lang: codeLang,
+        code: codeLines.join('\n'),
+        key: `c-${blocks.length}`
+      });
+    }
+
+    flushParagraph();
+
+    if (markdownBlocksCache.size > 800) {
+      markdownBlocksCache.clear();
+    }
+    markdownBlocksCache.set(rawText, blocks);
+    return blocks;
+  }
+
+  function renderInlineFormatting(text) {
+    if (!text) return '';
+    const parts = [];
+    const regex = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)/g;
+    let lastIndex = 0;
+    let match;
+    let k = 0;
+
+    while ((match = regex.exec(text)) !== null) {
+      if (match.index > lastIndex) {
+        parts.push(text.slice(lastIndex, match.index));
+      }
+      const tok = match[0];
+      if (tok.startsWith('`') && tok.endsWith('`')) {
+        parts.push(e('code', { key: `code-${k++}`, className: 'formatted-inline-code' }, tok.slice(1, -1)));
+      } else if (tok.startsWith('**') && tok.endsWith('**')) {
+        parts.push(e('strong', { key: `strong-${k++}` }, tok.slice(2, -2)));
+      } else if (tok.startsWith('*') && tok.endsWith('*')) {
+        parts.push(e('em', { key: `em-${k++}` }, tok.slice(1, -1)));
+      }
+      lastIndex = match.index + tok.length;
+    }
+
+    if (lastIndex < text.length) {
+      parts.push(text.slice(lastIndex));
+    }
+
+    return parts.length === 0 ? text : parts;
+  }
+
+  function renderSingleBlock(block) {
+    if (block.type === 'code') {
+      return e(CodeBlockView, { key: block.key, code: block.code, lang: block.lang });
+    }
+    if (block.type === 'heading') {
+      const tag = block.level === 1 ? 'h2' : (block.level === 2 ? 'h3' : 'h4');
+      return e(tag, { key: block.key, className: `formatted-heading formatted-heading-${block.level}` }, renderInlineFormatting(block.text));
+    }
+    if (block.type === 'quote') {
+      return e('blockquote', { key: block.key, className: 'formatted-blockquote' }, renderInlineFormatting(block.text));
+    }
+    if (block.type === 'list_item') {
+      return e('div', { key: block.key, className: 'formatted-list-item', style: { paddingLeft: `${block.indent * 12 + 8}px` } },
+        e('span', { className: 'formatted-list-marker' }, block.marker),
+        e('span', { className: 'formatted-list-content' }, renderInlineFormatting(block.text))
+      );
+    }
+    return e('p', { key: block.key, className: 'formatted-paragraph' }, renderInlineFormatting(block.text));
+  }
+
+  function VirtualizedFormattedText(props) {
+    const { text, maxBlocksBeforeVirtual = 24 } = props;
+    const [isForceFullDom, setIsForceFullDom] = useState(false);
+    const [visibleWindow, setVisibleWindow] = useState({ start: 0, end: 28 });
+    const containerRef = useRef(null);
+
+    const blocks = useMemo(() => parseMarkdownBlocks(text), [text]);
+    const totalBlocks = blocks.length;
+    const isVirtualCandidate = totalBlocks > maxBlocksBeforeVirtual;
+
+    const approxTokens = useMemo(() => {
+      return Math.max(1, Math.round((text ? text.length : 0) / 3.8));
+    }, [text]);
+
+    useEffect(() => {
+      if (!isVirtualCandidate || isForceFullDom) return;
+
+      const container = containerRef.current;
+      if (!container) return;
+      const scrollParent = container.closest('.chat-scroll-area') || container.parentElement;
+      if (!scrollParent) return;
+
+      let rafId = null;
+      const handleScroll = () => {
+        if (rafId) return;
+        rafId = requestAnimationFrame(() => {
+          rafId = null;
+          const parentRect = scrollParent.getBoundingClientRect();
+          const elemRect = container.getBoundingClientRect();
+
+          const offsetTop = parentRect.top - elemRect.top;
+          const viewportHeight = parentRect.height;
+
+          // Average block height estimation (~44px)
+          const avgBlockHeight = 44;
+          const rawStart = Math.floor(Math.max(0, offsetTop) / avgBlockHeight);
+          const visibleCount = Math.ceil(viewportHeight / avgBlockHeight);
+
+          // Overscan buffer of 14 blocks above and 14 blocks below for butter-smooth scrolling
+          const start = Math.max(0, rawStart - 14);
+          const end = Math.min(totalBlocks, start + visibleCount + 28);
+
+          setVisibleWindow(prev => (prev.start !== start || prev.end !== end ? { start, end } : prev));
+        });
+      };
+
+      scrollParent.addEventListener('scroll', handleScroll, { passive: true });
+      handleScroll();
+      return () => {
+        if (rafId) cancelAnimationFrame(rafId);
+        scrollParent.removeEventListener('scroll', handleScroll);
+      };
+    }, [isVirtualCandidate, isForceFullDom, totalBlocks]);
+
+    if (!text) return null;
+
+    if (!isVirtualCandidate || isForceFullDom) {
+      return e('div', { className: 'formatted-text-content full-dom' },
+        isVirtualCandidate && e('div', { className: 'virtualized-meta-bar' },
+          e('div', { className: 'virtualized-meta-pill' }, [
+            renderIcon('bolt', 11, { marginRight: '4px', color: '#10b981' }),
+            `Full DOM Mounted · ${approxTokens.toLocaleString()} Tokens (${totalBlocks} Blocks)`
+          ]),
+          e('button', {
+            className: 'virtualized-toggle-btn',
+            onClick: () => setIsForceFullDom(false)
+          }, 'Enable 120 FPS Virtual Window')
+        ),
+        blocks.map(block => renderSingleBlock(block))
+      );
+    }
+
+    // Virtualized Windowed View
+    const avgHeight = 44;
+    const topBlocksCount = visibleWindow.start;
+    const bottomBlocksCount = Math.max(0, totalBlocks - visibleWindow.end);
+    const topSpacerHeight = topBlocksCount * avgHeight;
+    const bottomSpacerHeight = bottomBlocksCount * avgHeight;
+    const renderedBlocks = blocks.slice(visibleWindow.start, visibleWindow.end);
+
+    return e('div', { ref: containerRef, className: 'formatted-text-content virtualized-active' },
+      e('div', { className: 'virtualized-meta-bar' },
+        e('div', { className: 'virtualized-meta-pill' }, [
+          renderIcon('bolt', 11, { marginRight: '4px', color: '#38bdf8' }),
+          `⚡ Virtual DOM Active · ${approxTokens.toLocaleString()} Tokens · 120 FPS Window (${visibleWindow.start + 1}–${Math.min(visibleWindow.end, totalBlocks)} of ${totalBlocks} blocks)`
+        ]),
+        e('button', {
+          className: 'virtualized-toggle-btn',
+          title: 'Mount all DOM elements for in-page browser search',
+          onClick: () => setIsForceFullDom(true)
+        }, 'Expand Full DOM')
+      ),
+      topSpacerHeight > 0 && e('div', {
+        className: 'virtual-spacer top-spacer',
+        style: { height: `${topSpacerHeight}px` }
+      }),
+      renderedBlocks.map(block => renderSingleBlock(block)),
+      bottomSpacerHeight > 0 && e('div', {
+        className: 'virtual-spacer bottom-spacer',
+        style: { height: `${bottomSpacerHeight}px` }
+      })
+    );
+  }
+
+  function renderFormattedText(rawText, options = {}) {
+    if (!rawText) return null;
+    return e(VirtualizedFormattedText, { text: rawText, ...options });
+  }
+
+  const ChatMessageBubble = React.memo(function ChatMessageBubble(props) {
+    const { m, idx, isLastAssistant, isGenerating, isThoughtExpanded, onToggleThought, onFork, onCopy } = props;
+    const parsedThought = m.isAssistant ? parseReasoningThought(m.text, isGenerating && isLastAssistant) : null;
+    const thoughtExpanded = isThoughtExpanded !== undefined ? isThoughtExpanded : (parsedThought ? parsedThought.isLiveThinking : false);
+
+    return e('div', { key: m.id || idx, className: `chat-bubble ${m.isAssistant ? 'assistant' : 'user'}` },
+      e('div', { className: 'bubble-header' },
+        e('span', { className: 'bubble-sender' }, m.sender),
+        e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+          e('span', { className: 'bubble-time' }, m.time),
+          e('button', {
+            className: 'btn-fork-bubble',
+            title: 'Fork conversation from this turn into a new branch',
+            onClick: onFork
+          }, [renderIcon('branch', 11, { marginRight: '4px' }), 'Fork Path']),
+          e('button', {
+            className: 'btn-copy-bubble',
+            title: 'Copy message text',
+            onClick: () => onCopy(parsedThought && parsedThought.hasThought ? parsedThought.cleanText || m.text : m.text)
+          }, [renderIcon('copy', 12, { marginRight: '4px' }), 'Copy'])
+        )
+      ),
+      parsedThought && parsedThought.hasThought && e('div', {
+        className: `reasoning-accordion ${parsedThought.isLiveThinking ? 'active' : 'completed'} ${thoughtExpanded ? 'expanded' : 'collapsed'}`
+      },
+        e('div', {
+          className: 'reasoning-header',
+          onClick: onToggleThought
+        },
+          e('div', { className: 'reasoning-header-left' },
+            e('span', { className: 'reasoning-label' }, [
+              renderIcon('brain', 13, { marginRight: '5px' }),
+              parsedThought.isLiveThinking ? 'Thinking live...' : 'Reasoning Process'
+            ]),
+            parsedThought.isLiveThinking ? (
+              e('span', { className: 'reasoning-timer' },
+                e('span', { className: 'velocity-gauge-dot streaming', style: { display: 'inline-block', marginRight: '4px' } }),
+                'Active reasoning'
+              )
+            ) : (
+              e('span', { className: 'reasoning-badge' }, `${parsedThought.steps.length > 0 ? `${parsedThought.steps.length} steps` : 'Complete'} · verified`)
+            )
+          ),
+          e('div', { className: 'reasoning-header-right' },
+            e('span', { className: 'reasoning-toggle-hint' }, thoughtExpanded ? 'Collapse' : 'Inspect Steps'),
+            e('span', { className: `reasoning-chevron ${thoughtExpanded ? 'up' : 'down'}` }, renderIcon(thoughtExpanded ? 'chevronUp' : 'chevronDown', 11))
+          )
+        ),
+        thoughtExpanded && e('div', { className: 'reasoning-body' },
+          parsedThought.steps.length > 0 && e('div', { className: 'reasoning-steps-section' },
+            e('div', { className: 'reasoning-steps-title' }, 'Step Breakdown & Deductions:'),
+            e('div', { className: 'reasoning-step-list' },
+              parsedThought.steps.map((st, sIdx) => {
+                const isLastStep = sIdx === parsedThought.steps.length - 1;
+                const inProgress = parsedThought.isLiveThinking && isLastStep;
+                return e('div', { key: sIdx, className: 'reasoning-step-item' },
+                  e('span', { className: `reasoning-step-badge ${inProgress ? 'spinning' : ''}` }, inProgress ? renderIcon('refresh', 10) : renderIcon('check', 10)),
+                  e('span', { className: 'reasoning-step-num' }, `Step ${sIdx + 1}:`),
+                  e('span', { className: 'reasoning-step-text' }, st)
+                );
+              })
+            )
+          ),
+          parsedThought.cleanText && e('div', { className: 'reasoning-synthesis-section' },
+            e('div', { className: 'reasoning-synthesis-title' }, 'Deductive Synthesis:'),
+            e('div', { className: 'reasoning-synthesis-content' }, renderFormattedText(parsedThought.cleanText))
+          )
+        )
+      ),
+      e('div', { className: 'bubble-text' }, renderFormattedText(parsedThought && parsedThought.hasThought ? parsedThought.cleanText : m.text)),
+      m.telemetry && e('div', { className: 'bubble-telemetry-pill' },
+        e('span', { className: 'telem-route-tag' }, `⚡ ${m.telemetry.route ? m.telemetry.route.toUpperCase() : 'REFLEX'}`),
+        m.telemetry.throughput > 0 && e('span', { className: 'telem-item' }, `${m.telemetry.throughput} t/s`),
+        m.telemetry.ttft > 0 && e('span', { className: 'telem-item' }, `TTFT ${m.telemetry.ttft}ms`),
+        m.telemetry.vram_gb && e('span', { className: 'telem-item' }, `${m.telemetry.vram_gb} GB`),
+        m.telemetry.latency_ms > 0 && e('span', { className: 'telem-item' }, `${m.telemetry.latency_ms.toFixed(0)}ms`),
+        m.telemetry.tokens > 0 && e('span', { className: 'telem-item dim' }, `${m.telemetry.tokens} toks`)
+      )
+    );
+  }, (prev, next) => {
+    return (
+      prev.m.text === next.m.text &&
+      prev.m.sender === next.m.sender &&
+      prev.m.time === next.m.time &&
+      prev.isThoughtExpanded === next.isThoughtExpanded &&
+      prev.isGenerating === next.isGenerating &&
+      prev.isLastAssistant === next.isLastAssistant &&
+      prev.m.telemetry === next.m.telemetry
+    );
+  });
 
   function TriuneStudio() {
     const cleanText = (str) => {
@@ -1403,12 +3087,25 @@
     };
     const [activeTab, setActiveTab] = useState(() => {
       try {
+        const hash = window.location.hash ? window.location.hash.replace('#', '') : '';
+        if (hash && Object.prototype.hasOwnProperty.call(TAB_TITLES, hash)) return hash;
         const savedTab = window.localStorage.getItem('triune.studio.activeTab');
         return Object.prototype.hasOwnProperty.call(TAB_TITLES, savedTab) ? savedTab : 'chat';
       } catch (e) {
         return 'chat';
       }
     });
+
+    useEffect(() => {
+      const onHashChange = () => {
+        const h = window.location.hash.replace('#', '');
+        if (h && Object.prototype.hasOwnProperty.call(TAB_TITLES, h)) {
+          setActiveTab(h);
+        }
+      };
+      window.addEventListener('hashchange', onHashChange);
+      return () => window.removeEventListener('hashchange', onHashChange);
+    }, []);
     const [backendStatus, setBackendStatus] = useState('checking');
     const [backendRetry, setBackendRetry] = useState(0);
     const [vramUsage, setVramUsage] = useState({ allocated: 0.0, reserved: 0.0, total: 0.0, oom_risk: false });
@@ -1428,9 +3125,21 @@
     const [statusToast, setStatusToast] = useState(null);
     const [studioTheme, setStudioTheme] = useState(() => {
       try {
-        const saved = window.localStorage.getItem('triune.studio.theme');
-        return APPEARANCE_THEMES.some(theme => theme.id === saved) ? saved : 'modern-light';
-      } catch (e) { return 'modern-light'; }
+        const migrated = window.localStorage.getItem('triune.studio.theme_migrated_v2');
+        let saved = window.localStorage.getItem('triune.studio.theme');
+        if (!migrated) {
+          window.localStorage.setItem('triune.studio.theme_migrated_v2', 'true');
+          if (!saved || saved === 'modern-light' || saved === 'classic-light' || saved === 'editorial-cream') {
+            saved = 'obsidian-glass';
+            window.localStorage.setItem('triune.studio.theme', 'obsidian-glass');
+          }
+        }
+        if (saved && APPEARANCE_THEMES.some(theme => theme.id === saved)) {
+          return saved;
+        }
+        window.localStorage.setItem('triune.studio.theme', 'obsidian-glass');
+        return 'obsidian-glass';
+      } catch (e) { return 'obsidian-glass'; }
     });
     const [appearanceFilter, setAppearanceFilter] = useState('All');
     const [customAccent, setCustomAccent] = useState(() => {
@@ -1501,13 +3210,89 @@
     const [inferenceWarmupStatus, setInferenceWarmupStatus] = useState('unknown');
     const [inferenceWarmupError, setInferenceWarmupError] = useState('');
     const [route, setRoute] = useState('auto');
-    const [systemPrompt, setSystemPrompt] = useState(SYSTEM_PROMPT_PRESETS[0].prompt);
+    const [systemPrompt, setSystemPrompt] = useState(DEFAULT_SYSTEM_PROMPT);
     const [temperature, setTemperature] = useState(0.7);
     const [maxTokens, setMaxTokens] = useState(256);
     const chatBottomRef = useRef(null);
     const chatAbortControllerRef = useRef(null);
     const [neuronScopeData, setNeuronScopeData] = useState(null);
-    const [showNeuronScope, setShowNeuronScope] = useState(true);
+    const [showNeuralConsole, setShowNeuralConsole] = useState(() => {
+      try {
+        const val = window.localStorage.getItem('triune.playground.neuralConsoleOpen');
+        if (val !== null) return val === 'true';
+        return true;
+      } catch (_) { return true; }
+    });
+    const [neuralConsoleView, setNeuralConsoleView] = useState(() => {
+      try {
+        return window.localStorage.getItem('triune.playground.neuralConsoleView') || '3d';
+      } catch (_) { return '3d'; }
+    });
+    const [neuralConsoleDock, setNeuralConsoleDock] = useState(() => {
+      try {
+        return window.localStorage.getItem('triune.playground.neuralConsoleDock') || 'dock-right';
+      } catch (_) { return 'dock-right'; }
+    });
+    const [neuralConsoleWidth, setNeuralConsoleWidth] = useState(() => {
+      try {
+        const w = parseInt(window.localStorage.getItem('triune.playground.neuralConsoleWidth'), 10);
+        return (!isNaN(w) && w >= 320 && w <= 1100) ? w : 500;
+      } catch (_) { return 500; }
+    });
+    const [neuralConsoleHeight, setNeuralConsoleHeight] = useState(() => {
+      try {
+        const h = parseInt(window.localStorage.getItem('triune.playground.neuralConsoleHeight'), 10);
+        return (!isNaN(h) && h >= 165 && h <= 800) ? h : 360;
+      } catch (_) { return 360; }
+    });
+    const [neuralConsolePos, setNeuralConsolePos] = useState(() => {
+      try {
+        const p = JSON.parse(window.localStorage.getItem('triune.playground.neuralConsolePos'));
+        if (p && typeof p.x === 'number' && typeof p.y === 'number') return p;
+      } catch (_) {}
+      return { x: Math.max(20, (typeof window !== 'undefined' ? window.innerWidth - 540 : 700)), y: 80 };
+    });
+    const [isDraggingConsoleWindow, setIsDraggingConsoleWindow] = useState(false);
+    const [isResizingConsole, setIsResizingConsole] = useState(false);
+    const consoleDragOffsetRef = useRef({ x: 0, y: 0 });
+
+    const [playgroundMode, setPlaygroundMode] = useState(() => {
+      try { return window.localStorage.getItem('triune.playground.mode') || 'chat'; } catch (_) { return 'chat'; }
+    });
+    const [audioFeedback, setAudioFeedback] = useState(() => {
+      try { return window.localStorage.getItem('triune.playground.audio') === 'true'; } catch (_) { return false; }
+    });
+    const [streamVelocity, setStreamVelocity] = useState({ current: 0, peak: 0, totalTokens: 0, isStreaming: false });
+    const [expandedThoughts, setExpandedThoughts] = useState({});
+    const streamTokenTimestampsRef = useRef([]);
+
+    const [arenaPrompt, setArenaPrompt] = useState('');
+    const [arenaConfigA, setArenaConfigA] = useState({ model: 'triune-small', route: 'reflex', temp: 0.2 });
+    const [arenaConfigB, setArenaConfigB] = useState({ model: 'triune-small', route: 'cortex', temp: 0.8 });
+    const [arenaResultA, setArenaResultA] = useState({ text: '', isStreaming: false, telemetry: null, speed: 0, latency: 0, ttft: 0, tokensCount: 0, error: null });
+    const [arenaResultB, setArenaResultB] = useState({ text: '', isStreaming: false, telemetry: null, speed: 0, latency: 0, ttft: 0, tokensCount: 0, error: null });
+    const [arenaWinner, setArenaWinner] = useState(null);
+    const [isArenaBattling, setIsArenaBattling] = useState(false);
+    const arenaAbortRef = useRef(null);
+
+    const [tokenLabText, setTokenLabText] = useState('Triune MoE dynamic routing activates shallow Reflex for high confidence tokens.');
+    const [tokenLabTokens, setTokenLabTokens] = useState(() => tokenizeTextWithEntropy('Triune MoE dynamic routing activates shallow Reflex for high confidence tokens.'));
+    const [selectedTokenIdx, setSelectedTokenIdx] = useState(null);
+
+    const recordStreamToken = (tokenCount = 1) => {
+      const now = performance.now();
+      const timestamps = streamTokenTimestampsRef.current;
+      for (let i = 0; i < tokenCount; i++) timestamps.push(now);
+      const windowStart = now - 1000;
+      while (timestamps.length && timestamps[0] < windowStart) timestamps.shift();
+      const currentSpeed = timestamps.length;
+      setStreamVelocity(prev => ({
+        current: currentSpeed,
+        peak: Math.max(prev.peak, currentSpeed),
+        totalTokens: prev.totalTokens + tokenCount,
+        isStreaming: true
+      }));
+    };
 
     const refreshNeuronScope = async () => {
       try {
@@ -1566,6 +3351,16 @@
     const canvasRef = useRef(null);
     const [windowWidth, setWindowWidth] = useState(typeof window !== 'undefined' ? window.innerWidth : 1200);
     const [nodeCatalog, setNodeCatalog] = useState(BUILTIN_NODE_CATALOG);
+
+    const [upgradeModelName, setUpgradeModelName] = useState('active');
+    const [upgradeSourceType, setUpgradeSourceType] = useState('dense_transformer');
+    const [upgradeReflexRatio, setUpgradeReflexRatio] = useState(0.25);
+    const [upgradeLimbicExperts, setUpgradeLimbicExperts] = useState(8);
+    const [upgradeCortexGla, setUpgradeCortexGla] = useState(true);
+    const [upgradeResult, setUpgradeResult] = useState(null);
+    const [isUpgradingModel, setIsUpgradingModel] = useState(false);
+    const [selectedInspectorLayer, setSelectedInspectorLayer] = useState(null);
+    const [showArchInspectorPlayground, setShowArchInspectorPlayground] = useState(false);
 
     // Visual Node Graph State (Unreal Engine / Blender Style Freedom)
     const [nodes, setNodes] = useState(() => (readSavedWorkflow() || DAG_PRESETS.triune_canonical_hierarchical).nodes);
@@ -1844,6 +3639,193 @@
       setStatusToast(msg);
       toastTimerRef.current = setTimeout(() => setStatusToast(null), 3000);
     };
+
+    const handleUpgradeModel = async (customName = null, applyAsActive = false) => {
+      const targetModel = customName || upgradeModelName;
+      setIsUpgradingModel(true);
+      try {
+        const res = await apiFetch('/v1/models/upgrade_to_triune', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model_name: targetModel,
+            source_type: upgradeSourceType,
+            reflex_ratio: upgradeReflexRatio,
+            limbic_experts: upgradeLimbicExperts,
+            cortex_gla: upgradeCortexGla,
+            apply_as_active: applyAsActive
+          })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          data.timestamp = Date.now();
+          setUpgradeResult(data);
+          if (data.layer_mapping && data.layer_mapping.length > 0) {
+            setSelectedInspectorLayer(data.layer_mapping[0]);
+          }
+          if (applyAsActive) {
+            const nextActiveId = data.active_model_id || `triune-${targetModel}`;
+            setActiveModel(nextActiveId);
+            try {
+              window.localStorage.setItem('triune.studio.activeModel', nextActiveId);
+            } catch (_) {}
+            refreshNeuronScope();
+            showToast(`Transmuted ${targetModel} into active Triune 3-Tier model (${data.estimated_throughput_gain} speedup)!`);
+          } else {
+            showToast(`Transmutation profile ready for ${targetModel} (${data.estimated_throughput_gain} speedup)!`);
+          }
+        } else {
+          showToast('Failed to transmute model architecture');
+        }
+      } catch (err) {
+        showToast(`Transmutation error: ${err.message}`);
+      } finally {
+        setIsUpgradingModel(false);
+      }
+    };
+
+    const handleSetConsoleDock = (newDock) => {
+      setNeuralConsoleDock(newDock);
+      try { window.localStorage.setItem('triune.playground.neuralConsoleDock', newDock); } catch (_) {}
+    };
+
+    const handleSetConsoleSizePreset = (preset) => {
+      if (preset === 'compact') {
+        setNeuralConsoleWidth(380);
+        setNeuralConsoleHeight(220);
+        try {
+          window.localStorage.setItem('triune.playground.neuralConsoleWidth', '380');
+          window.localStorage.setItem('triune.playground.neuralConsoleHeight', '220');
+        } catch (_) {}
+      } else if (preset === 'expanded') {
+        setNeuralConsoleWidth(720);
+        setNeuralConsoleHeight(520);
+        try {
+          window.localStorage.setItem('triune.playground.neuralConsoleWidth', '720');
+          window.localStorage.setItem('triune.playground.neuralConsoleHeight', '520');
+        } catch (_) {}
+      } else {
+        setNeuralConsoleWidth(500);
+        setNeuralConsoleHeight(360);
+        try {
+          window.localStorage.setItem('triune.playground.neuralConsoleWidth', '500');
+          window.localStorage.setItem('triune.playground.neuralConsoleHeight', '360');
+        } catch (_) {}
+      }
+    };
+
+    const handleColResizeStart = (e) => {
+      e.preventDefault();
+      setIsResizingConsole(true);
+      const startX = e.clientX;
+      const startW = neuralConsoleWidth;
+      const onMove = (moveEv) => {
+        const delta = startX - moveEv.clientX;
+        const maxW = Math.max(400, Math.floor((window.innerWidth || 1200) * 0.75));
+        const newW = Math.max(320, Math.min(maxW, startW + delta));
+        setNeuralConsoleWidth(newW);
+      };
+      const onUp = (upEv) => {
+        setIsResizingConsole(false);
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        try {
+          const delta = startX - upEv.clientX;
+          const maxW = Math.max(400, Math.floor((window.innerWidth || 1200) * 0.75));
+          const finalW = Math.max(320, Math.min(maxW, startW + delta));
+          window.localStorage.setItem('triune.playground.neuralConsoleWidth', String(finalW));
+        } catch (_) {}
+      };
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+    };
+
+    const handleRowResizeStart = (e) => {
+      e.preventDefault();
+      setIsResizingConsole(true);
+      const startY = e.clientY;
+      const startH = neuralConsoleHeight;
+      const onMove = (moveEv) => {
+        const delta = moveEv.clientY - startY;
+        const maxH = Math.max(300, Math.floor((window.innerHeight || 800) * 0.75));
+        const newH = Math.max(165, Math.min(maxH, startH + delta));
+        setNeuralConsoleHeight(newH);
+      };
+      const onUp = (upEv) => {
+        setIsResizingConsole(false);
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        try {
+          const delta = upEv.clientY - startY;
+          const maxH = Math.max(300, Math.floor((window.innerHeight || 800) * 0.75));
+          const finalH = Math.max(165, Math.min(maxH, startH + delta));
+          window.localStorage.setItem('triune.playground.neuralConsoleHeight', String(finalH));
+        } catch (_) {}
+      };
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+    };
+
+    const handleCornerResizeStart = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsResizingConsole(true);
+      const startX = e.clientX;
+      const startY = e.clientY;
+      const startW = neuralConsoleWidth;
+      const startH = neuralConsoleHeight;
+      const onMove = (moveEv) => {
+        const newW = Math.max(340, Math.min((window.innerWidth || 1200) - 40, startW + (moveEv.clientX - startX)));
+        const newH = Math.max(220, Math.min((window.innerHeight || 800) - 80, startH + (moveEv.clientY - startY)));
+        setNeuralConsoleWidth(newW);
+        setNeuralConsoleHeight(newH);
+      };
+      const onUp = (upEv) => {
+        setIsResizingConsole(false);
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        try {
+          const finalW = Math.max(340, Math.min((window.innerWidth || 1200) - 40, startW + (upEv.clientX - startX)));
+          const finalH = Math.max(220, Math.min((window.innerHeight || 800) - 80, startH + (upEv.clientY - startY)));
+          window.localStorage.setItem('triune.playground.neuralConsoleWidth', String(finalW));
+          window.localStorage.setItem('triune.playground.neuralConsoleHeight', String(finalH));
+        } catch (_) {}
+      };
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+    };
+
+    const handleFloatHeaderPointerDown = (e) => {
+      if (neuralConsoleDock !== 'float') return;
+      if (e.target.closest('button') || e.target.closest('select') || e.target.closest('input')) return;
+      setIsDraggingConsoleWindow(true);
+      consoleDragOffsetRef.current = {
+        x: e.clientX - neuralConsolePos.x,
+        y: e.clientY - neuralConsolePos.y
+      };
+      try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {}
+    };
+
+    const handleFloatHeaderPointerMove = (e) => {
+      if (!isDraggingConsoleWindow) return;
+      const maxW = (window.innerWidth || 1200) - neuralConsoleWidth - 10;
+      const maxH = (window.innerHeight || 800) - 100;
+      const newX = Math.max(10, Math.min(maxW, e.clientX - consoleDragOffsetRef.current.x));
+      const newY = Math.max(50, Math.min(maxH, e.clientY - consoleDragOffsetRef.current.y));
+      setNeuralConsolePos({ x: newX, y: newY });
+    };
+
+    const handleFloatHeaderPointerUp = (e) => {
+      if (isDraggingConsoleWindow) {
+        setIsDraggingConsoleWindow(false);
+        try { e.currentTarget.releasePointerCapture(e.pointerId); } catch (_) {}
+        try { window.localStorage.setItem('triune.playground.neuralConsolePos', JSON.stringify(neuralConsolePos)); } catch (_) {}
+      }
+    };
+
+    useEffect(() => {
+      refreshNeuronScope();
+    }, []);
 
     useEffect(() => {
       setWorkflowSaveState('Saving…');
@@ -2371,11 +4353,15 @@
       };
     }, [backendRetry]);
 
-    // Auto-scroll chat smoothly on new messages or generation updates
+    // Auto-scroll chat smoothly on new messages or instant-scroll during high-speed token generation
     useEffect(() => {
       if (activeTab === 'chat' && chatBottomRef.current) {
         try {
-          chatBottomRef.current.scrollIntoView({ behavior: 'smooth' });
+          if (isGenerating) {
+            chatBottomRef.current.scrollIntoView({ behavior: 'auto', block: 'end' });
+          } else {
+            chatBottomRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
+          }
         } catch (e) {}
       }
     }, [messages, isGenerating, activeTab]);
@@ -3825,6 +5811,7 @@
             num_experts: data.architecture.num_experts || preset.experts_routed
           }));
         }
+        refreshNeuronScope();
         showToast(data.message || `Loaded ${preset.name} and synchronized training settings and graph.`);
       } catch (err) {
         showToast(`Model selection failed: ${err.message || 'could not reach the backend'}`);
@@ -4376,7 +6363,7 @@
                 'Triune Custom Kernel Accelerator & Engine Turbo'
               ),
               e('span', { className: 'badge-ckpt-active', style: { background: isTurbo ? 'rgba(43, 76, 63, 0.18)' : 'rgba(154, 52, 18, 0.18)', color: isTurbo ? 'var(--accent-olive, #2b4c3f)' : 'var(--accent-terracotta, #e05b38)', border: 'none' } },
-                isTurbo ? '⚡ Turbo Mode Active' : '○ Vanilla PyTorch Fallback'
+                isTurbo ? 'Turbo Mode Active' : 'Vanilla PyTorch Fallback'
               )
             ),
             e('p', { style: { color: 'var(--text-muted)', fontSize: '12.5px', margin: '4px 0 0 0' } },
@@ -4482,7 +6469,7 @@
                 `● ${opt.memory?.compression_ratio || 1.74}x State Compression (${opt.memory?.saved_state_mb || 294.8} MB VRAM Saved)`
               ),
               e('span', { className: 'badge-ckpt-active', style: { background: 'rgba(224, 91, 56, 0.15)', color: 'var(--accent-terracotta, #e05b38)', border: 'none' } },
-                '⚡ Fused fast_muon.py'
+                'Fused fast_muon.py'
               ),
               e('span', { className: 'badge-ckpt-active', style: { background: 'rgba(217, 119, 6, 0.15)', color: 'var(--accent-gold, #d97706)', border: 'none' } },
                 'P^T c_orth = 0'
@@ -6072,6 +8059,29 @@
           const decoder = new TextDecoder();
           let pending = '';
           let streamCompleted = false;
+          let streamRafId = null;
+          let lastAudioKeyTime = 0;
+
+          const scheduleBatchedRender = () => {
+            if (streamRafId) return;
+            streamRafId = requestAnimationFrame(() => {
+              streamRafId = null;
+              setMessages(prev => prev.map(message => message.id === streamedMessageId
+                ? { ...message, text: streamedText }
+                : message));
+            });
+          };
+
+          const flushBatchedRender = () => {
+            if (streamRafId) {
+              cancelAnimationFrame(streamRafId);
+              streamRafId = null;
+            }
+            setMessages(prev => prev.map(message => message.id === streamedMessageId
+              ? { ...message, text: streamedText }
+              : message));
+          };
+
           const consumeSseLine = line => {
             const trimmed = line.trim();
             if (!trimmed.startsWith('data:')) return;
@@ -6089,12 +8099,21 @@
               if (streamFirstTokenMs === null && String(choice.delta.content).length > 0) {
                 streamFirstTokenMs = performance.now() - requestStartedAt;
               }
+              const chunkStr = String(choice.delta.content);
               streamedText = chunk.triune_snapshot
-                ? String(choice.delta.content)
-                : streamedText + String(choice.delta.content);
-              setMessages(prev => prev.map(message => message.id === streamedMessageId
-                ? { ...message, text: streamedText }
-                : message));
+                ? chunkStr
+                : streamedText + chunkStr;
+
+              const nowAudio = performance.now();
+              if (audioFeedback && nowAudio - lastAudioKeyTime > 65) {
+                lastAudioKeyTime = nowAudio;
+                playTactileKeyClick();
+              }
+              recordStreamToken(Math.max(1, Math.round(chunkStr.length / 4)));
+              if (window.__triuneCanvasEmitPulse) {
+                window.__triuneCanvasEmitPulse(chunk.telemetry || { tier: route === 'reflex' ? 0 : (route === 'limbic' ? 1 : 2), route });
+              }
+              scheduleBatchedRender();
             }
             if (chunk.telemetry) streamTelemetry = chunk.telemetry;
           };
@@ -6108,6 +8127,7 @@
             if (done) break;
           }
           if (pending) consumeSseLine(pending);
+          flushBatchedRender();
           if (!streamCompleted && !controller.signal.aborted)
             throw new Error('The inference stream ended before the backend completed the response.');
           data = {
@@ -6196,8 +8216,176 @@
         ]);
       } finally {
         setIsGenerating(false);
+        setStreamVelocity(prev => ({ ...prev, isStreaming: false }));
         chatAbortControllerRef.current = null;
       }
+    };
+
+    const handleForkSession = (messageIndex) => {
+      const currentSession = chatSessions.find(s => s.id === activeSessionId) || { title: 'Conversation' };
+      const slicedMessages = messages.slice(0, messageIndex + 1);
+      const newId = `branch_${Date.now()}`;
+      const branchTitle = `Branch of ${currentSession.title.slice(0, 18)} (Turn #${messageIndex + 1})`;
+      const newSession = {
+        id: newId,
+        title: branchTitle,
+        parentSessionId: activeSessionId,
+        parentSessionTitle: currentSession.title,
+        parentTurn: messageIndex + 1,
+        messages: slicedMessages,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+      setChatSessions(prev => [newSession, ...prev]);
+      setActiveSessionId(newId);
+      setMessages(slicedMessages);
+      showToast(`Branched conversation from turn #${messageIndex + 1}`);
+    };
+
+    const handleBranchFromToken = (prefixText) => {
+      const newId = `branch_${Date.now()}`;
+      const branchTitle = `Branch: "${prefixText.slice(0, 18)}..."`;
+      const branchMessages = [
+        { sender: 'User', text: prefixText, time: new Date().toLocaleTimeString(), isAssistant: false }
+      ];
+      const newSession = {
+        id: newId,
+        title: branchTitle,
+        parentSessionId: activeSessionId,
+        messages: branchMessages,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+      setChatSessions(prev => [newSession, ...prev]);
+      setActiveSessionId(newId);
+      setMessages(branchMessages);
+      setPlaygroundMode('chat');
+      showToast('Branched into Chat from token!');
+    };
+
+    const handleArenaBattle = async (overridePrompt = null) => {
+      const promptToRun = (overridePrompt !== null ? overridePrompt : arenaPrompt).trim();
+      if (!promptToRun || isArenaBattling) return;
+      setIsArenaBattling(true);
+      setArenaWinner(null);
+      setArenaResultA({ text: '', isStreaming: true, telemetry: null, speed: 0, latency: 0, ttft: 0, tokensCount: 0, error: null });
+      setArenaResultB({ text: '', isStreaming: true, telemetry: null, speed: 0, latency: 0, ttft: 0, tokensCount: 0, error: null });
+
+      const controller = new AbortController();
+      arenaAbortRef.current = controller;
+
+      const runFighter = async (side, config, setResult) => {
+        const start = performance.now();
+        let firstTokenMs = null;
+        let textAccum = '';
+        let toks = 0;
+        try {
+          const res = await apiFetch('/v1/chat/completions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            signal: controller.signal,
+            body: JSON.stringify({
+              model: config.model,
+              messages: [{ role: 'user', content: promptToRun }],
+              temperature: config.temp,
+              route: config.route,
+              stream: true
+            })
+          });
+          if (res.headers.get('content-type')?.includes('text/event-stream') && res.body) {
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+            let pending = '';
+            let fighterRafId = null;
+            let lastAudioKeyTime = 0;
+
+            const scheduleFighterRender = () => {
+              if (fighterRafId) return;
+              fighterRafId = requestAnimationFrame(() => {
+                fighterRafId = null;
+                setResult(prev => ({ ...prev, text: textAccum, isStreaming: true, tokensCount: toks }));
+              });
+            };
+
+            const flushFighterRender = () => {
+              if (fighterRafId) {
+                cancelAnimationFrame(fighterRafId);
+                fighterRafId = null;
+              }
+              setResult(prev => ({ ...prev, text: textAccum, isStreaming: true, tokensCount: toks }));
+            };
+
+            while (true) {
+              const { value, done } = await reader.read();
+              pending += decoder.decode(value || new Uint8Array(), { stream: !done });
+              const lines = pending.split(/\r?\n/);
+              pending = lines.pop() || '';
+              for (const line of lines) {
+                const tr = line.trim();
+                if (!tr.startsWith('data:')) continue;
+                const pl = tr.slice(5).trim();
+                if (pl === '[DONE]' || !pl) continue;
+                try {
+                  const chk = JSON.parse(pl);
+                  const cont = chk.choices?.[0]?.delta?.content;
+                  if (cont !== undefined) {
+                    if (firstTokenMs === null && String(cont).length > 0) firstTokenMs = performance.now() - start;
+                    textAccum += String(cont);
+                    toks += 1;
+                    const nowAudio = performance.now();
+                    if (audioFeedback && nowAudio - lastAudioKeyTime > 65) {
+                      lastAudioKeyTime = nowAudio;
+                      playTactileKeyClick();
+                    }
+                    scheduleFighterRender();
+                  }
+                } catch (_) {}
+              }
+              if (done) break;
+            }
+            flushFighterRender();
+          } else {
+            const json = await res.json();
+            textAccum = json.choices?.[0]?.message?.content || (json.detail || 'Completed.');
+          }
+          const totalMs = Math.round(performance.now() - start);
+          const tps = totalMs > 0 ? +((toks / (totalMs / 1000)).toFixed(1)) : 0;
+          setResult({
+            text: textAccum,
+            isStreaming: false,
+            telemetry: { latency: `${totalMs}ms`, speed: `${tps} tok/s`, ttft: `${Math.round(firstTokenMs || totalMs)}ms` },
+            speed: tps,
+            latency: totalMs,
+            ttft: Math.round(firstTokenMs || totalMs),
+            tokensCount: toks,
+            error: null
+          });
+        } catch (err) {
+          if (err.name !== 'AbortError') {
+            setResult(prev => ({ ...prev, isStreaming: false, error: err.message, text: prev.text || `[Battle Note]: ${err.message}` }));
+          }
+        }
+      };
+
+      await Promise.allSettled([
+        runFighter('A', arenaConfigA, setArenaResultA),
+        runFighter('B', arenaConfigB, setArenaResultB)
+      ]);
+      setIsArenaBattling(false);
+    };
+
+    const handleSubstituteToken = (tokenIdx, candidateText) => {
+      const updated = [...tokenLabTokens];
+      updated[tokenIdx] = {
+        ...updated[tokenIdx],
+        text: candidateText,
+        confidence: 99.0,
+        entropy: 0.1
+      };
+      setTokenLabTokens(updated);
+      const fullText = updated.map(t => t.text).join('');
+      setTokenLabText(fullText);
+      showToast(`Substituted token #${updated[tokenIdx].id} -> "${candidateText}"`);
     };
 
     const handleStopGeneration = async () => {
@@ -6672,35 +8860,43 @@
         e('nav', { className: 'react-nav', 'aria-label': 'Studio sections' },
           e('button', { className: `nav-item ${activeTab === 'chat' ? 'active' : ''}`, title: 'Chat & Playground', onClick: () => setActiveTab('chat') },
             e('span', { className: 'nav-icon' }, renderIcon('chat', 17)),
-            !sidebarCollapsed && e('span', { className: 'nav-label' }, 'Chat & Playground')
+            !sidebarCollapsed && e('span', { className: 'nav-label' }, 'Chat & Playground'),
+            !sidebarCollapsed && e('span', { className: 'nav-badge' }, 'MoE')
           ),
           e('button', { className: `nav-item ${activeTab === 'nodegraph' ? 'active' : ''}`, title: 'Visual Node Canvas', onClick: () => setActiveTab('nodegraph') },
             e('span', { className: 'nav-icon' }, renderIcon('nodes', 17)),
-            !sidebarCollapsed && e('span', { className: 'nav-label' }, 'Visual Node Canvas')
+            !sidebarCollapsed && e('span', { className: 'nav-label' }, 'Visual Node Canvas'),
+            !sidebarCollapsed && e('span', { className: 'nav-badge' }, 'DAG')
           ),
           e('button', { className: `nav-item ${activeTab === 'training' ? 'active' : ''}`, title: 'Training & Telemetry', onClick: () => setActiveTab('training') },
             e('span', { className: 'nav-icon' }, renderIcon('training', 17)),
-            !sidebarCollapsed && e('span', { className: 'nav-label' }, 'Training & Telemetry')
+            !sidebarCollapsed && e('span', { className: 'nav-label' }, 'Training & Telemetry'),
+            !sidebarCollapsed && e('span', { className: `nav-badge ${isTraining ? 'pulse' : ''}` }, isTraining ? 'Running' : (metrics && metrics.step > 0 ? 'Paused' : 'Idle'))
           ),
           e('button', { className: `nav-item ${activeTab === 'checkpoints' ? 'active' : ''}`, title: 'Checkpoints & Weights', onClick: () => { setActiveTab('checkpoints'); fetchCheckpoints(); } },
             e('span', { className: 'nav-icon' }, renderIcon('checkpoints', 17)),
-            !sidebarCollapsed && e('span', { className: 'nav-label' }, 'Checkpoints & Weights')
+            !sidebarCollapsed && e('span', { className: 'nav-label' }, 'Checkpoints & Weights'),
+            !sidebarCollapsed && e('span', { className: 'nav-badge' }, checkpoints.length > 0 ? String(checkpoints.length) : '0')
           ),
           e('button', { className: `nav-item ${activeTab === 'finetune' ? 'active' : ''}`, title: 'LoRA / QLoRA Tuner', onClick: () => { setActiveTab('finetune'); fetchAvailableAdapters(); } },
             e('span', { className: 'nav-icon' }, renderIcon('finetune', 17)),
-            !sidebarCollapsed && e('span', { className: 'nav-label' }, 'LoRA / QLoRA Tuner')
+            !sidebarCollapsed && e('span', { className: 'nav-label' }, 'LoRA / QLoRA Tuner'),
+            !sidebarCollapsed && e('span', { className: 'nav-badge' }, 'PEFT')
           ),
           e('button', { className: `nav-item ${activeTab === 'modules' ? 'active' : ''}`, title: 'Modules & Repos', onClick: () => { setActiveTab('modules'); fetchInstalledModules(); searchMarketplace(); } },
             e('span', { className: 'nav-icon' }, renderIcon('modules', 17)),
-            !sidebarCollapsed && e('span', { className: 'nav-label' }, 'Extensions Marketplace')
+            !sidebarCollapsed && e('span', { className: 'nav-label' }, 'Extensions Marketplace'),
+            !sidebarCollapsed && e('span', { className: 'nav-badge' }, 'Hub')
           ),
           e('button', { className: `nav-item ${activeTab === 'customize' ? 'active' : ''}`, title: 'Appearance Marketplace', onClick: () => setActiveTab('customize') },
             e('span', { className: 'nav-icon' }, renderIcon('sparkle', 17)),
-            !sidebarCollapsed && e('span', { className: 'nav-label' }, 'Appearance & Themes')
+            !sidebarCollapsed && e('span', { className: 'nav-label' }, 'Appearance & Themes'),
+            !sidebarCollapsed && e('span', { className: 'nav-badge' }, 'Themes')
           ),
           e('button', { className: `nav-item ${activeTab === 'environment' ? 'active' : ''}`, title: 'System & Hardware', onClick: () => setActiveTab('environment') },
             e('span', { className: 'nav-icon' }, renderIcon('hardware', 17)),
-            !sidebarCollapsed && e('span', { className: 'nav-label' }, 'System & Hardware')
+            !sidebarCollapsed && e('span', { className: 'nav-label' }, 'System & Hardware'),
+            !sidebarCollapsed && e('span', { className: 'nav-badge' }, systemDiagnostics.cuda_available ? 'CUDA' : 'CPU')
           ),
           e('button', { className: `nav-item ${activeTab === 'models' ? 'active' : ''}`, title: 'Model Zoo & Exporters', onClick: () => setActiveTab('models') },
             e('span', { className: 'nav-icon' }, renderIcon('models', 17)),
@@ -6893,17 +9089,25 @@
           ),
 
           e('div', { className: 'topbar-pills' },
-            e('button', {
-              className: 'appearance-quick-toggle',
-              type: 'button',
-              title: /dark|forest/.test(studioTheme) ? 'Switch to light mode' : 'Switch to dark mode',
-              'aria-label': /dark|forest/.test(studioTheme) ? 'Switch to light mode' : 'Switch to dark mode',
-              onClick: () => {
-                const isDark = /dark|forest/.test(studioTheme);
-                const edition = studioTheme.startsWith('classic') ? 'classic' : 'modern';
-                setStudioTheme(`${edition}-${isDark ? 'light' : 'dark'}`);
-              }
-            }, [/dark|forest/.test(studioTheme) ? '☀' : '☾', /dark|forest/.test(studioTheme) ? 'Light' : 'Dark']),
+            e('div', { className: 'pill', style: { display: 'inline-flex', alignItems: 'center', gap: '5px', padding: '2px 8px' }, title: 'Switch Studio Theme' },
+              renderIcon('themes', 12, { color: 'var(--text-muted)' }),
+              e('select', {
+                value: studioTheme,
+                'aria-label': 'Switch Studio Theme',
+                onChange: ev => {
+                  const val = ev.target.value;
+                  if (APPEARANCE_THEMES.some(t => t.id === val)) {
+                    setStudioTheme(val);
+                    try { window.localStorage.setItem('triune.studio.theme', val); } catch (_) {}
+                    const themeName = APPEARANCE_THEMES.find(t => t.id === val)?.name || val;
+                    showToast(`Theme: ${themeName}`);
+                  }
+                },
+                style: { background: 'transparent', border: 'none', color: 'var(--text-main)', fontSize: '11px', outline: 'none', cursor: 'pointer', fontFamily: 'var(--font-mono)' }
+              },
+                APPEARANCE_THEMES.map(t => e('option', { key: t.id, value: t.id, style: { background: '#111318', color: '#f3f4f6' } }, t.name))
+              )
+            ),
             e('span', {
               className: `pill ${backendStatus === 'online' ? 'online' : (backendStatus === 'offline' ? 'warning' : '')}`,
               role: 'status',
@@ -6921,7 +9125,7 @@
             (metrics && metrics.step > 0) && e('span', { className: 'pill', title: 'Global Step' }, `Step: ${metrics.step.toLocaleString()}`),
             (metrics && metrics.step > 0 && metrics.loss !== null && metrics.loss !== undefined) && e('span', {
               className: 'pill',
-              style: { color: 'var(--accent-terracotta, #9a3412)', fontWeight: 600 },
+              style: { color: 'var(--accent-amber, #f59e0b)', fontWeight: 600 },
               title: 'Total Loss'
             }, `Loss: ${Number(metrics.loss).toFixed(4)}`),
             (metrics && metrics.step > 0 && metrics.throughput > 0) && e('span', { className: 'pill', title: 'Training Throughput', style: { display: 'inline-flex', alignItems: 'center' } }, [renderIcon('bolt', 11, { marginRight: '4px' }), `${metrics.throughput} tok/s`]),
@@ -6936,9 +9140,9 @@
               e('span', { style: { fontWeight: 600 } }, `${vramUsage.allocated}G`),
               e('div', {
                 style: {
-                  width: '38px',
+                  width: '42px',
                   height: '6px',
-                  background: 'var(--border-dark, #c9c3b4)',
+                  background: 'rgba(255, 255, 255, 0.1)',
                   borderRadius: '3px',
                   overflow: 'hidden'
                 }
@@ -6947,7 +9151,7 @@
                   style: {
                     width: `${vramUsage.total > 0 ? Math.min(100, Math.max(0, (vramUsage.allocated / vramUsage.total) * 100)) : 0}%`,
                     height: '100%',
-                    background: vramUsage.oom_risk ? '#dc2626' : '#2b4c3f',
+                    background: vramUsage.oom_risk ? '#ef4444' : 'linear-gradient(90deg, #10b981, #8b5cf6)',
                     borderRadius: '3px',
                     transition: 'width 0.3s ease'
                   }
@@ -6955,28 +9159,58 @@
               ),
               e('button', {
                 onClick: handlePurgeVRAM,
-            title: 'Clear unused GPU cache; active model memory is not released',
+                title: 'Clear unused GPU cache; active model memory is not released',
                 style: {
-                  background: 'rgba(154, 52, 18, 0.08)',
-                  border: '1px solid rgba(154, 52, 18, 0.25)',
-                  borderRadius: '3px',
+                  background: 'rgba(139, 92, 246, 0.12)',
+                  border: '1px solid rgba(139, 92, 246, 0.3)',
+                  borderRadius: '4px',
                   cursor: 'pointer',
-                  padding: '1px 5px',
+                  padding: '2px 6px',
                   fontSize: '10px',
-                  color: 'var(--accent-terracotta, #9a3412)',
+                  color: 'var(--primary, #8b5cf6)',
                   fontWeight: 600,
                   marginLeft: '2px'
                 }
               }, 'Purge')
             ),
 
-            // Model & Config Pills
-            e('span', {
+            // Model Selector Dropdown
+            e('div', {
               className: 'pill',
-              style: { cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '5px', borderColor: 'var(--accent-olive, #2b4c3f)', color: 'var(--accent-olive, #2b4c3f)', fontWeight: 600 },
-              title: 'Click to open Architecture Zoo & Model Presets',
-              onClick: () => setActiveTab('models')
-            }, [renderIcon('models', 12), `Model: ${activeModel}`]),
+              style: { display: 'inline-flex', alignItems: 'center', gap: '5px', borderColor: 'rgba(139, 92, 246, 0.35)', padding: '2px 8px' },
+              title: 'Select Active Architecture or Model Preset'
+            },
+              renderIcon('models', 13, { color: 'var(--primary)' }),
+              e('select', {
+                value: activeModel,
+                onChange: ev => {
+                  const val = ev.target.value;
+                  if (val.startsWith('triune-')) handleSelectModelPreset(val);
+                  else { setActiveModel(val); showToast(`Active BYOK Model: ${val}`); }
+                },
+                style: {
+                  background: 'transparent',
+                  border: 'none',
+                  color: 'var(--text-main)',
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  outline: 'none',
+                  paddingRight: '4px'
+                }
+              },
+                MODEL_PRESETS.map(p => e('option', { key: p.id, value: p.id, style: { background: '#111318', color: '#f3f4f6' } }, p.name)),
+                !MODEL_PRESETS.some(p => p.id === activeModel) && !['gpt-4o-mini', 'claude-3-5-sonnet-latest', 'gemini-2.5-flash'].includes(activeModel) && e('option', {
+                  key: activeModel,
+                  value: activeModel,
+                  style: { background: '#111318', color: '#10b981', fontWeight: 700 }
+                }, `⚡ ${activeModel.toUpperCase()} (Active Transmuted)`),
+                e('option', { value: 'gpt-4o-mini', style: { background: '#111318', color: '#f3f4f6' } }, 'GPT-4o Mini (BYOK)'),
+                e('option', { value: 'claude-3-5-sonnet-latest', style: { background: '#111318', color: '#f3f4f6' } }, 'Claude 3.5 Sonnet (BYOK)'),
+                e('option', { value: 'gemini-2.5-flash', style: { background: '#111318', color: '#f3f4f6' } }, 'Gemini 2.5 Flash (BYOK)')
+              )
+            ),
             e('span', { className: 'pill' }, `Precision: ${trainPrecision || precision}`)
           )
         ),
@@ -7090,246 +9324,963 @@
 
               // Right: Main Chat Pane
               e('div', { className: 'chat-main-pane' },
-                e('div', { className: 'preset-bar', style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' } },
-                  e('div', { style: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '8px' } },
+                // Playground Mode Switcher & Command Bar
+                e('div', { className: 'playground-mode-bar' },
+                  e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
                     e('button', {
                       className: 'chat-history-toggle-pill',
                       title: chatSidebarOpen ? 'Collapse history sidebar' : 'Open history sidebar',
                       onClick: () => setChatSidebarOpen(!chatSidebarOpen)
                     }, [renderIcon('chat', 13), chatSidebarOpen ? 'Hide History' : 'History']),
-                    e('span', { className: 'preset-title' }, 'System Persona:'),
-                    SYSTEM_PROMPT_PRESETS.map((p, idx) =>
-                      e('button', {
-                        key: idx,
-                        className: `preset-chip ${systemPrompt === p.prompt ? 'active' : ''}`,
-                        onClick: () => { setSystemPrompt(p.prompt); showToast(`Applied Persona: ${p.name}`); }
-                      }, p.name)
-                    )
+                    e('div', { className: 'playground-mode-pill-group' },
+                      [
+                        { id: 'chat', label: 'Chat & Reason', icon: 'chat' },
+                        { id: 'arena', label: 'Dual Arena', icon: 'arena' },
+                        { id: 'tokens', label: 'Token Lab', icon: 'tokens' }
+                      ].map(m => e('button', {
+                        key: m.id,
+                        className: `playground-mode-btn ${playgroundMode === m.id ? 'active' : ''}`,
+                        onClick: () => {
+                          setPlaygroundMode(m.id);
+                          try { window.localStorage.setItem('triune.playground.mode', m.id); } catch (_) {}
+                        }
+                      }, [renderIcon(m.icon, 13), m.label]))
+                    ),
                   ),
-                  e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+                  e('div', { className: 'playground-toolbar-right' },
                     activeModel.startsWith('triune') && e('button', {
-                      className: `btn-clear-chat ${showNeuronScope ? 'active' : ''}`,
-                      style: showNeuronScope ? { borderColor: 'var(--accent-bronze, #d97706)', color: 'var(--accent-bronze, #d97706)' } : {},
-                      onClick: () => { setShowNeuronScope(!showNeuronScope); if (!showNeuronScope) refreshNeuronScope(); },
-                      title: 'Toggle live Native C/CUDA Neuron & 3-Tier Router Scope'
-                    }, [renderIcon('bolt', 12, { marginRight: '4px' }), 'Neuron Scope']),
-                    e('button', { className: 'btn-clear-chat', onClick: handleNewChat, title: 'Start fresh conversation' }, [renderIcon('plus', 12, { marginRight: '4px' }), 'New Chat']),
+                      className: `btn-clear-chat neural-console-toggle-pill ${showNeuralConsole ? 'active' : ''}`,
+                      style: showNeuralConsole ? { borderColor: 'var(--primary)', color: 'var(--primary)', background: 'rgba(139, 92, 246, 0.12)' } : {},
+                      onClick: () => {
+                        const nextState = !showNeuralConsole;
+                        setShowNeuralConsole(nextState);
+                        try { window.localStorage.setItem('triune.playground.neuralConsoleOpen', String(nextState)); } catch (_) {}
+                        if (nextState) refreshNeuronScope();
+                      },
+                      title: showNeuralConsole ? 'Collapse Neural Intelligence Console' : 'Expand Neural Intelligence Console'
+                    }, [
+                      renderIcon('bolt', 12, { marginRight: '5px' }),
+                      showNeuralConsole ? 'Collapse Console' : 'Neural Console'
+                    ]),
+                    e('div', { className: 'velocity-gauge-badge', title: 'Live Token Stream Velocity' },
+                      e('span', { className: `velocity-gauge-dot ${isGenerating || isArenaBattling ? 'streaming' : ''}` }),
+                      renderIcon('gauge', 12),
+                      e('span', null, `${streamVelocity.current > 0 ? streamVelocity.current : (telemetryLogs[0]?.throughput || 0)} tok/s`),
+                      streamVelocity.peak > 0 && e('span', { style: { color: 'var(--text-dim)', fontSize: '10px' } }, `(peak: ${streamVelocity.peak})`)
+                    ),
+                    e('button', { className: 'btn-clear-chat', onClick: handleNewChat, title: 'Start fresh conversation' }, [renderIcon('plus', 12, { marginRight: '4px' }), 'New']),
                     e('button', { className: 'btn-clear-chat', onClick: handleClearChat, title: 'Clear current conversation messages' }, [renderIcon('trash', 12, { marginRight: '4px' }), 'Clear'])
                   )
                 ),
-                activeModel.startsWith('triune') && showNeuronScope && (() => {
-                  const cInfo = (neuronScopeData && neuronScopeData.native_c_engine) || {};
-                  const activeTierIdx = neuronScopeData && typeof neuronScopeData.active_tier === 'number' ? neuronScopeData.active_tier : (route === 'reflex' ? 0 : (route === 'limbic' ? 1 : 2));
-                  const tierLabels = [
-                    { id: 0, name: 'Tier 0 · Reflex (Shallow Exit)', color: '#16a34a' },
-                    { id: 1, name: 'Tier 1 · Limbic (Mid-Depth MoE)', color: '#d97706' },
-                    { id: 2, name: 'Tier 2 · Cortex (Full Reasoning)', color: '#dc2626' }
-                  ];
-                  const layerBins = (neuronScopeData && neuronScopeData.layer_bins) || {};
-                  const layerKeys = Object.keys(layerBins);
-                  return e('div', {
-                    className: 'neuron-scope-strip',
-                    style: {
-                      padding: '8px 14px',
-                      borderBottom: '1px solid var(--border-color, #ded9cd)',
-                      background: 'var(--bg-surface, #ede9df)',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '6px',
-                      fontSize: '11px'
-                    }
-                  },
-                    e('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' } },
-                      e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
-                        e('span', { style: { fontWeight: 700, fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.04em' } }, '3-Tier Router & Neuron Scope:'),
-                        tierLabels.map(t => e('span', {
-                          key: t.id,
-                          style: {
-                            padding: '2px 7px',
-                            borderRadius: '3px',
-                            fontFamily: 'var(--font-mono)',
-                            fontSize: '10.5px',
-                            fontWeight: activeTierIdx === t.id ? 700 : 500,
-                            background: activeTierIdx === t.id ? t.color : 'rgba(0,0,0,0.05)',
-                            color: activeTierIdx === t.id ? '#fff' : 'var(--text-muted)'
-                          }
-                        }, t.name))
-                      ),
-                      e('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--font-mono)', fontSize: '10.5px', color: 'var(--text-muted)' } },
-                        e('span', {
-                          className: `pill ${cInfo.available ? 'online' : ''}`,
-                          style: { fontSize: '10px', padding: '1px 6px' }
-                        }, cInfo.available ? `Native C/AVX2: ${cInfo.version || 'active'}${cInfo.cuda_runtime_bound ? ' · CUDA Bound' : ''}` : 'PyTorch/Triton Kernel Path')
-                      )
-                    ),
-                    layerKeys.length > 0 && e('div', {
-                      style: { display: 'grid', gridTemplateColumns: `repeat(${Math.min(layerKeys.length, 8)}, 1fr)`, gap: '6px', paddingTop: '2px' }
-                    },
-                      layerKeys.slice(0, 8).map(lKey => {
-                        const bins = layerBins[lKey] || [];
-                        return e('div', {
-                          key: lKey,
-                          style: {
-                            background: 'var(--bg-input, #f2eee5)',
-                            border: '1px solid var(--border-color, #ded9cd)',
-                            borderRadius: '3px',
-                            padding: '3px 5px'
-                          }
-                        },
-                          e('div', { style: { fontSize: '9.5px', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)', marginBottom: '2px' } }, `L${lKey}`),
-                          e('div', { style: { display: 'flex', alignItems: 'flex-end', height: '16px', gap: '1px' } },
-                            bins.slice(0, 24).map((val, bIdx) => e('div', {
-                              key: bIdx,
-                              style: {
-                                flex: 1,
-                                height: `${Math.max(15, Math.round(val * 100))}%`,
-                                background: val > 0.75 ? '#dc2626' : (val > 0.4 ? '#d97706' : '#78716c'),
-                                borderRadius: '1px'
-                              }
-                            }))
-                          )
-                        );
-                      })
-                    )
+
+                // Mode 1: Chat & Reason
+                playgroundMode === 'chat' && (() => {
+                  const activeSession = chatSessions.find(s => s.id === activeSessionId);
+                  const lineageBanner = activeSession && activeSession.parentSessionId && e('div', { className: 'chat-branch-lineage-banner' },
+                    e('span', null, [
+                      'Branch: ',
+                      e('span', { className: 'chat-branch-title' }, activeSession.title),
+                      ` (Branched from Turn #${activeSession.parentTurn || 1})`
+                    ]),
+                    e('button', {
+                      className: 'btn-clear-chat',
+                      style: { padding: '2px 8px', fontSize: '11px' },
+                      onClick: () => {
+                        const parent = chatSessions.find(s => s.id === activeSession.parentSessionId);
+                        if (parent) handleSelectSession(parent);
+                      }
+                    }, 'Return to Main Trunk')
                   );
-                })(),
-                e('div', { className: 'chat-scroll-area' },
-                  messages.map((m, idx) =>
-                    e('div', { key: idx, className: `chat-bubble ${m.isAssistant ? 'assistant' : 'user'}` },
-                      e('div', { className: 'bubble-header' },
-                        e('span', { className: 'bubble-sender' }, m.sender),
-                        e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
-                          e('span', { className: 'bubble-time' }, m.time),
-                          e('button', {
-                            className: 'btn-copy-bubble',
-                            title: 'Copy message text',
-                            onClick: () => handleCopyMessage(m.text)
-                          }, [renderIcon('copy', 12, { marginRight: '4px' }), 'Copy'])
-                        )
-                      ),
-                      e('div', { className: 'bubble-text', style: { whiteSpace: 'pre-wrap', lineHeight: '1.6' } }, m.text),
-                      m.telemetry && e('div', { className: 'bubble-telemetry-badge' },
-                        e('span', null, renderIcon('bolt', 11, { marginRight: '3px' }), m.telemetry.speed || 'Direct'),
-                        e('span', null, `Route: ${m.telemetry.route}`),
-                        e('span', null, `VRAM: ${m.telemetry.vram}`),
-                        e('span', null, `Latency: ${m.telemetry.latency}`),
-                        m.telemetry.ttft && e('span', null, `TTFT: ${m.telemetry.ttft}`),
-                        m.telemetry.decodeSpeed && e('span', null, m.telemetry.decodeSpeed),
-                        m.telemetry.device && e('span', null, `Device: ${m.telemetry.device}`),
-                        m.telemetry.tokens_count !== undefined && e('span', null, `${m.telemetry.tokens_count} toks`)
-                      )
-                    )
-                  ),
-                  isGenerating && e('div', { className: 'chat-bubble assistant generating' },
-                    e('div', { className: 'bubble-header' },
-                      e('span', { className: 'bubble-sender' }, activeModel.includes('gpt') || activeModel.includes('claude') || activeModel.includes('gemini') ? activeModel.toUpperCase() : 'Triune MoE Engine'),
-                      e('span', { className: 'bubble-time' }, 'Synthesizing...')
-                    ),
-                    e('div', { className: 'bubble-text', style: { fontStyle: 'italic', color: 'var(--text-muted)' } },
-                      activeModel.startsWith('triune')
-                        ? (!weightsLoaded
-                          ? 'Loading and validating trained weights, then generating locally. First load can take a while.'
-                          : (!systemDiagnostics.cuda_available
-                            ? 'Generating locally on CPU. This is functional but much slower than GPU inference.'
-                          : (inferenceWarmupStatus === 'queued' || inferenceWarmupStatus === 'warming'
-                            ? 'Preparing CUDA attention kernels in the background. This is a one-time startup cost; your response will stream as soon as the GPU is ready.'
-                            : (inferenceWarmupStatus === 'failed'
-                              ? `Generating locally on GPU. Startup warmup failed, so this request may take longer while kernels initialize. ${inferenceWarmupError ? `Diagnostic: ${String(inferenceWarmupError).slice(0, 180)}` : ''}`
-                              : 'Generating locally on GPU. Tokens will appear as they are produced.'))))
-                        : 'Waiting for the selected provider. The response appears when this request finishes.'
-                    )
-                  ),
-                  e('div', { ref: chatBottomRef })
-                ),
-                e('div', { className: 'chat-controls-box' },
-                  e('div', { className: 'route-select-row' },
-                    e('div', null,
-                      e('label', { style: { marginRight: '8px', fontWeight: 600 } }, 'Model:'),
-                      e('select', {
-                        value: activeModel,
-                        onChange: ev => {
-                          const val = ev.target.value;
-                          if (val.startsWith('triune-')) {
-                            handleSelectModelPreset(val);
-                          } else {
-                            setActiveModel(val);
-                            showToast(`Active BYOK Model: ${val}`);
-                          }
+
+                  const renderNeuralIntelligenceConsole = (dockMode) => {
+                    const cInfo = (neuronScopeData && neuronScopeData.native_c_engine) || {};
+                    const activeTierIdx = neuronScopeData && typeof neuronScopeData.active_tier === 'number' ? neuronScopeData.active_tier : (route === 'reflex' ? 0 : (route === 'limbic' ? 1 : 2));
+                    const activeModelSpec = neuronScopeData?.active_model_spec || (() => {
+                      const p = MODEL_PRESETS.find(x => x.id === activeModel) || MODEL_PRESETS[2];
+                      const rL = p.layers <= 4 ? 2 : (p.layers <= 6 ? 3 : (p.layers <= 8 ? 3 : 4));
+                      const lL = p.layers <= 4 ? 1 : (p.layers <= 6 ? 2 : (p.layers <= 8 ? 3 : 4));
+                      const layers = [];
+                      for (let i = 0; i < p.layers; i++) {
+                        const tier = i < rL ? 'reflex' : (i < rL + lL ? 'limbic' : 'cortex');
+                        layers.push({
+                          layer_index: i,
+                          upgraded_tier: tier,
+                          upgraded_label: tier === 'reflex' ? `Reflex Block ${i}` : (tier === 'limbic' ? `Limbic MoE Block ${i}` : `Cortex GLA Block ${i}`),
+                          mechanism: tier === 'limbic' ? `CentroidSteer MoE (Top-2 of ${p.experts_routed || 4} Experts)` : (tier === 'cortex' ? 'Vectorised GLA Recurrent Memory' : 'RoPE Attention + Dense FFN'),
+                          attention_complexity: tier === 'cortex' ? 'O(S) Linear Recurrent' : 'O(S^2) Scaled Dot-Product',
+                          sparsity_pct: tier === 'limbic' ? 75 : 0,
+                          reflex_early_exit_prob: i === rL - 1 ? 0.82 : 0
+                        });
+                      }
+                      return {
+                        model_id: p.id,
+                        model_name: p.name,
+                        num_layers: p.layers,
+                        hidden_dim: p.hidden_dim,
+                        num_heads: p.heads,
+                        num_experts: p.experts_routed || 4,
+                        layer_mapping: layers
+                      };
+                    })();
+
+                    const isInspectActive = upgradeModelName === 'active';
+                    const activeLayers = (isInspectActive ? activeModelSpec.layer_mapping : (upgradeResult ? upgradeResult.layer_mapping : activeModelSpec.layer_mapping)) || [];
+
+                    const renderArchitectureTransmutationPanel = (isCompact = false) => {
+                      return e('div', {
+                        className: 'architecture-transmutation-content',
+                        style: {
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '6px',
+                          fontSize: '11px',
+                          justifyContent: 'space-between',
+                          height: '100%'
                         }
                       },
-                        MODEL_PRESETS.map(p =>
-                          e('option', { key: p.id, value: p.id }, p.name)
+                        e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' } },
+                          e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
+                            e('span', { style: { fontWeight: 700, fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.04em', color: '#a78bfa' } }, isCompact ? 'Arch Transmute:' : 'Visual Architecture Inspector:'),
+                            e('select', {
+                              value: upgradeModelName,
+                              onChange: ev => {
+                                const val = ev.target.value;
+                                if (val === 'active') {
+                                  setUpgradeModelName('active');
+                                  setUpgradeResult(null);
+                                  refreshNeuronScope();
+                                } else if (MODEL_PRESETS.some(p => p.id === val)) {
+                                  setUpgradeModelName('active');
+                                  setUpgradeResult(null);
+                                  handleSelectModelPreset(val);
+                                } else {
+                                  setUpgradeModelName(val);
+                                  handleUpgradeModel(val, false);
+                                }
+                              },
+                              className: 'transmutation-select',
+                              style: { padding: '2px 8px', fontSize: '11px' }
+                            },
+                              e('optgroup', { label: '⚡ Active Engine Architecture' },
+                                e('option', { value: 'active', style: { fontWeight: 700, color: '#10b981' } }, `⚡ Active Model: ${activeModelSpec.model_name || activeModel} (${activeModelSpec.num_layers}L / ${activeModelSpec.num_experts}E)`)
+                              ),
+                              e('optgroup', { label: '📦 Switch Local Engine Model' },
+                                MODEL_PRESETS.map(p => e('option', { key: p.id, value: p.id }, `${p.name}`))
+                              ),
+                              e('optgroup', { label: '🔄 Transmute External Dense Architecture' },
+                                UPGRADEABLE_MODELS.map(m => e('option', { key: m.id, value: m.id }, `Transmute: ${m.name} (${m.layers}) → Triune`))
+                              )
+                            ),
+                            e('button', {
+                              className: 'btn-transmute-action',
+                              disabled: isInspectActive || isUpgradingModel,
+                              onClick: () => {
+                                if (!isInspectActive) handleUpgradeModel(upgradeModelName, true);
+                              },
+                              title: isInspectActive ? 'Current active architecture running in live PyTorch engine' : 'Instantly transmute and activate this architecture in the live Triune inference engine'
+                            }, [
+                              renderIcon(isInspectActive ? 'check' : 'bolt', 11, { marginRight: '4px' }),
+                              isInspectActive ? 'Active in Engine' : (isUpgradingModel ? 'Transmuting…' : 'Transmute & Run')
+                            ])
+                          ),
+                          isInspectActive ? e('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--font-mono)', fontSize: '10.5px' } },
+                            e('span', { className: 'pill online', style: { color: '#10b981' } }, `${activeModelSpec.num_layers} Layers`),
+                            e('span', { className: 'pill', style: { background: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa' } }, `${activeModelSpec.num_experts} MoE Experts`),
+                            !isCompact && e('span', { className: 'pill', style: { color: 'var(--text-muted)' } }, 'Live Architecture')
+                          ) : (upgradeResult && e('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--font-mono)', fontSize: '10.5px' } },
+                            e('span', { className: 'pill online', style: { color: '#10b981' } }, `${upgradeResult.estimated_throughput_gain} Speedup`),
+                            e('span', { className: 'pill', style: { background: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa' } }, `${upgradeResult.compression_ratio}x Compression`),
+                            !isCompact && e('span', { className: 'pill', style: { color: 'var(--text-muted)' } }, `-${upgradeResult.estimated_ttft_gain} TTFT`)
+                          ))
                         ),
-                        e('option', { value: 'gpt-4o-mini' }, 'GPT-4o Mini (OpenAI BYOK)'),
-                        e('option', { value: 'claude-3-5-sonnet-latest' }, 'Claude 3.5 Sonnet (Anthropic BYOK)'),
-                        e('option', { value: 'gemini-2.5-flash' }, 'Gemini 2.5 Flash (Google BYOK)'),
-                        e('option', { value: 'gemini-1.5-flash' }, 'Gemini 1.5 Flash (Google BYOK)'),
-                        e('option', { value: 'gemini-1.5-pro' }, 'Gemini 1.5 Pro (Google BYOK)')
-                      )
-                    ),
-                    activeModel.startsWith('triune') ? e('div', null,
-                      e('span', {
-                        className: `pill ${weightsLoaded ? 'online' : 'warning'}`,
-                        title: weightsLoaded
-                          ? `Trained weights loaded${activeCheckpointName ? `: ${activeCheckpointName}` : ''}`
-                          : 'No trained weights are currently loaded; local inference requires a checkpoint or a completed training step.'
-                      }, weightsLoaded ? `Weights: ${activeCheckpointName || 'in memory'}` : 'No trained weights loaded'),
-                      !systemDiagnostics.cuda_available && e('span', {
-                        className: 'pill warning',
-                        title: 'This Studio backend is using CPU-only PyTorch. API online means the server is reachable; it does not mean local GPU inference is active.'
-                      }, 'CPU inference · slow'),
-                      e('label', { style: { marginRight: '8px', fontWeight: 600 } }, 'Exit Route:'),
-                      e('select', { value: route, onChange: ev => setRoute(ev.target.value) },
-                        e('option', { value: 'auto' }, 'Auto (Adaptive Layer Exit)'),
-                        e('option', { value: 'reflex' }, 'Reflex (Shallow Exit - Fast)'),
-                        e('option', { value: 'limbic' }, 'Limbic (Mid Depth Exit)'),
-                        e('option', { value: 'cortex' }, 'Cortex (Full Layer Depth)')
-                      )
-                    ) : e('div', null,
-                      e('span', { className: 'pill', style: { background: 'rgba(217, 119, 6, 0.15)', color: 'var(--accent-bronze, #d97706)', borderColor: 'rgba(217, 119, 6, 0.35)' } }, 'BYOK API Mode')
-                    ),
-                    activeAdapter && e('div', null,
-                      e('span', { className: 'pill online', title: `Trained LoRA Adapter: ${activeAdapter.name}` }, renderIcon('finetune', 12, { marginRight: '4px' }), activeAdapter.name)
-                    ),
-                    e('div', null,
-                      e('label', { style: { marginRight: '8px' } }, `Temp: ${temperature}`),
-                      e('input', { type: 'range', min: 0.1, max: 1.5, step: 0.1, value: temperature, onChange: ev => setTemperature(parseFloat(ev.target.value)) })
-                    ),
-                    e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
-                      e('label', { style: { marginRight: '4px' } }, `Max Tokens:`),
-                      e('input', { type: 'range', min: 64, max: 8192, step: 64, value: maxTokens, onChange: ev => setMaxTokens(parseInt(ev.target.value, 10)) }),
-                      e('input', {
-                        type: 'number',
-                        min: 1,
-                        max: 8192,
-                        value: maxTokens,
-                        style: { width: '60px', height: '22px', textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11px', background: 'var(--bg-input, #f2eee5)', border: '1px solid var(--border-color, #ded9cd)', borderRadius: '3px' },
-                        onChange: ev => setMaxTokens(Math.min(8192, Math.max(1, parseInt(ev.target.value, 10) || 1)))
+                        activeLayers.length > 0 && e('div', { className: 'transmutation-layer-matrix', style: { maxHeight: isCompact ? '85px' : '110px', margin: '2px 0', padding: '6px 8px' } },
+                          activeLayers.map(layer => {
+                            const isSel = selectedInspectorLayer && selectedInspectorLayer.layer_index === layer.layer_index;
+                            const tierCls = layer.upgraded_tier === 'reflex' ? 'tier-reflex' : (layer.upgraded_tier === 'limbic' ? 'tier-limbic' : 'tier-cortex');
+                            return e('div', {
+                              key: layer.layer_index,
+                              className: `layer-block-node ${tierCls} ${isSel ? 'active-inspector-layer' : ''}`,
+                              style: { height: isCompact ? '30px' : '36px', minWidth: '36px', flex: '1 0 36px' },
+                              onClick: () => setSelectedInspectorLayer(layer),
+                              title: `L${layer.layer_index}: ${layer.upgraded_label}\n${layer.mechanism}`
+                            },
+                              e('span', { className: 'layer-node-idx', style: { fontSize: '9.5px' } }, `L${layer.layer_index}`),
+                              e('span', { className: 'layer-node-badge', style: { fontSize: '7px' } }, layer.upgraded_tier)
+                            );
+                          })
+                        ),
+                        selectedInspectorLayer && e('div', { className: 'transmutation-layer-inspector', style: { padding: '6px 10px', fontSize: '10.5px' } },
+                          e('div', { className: 'transmutation-layer-inspector-row' },
+                            e('span', { style: { fontWeight: 700, color: '#f3f4f6' } }, `L${selectedInspectorLayer.layer_index}: ${selectedInspectorLayer.upgraded_label}`),
+                            e('span', { className: `inspector-tag ${selectedInspectorLayer.upgraded_tier === 'reflex' ? 'online' : (selectedInspectorLayer.upgraded_tier === 'limbic' ? 'warning' : 'active')}` }, selectedInspectorLayer.upgraded_tier.toUpperCase())
+                          ),
+                          e('div', { className: 'transmutation-layer-inspector-row', style: { color: 'var(--text-muted)' } },
+                            e('span', null, `Attention: ${selectedInspectorLayer.attention_complexity}`),
+                            selectedInspectorLayer.upgraded_tier === 'limbic' && e('span', { style: { color: '#f59e0b' } }, `MoE Sparsity: ${selectedInspectorLayer.sparsity_pct}%`),
+                            selectedInspectorLayer.upgraded_tier === 'reflex' && e('span', { style: { color: '#10b981' } }, `Early Exit: ${Math.round((selectedInspectorLayer.reflex_early_exit_prob || 0) * 100)}%`)
+                          )
+                        )
+                      );
+                    };
+
+                    let containerCls = `neural-intelligence-console ${dockMode}`;
+                    let containerStyle = {};
+                    let bodyHeight = '165px';
+
+                    if (dockMode === 'dock-right') {
+                      containerStyle = {
+                        width: `${neuralConsoleWidth}px`,
+                        minWidth: '320px',
+                        maxWidth: '85vw',
+                        height: '100%',
+                        margin: 0,
+                        borderRadius: 0,
+                        borderTop: 'none',
+                        borderRight: 'none',
+                        borderBottom: 'none',
+                        borderLeft: '1px solid var(--border-color)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        flexShrink: 0
+                      };
+                      bodyHeight = '100%';
+                    } else if (dockMode === 'dock-top') {
+                      containerStyle = {
+                        height: `${neuralConsoleHeight}px`,
+                        minHeight: '165px',
+                        margin: '4px 16px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        flexShrink: 0
+                      };
+                      bodyHeight = `${Math.max(165, neuralConsoleHeight - 56)}px`;
+                    } else if (dockMode === 'float') {
+                      containerCls += isDraggingConsoleWindow ? ' dragging' : '';
+                      containerStyle = {
+                        position: 'fixed',
+                        left: `${neuralConsolePos.x}px`,
+                        top: `${neuralConsolePos.y}px`,
+                        width: `${neuralConsoleWidth}px`,
+                        height: `${neuralConsoleHeight}px`,
+                        minWidth: '340px',
+                        minHeight: '220px',
+                        margin: 0,
+                        zIndex: 1000,
+                        boxShadow: '0 20px 60px rgba(0,0,0,0.8), 0 0 0 1px rgba(139, 92, 246, 0.35)',
+                        borderRadius: '12px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        overflow: 'hidden'
+                      };
+                      bodyHeight = '100%';
+                    } else if (dockMode === 'fullscreen') {
+                      containerStyle = {
+                        position: 'fixed',
+                        inset: '16px',
+                        zIndex: 1000,
+                        margin: 0,
+                        boxShadow: '0 25px 70px rgba(0,0,0,0.9), 0 0 0 1px rgba(139, 92, 246, 0.45)',
+                        borderRadius: '14px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        overflow: 'hidden'
+                      };
+                      bodyHeight = '100%';
+                    }
+
+                    return e('div', {
+                      className: containerCls,
+                      style: containerStyle
+                    },
+                      // Header
+                      e('div', {
+                        className: `neural-console-header ${dockMode === 'float' ? 'draggable' : ''}`,
+                        onPointerDown: dockMode === 'float' ? handleFloatHeaderPointerDown : undefined,
+                        onPointerMove: dockMode === 'float' ? handleFloatHeaderPointerMove : undefined,
+                        onPointerUp: dockMode === 'float' ? handleFloatHeaderPointerUp : undefined,
+                        style: dockMode === 'float' ? { cursor: isDraggingConsoleWindow ? 'grabbing' : 'grab' } : undefined
+                      },
+                        e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
+                          dockMode === 'float' && e('span', { className: 'neural-drag-indicator', title: 'Drag titlebar to move floating window' }, renderIcon('grip', 13, { color: 'var(--primary)' })),
+                          e('div', { style: { display: 'flex', alignItems: 'center', gap: '6px' } },
+                            renderIcon('bolt', 13, { color: 'var(--primary)' }),
+                            e('span', { style: { fontWeight: 700, fontFamily: 'var(--font-mono)', fontSize: '11px', letterSpacing: '0.04em', textTransform: 'uppercase', color: '#e5e7eb' } }, 'Neural Intelligence Console')
+                          ),
+                          e('div', { className: 'neural-console-tabs' },
+                            e('button', {
+                              className: `neural-console-tab-btn ${neuralConsoleView === '3d' ? 'active' : ''}`,
+                              onClick: () => {
+                                setNeuralConsoleView('3d');
+                                try { window.localStorage.setItem('triune.playground.neuralConsoleView', '3d'); } catch (_) {}
+                              }
+                            }, [renderIcon('bolt', 11), '3D Synapses']),
+                            e('button', {
+                              className: `neural-console-tab-btn ${neuralConsoleView === 'transmute' ? 'active' : ''}`,
+                              onClick: () => {
+                                setNeuralConsoleView('transmute');
+                                try { window.localStorage.setItem('triune.playground.neuralConsoleView', 'transmute'); } catch (_) {}
+                              }
+                            }, [renderIcon('branch', 11), 'Architecture Transmutation']),
+                            e('button', {
+                              className: `neural-console-tab-btn ${neuralConsoleView === 'split' ? 'active' : ''}`,
+                              onClick: () => {
+                                setNeuralConsoleView('split');
+                                try { window.localStorage.setItem('triune.playground.neuralConsoleView', 'split'); } catch (_) {}
+                              }
+                            }, [renderIcon('columns', 11), 'Split View'])
+                          )
+                        ),
+                        e('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' } },
+                          // Dock Mode Switcher
+                          e('div', { className: 'neural-dock-control-group' },
+                            e('button', {
+                              className: `neural-dock-btn ${dockMode === 'dock-right' ? 'active' : ''}`,
+                              title: 'Dock to Right (Side-by-side with chat)',
+                              onClick: () => handleSetConsoleDock('dock-right')
+                            }, [renderIcon('dockRight', 12)]),
+                            e('button', {
+                              className: `neural-dock-btn ${dockMode === 'dock-top' ? 'active' : ''}`,
+                              title: 'Dock to Top (Stacked above chat)',
+                              onClick: () => handleSetConsoleDock('dock-top')
+                            }, [renderIcon('dockTop', 12)]),
+                            e('button', {
+                              className: `neural-dock-btn ${dockMode === 'float' ? 'active' : ''}`,
+                              title: 'Float / Detach into Movable Window',
+                              onClick: () => handleSetConsoleDock('float')
+                            }, [renderIcon('dockFloat', 12)]),
+                            e('button', {
+                              className: `neural-dock-btn ${dockMode === 'fullscreen' ? 'active' : ''}`,
+                              title: 'Fullscreen Theater View',
+                              onClick: () => handleSetConsoleDock(dockMode === 'fullscreen' ? 'dock-right' : 'fullscreen')
+                            }, [renderIcon('maximize', 12)])
+                          ),
+                          // Size Presets
+                          e('div', { className: 'neural-size-preset-group' },
+                            e('button', {
+                              className: 'neural-size-btn',
+                              title: 'Compact Size',
+                              onClick: () => handleSetConsoleSizePreset('compact')
+                            }, 'S'),
+                            e('button', {
+                              className: 'neural-size-btn',
+                              title: 'Standard Size',
+                              onClick: () => handleSetConsoleSizePreset('standard')
+                            }, 'M'),
+                            e('button', {
+                              className: 'neural-size-btn',
+                              title: 'Expanded Size',
+                              onClick: () => handleSetConsoleSizePreset('expanded')
+                            }, 'L')
+                          ),
+                          e('span', {
+                            className: `pill ${cInfo.available ? 'online' : ''}`,
+                            style: { fontSize: '10px', padding: '1px 6px' }
+                          }, cInfo.available ? `Native C/AVX2: ${cInfo.version || 'active'}${cInfo.cuda_runtime_bound ? ' · CUDA Bound' : ''}` : 'PyTorch Kernel Path'),
+                          e('span', {
+                            className: 'pill online',
+                            style: { fontSize: '10px', padding: '1px 6px', color: '#10b981' }
+                          }, neuronScopeData?.graphics_interop || (cInfo?.cuda_runtime_bound ? 'CUDA Zero-Copy 120 FPS' : 'Vulkan Zero-Copy 120 FPS')),
+                          e('button', {
+                            className: 'neural-console-close-btn',
+                            style: { padding: '2px 6px', fontSize: '11px', minWidth: 'auto', border: '1px solid rgba(255, 255, 255, 0.08)', background: 'transparent', color: 'var(--text-muted)' },
+                            onClick: () => {
+                              setShowNeuralConsole(false);
+                              try { window.localStorage.setItem('triune.playground.neuralConsoleOpen', 'false'); } catch (_) {}
+                            },
+                            title: 'Collapse Neural Console'
+                          }, [renderIcon('close', 11)])
+                        )
+                      ),
+
+                      // Content
+                      e('div', {
+                        className: 'neural-console-content-wrap',
+                        style: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }
+                      },
+                        neuralConsoleView === '3d' && e(NeuronSynapseCanvas3D, {
+                          neuronScopeData,
+                          activeTierIdx,
+                          route,
+                          streamVelocity,
+                          isGenerating,
+                          upgradeResult,
+                          activeModel,
+                          height: '165px',
+                          customHeight: bodyHeight
+                        }),
+                        neuralConsoleView === 'transmute' && e('div', { className: 'neural-console-body-panel', style: { height: bodyHeight, overflowY: 'auto' } },
+                          renderArchitectureTransmutationPanel(false)
+                        ),
+                        neuralConsoleView === 'split' && e('div', {
+                          className: 'neural-console-body-split',
+                          style: dockMode === 'dock-right' ? { display: 'flex', flexDirection: 'column', height: '100%', flex: 1, minHeight: 0, gap: '8px', overflowY: 'auto' } : { height: bodyHeight, minHeight: '165px' }
+                        },
+                          e('div', { style: { minWidth: 0, height: dockMode === 'dock-right' ? '280px' : bodyHeight, position: 'relative', flexShrink: 0 } },
+                            e(NeuronSynapseCanvas3D, {
+                              neuronScopeData,
+                              activeTierIdx,
+                              route,
+                              streamVelocity,
+                              isGenerating,
+                              upgradeResult,
+                              activeModel,
+                              height: '165px',
+                              customHeight: dockMode === 'dock-right' ? '280px' : bodyHeight
+                            })
+                          ),
+                          e('div', { style: { minWidth: 0, flex: 1, height: dockMode === 'dock-right' ? 'auto' : bodyHeight, overflowY: 'auto', paddingRight: '4px' } },
+                            renderArchitectureTransmutationPanel(true)
+                          )
+                        )
+                      ),
+
+                      // Corner resizer for float mode
+                      dockMode === 'float' && e('div', {
+                        className: 'neural-console-resizer-corner',
+                        title: 'Drag corner to resize window',
+                        onPointerDown: handleCornerResizeStart
                       })
+                    );
+                  };
+
+                  const chatColumnContent = e('div', {
+                    className: 'chat-column-pane',
+                    style: { display: 'flex', flexDirection: 'column', flex: 1, minWidth: '320px', minHeight: 0, overflow: 'hidden' }
+                  },
+                    lineageBanner,
+                    e('div', { className: 'chat-scroll-area' },
+                      messages.map((m, idx) => {
+                        const isLastAssistant = m.isAssistant && idx === messages.length - 1;
+                        const isThoughtExpanded = expandedThoughts[m.id || idx] !== undefined
+                          ? expandedThoughts[m.id || idx]
+                          : false;
+
+                        return e(ChatMessageBubble, {
+                          key: m.id || idx,
+                          m,
+                          idx,
+                          isLastAssistant,
+                          isGenerating,
+                          isThoughtExpanded,
+                          onToggleThought: () => setExpandedThoughts(prev => ({ ...prev, [m.id || idx]: !isThoughtExpanded })),
+                          onFork: () => handleForkSession(idx),
+                          onCopy: text => handleCopyMessage(text)
+                        });
+                      }),
+                      isGenerating && e('div', { className: 'chat-bubble assistant generating' },
+                        e('div', { className: 'bubble-header' },
+                          e('span', { className: 'bubble-sender' }, activeModel.startsWith('triune') ? 'Triune MoE Engine' : activeModel),
+                          e('span', { className: 'bubble-time' }, 'typing…')
+                        ),
+                        e('div', { className: 'generating-indicator' },
+                          e('span', { className: 'generating-dot' }),
+                          e('span', { className: 'generating-dot' }),
+                          e('span', { className: 'generating-dot' })
+                        ),
+                        e('span', { className: 'generating-hint' },
+                          activeModel.startsWith('triune')
+                            ? (inferenceWarmupStatus === 'running'
+                                ? 'Initializing local Triune PyTorch engine and running warmup forward pass…'
+                                : (inferenceWarmupStatus === 'ready'
+                                    ? 'Generating locally on GPU with warmed-up Triune kernels. Streaming tokens live…'
+                                    : (inferenceWarmupStatus === 'failed'
+                                        ? `Generating locally on GPU. Startup warmup failed, so this request may take longer while kernels initialize. ${inferenceWarmupError ? `Diagnostic: ${String(inferenceWarmupError).slice(0, 180)}` : ''}`
+                                        : 'Generating locally on GPU. Tokens will appear as they are produced.')))
+                            : 'Waiting for the selected provider. The response appears when this request finishes.'
+                        )
+                      ),
+                      e('div', { ref: chatBottomRef })
+                    ),
+                    e('div', { className: 'chat-input-container' },
+                      e('div', { className: 'chat-input-area-wrap' },
+                        e('textarea', {
+                          className: 'chat-input-textarea',
+                          placeholder: isGenerating ? 'Generating response…' : 'Ask a research question or enter prompt… (Enter to send, Shift+Enter for newline)',
+                          value: chatInput,
+                          disabled: isGenerating,
+                          rows: 2,
+                          onChange: ev => setChatInput(ev.target.value),
+                          onKeyDown: ev => { if (ev.key === 'Enter' && !ev.shiftKey && !isGenerating) { ev.preventDefault(); handleSendMessage(ev.target.value); } }
+                        })
+                      ),
+                      e('div', { className: 'chat-input-actions-bar' },
+                        e('div', { className: 'chat-input-meta-left' },
+                          activeModel.startsWith('triune') ? e('div', { className: 'chat-input-meta-group' },
+                            e('div', { className: 'chat-control-pill', title: 'Dynamic Exit Route' },
+                              renderIcon('branch', 12, { marginRight: '4px' }),
+                              e('select', {
+                                value: route,
+                                onChange: ev => setRoute(ev.target.value),
+                                className: 'chat-meta-select'
+                              },
+                                e('option', { value: 'auto' }, 'Auto Exit'),
+                                e('option', { value: 'reflex' }, 'Reflex (Shallow)'),
+                                e('option', { value: 'limbic' }, 'Limbic (Mid)'),
+                                e('option', { value: 'cortex' }, 'Cortex (Deep)')
+                              )
+                            ),
+                            e('span', {
+                              className: `pill ${weightsLoaded ? 'online' : 'warning'}`,
+                              style: { fontSize: '10.5px', padding: '2px 7px' },
+                              title: weightsLoaded ? `Trained weights: ${activeCheckpointName || 'loaded'}` : 'No checkpoint weights loaded'
+                            }, weightsLoaded ? (activeCheckpointName ? activeCheckpointName.replace('.pt', '') : 'Weights Loaded') : 'Untrained'),
+                            !systemDiagnostics.cuda_available && e('span', {
+                              className: 'pill warning',
+                              style: { fontSize: '10px', padding: '2px 6px' }
+                            }, 'CPU')
+                          ) : e('span', {
+                            className: 'pill',
+                            style: { fontSize: '10.5px', background: 'rgba(217, 119, 6, 0.15)', color: 'var(--accent-bronze, #d97706)' }
+                          }, activeModel.toUpperCase()),
+                          activeAdapter && e('span', {
+                            className: 'pill online',
+                            style: { fontSize: '10.5px' },
+                            title: `LoRA: ${activeAdapter.name}`
+                          }, [renderIcon('finetune', 11, { marginRight: '3px' }), activeAdapter.name]),
+                          e('div', { className: 'chat-param-control', title: 'Sampling Temperature (0.00 - 2.00)' },
+                            e('span', { className: 'chat-param-label' }, 'Temp:'),
+                            e('input', {
+                              type: 'range',
+                              min: 0,
+                              max: 2.0,
+                              step: 0.05,
+                              value: temperature,
+                              onChange: ev => setTemperature(parseFloat(ev.target.value)),
+                              className: 'chat-param-slider'
+                            }),
+                            e('input', {
+                              type: 'number',
+                              min: 0,
+                              max: 2.0,
+                              step: 0.05,
+                              value: temperature,
+                              onChange: ev => {
+                                const v = parseFloat(ev.target.value);
+                                if (!isNaN(v)) setTemperature(Math.max(0, Math.min(2.0, v)));
+                              },
+                              className: 'chat-param-number'
+                            })
+                          ),
+                          e('div', { className: 'chat-param-control', title: 'Max Generation Tokens (1 - 8192)' },
+                            e('span', { className: 'chat-param-label' }, 'Tokens:'),
+                            e('input', {
+                              type: 'range',
+                              min: 32,
+                              max: 8192,
+                              step: 32,
+                              value: maxTokens,
+                              onChange: ev => setMaxTokens(parseInt(ev.target.value, 10)),
+                              className: 'chat-param-slider'
+                            }),
+                            e('input', {
+                              type: 'number',
+                              min: 1,
+                              max: 8192,
+                              step: 32,
+                              value: maxTokens,
+                              onChange: ev => {
+                                const v = parseInt(ev.target.value, 10);
+                                if (!isNaN(v)) setMaxTokens(Math.max(1, Math.min(8192, v)));
+                              },
+                              className: 'chat-param-number chat-param-number-wide'
+                            })
+                          )
+                        ),
+                        e('div', { className: 'chat-input-buttons-right' },
+                          !isGenerating && messages.some(m => !m.isAssistant && m.sender !== 'System') && e('button', {
+                            className: 'btn-input-retry',
+                            title: 'Regenerate last response',
+                            onClick: handleRegenerateLast
+                          }, [renderIcon('refresh', 12, { marginRight: '4px' }), 'Retry']),
+                          isGenerating ? e('button', {
+                            className: 'btn-input-stop',
+                            onClick: handleStopGeneration
+                          }, [renderIcon('pause', 12, { marginRight: '4px' }), 'Stop']) : e('button', {
+                            className: 'btn-input-send',
+                            disabled: !chatInput.trim(),
+                            style: !chatInput.trim() ? { opacity: 0.45, cursor: 'not-allowed' } : {},
+                            onClick: () => {
+                              const ta = document.querySelector('.chat-input-textarea');
+                              handleSendMessage(ta ? ta.value : chatInput);
+                            }
+                          }, [renderIcon('arrowRight', 12, { marginRight: '5px' }), 'Send', e('kbd', { className: 'kbd-hint' }, '↵')])
+                        )
+                      )
+                    )
+                  );
+
+                  if (neuralConsoleDock === 'dock-right') {
+                    return e('div', {
+                      className: `playground-chat-layout dock-right ${isResizingConsole ? 'resizing' : ''}`,
+                      style: { display: 'flex', flexDirection: 'row', flex: 1, minHeight: 0, overflow: 'hidden', position: 'relative' }
+                    },
+                      chatColumnContent,
+                      activeModel.startsWith('triune') && showNeuralConsole && e('div', {
+                        className: 'neural-console-resizer-col',
+                        title: 'Drag horizontally to resize Neural Console width',
+                        onPointerDown: handleColResizeStart
+                      }, e('div', { className: 'resizer-col-line' })),
+                      activeModel.startsWith('triune') && showNeuralConsole && renderNeuralIntelligenceConsole('dock-right')
+                    );
+                  }
+
+                  if (neuralConsoleDock === 'dock-top') {
+                    return e('div', {
+                      className: `playground-chat-layout dock-top ${isResizingConsole ? 'resizing' : ''}`,
+                      style: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden', position: 'relative' }
+                    },
+                      activeModel.startsWith('triune') && showNeuralConsole && renderNeuralIntelligenceConsole('dock-top'),
+                      activeModel.startsWith('triune') && showNeuralConsole && e('div', {
+                        className: 'neural-console-resizer-row',
+                        title: 'Drag vertically to resize Neural Console height',
+                        onPointerDown: handleRowResizeStart
+                      }, e('div', { className: 'resizer-row-line' })),
+                      chatColumnContent
+                    );
+                  }
+
+                  if (neuralConsoleDock === 'float') {
+                    return e('div', {
+                      className: 'playground-chat-layout dock-float',
+                      style: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden', position: 'relative' }
+                    },
+                      chatColumnContent,
+                      activeModel.startsWith('triune') && showNeuralConsole && renderNeuralIntelligenceConsole('float')
+                    );
+                  }
+
+                  // fullscreen
+                  return e('div', {
+                    className: 'playground-chat-layout dock-fullscreen',
+                    style: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden', position: 'relative' }
+                  },
+                    chatColumnContent,
+                    activeModel.startsWith('triune') && showNeuralConsole && renderNeuralIntelligenceConsole('fullscreen')
+                  );
+                })(),
+
+                // Mode 2: Dual Arena Battle
+                playgroundMode === 'arena' && e('div', { className: 'arena-view' },
+                  e('div', { className: 'arena-preset-bar' },
+                    e('span', { style: { fontWeight: 700, fontSize: '12px', color: 'var(--text-muted)' } }, 'Battle Presets:'),
+                    [
+                      { name: 'Reflex vs Cortex Latency Benchmark', a: { model: 'triune-small', route: 'reflex', temp: 0.2 }, b: { model: 'triune-small', route: 'cortex', temp: 0.8 }, prompt: 'Explain how vectorised Gated Linear Attention replaces softmax in linear complexity.' },
+                      { name: 'Deterministic vs Exploratory Sampling', a: { model: 'triune-small', route: 'limbic', temp: 0.1 }, b: { model: 'triune-small', route: 'limbic', temp: 1.1 }, prompt: 'Propose 3 radically novel hardware architectures for sub-nanosecond MoE routing.' },
+                      { name: 'Triune MoE vs External Gateway', a: { model: 'triune-small', route: 'auto', temp: 0.7 }, b: { model: 'gpt-4o-mini', route: 'auto', temp: 0.7 }, prompt: 'Write a lock-free multi-producer single-consumer ring buffer in C.' }
+                    ].map((preset, pIdx) => e('button', {
+                      key: pIdx,
+                      className: 'arena-preset-chip',
+                      onClick: () => {
+                        setArenaConfigA(preset.a);
+                        setArenaConfigB(preset.b);
+                        setArenaPrompt(preset.prompt);
+                        showToast(`Loaded Battle: ${preset.name}`);
+                      }
+                    }, preset.name))
+                  ),
+                  arenaWinner && e('div', { className: 'arena-winner-banner' },
+                    e('span', null, [renderIcon('crown', 14, { marginRight: '6px' }), `Candidate ${arenaWinner === 'tie' ? 'Battle was a Tie!' : `${arenaWinner} Crowned Winner!`}`]),
+                    e('div', { style: { display: 'flex', gap: '8px' } },
+                      arenaWinner !== 'tie' && e('button', {
+                        className: 'btn-clear-chat',
+                        style: { fontSize: '11px', padding: '2px 8px' },
+                        onClick: () => {
+                          const chosenText = arenaWinner === 'A' ? arenaResultA.text : arenaResultB.text;
+                          const chosenConfig = arenaWinner === 'A' ? arenaConfigA : arenaConfigB;
+                          setMessages([
+                            { sender: 'User', text: arenaPrompt, time: new Date().toLocaleTimeString(), isAssistant: false },
+                            { sender: `Triune (${chosenConfig.route.toUpperCase()})`, text: chosenText, time: new Date().toLocaleTimeString(), isAssistant: true }
+                          ]);
+                          setPlaygroundMode('chat');
+                          showToast(`Forked Candidate ${arenaWinner} into Chat`);
+                        }
+                      }, 'Fork Winner to Chat'),
+                      e('button', { className: 'btn-clear-chat', style: { fontSize: '11px', padding: '2px 8px' }, onClick: () => setArenaWinner(null) }, 'Dismiss')
                     )
                   ),
-                  e('div', { className: 'chat-input-row' },
-                    e('textarea', {
-                      placeholder: isGenerating ? 'Generating response…' : 'Ask a research question or input prompt...',
-                      value: chatInput,
-                      disabled: isGenerating,
-                      onChange: ev => setChatInput(ev.target.value),
-                      onKeyDown: ev => { if (ev.key === 'Enter' && !ev.shiftKey && !isGenerating) { ev.preventDefault(); handleSendMessage(); } }
-                    }),
-                    !isGenerating && messages.some(m => !m.isAssistant && m.sender !== 'System') && e('button', {
-                      className: 'btn-regen',
-                      title: 'Regenerate last response',
-                      onClick: handleRegenerateLast
-                    }, [renderIcon('refresh', 13, { marginRight: '5px' }), 'Retry']),
-                    isGenerating ? e('button', {
-                      className: 'btn-stop',
-                      onClick: handleStopGeneration
-                    }, [renderIcon('pause', 13, { marginRight: '5px' }), 'Stop']) : e('button', {
-                      className: 'btn-send',
-                      disabled: !chatInput.trim(),
-                      style: !chatInput.trim() ? { opacity: 0.5, cursor: 'not-allowed' } : {},
-                      onClick: () => handleSendMessage()
-                    }, 'Send Prompt')
+                  e('div', { className: 'arena-grid' },
+                    // Column A
+                    e('div', { className: 'arena-column' },
+                      e('div', { className: 'arena-col-header' },
+                        e('div', { className: 'arena-col-title-row' },
+                          e('div', { className: 'arena-col-badge' }, [renderIcon('bolt', 13), 'Candidate A (Fighter 1)']),
+                          arenaResultA.isStreaming && e('span', { className: 'velocity-gauge-badge' }, [
+                            e('span', { className: 'velocity-gauge-dot streaming' }),
+                            `${arenaResultA.tokensCount} toks`
+                          ])
+                        ),
+                        e('div', { className: 'arena-col-config-row' },
+                          e('label', { style: { fontWeight: 600 } }, 'Route:'),
+                          e('select', { value: arenaConfigA.route, onChange: ev => setArenaConfigA({ ...arenaConfigA, route: ev.target.value }) },
+                            e('option', { value: 'reflex' }, 'Reflex (Shallow Exit)'),
+                            e('option', { value: 'limbic' }, 'Limbic (Mid MoE)'),
+                            e('option', { value: 'cortex' }, 'Cortex (Deep Reasoning)'),
+                            e('option', { value: 'auto' }, 'Auto Adaptive')
+                          ),
+                          e('label', { style: { fontWeight: 600 } }, `Temp: ${arenaConfigA.temp}`),
+                          e('input', { type: 'range', min: 0.1, max: 1.5, step: 0.1, value: arenaConfigA.temp, style: { width: '80px' }, onChange: ev => setArenaConfigA({ ...arenaConfigA, temp: parseFloat(ev.target.value) }) })
+                        )
+                      ),
+                      e('div', { className: 'arena-response-scroll' },
+                        arenaResultA.text ? (() => {
+                          const parsedA = parseReasoningThought(arenaResultA.text, arenaResultA.isStreaming);
+                          return e('div', null,
+                            parsedA.hasThought && e('div', { className: `reasoning-accordion ${parsedA.isLiveThinking ? 'active' : 'completed'}` },
+                              e('div', { className: 'reasoning-header' },
+                                e('span', { className: 'reasoning-label' }, [renderIcon('brain', 12, { marginRight: '4px' }), 'Candidate A Thought']),
+                                e('span', { className: 'reasoning-badge' }, `${parsedA.steps.length} steps`)
+                              ),
+                              e('div', { className: 'reasoning-body' }, parsedA.thoughtText)
+                            ),
+                            e('div', { style: { lineHeight: '1.6', fontSize: '13px' } },
+                              renderFormattedText(parsedA.hasThought ? parsedA.cleanText : arenaResultA.text),
+                              arenaResultA.isStreaming && e('span', { className: 'streaming-cursor-particle-wrap' }, e('span', { className: 'streaming-cursor-spark' }))
+                            )
+                          );
+                        })() : (
+                          e('div', { style: { color: 'var(--text-dim)', fontStyle: 'italic', padding: '20px 0' } },
+                            isArenaBattling ? 'Fighter A initializing generation...' : 'Ready for dual battle. Enter a prompt below and launch!'
+                          )
+                        )
+                      ),
+                      e('div', { className: 'arena-col-footer' },
+                        e('div', { style: { fontSize: '11px', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' } },
+                          arenaResultA.telemetry ? `${arenaResultA.telemetry.latency} · ${arenaResultA.telemetry.speed || 'Done'}` : 'No telemetry yet'
+                        ),
+                        e('button', {
+                          className: `btn-crown-winner ${arenaWinner === 'A' ? 'active' : ''}`,
+                          disabled: !arenaResultA.text || isArenaBattling,
+                          onClick: () => { setArenaWinner('A'); showToast('Candidate A selected'); }
+                        }, [renderIcon('crown', 12), 'Crown A Winner'])
+                      )
+                    ),
+                    // VS Divider
+                    e('div', { className: 'arena-vs-divider' },
+                      e('div', { className: 'arena-vs-badge' }, 'VS')
+                    ),
+                    // Column B
+                    e('div', { className: 'arena-column' },
+                      e('div', { className: 'arena-col-header' },
+                        e('div', { className: 'arena-col-title-row' },
+                          e('div', { className: 'arena-col-badge', style: { color: 'var(--accent-bronze, #d97706)' } }, [renderIcon('bolt', 13), 'Candidate B (Fighter 2)']),
+                          arenaResultB.isStreaming && e('span', { className: 'velocity-gauge-badge' }, [
+                            e('span', { className: 'velocity-gauge-dot streaming' }),
+                            `${arenaResultB.tokensCount} toks`
+                          ])
+                        ),
+                        e('div', { className: 'arena-col-config-row' },
+                          e('label', { style: { fontWeight: 600 } }, 'Route:'),
+                          e('select', { value: arenaConfigB.route, onChange: ev => setArenaConfigB({ ...arenaConfigB, route: ev.target.value }) },
+                            e('option', { value: 'cortex' }, 'Cortex (Deep Reasoning)'),
+                            e('option', { value: 'limbic' }, 'Limbic (Mid MoE)'),
+                            e('option', { value: 'reflex' }, 'Reflex (Shallow Exit)'),
+                            e('option', { value: 'auto' }, 'Auto Adaptive')
+                          ),
+                          e('label', { style: { fontWeight: 600 } }, `Temp: ${arenaConfigB.temp}`),
+                          e('input', { type: 'range', min: 0.1, max: 1.5, step: 0.1, value: arenaConfigB.temp, style: { width: '80px' }, onChange: ev => setArenaConfigB({ ...arenaConfigB, temp: parseFloat(ev.target.value) }) })
+                        )
+                      ),
+                      e('div', { className: 'arena-response-scroll' },
+                        arenaResultB.text ? (() => {
+                          const parsedB = parseReasoningThought(arenaResultB.text, arenaResultB.isStreaming);
+                          return e('div', null,
+                            parsedB.hasThought && e('div', { className: `reasoning-accordion ${parsedB.isLiveThinking ? 'active' : 'completed'}` },
+                              e('div', { className: 'reasoning-header' },
+                                e('span', { className: 'reasoning-label' }, [renderIcon('brain', 12, { marginRight: '4px' }), 'Candidate B Thought']),
+                                e('span', { className: 'reasoning-badge' }, `${parsedB.steps.length} steps`)
+                              ),
+                              e('div', { className: 'reasoning-body' }, parsedB.thoughtText)
+                            ),
+                            e('div', { style: { lineHeight: '1.6', fontSize: '13px' } },
+                              renderFormattedText(parsedB.hasThought ? parsedB.cleanText : arenaResultB.text),
+                              arenaResultB.isStreaming && e('span', { className: 'streaming-cursor-particle-wrap' }, e('span', { className: 'streaming-cursor-spark' }))
+                            )
+                          );
+                        })() : (
+                          e('div', { style: { color: 'var(--text-dim)', fontStyle: 'italic', padding: '20px 0' } },
+                            isArenaBattling ? 'Fighter B synthesizing...' : 'Ready for dual battle. Enter a prompt below and launch!'
+                          )
+                        )
+                      ),
+                      e('div', { className: 'arena-col-footer' },
+                        e('div', { style: { fontSize: '11px', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' } },
+                          arenaResultB.telemetry ? `${arenaResultB.telemetry.latency} · ${arenaResultB.telemetry.speed || 'Done'}` : 'No telemetry yet'
+                        ),
+                        e('button', {
+                          className: `btn-crown-winner ${arenaWinner === 'B' ? 'active' : ''}`,
+                          disabled: !arenaResultB.text || isArenaBattling,
+                          onClick: () => { setArenaWinner('B'); showToast('Candidate B selected'); }
+                        }, [renderIcon('crown', 12), 'Crown B Winner'])
+                      )
+                    )
+                  ),
+                  e('div', { className: 'chat-controls-box' },
+                    e('div', { className: 'chat-input-row' },
+                      e('textarea', {
+                        placeholder: isArenaBattling ? 'Battle running concurrently...' : 'Enter prompt to duel Candidate A vs Candidate B concurrently...',
+                        value: arenaPrompt,
+                        disabled: isArenaBattling,
+                        onChange: ev => setArenaPrompt(ev.target.value),
+                        onKeyDown: ev => { if (ev.key === 'Enter' && !ev.shiftKey && !isArenaBattling) { ev.preventDefault(); handleArenaBattle(); } }
+                      }),
+                      isArenaBattling ? e('button', {
+                        className: 'btn-stop',
+                        onClick: () => { if (arenaAbortRef.current) arenaAbortRef.current.abort(); setIsArenaBattling(false); }
+                      }, [renderIcon('pause', 13, { marginRight: '5px' }), 'Stop Battle']) : e('button', {
+                        className: 'btn-send',
+                        disabled: !arenaPrompt.trim(),
+                        style: !arenaPrompt.trim() ? { opacity: 0.5, cursor: 'not-allowed' } : {},
+                        onClick: () => handleArenaBattle()
+                      }, [renderIcon('arena', 13, { marginRight: '5px' }), 'Launch Dual Battle'])
+                    )
+                  )
+                ),
+
+                // Mode 3: Token Lab
+                playgroundMode === 'tokens' && e('div', { className: 'token-lab-view' },
+                  e('div', { className: 'token-lab-toolbar' },
+                    e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+                      e('span', { style: { fontWeight: 700, fontSize: '12px' } }, 'Token Lab Samples:'),
+                      e('button', {
+                        className: 'arena-preset-chip',
+                        onClick: () => {
+                          const lastMsg = [...messages].reverse().find(m => m.isAssistant);
+                          if (lastMsg) {
+                            setTokenLabText(lastMsg.text);
+                            setTokenLabTokens(tokenizeTextWithEntropy(lastMsg.text));
+                            setSelectedTokenIdx(null);
+                            showToast('Loaded Last Chat Response into Token Lab');
+                          } else {
+                            showToast('No assistant response found to inspect');
+                          }
+                        }
+                      }, 'Last Chat Response'),
+                      e('button', {
+                        className: 'arena-preset-chip',
+                        onClick: () => {
+                          const sample = '<|thought|>\n1. Route analysis: shallow Reflex exit verified.\n2. Invariant preserved.\n<|end_thought|>\nTriune MoE dynamic routing activates shallow Reflex for high confidence tokens.';
+                          setTokenLabText(sample);
+                          setTokenLabTokens(tokenizeTextWithEntropy(sample));
+                          setSelectedTokenIdx(null);
+                          showToast('Loaded MoE Routing Sample');
+                        }
+                      }, 'MoE Router Sample'),
+                      e('button', {
+                        className: 'arena-preset-chip',
+                        onClick: () => {
+                          const sample = 'def lockfree_ring_enqueue(head: int, tail: int, val: float) -> bool:\n    next_head = (head + 1) & RING_MASK\n    return atomic_cas(head, next_head, val)';
+                          setTokenLabText(sample);
+                          setTokenLabTokens(tokenizeTextWithEntropy(sample));
+                          setSelectedTokenIdx(null);
+                          showToast('Loaded Code Architecture Sample');
+                        }
+                      }, 'Code Kernel Sample')
+                    ),
+                    e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px', color: 'var(--text-muted)' } },
+                      e('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '4px' } },
+                        e('span', { style: { width: '8px', height: '8px', borderRadius: '50%', background: '#10b981' } }),
+                        'High Confidence'
+                      ),
+                      e('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '4px' } },
+                        e('span', { style: { width: '8px', height: '8px', borderRadius: '50%', background: '#d97706' } }),
+                        'Medium Entropy'
+                      ),
+                      e('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '4px' } },
+                        e('span', { style: { width: '8px', height: '8px', borderRadius: '50%', background: '#ec4899' } }),
+                        'Branch Fork Point'
+                      )
+                    )
+                  ),
+                  e('div', { className: 'token-lab-main' },
+                    e('div', { className: 'token-stream-area' },
+                      e('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
+                        e('span', { style: { fontSize: '11.5px', fontWeight: 600, color: 'var(--text-muted)' } }, 'Inspect & Edit Input Text:'),
+                        e('div', { style: { display: 'flex', gap: '8px' } },
+                          e('textarea', {
+                            style: { flex: 1, height: '70px', padding: '8px', borderRadius: '6px', background: 'var(--bg-input)', border: '1px solid var(--border-color)', color: 'var(--text-main)', fontFamily: 'var(--font-mono)', fontSize: '12px' },
+                            value: tokenLabText,
+                            onChange: ev => setTokenLabText(ev.target.value)
+                          }),
+                          e('button', {
+                            className: 'btn-send',
+                            style: { width: '120px', height: '70px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' },
+                            onClick: () => {
+                              setTokenLabTokens(tokenizeTextWithEntropy(tokenLabText));
+                              setSelectedTokenIdx(null);
+                              showToast('Tokenized & calculated entropy!');
+                            }
+                          }, [renderIcon('tokens', 16), 'Tokenize'])
+                        )
+                      ),
+                      e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '6px' } },
+                        e('span', { style: { fontSize: '12px', fontWeight: 700 } }, `Token Stream (${tokenLabTokens.length} tokens):`),
+                        e('span', { style: { fontSize: '11px', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' } }, 'Click any token to inspect alternative candidates or branch')
+                      ),
+                      e('div', { className: 'token-chips-flow' },
+                        tokenLabTokens.map((tok, tIdx) => {
+                          const isSelected = selectedTokenIdx === tIdx;
+                          const entropyClass = tok.entropy < 0.5 ? 'low-entropy' : (tok.entropy < 1.1 ? 'mid-entropy' : 'high-entropy');
+                          return e('span', {
+                            key: tIdx,
+                            className: `token-chip ${entropyClass} ${isSelected ? 'selected' : ''}`,
+                            title: `Token #${tok.id}: "${tok.text.replace(/\n/g, '\\n')}" · Entropy: ${tok.entropy} bits · Confidence: ${tok.confidence}%`,
+                            onClick: () => setSelectedTokenIdx(tIdx)
+                          }, tok.text === '\n' ? '↵' : (tok.text.startsWith(' ') ? `·${tok.text.slice(1)}` : tok.text));
+                        })
+                      )
+                    ),
+                    e('div', { className: 'token-inspector-panel' },
+                      selectedTokenIdx !== null && tokenLabTokens[selectedTokenIdx] ? (() => {
+                        const curTok = tokenLabTokens[selectedTokenIdx];
+                        const prefixText = tokenLabTokens.slice(0, selectedTokenIdx + 1).map(t => t.text).join('');
+                        return e('div', { style: { display: 'flex', flexDirection: 'column', gap: '12px' } },
+                          e('div', { style: { fontWeight: 700, fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--primary)' } }, [
+                            renderIcon('tokens', 14),
+                            `Token Inspector: #${curTok.id}`
+                          ]),
+                          e('div', { className: 'token-stat-card' },
+                            e('div', { className: 'token-stat-row' },
+                              e('span', { className: 'token-stat-label' }, 'Token String:'),
+                              e('span', { className: 'token-stat-val', style: { background: 'var(--bg-input)', padding: '2px 6px', borderRadius: '4px' } }, `"${curTok.text.replace(/\n/g, '\\n')}"`)
+                            ),
+                            e('div', { className: 'token-stat-row' },
+                              e('span', { className: 'token-stat-label' }, 'Confidence:'),
+                              e('span', { className: 'token-stat-val', style: { color: curTok.confidence > 80 ? '#10b981' : '#ec4899' } }, `${curTok.confidence}%`)
+                            ),
+                            e('div', { className: 'token-stat-row' },
+                              e('span', { className: 'token-stat-label' }, 'Entropy:'),
+                              e('span', { className: 'token-stat-val' }, `${curTok.entropy} bits`)
+                            ),
+                            e('div', { className: 'token-stat-row' },
+                              e('span', { className: 'token-stat-label' }, 'Position:'),
+                              e('span', { className: 'token-stat-val' }, `Token ${selectedTokenIdx + 1} of ${tokenLabTokens.length}`)
+                            )
+                          ),
+                          e('div', { style: { fontWeight: 600, fontSize: '11.5px', color: 'var(--text-muted)' } }, 'Alternative Candidates (Top-k):'),
+                          e('div', { className: 'token-candidate-list' },
+                            curTok.topCandidates.map((cand, cIdx) => e('div', { key: cIdx, className: 'token-candidate-item' },
+                              e('div', { style: { display: 'flex', alignItems: 'center', gap: '6px' } },
+                                e('span', { className: 'token-candidate-val' }, `"${cand.text.replace(/\n/g, '\\n')}"`),
+                                e('span', { className: 'token-candidate-prob' }, `${cand.prob}%`)
+                              ),
+                              cand.text !== curTok.text && e('button', {
+                                className: 'btn-substitute-token',
+                                onClick: () => handleSubstituteToken(selectedTokenIdx, cand.text)
+                              }, 'Substitute')
+                            ))
+                          ),
+                          e('button', {
+                            className: 'btn-send',
+                            style: { marginTop: '8px', padding: '8px 12px', fontSize: '12px' },
+                            onClick: () => handleBranchFromToken(prefixText)
+                          }, [renderIcon('branch', 13, { marginRight: '6px' }), 'Branch Conversation Here'])
+                        );
+                      })() : (
+                        e('div', { style: { color: 'var(--text-dim)', fontStyle: 'italic', padding: '40px 10px', textAlign: 'center' } },
+                          'Click any token in the stream on the left to inspect probability entropy, top-k candidate distribution, and branch paths.'
+                        )
+                      )
+                    )
                   )
                 )
               )
@@ -7357,7 +10308,7 @@
               e('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' } },
                 e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
                   e('span', { style: { display: 'flex', alignItems: 'center' } }, renderIcon('models', 18, { color: 'var(--accent-olive, #2b4c3f)' })),
-                  e('span', { style: { fontFamily: 'Newsreader, Georgia, serif', fontSize: '17px', fontWeight: 600 } }, 'Active Architecture:'),
+                  e('span', { style: { fontFamily: 'var(--font-heading)', fontSize: '15px', fontWeight: 700 } }, 'Active Architecture:'),
                   e('select', {
                     value: activeModel,
                     onChange: ev => handleSelectModelPreset(ev.target.value),
@@ -7456,7 +10407,7 @@
                     color: '#d97706',
                     fontWeight: 600
                   }
-                }, ['📊 WandB Dashboard ↗']),
+                }, ['WandB Dashboard ↗']),
                 e('button', {
                   className: 'btn-sec',
                   style: { fontSize: '11.5px', padding: '5px 12px' },
@@ -7666,7 +10617,7 @@
             e('div', { className: 'node-canvas-react' },
               e('div', { className: 'node-canvas-header', style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', paddingBottom: '10px', borderBottom: '1px solid var(--border-color)', flexWrap: 'wrap', gap: '8px' } },
                 e('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
-                  e('span', { style: { fontFamily: 'Newsreader, Georgia, serif', fontSize: '17px', fontWeight: 700, color: 'var(--text-main)' } }, 'Visual DAG Architecture'),
+                  e('span', { style: { fontFamily: 'var(--font-heading)', fontSize: '15px', fontWeight: 700, color: 'var(--text-main)' } }, 'Visual DAG Architecture'),
                   e('input', {
                     value: workflowName,
                     onChange: ev => setWorkflowName(ev.target.value),
@@ -8824,7 +11775,7 @@
                             renderIcon('checkpoints', 16, { color: 'var(--primary)' }),
                             project.name
                           ),
-                          isCurrentActive && e('span', { className: 'project-badge-active' }, '★ Active Training Project'),
+                          isCurrentActive && e('span', { className: 'project-badge-active' }, 'Active Training Project'),
                           e('span', { className: 'project-stats-pill' }, `${project.count} checkpoints`),
                           e('span', { className: 'project-stats-pill' }, project.total_size_formatted),
                           project.latest_step !== null && project.latest_step !== undefined && e('span', { className: 'project-stats-pill' }, `Latest Step ${project.latest_step.toLocaleString()}`)
@@ -8960,6 +11911,156 @@
                 )
               ),
               e('div', { className: 'badge-folder' }, `${MODEL_PRESETS.length} Verified Architectures`)
+            ),
+            e('div', { className: 'transmutation-wizard-card' },
+              e('div', { className: 'transmutation-header' },
+                e('div', null,
+                  e('h3', { className: 'transmutation-title' },
+                    renderIcon('branch', 20, { marginRight: '8px', color: '#a78bfa' }),
+                    'Universal Model Upgrader to Triune Architecture'
+                  ),
+                  e('p', { style: { color: 'var(--text-muted)', fontSize: '13px', margin: '4px 0 0 0' } },
+                    'Transmute standard dense Transformer architectures into high-efficiency Triune 3-Tier models (Reflex early exit + Limbic MoE with CentroidSteer + Cortex GLA).'
+                  )
+                ),
+                upgradeResult && e('div', { className: 'transmutation-badge-glow' },
+                  `${upgradeResult.estimated_throughput_gain} Projected Throughput`
+                )
+              ),
+              e('div', { className: 'transmutation-controls-grid' },
+                e('div', { className: 'transmutation-form-field' },
+                  e('label', { className: 'transmutation-label' }, 'Target Dense Model'),
+                  e('select', {
+                    value: upgradeModelName,
+                    onChange: ev => setUpgradeModelName(ev.target.value),
+                    className: 'transmutation-select'
+                  },
+                    UPGRADEABLE_MODELS.map(m => e('option', { key: m.id, value: m.id }, m.desc))
+                  )
+                ),
+                e('div', { className: 'transmutation-form-field' },
+                  e('label', { className: 'transmutation-label' }, `Reflex Ratio: ${Math.round(upgradeReflexRatio * 100)}%`),
+                  e('input', {
+                    type: 'range',
+                    min: 0.10,
+                    max: 0.50,
+                    step: 0.05,
+                    value: upgradeReflexRatio,
+                    onChange: ev => setUpgradeReflexRatio(parseFloat(ev.target.value)),
+                    className: 'chat-param-slider'
+                  })
+                ),
+                e('div', { className: 'transmutation-form-field' },
+                  e('label', { className: 'transmutation-label' }, 'Limbic Experts (MoE)'),
+                  e('select', {
+                    value: upgradeLimbicExperts,
+                    onChange: ev => setUpgradeLimbicExperts(parseInt(ev.target.value, 10)),
+                    className: 'transmutation-select'
+                  },
+                    e('option', { value: 4 }, '4 Experts (Top-2 Active)'),
+                    e('option', { value: 8 }, '8 Experts (Top-2 Active)'),
+                    e('option', { value: 16 }, '16 Experts (Top-2 Active)'),
+                    e('option', { value: 32 }, '32 Experts (Top-2 Active)')
+                  )
+                ),
+                e('div', { className: 'transmutation-form-field' },
+                  e('label', { className: 'transmutation-label' }, 'Cortex Linear Attn (GLA)'),
+                  e('label', { style: { display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', height: '34px', fontFamily: 'var(--font-mono)', fontSize: '12px', color: '#f3f4f6' } },
+                    e('input', {
+                      type: 'checkbox',
+                      checked: upgradeCortexGla,
+                      onChange: ev => setUpgradeCortexGla(ev.target.checked)
+                    }),
+                    'Enable O(S) GLA'
+                  )
+                ),
+                e('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' } },
+                  e('button', {
+                    className: 'btn-transmute-action',
+                    onClick: () => handleUpgradeModel(upgradeModelName, false),
+                    disabled: isUpgradingModel
+                  }, [
+                    renderIcon('bolt', 13, { marginRight: '4px' }),
+                    isUpgradingModel ? 'Transmuting Layers…' : '1-Click Transmute'
+                  ]),
+                  e('button', {
+                    className: 'btn-transmute-action',
+                    style: { background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)', color: '#fff' },
+                    onClick: () => handleUpgradeModel(upgradeModelName, true),
+                    disabled: isUpgradingModel,
+                    title: 'Transmute layers and activate as active model in engine'
+                  }, [
+                    renderIcon('bolt', 13, { marginRight: '4px' }),
+                    isUpgradingModel ? 'Transmuting & Activating…' : '⚡ Transmute & Run'
+                  ])
+                )
+              ),
+              upgradeResult && e('div', null,
+                e('div', { className: 'transmutation-kpi-grid' },
+                  e('div', { className: 'transmutation-kpi-tile' },
+                    e('span', { className: 'transmutation-kpi-label' }, 'Projected Throughput'),
+                    e('span', { className: 'transmutation-kpi-val highlight-green' }, upgradeResult.estimated_throughput_gain)
+                  ),
+                  e('div', { className: 'transmutation-kpi-tile' },
+                    e('span', { className: 'transmutation-kpi-label' }, 'Compression Ratio'),
+                    e('span', { className: 'transmutation-kpi-val highlight-amber' }, `${upgradeResult.compression_ratio}x`)
+                  ),
+                  e('div', { className: 'transmutation-kpi-tile' },
+                    e('span', { className: 'transmutation-kpi-label' }, 'Active Forward Pass Params'),
+                    e('span', { className: 'transmutation-kpi-val highlight-violet' }, `${upgradeResult.parameter_count.weighted_inference_active_str} / ${upgradeResult.parameter_count.original_dense_str}`)
+                  ),
+                  e('div', { className: 'transmutation-kpi-tile' },
+                    e('span', { className: 'transmutation-kpi-label' }, 'TTFT Latency Reduction'),
+                    e('span', { className: 'transmutation-kpi-val highlight-green' }, `-${upgradeResult.estimated_ttft_gain}`)
+                  )
+                ),
+                e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' } },
+                  e('span', { style: { fontFamily: 'var(--font-mono)', fontSize: '11px', textTransform: 'uppercase', color: 'var(--text-muted)', letterSpacing: '0.04em' } },
+                    `Layer Partition Matrix (${upgradeResult.tier_summary.reflex_layers} Reflex · ${upgradeResult.tier_summary.limbic_layers} Limbic MoE · ${upgradeResult.tier_summary.cortex_layers} Cortex GLA):`
+                  ),
+                  e('span', { style: { fontFamily: 'var(--font-mono)', fontSize: '10.5px', color: 'var(--text-dim)' } }, 'Click any layer to inspect internal mechanisms')
+                ),
+                upgradeResult.layer_mapping && e('div', { className: 'transmutation-layer-matrix' },
+                  upgradeResult.layer_mapping.map(layer => {
+                    const isSel = selectedInspectorLayer && selectedInspectorLayer.layer_index === layer.layer_index;
+                    const tierCls = layer.upgraded_tier === 'reflex' ? 'tier-reflex' : (layer.upgraded_tier === 'limbic' ? 'tier-limbic' : 'tier-cortex');
+                    return e('div', {
+                      key: layer.layer_index,
+                      className: `layer-block-node ${tierCls} ${isSel ? 'active-inspector-layer' : ''}`,
+                      onClick: () => setSelectedInspectorLayer(layer),
+                      title: `Layer ${layer.layer_index} (${layer.upgraded_label})`
+                    },
+                      e('span', { className: 'layer-node-idx' }, `L${layer.layer_index}`),
+                      e('span', { className: 'layer-node-badge' }, layer.upgraded_tier)
+                    );
+                  })
+                ),
+                selectedInspectorLayer && e('div', { className: 'transmutation-layer-inspector' },
+                  e('div', { className: 'transmutation-layer-inspector-row' },
+                    e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+                      e('span', { style: { fontWeight: 700, fontSize: '13px', color: '#f3f4f6' } },
+                        `Layer ${selectedInspectorLayer.layer_index}: ${selectedInspectorLayer.original_name} → ${selectedInspectorLayer.upgraded_label}`
+                      ),
+                      e('span', {
+                        className: `inspector-tag ${selectedInspectorLayer.upgraded_tier === 'reflex' ? 'online' : (selectedInspectorLayer.upgraded_tier === 'limbic' ? 'warning' : 'active')}`
+                      }, selectedInspectorLayer.upgraded_tier.toUpperCase())
+                    ),
+                    e('span', { style: { color: 'var(--text-muted)' } }, selectedInspectorLayer.attention_complexity)
+                  ),
+                  e('div', { className: 'transmutation-layer-inspector-row', style: { color: 'var(--text-muted)' } },
+                    e('span', null, `Transformation: ${selectedInspectorLayer.mechanism}`),
+                    selectedInspectorLayer.upgraded_tier === 'limbic' && e('span', { style: { color: '#f59e0b', fontWeight: 600 } },
+                      `Sparsity: ${selectedInspectorLayer.sparsity_pct}% (${selectedInspectorLayer.active_experts}/${selectedInspectorLayer.total_experts} Active Experts)`
+                    ),
+                    selectedInspectorLayer.upgraded_tier === 'reflex' && e('span', { style: { color: '#10b981', fontWeight: 600 } },
+                      `Early-Exit Rate: ~${Math.round(selectedInspectorLayer.reflex_early_exit_prob * 100)}% token bypass`
+                    ),
+                    selectedInspectorLayer.upgraded_tier === 'cortex' && e('span', { style: { color: '#a78bfa', fontWeight: 600 } },
+                      'Linear KV Cache Memory: O(1) per token'
+                    )
+                  )
+                )
+              )
             ),
             e('div', { className: 'models-grid-rich' },
               MODEL_PRESETS.map((m, idx) => {
@@ -9414,7 +12515,16 @@
               e('div', { className: 'appearance-current' },
                 e('span', null, 'CURRENT THEME'),
                 e('strong', null, (APPEARANCE_THEMES.find(theme => theme.id === studioTheme) || APPEARANCE_THEMES[0]).name),
-                e('small', null, `${studioTheme.startsWith('classic') ? 'Classic' : 'Modern'} · ${/dark|forest/.test(studioTheme) ? 'Dark' : 'Light'}`)
+                e('small', null, `${(APPEARANCE_THEMES.find(theme => theme.id === studioTheme) || APPEARANCE_THEMES[0]).edition} edition · ${(APPEARANCE_THEMES.find(theme => theme.id === studioTheme) || APPEARANCE_THEMES[0]).mode} mode`),
+                studioTheme !== 'obsidian-glass' && e('button', {
+                  className: 'btn-clear-chat',
+                  style: { marginTop: '8px', padding: '3px 8px', fontSize: '10.5px' },
+                  onClick: () => {
+                    setStudioTheme('obsidian-glass');
+                    try { window.localStorage.setItem('triune.studio.theme', 'obsidian-glass'); } catch (_) {}
+                    showToast('Restored Studio Carbon (Default) theme.');
+                  }
+                }, 'Reset to Studio Carbon (Default)')
               )
             ),
             e('div', { className: 'appearance-section-heading' },
@@ -9437,8 +12547,20 @@
                   e('div', { className: `appearance-preview preview-${theme.id}`, 'aria-hidden': 'true' },
                     e('div', { className: 'preview-sidebar' }, e('i', null), e('i', null), e('i', null), e('i', null)),
                     e('div', { className: 'preview-workspace' },
-                      e('div', { className: 'preview-topbar' }),
-                      e('div', { className: 'preview-content' }, e('i', null), e('i', null), e('i', null))
+                      e('div', { className: 'preview-topbar' },
+                        e('span', { className: 'preview-dot' }),
+                        e('span', { className: 'preview-title' }, theme.name)
+                      ),
+                      e('div', { className: 'preview-content' },
+                        e('div', { className: 'preview-card-a' },
+                          e('div', { className: 'preview-metric-bar' }),
+                          e('div', { className: 'preview-chart-line' })
+                        ),
+                        e('div', { className: 'preview-card-b' },
+                          e('div', { className: 'preview-node-chip' }),
+                          e('div', { className: 'preview-node-chip' })
+                        )
+                      )
                     )
                   ),
                   e('div', { className: 'appearance-theme-info' },
@@ -9452,7 +12574,17 @@
                       className: studioTheme === theme.id ? 'appearance-apply applied' : 'appearance-apply',
                       type: 'button',
                       disabled: studioTheme === theme.id,
-                      onClick: () => { setStudioTheme(theme.id); showToast(`${theme.name} applied.`); }
+                      style: studioTheme === theme.id ? {} : {
+                        background: theme.accent,
+                        borderColor: theme.accent,
+                        color: '#ffffff',
+                        boxShadow: `0 2px 8px ${theme.accent}40`
+                      },
+                      onClick: () => {
+                        setStudioTheme(theme.id);
+                        try { window.localStorage.setItem('triune.studio.theme', theme.id); } catch (_) {}
+                        showToast(`${theme.name} applied.`);
+                      }
                     }, studioTheme === theme.id ? 'Currently applied' : 'Apply theme')
                   )
                 )

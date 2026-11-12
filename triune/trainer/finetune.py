@@ -182,18 +182,30 @@ class TriuneFineTuner:
         self.detach_lora()
 
     def save_adapter(self, save_dir: str | Path) -> Path:
-        """Save only LoRA adapter weights and metadata."""
+        """Save LoRA adapter weights and metadata in Hugging Face PEFT standard format."""
         p = Path(save_dir)
         p.mkdir(parents=True, exist_ok=True)
         state_dict = {}
         for name, adapter in self.applied_adapters.items():
             state_dict[f"{name}.lora_A"] = adapter.lora_A.data.cpu()
             state_dict[f"{name}.lora_B"] = adapter.lora_B.data.cpu()
+            state_dict[f"base_model.model.{name}.lora_A.weight"] = adapter.lora_A.data.cpu()
+            state_dict[f"base_model.model.{name}.lora_B.weight"] = adapter.lora_B.data.cpu()
+
+        base_name = getattr(self.model, "active_model_id", "triune-base")
         config = {
+            "peft_type": "LORA",
+            "auto_mapping": None,
+            "base_model_name_or_path": base_name,
+            "r": self.lora_config.rank,
+            "lora_alpha": self.lora_config.alpha,
+            "lora_dropout": self.lora_config.dropout,
+            "target_modules": self.lora_config.target_modules,
+            "bias": "none",
+            "task_type": "CAUSAL_LM",
             "rank": self.lora_config.rank,
             "alpha": self.lora_config.alpha,
             "dropout": self.lora_config.dropout,
-            "target_modules": self.lora_config.target_modules,
             "quantization": getattr(self.lora_config, "quantization", "4-bit NF4"),
             "trainable_params": self.count_trainable_parameters(),
         }
@@ -208,7 +220,7 @@ class TriuneFineTuner:
         return p
 
     def load_adapter(self, load_dir: str | Path) -> None:
-        """Load LoRA weights into attached adapters."""
+        """Load LoRA weights into attached adapters from native or Hugging Face PEFT format."""
         p = Path(load_dir)
         if p.is_file():
             weights_file = p
@@ -229,12 +241,26 @@ class TriuneFineTuner:
 
         self.attach_lora()
         for name, adapter in self.applied_adapters.items():
-            a_key = f"{name}.lora_A"
-            b_key = f"{name}.lora_B"
-            if a_key in state_dict:
-                adapter.lora_A.data.copy_(state_dict[a_key].to(adapter.lora_A.device))
-            if b_key in state_dict:
-                adapter.lora_B.data.copy_(state_dict[b_key].to(adapter.lora_B.device))
+            cand_a = [
+                f"{name}.lora_A",
+                f"{name}.lora_A.weight",
+                f"base_model.model.{name}.lora_A.weight",
+                f"base_model.model.{name}.lora_A",
+            ]
+            cand_b = [
+                f"{name}.lora_B",
+                f"{name}.lora_B.weight",
+                f"base_model.model.{name}.lora_B.weight",
+                f"base_model.model.{name}.lora_B",
+            ]
+            for ka in cand_a:
+                if ka in state_dict:
+                    adapter.lora_A.data.copy_(state_dict[ka].to(adapter.lora_A.device))
+                    break
+            for kb in cand_b:
+                if kb in state_dict:
+                    adapter.lora_B.data.copy_(state_dict[kb].to(adapter.lora_B.device))
+                    break
 
     def count_trainable_parameters(self) -> int:
         return sum(p.numel() for p in self.model.parameters() if p.requires_grad)

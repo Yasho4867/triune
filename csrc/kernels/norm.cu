@@ -41,9 +41,24 @@ __global__ void rmsnorm_forward_kernel(
     }
 
     sum_sq = warp_sum(sum_sq);
+
+    __shared__ float s_warp_sums[32]; // Max 32 warps (1024 threads)
+    int lane = tid % WARP_SIZE;
+    int wid = tid / WARP_SIZE;
+
+    if (lane == 0) {
+        s_warp_sums[wid] = sum_sq;
+    }
+    __syncthreads();
+
     __shared__ float s_mean_sq;
     if (tid == 0) {
-        s_mean_sq = rsqrtf((sum_sq / (float)hidden_dim) + eps);
+        int num_warps = (blockDim.x + WARP_SIZE - 1) / WARP_SIZE;
+        float total_sum_sq = 0.0f;
+        for (int w = 0; w < num_warps; ++w) {
+            total_sum_sq += s_warp_sums[w];
+        }
+        s_mean_sq = rsqrtf((total_sum_sq / (float)hidden_dim) + eps);
     }
     __syncthreads();
 

@@ -8,11 +8,32 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-SPECIAL_TOKENS = ["[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]"]
+SPECIAL_TOKENS = [
+    "[PAD]",
+    "[UNK]",
+    "[CLS]",
+    "[SEP]",
+    "[MASK]",
+    "<|endoftext|>",
+    "<|begin_of_text|>",
+    "<|end_of_text|>",
+    "<|start_header_id|>",
+    "<|end_header_id|>",
+    "<|eot_id|>",
+    "<|thought|>",
+    "<|end_thought|>",
+    "<|tool_call|>",
+    "<|tool_return|>",
+    "<|system|>",
+    "<|user|>",
+    "<|assistant|>",
+    "<|fim_prefix|>",
+    "<|fim_middle|>",
+    "<|fim_suffix|>",
+]
 
 
 def bytes_to_unicode() -> Dict[int, str]:
-    """Returns mapping between utf-8 byte values (0..255) and unicode characters for byte-level BPE."""
     bs = (
         list(range(ord("!"), ord("~") + 1))
         + list(range(ord("\u00a1"), ord("\u00ac") + 1))
@@ -29,10 +50,6 @@ def bytes_to_unicode() -> Dict[int, str]:
 
 
 class PurePythonBPETokenizer:
-    """Pure-Python high-throughput ByteLevel BPE tokenizer matching OpenAI / HuggingFace format.
-    Ensures zero decoding artifacts and works across any operating system without C-extension dependencies.
-    """
-
     def __init__(self, json_path: Union[str, Path]):
         with open(str(json_path), "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -51,7 +68,8 @@ class PurePythonBPETokenizer:
 
         self.byte_encoder = bytes_to_unicode()
         self.byte_decoder = {v: k for k, v in self.byte_encoder.items()}
-        self.pat = re.compile(r"""'s|'t|'re|'ve|'m|'ll|'d| ?\w+| ?\d+| ?[^\s\w\d]+|\s+(?!\S)|\s+""")
+        self.pat = re.compile(r"""'s|'t|'re|'ve|'m|'ll|'d|[^\r\n\w\s]?[a-zA-Z]+|\d{1,3}| ?[^\s\w\d]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+""")
+        self.special_tokens_set = set(SPECIAL_TOKENS)
 
     def _get_pairs(self, word: Tuple[str, ...]):
         pairs = set()
@@ -61,7 +79,7 @@ class PurePythonBPETokenizer:
             prev_char = char
         return pairs
 
-    @functools.lru_cache(maxsize=32768)
+    @functools.lru_cache(maxsize=65536)
     def bpe(self, token: str) -> str:
         word = tuple(token)
         pairs = self._get_pairs(word)
@@ -94,12 +112,16 @@ class PurePythonBPETokenizer:
             pairs = self._get_pairs(word)
         return " ".join(word)
 
-    def encode(self, text: str):
+    def encode(self, text: str, allowed_special: str = "all"):
         bpe_tokens: List[int] = []
         for match in re.finditer(self.pat, text):
             token = match.group(0)
-            token = "".join(self.byte_encoder[b] for b in token.encode("utf-8"))
-            for bpe_token in self.bpe(token).split(" "):
+            if token in self.special_tokens_set and allowed_special in ("all", token):
+                tid = self.vocab.get(token, self.vocab.get("[UNK]", 1))
+                bpe_tokens.append(tid)
+                continue
+            token_bytes = "".join(self.byte_encoder[b] for b in token.encode("utf-8"))
+            for bpe_token in self.bpe(token_bytes).split(" "):
                 tid = self.vocab.get(bpe_token, self.vocab.get("[UNK]", 1))
                 bpe_tokens.append(tid)
 
@@ -116,7 +138,8 @@ class PurePythonBPETokenizer:
             if tok is None:
                 continue
             if skip_special_tokens and (
-                tok in ["[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]", "<|endoftext|>"]
+                tok in self.special_tokens_set
+                or (tok.startswith("<|") and tok.endswith("|>"))
                 or (tok.startswith("[") and tok.endswith("]"))
             ):
                 continue
@@ -126,6 +149,39 @@ class PurePythonBPETokenizer:
                 else:
                     byte_arr.extend(ch.encode("utf-8"))
         return byte_arr.decode("utf-8", errors="replace")
+
+    def decode_stream_step(self, buffer: bytearray, token_id: int) -> Tuple[bytearray, str]:
+        tok = self.inv_vocab.get(token_id)
+        if tok is None:
+            return buffer, ""
+        if tok in self.special_tokens_set:
+            return buffer, ""
+        for ch in tok:
+            if ch in self.byte_decoder:
+                buffer.append(self.byte_decoder[ch])
+            else:
+                buffer.extend(ch.encode("utf-8"))
+        try:
+            text = buffer.decode("utf-8")
+            return bytearray(), text
+        except UnicodeDecodeError:
+            for cutoff in range(1, min(4, len(buffer)) + 1):
+                try:
+                    text = buffer[:-cutoff].decode("utf-8")
+                    return buffer[-cutoff:], text
+                except UnicodeDecodeError:
+                    continue
+            return buffer, ""
+
+    def apply_chat_template(self, messages: List[Dict[str, str]], add_generation_prompt: bool = True) -> str:
+        prompt_parts = ["<|begin_of_text|>"]
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            prompt_parts.append(f"<|start_header_id|>{role}<|end_header_id|>\n\n{content}<|eot_id|>")
+        if add_generation_prompt:
+            prompt_parts.append("<|start_header_id|>assistant<|end_header_id|>\n\n")
+        return "".join(prompt_parts)
 
     def get_vocab_size(self) -> int:
         return len(self.vocab)
@@ -137,13 +193,14 @@ class PurePythonBPETokenizer:
         return self.inv_vocab.get(tid)
 
 
+TriuneTokenizer = PurePythonBPETokenizer
+
+
 def load_tokenizer(path: Union[str, Path]) -> Any:
-    """Load BPE tokenizer from json file, preferring HuggingFace Tokenizers C-lib or PurePython fallback."""
     p = Path(path)
     if not p.is_file():
         raise FileNotFoundError(f"Tokenizer file not found: {path}")
 
-    # Try fast C-extension Tokenizer if installed
     try:
         from tokenizers import Tokenizer
         from tokenizers.decoders import ByteLevel as ByteLevelDecoder
@@ -168,14 +225,13 @@ def load_tokenizer(path: Union[str, Path]) -> Any:
                 tok.decoder = ByteLevelDecoder()
             return tok
     except (ImportError, Exception):
-        # High-performance Pure Python Byte-Level fallback
         return PurePythonBPETokenizer(p)
 
 
 def build_tokenizer(
     output_path: Union[str, Path],
     *,
-    vocab_size: int = 32_000,
+    vocab_size: int = 131_072,
     min_frequency: int = 2,
     target_chars: int = 5_000_000_000,
     dataset_name: str = "wikitext",

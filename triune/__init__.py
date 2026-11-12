@@ -18,42 +18,44 @@ if sys.platform == "win32":
         except Exception:
             pass
 
-# Eager core imports (fast, zero heavy web/agent/export dependencies)
-try:
-    from . import ops
-    from .configs.config import build_config, default_config, validate_config
-    from .kernels import (
-        FastGELU,
-        FastSwiGLU,
-        fast_chunk_gla,
-        fast_cross_entropy,
-        fast_gelu,
-        fast_lora_forward,
-        fast_rmsnorm,
-        fast_rope,
-        fast_swiglu,
-        fast_zeropower_via_newtonschulz5,
-        get_kernel_telemetry,
-        is_turbo_mode_enabled,
-        set_turbo_mode,
-    )
-    from .model import (
-        TriuneModel,
-        TriuneTransformer,
-        attach_early_exits,
-        build_model,
-        load_model,
-        register_model,
-    )
-    from .optim import CentroidSteerOptimizer, Muon, build_optimizer
-
-    # Minimalist Public API
-    Model = build_model
-    Config = build_config
-    CentroidSteer = CentroidSteerOptimizer
-except ImportError:
-    # Allows lightweight tooling and desktop launchers to initialize without direct torch installation
-    pass
+# Pure PEP 562 Lazy Loading: Zero-overhead startup for CLI, tooling, and desktop launchers.
+# PyTorch, Triton, and native CUDA extensions are loaded strictly on first access.
+_CORE_IMPORTS = {
+    # Core public API
+    "Model": ".model",
+    "Config": ".configs.config",
+    "CentroidSteer": ".optim",
+    "Muon": ".optim",
+    "ops": ".ops",
+    # Configs
+    "build_config": ".configs.config",
+    "default_config": ".configs.config",
+    "validate_config": ".configs.config",
+    # Kernels
+    "FastGELU": ".kernels",
+    "FastSwiGLU": ".kernels",
+    "fast_chunk_gla": ".kernels",
+    "fast_cross_entropy": ".kernels",
+    "fast_gelu": ".kernels",
+    "fast_lora_forward": ".kernels",
+    "fast_rmsnorm": ".kernels",
+    "fast_rope": ".kernels",
+    "fast_swiglu": ".kernels",
+    "fast_zeropower_via_newtonschulz5": ".kernels",
+    "get_kernel_telemetry": ".kernels",
+    "is_turbo_mode_enabled": ".kernels",
+    "set_turbo_mode": ".kernels",
+    # Model
+    "TriuneModel": ".model",
+    "TriuneTransformer": ".model",
+    "attach_early_exits": ".model",
+    "build_model": ".model",
+    "load_model": ".model",
+    "register_model": ".model",
+    # Optim
+    "CentroidSteerOptimizer": ".optim",
+    "build_optimizer": ".optim",
+}
 
 # Mapping of heavy/secondary components to their host submodule
 _LAZY_IMPORTS = {
@@ -145,15 +147,27 @@ __all__ = [
 ]
 
 
+_ALL_LAZY = {**_CORE_IMPORTS, **_LAZY_IMPORTS}
+
+
 def __getattr__(name: str) -> Any:
-    if name in _LAZY_IMPORTS:
-        module_path = _LAZY_IMPORTS[name]
+    if name in _ALL_LAZY:
+        module_path = _ALL_LAZY[name]
         module = importlib.import_module(module_path, __package__)
-        val = getattr(module, name)
+        if name == "Model":
+            val = getattr(module, "build_model")
+        elif name == "Config":
+            val = getattr(module, "build_config")
+        elif name == "CentroidSteer":
+            val = getattr(module, "CentroidSteerOptimizer")
+        elif name == "ops":
+            val = module
+        else:
+            val = getattr(module, name)
         globals()[name] = val
         return val
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def __dir__() -> list[str]:
-    return sorted(list(globals().keys()) + list(_LAZY_IMPORTS.keys()))
+    return sorted(list(globals().keys()) + list(_ALL_LAZY.keys()))

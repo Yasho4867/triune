@@ -60,6 +60,8 @@ studio/windows/**/bin/
 studio/windows/**/obj/
 studio/windows/publish/
 studio/windows/publish_installer/
+studio/publish/
+*.pdb
 *.WebView2/
 
 # Logs

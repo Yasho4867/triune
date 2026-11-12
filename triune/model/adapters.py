@@ -253,28 +253,26 @@ def generate_adaptive(
                 r_logits = c_logits
                 l_logits = c_logits
 
-        # Evaluate Softmax Margin: Δp = p_top1 - p_top2
-        r_probs = F.softmax(r_logits.float() / max(temperature, 1e-5), dim=-1)
-        top2_r = torch.topk(r_probs, k=2, dim=-1).values
-        delta_p_r = (top2_r[0, 0] - top2_r[0, 1]).item()
+        def _evaluate_exit(logits: torch.Tensor, scale: float = 1.0) -> bool:
+            probs = F.softmax(logits.float() / max(temperature, 1e-5), dim=-1)
+            k_val = min(16, probs.size(-1))
+            topk = torch.topk(probs, k=k_val, dim=-1).values
+            p1 = topk[0, 0].item()
+            p2 = topk[0, 1].item() if k_val > 1 else 0.0
+            margin = p1 - p2
+            topk_norm = topk / topk.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+            h_norm = -(topk_norm * torch.log(topk_norm.clamp_min(1e-12))).sum().item() / max(math.log(k_val), 1e-12)
+            return (margin >= confidence_threshold * scale) or (p1 >= 0.70 * scale and h_norm <= 0.35)
 
-        if delta_p_r >= confidence_threshold:
-            # High confidence -> Reflex Exit
+        if _evaluate_exit(r_logits, scale=1.0):
             selected_logits = r_logits
             exit_counts["reflex"] += 1
+        elif _evaluate_exit(l_logits, scale=0.85):
+            selected_logits = l_logits
+            exit_counts["limbic"] += 1
         else:
-            l_probs = F.softmax(l_logits.float() / max(temperature, 1e-5), dim=-1)
-            top2_l = torch.topk(l_probs, k=2, dim=-1).values
-            delta_p_l = (top2_l[0, 0] - top2_l[0, 1]).item()
-
-            if delta_p_l >= (confidence_threshold * 0.85):
-                # Moderate confidence -> Limbic Exit
-                selected_logits = l_logits
-                exit_counts["limbic"] += 1
-            else:
-                # Ambiguous / Complex reasoning -> Cortex Exit
-                selected_logits = c_logits
-                exit_counts["cortex"] += 1
+            selected_logits = c_logits
+            exit_counts["cortex"] += 1
 
         next_logits = selected_logits[0].float() / max(temperature, 1e-5)
         if pad_token_id is not None:

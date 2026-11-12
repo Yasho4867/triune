@@ -63,20 +63,12 @@ def _pytorch_chunk_gla(q, k, v, g, initial_state=None, chunk_size: int = 64):
         g_cumsum = torch.cumsum(g_c, dim=-2)
         causal_mask = torch.tril(torch.ones(C, C, device=q.device, dtype=torch.bool)).view(1, 1, 1, C, C, 1)
 
-        # Chunk-by-chunk intra-chunk attention:
-        causal_mask_chunk = torch.tril(torch.ones(C, C, device=q.device, dtype=torch.bool)).view(1, 1, C, C, 1)
-        out_intra_list = []
-        for i in range(num_chunks):
-            q_i = q_c[:, :, i]
-            k_i = k_c[:, :, i]
-            v_i = v_c[:, :, i]
-            g_cum_i = g_cumsum[:, :, i]
-            g_diff_i = torch.clamp(g_cum_i.unsqueeze(-2) - g_cum_i.unsqueeze(-3), max=0.0)
-            decay_i = torch.exp(g_diff_i).masked_fill(~causal_mask_chunk, 0.0)
-            attn_i = ((q_i.unsqueeze(-2) * k_i.unsqueeze(-3)) * decay_i).sum(dim=-1)
-            out_i = torch.matmul(attn_i, v_i)
-            out_intra_list.append(out_i)
-        out_intra = torch.stack(out_intra_list, dim=2)
+        # Factored Tensor Core GEMM for intra-chunk attention: O(C^2) memory footprint
+        causal_mask_chunk = torch.tril(torch.ones(C, C, device=q.device, dtype=torch.bool)).view(1, 1, 1, C, C)
+        q_tilde = q_c.float() * torch.exp(g_cumsum.float())
+        k_tilde = k_c.float() * torch.exp(-g_cumsum.float())
+        attn_intra = torch.matmul(q_tilde, k_tilde.transpose(-1, -2)).masked_fill(~causal_mask_chunk, 0.0).to(dtype=v_c.dtype)
+        out_intra = torch.matmul(attn_intra, v_c)
 
         # Inter-chunk recurrent state propagation with batched KV GEMM
         g_last = g_cumsum[:, :, :, -1:, :]
@@ -268,15 +260,81 @@ class VectorisedGLA(nn.Module):
 
 
 class HybridAttention(nn.Module):
-    def __init__(self, dim, heads, use_fp4=False, use_fp8=False, use_delta_rule=False):
+    def __init__(
+        self,
+        dim: int,
+        heads: int,
+        use_fp4: bool = False,
+        use_fp8: bool = False,
+        use_delta_rule: bool = False,
+        use_sdpa: bool = False,
+        layer_idx: int = 0,
+        reflex_exit_layer: int | None = None,
+        **kwargs,
+    ):
         super().__init__()
         self.dim = dim
         self.heads = heads
         self.use_fp4 = use_fp4
         self.use_fp8 = use_fp8
         self.use_delta_rule = use_delta_rule
+        self.use_sdpa = use_sdpa
+        self.layer_idx = layer_idx
+        self.reflex_exit_layer = reflex_exit_layer
         head_dim = dim // heads if (heads > 0 and dim % heads == 0) else GLA_HEAD_DIM
+        self.head_dim = head_dim
         self.gla = VectorisedGLA(dim, heads, head_dim, use_delta_rule=use_delta_rule)
 
-    def forward(self, x, cache=None):
+    def forward(self, x: torch.Tensor, cache=None):
+        if self.use_sdpa:
+            return self._forward_sdpa(x, cache=cache)
         return self.gla(x, cache)
+
+    def _forward_sdpa(self, x: torch.Tensor, cache=None):
+        """Execute hardware-fused FlashAttention-2 / cuDNN SDPA with RoPE and KV-caching.
+
+        Avoids O(S^2) quadratic memory materialization for long-context (up to 8,192+ tokens)
+        by dispatching directly to fused PyTorch SDPA kernels.
+        """
+        B, T, D = x.shape
+        H, HD = self.heads, self.head_dim
+
+        q = self.gla.q_proj(x).view(B, T, H, HD)
+        k = self.gla.k_proj(x).view(B, T, H, HD)
+        v = self.gla.v_proj(x).view(B, T, H, HD)
+
+        offset = 0
+        k_cache = None
+        v_cache = None
+        if isinstance(cache, dict):
+            k_cache = cache.get("k")
+            v_cache = cache.get("v")
+            offset = cache.get("offset", 0)
+        elif isinstance(cache, tuple) and len(cache) == 2:
+            if isinstance(cache[0], tuple):
+                (k_cache, v_cache), offset = cache
+            else:
+                offset = cache[1] if isinstance(cache[1], int) else 0
+
+        q_sdpa = q.transpose(1, 2)
+        k_sdpa = k.transpose(1, 2)
+        v_sdpa = v.transpose(1, 2)
+
+        if self.gla.use_rope:
+            cos, sin = self.gla.rope(T, x.device, offset=offset)
+            from .rotary import apply_rotary
+
+            q_sdpa, k_sdpa = apply_rotary(q_sdpa, k_sdpa, cos, sin)
+
+        if k_cache is not None and v_cache is not None:
+            k_all = torch.cat([k_cache, k_sdpa], dim=2)
+            v_all = torch.cat([v_cache, v_sdpa], dim=2)
+        else:
+            k_all = k_sdpa
+            v_all = v_sdpa
+
+        is_causal = (T > 1) and (k_cache is None or k_cache.size(2) == 0)
+        out = F.scaled_dot_product_attention(q_sdpa, k_all, v_all, is_causal=is_causal)
+        out = out.transpose(1, 2).contiguous().reshape(B, T, -1)
+        new_cache = ((k_all, v_all), offset + T) if cache is not None else None
+        return self.gla.out_proj(out), new_cache

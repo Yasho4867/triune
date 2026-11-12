@@ -189,13 +189,26 @@ class MoE_FFN(nn.Module):
             )
         )
 
+        is_capturing = bool(x.is_cuda and torch.cuda.is_current_stream_capturing())
+        use_shared_stream = bool(x.is_cuda and self.shared_expert and not is_capturing)
+        shared_stream = None
+        shared_event = None
+        shared_out = None
+
+        if use_shared_stream:
+            if not hasattr(self, "_shared_stream") or self._shared_stream is None:
+                self._shared_stream = torch.cuda.Stream(device=x.device)
+            shared_stream = self._shared_stream
+            shared_stream.wait_stream(torch.cuda.current_stream())
+            with torch.cuda.stream(shared_stream):
+                shared_out = self.shared(flat_x)
+                shared_event = torch.cuda.Event()
+                shared_event.record(shared_stream)
+
         # Fast path for single-token autoregressive decoding: evaluate only the selected top-k
         # experts directly on GPU without .tolist() or nonzero() CUDA stream syncs.
         if not self.training and N_tok == 1 and not any(isinstance(m, FP4Linear) for m in self.experts.modules()):
-            if self.shared_expert:
-                out = (self.shared_scale * self.shared(flat_x)).to(flat_x.dtype)
-            else:
-                out = torch.zeros_like(flat_x)
+            out = torch.zeros_like(flat_x)
             if can_batch_bmm:
                 W1_stack = torch.stack([_get_submod_weight_bias(e[0])[0] for e in self.experts], dim=0)
                 W2_stack = torch.stack([_get_submod_weight_bias(e[2])[0] for e in self.experts], dim=0)
@@ -224,11 +237,17 @@ class MoE_FFN(nn.Module):
                     y_sel = y_sel + b2_stack[sel_idx].unsqueeze(1)
                 weights_sel = flat_vals[0].view(self.top_k, 1, 1).to(y_sel.dtype)
                 out = out + (y_sel * weights_sel).sum(dim=0).to(out.dtype)
-                return out.reshape(B, T, D)
-            chosen_experts = flat_idx[0].tolist()
-            for k_idx, e_idx in enumerate(chosen_experts):
-                w = flat_vals[0, k_idx]
-                out = out + (self.experts[e_idx](flat_x) * w).to(out.dtype)
+            else:
+                chosen_experts = flat_idx[0].tolist()
+                for k_idx, e_idx in enumerate(chosen_experts):
+                    w = flat_vals[0, k_idx]
+                    out = out + (self.experts[e_idx](flat_x) * w).to(out.dtype)
+
+            if use_shared_stream and shared_out is not None:
+                torch.cuda.current_stream().wait_event(shared_event)
+                out = out + (self.shared_scale * shared_out).to(out.dtype)
+            elif self.shared_expert:
+                out = out + (self.shared_scale * self.shared(flat_x)).to(out.dtype)
             return out.reshape(B, T, D)
 
         if self.training:
@@ -236,12 +255,11 @@ class MoE_FFN(nn.Module):
         else:
             capacity = N_tok
         out = torch.zeros_like(flat_x)
-        is_capturing = bool(x.is_cuda and torch.cuda.is_current_stream_capturing())
         need_stats = bool(self.training and update_stats and not is_checkpoint_recomputing() and not is_capturing)
         accepted_counts = torch.zeros(self.num_experts, dtype=torch.long, device=x.device) if need_stats else None
         accepted_mask = torch.zeros((N_tok, self.top_k), dtype=torch.bool, device=x.device) if need_stats else None
 
-        if self.shared_expert:
+        if not use_shared_stream and self.shared_expert:
             shared_out = self.shared(flat_x)
             out = out + (self.shared_scale * shared_out).to(out.dtype)
 
@@ -398,6 +416,10 @@ class MoE_FFN(nn.Module):
 
         if self.training and not getattr(self, "_step_managed_by_engine", False) and not is_checkpoint_recomputing():
             self._global_step += 1
+
+        if use_shared_stream and shared_out is not None:
+            torch.cuda.current_stream().wait_event(shared_event)
+            out = out + (self.shared_scale * shared_out).to(out.dtype)
 
         return out.reshape(B, T, D)
 
