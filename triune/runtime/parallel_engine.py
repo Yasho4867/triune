@@ -125,19 +125,22 @@ class GLAPipelineBlock(nn.Module):
 
 
 class MoERoutingBlock(nn.Module):
-    """DeepSeek-V3 inspired Load-Balanced Mixture of Experts Block."""
+    """DeepSeek-V3 inspired Load-Balanced Mixture of Experts Block with True Sparse Execution."""
 
     def __init__(
         self,
         dim: int = 512,
         num_experts: int = 8,
         top_k: int = 2,
+        mode: str = "auto",
     ) -> None:
         super().__init__()
         self.dim = dim
         self.num_experts = num_experts
         self.top_k = min(top_k, num_experts)
+        self.mode = mode
         hidden_dim = dim * 2
+        self.hidden_dim = hidden_dim
 
         self.router = nn.Linear(dim, num_experts, bias=False)
         self.register_buffer("expert_bias", torch.zeros(num_experts))
@@ -161,8 +164,27 @@ class MoERoutingBlock(nn.Module):
             self._W2_stack = torch.stack([e[2].weight for e in self.experts], dim=0)
         return self._W1_stack, self._W2_stack
 
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Route and execute MoE feed-forward forward pass.
+    def compute_expert_flops(self, num_tokens: int, sparse: bool = True) -> int:
+        """Compute theoretical FLOPs for the MoE feed-forward projection.
+
+        Each expert has W1 [dim, 2*dim] and W2 [2*dim, dim] -> 4 * dim^2 FLOPs per token.
+        Sparse execution calculates only top_k experts per token.
+        Dense computation calculates all num_experts per token.
+        """
+        flops_per_token_expert = 4 * self.dim * self.hidden_dim
+        active_experts = self.top_k if sparse else self.num_experts
+        return num_tokens * active_experts * flops_per_token_expert
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        mode: Optional[str] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Route and execute MoE feed-forward pass.
+
+        Args:
+            x: Input tensor [B, T, D]
+            mode: Optional execution mode override ('sparse', 'dense_graph', or 'auto')
 
         Returns:
             (output, router_weights, router_indices)
@@ -181,11 +203,12 @@ class MoERoutingBlock(nn.Module):
         if self.top_k > 1:
             flat_vals = flat_vals / (flat_vals.sum(dim=-1, keepdim=True) + 1e-6)
 
+        exec_mode = mode if mode is not None else self.mode
         is_capturing = bool(x.is_cuda and torch.cuda.is_current_stream_capturing())
 
-        if is_capturing or (x.is_cuda and N_tok <= 65536):
-            # Static batched BMM: completely eliminates GPU-to-CPU synchronization stalls
-            # and dynamic boolean mask allocations for 100% CUDA Graph compatibility.
+        # Dense BMM mode: used specifically for static CUDA Graph capture where variable
+        # shape dynamic token bucketing is disallowed by CUDA hardware graph capture.
+        if exec_mode == "dense_graph" or (exec_mode == "auto" and is_capturing):
             W1_stack, W2_stack = self._get_stacked_weights()
             x_exp = flat_x.unsqueeze(0).expand(self.num_experts, -1, -1)
             h_pre = torch.bmm(x_exp, W1_stack.transpose(1, 2))
@@ -197,7 +220,8 @@ class MoERoutingBlock(nn.Module):
             out = (y_all * routing_weights.t().unsqueeze(-1)).sum(dim=0).to(x.dtype)
             return out.reshape(B, T, D), flat_vals, top_idx
 
-        # Standard CPU / large batch fallback
+        # Genuine Sparse Top-K Execution (Scatter-Gather):
+        # Tokens are routed ONLY to their top_k assigned experts, saving (num_experts - top_k) / num_experts FLOPs.
         out = torch.zeros_like(flat_x)
         for k in range(self.top_k):
             expert_indices = top_idx[:, k]

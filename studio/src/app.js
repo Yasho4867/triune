@@ -1630,13 +1630,25 @@
     const wrapRef = useRef(null);
     const [isExpanded, setIsExpanded] = useState(false);
     const [fps, setFps] = useState(120);
+    const [layoutMode, setLayoutMode] = useState(() => {
+      try { return localStorage.getItem('triune_canvas_layout') || 'obsidian'; } catch (_) { return 'obsidian'; }
+    });
+    const [customCanvasHeight, setCustomCanvasHeight] = useState(() => {
+      try {
+        const saved = localStorage.getItem('triune_canvas_height');
+        return saved ? Math.max(160, Math.min(560, parseInt(saved, 10))) : 240;
+      } catch (_) { return 240; }
+    });
+    const [isResizing, setIsResizing] = useState(false);
+    const resizeStartYRef = useRef(0);
+    const resizeStartHRef = useRef(240);
 
-    const rotXRef = useRef(0.22);
+    const rotXRef = useRef(0.24);
     const rotYRef = useRef(-0.35);
     const velXRef = useRef(0);
     const velYRef = useRef(0);
-    const camDistRef = useRef(380);
-    const targetCamDistRef = useRef(380);
+    const camDistRef = useRef(370);
+    const targetCamDistRef = useRef(370);
     const isResettingRef = useRef(false);
     const isDraggingRef = useRef(false);
     const lastMouseRef = useRef({ x: 0, y: 0 });
@@ -1702,293 +1714,558 @@
       };
     })();
 
-    const modelSig = `${activeSpec.id}-${activeSpec.totalLayers}-${activeSpec.reflexLayers}-${activeSpec.limbicLayers}-${activeSpec.cortexLayers}-${activeSpec.numExperts}`;
+    const modelSig = `${activeSpec.id}-${activeSpec.totalLayers}-${activeSpec.reflexLayers}-${activeSpec.limbicLayers}-${activeSpec.cortexLayers}-${activeSpec.numExperts}-${layoutMode}`;
     if (!particlesRef.current || !wiresRef.current || modelSigRef.current !== modelSig) {
       modelSigRef.current = modelSig;
       const particles = [];
       const wires = [];
 
-      // 1. Input Embedding Node
-      particles.push({
-        id: 0,
-        tier: 0,
-        tierName: 'Input',
-        x: -185,
-        y: 0,
-        z: 0,
-        phaseX: 0,
-        phaseY: 0,
-        phaseZ: 0,
-        baseR: 5.6,
-        charge: 0,
-        color: '#00f0ff',
-        glowColor: '#38bdf8',
-        auraColor: 'rgba(0, 240, 255, 0.75)',
-        isInput: true,
-        label: 'Embed'
-      });
-
-      // 2. Tier 0: Reflex Layers & Exit Tap
-      const reflexNodeIds = [];
-      const reflexLayersCount = Math.max(1, activeSpec.reflexLayers);
-      for (let l = 0; l < reflexLayersCount; l++) {
-        const headsInLayer = Math.min(activeSpec.heads || 4, 4);
-        const layerX = -145 + l * (75 / Math.max(1, reflexLayersCount - 1));
-        for (let h = 0; h < headsInLayer; h++) {
-          const hAngle = (h / headsInLayer) * Math.PI * 2;
-          const pId = particles.length;
-          reflexNodeIds.push(pId);
-          particles.push({
-            id: pId,
-            tier: 0,
-            tierName: 'Reflex',
-            layerIdx: l,
-            headIdx: h,
-            x: layerX + (h % 2 === 1 ? 5 : -5),
-            y: (h - (headsInLayer - 1) / 2) * 26 + Math.sin(l * 1.5) * 4,
-            z: Math.sin(hAngle) * 26,
-            phaseX: pId * 0.45,
-            phaseY: pId * 0.72,
-            phaseZ: pId * 0.31,
-            baseR: 3.4,
-            charge: 0,
-            color: '#10b981',
-            glowColor: '#34d399',
-            auraColor: 'rgba(16, 185, 129, 0.65)',
-            label: `L${l}·H${h}`
-          });
-        }
-      }
-
-      // Reflex Exit Tap Node
-      const reflexExitId = particles.length;
-      particles.push({
-        id: reflexExitId,
-        tier: 0,
-        tierName: 'Reflex',
-        x: -65,
-        y: 38,
-        z: 0,
-        phaseX: 1.2,
-        phaseY: 0.8,
-        phaseZ: 1.4,
-        baseR: 5.2,
-        charge: 0,
-        color: '#10b981',
-        glowColor: '#00f0ff',
-        auraColor: 'rgba(16, 185, 129, 0.85)',
-        isExit: true,
-        label: 'Reflex Exit [T0]'
-      });
-
-      // 3. Tier 1: Limbic Centroid Router Hub & MoE Experts
-      const routerHubId = particles.length;
-      particles.push({
-        id: routerHubId,
-        tier: 1,
-        tierName: 'Limbic',
-        x: -15,
-        y: 0,
-        z: 0,
-        hubCenterX: -15,
-        hubCenterY: 0,
-        hubCenterZ: 0,
-        phaseX: 0.5,
-        phaseY: 0.9,
-        phaseZ: 0.3,
-        baseR: 6.4,
-        charge: 0,
-        color: '#f59e0b',
-        glowColor: '#fbbf24',
-        auraColor: 'rgba(245, 158, 11, 0.85)',
-        isExpertHub: true,
-        isRouterHub: true,
-        label: 'Centroid Router'
-      });
-
-      const expertNodeIds = [];
-      const numExp = Math.max(2, activeSpec.numExperts);
-      for (let e = 0; e < numExp; e++) {
-        const eAngle = (e / numExp) * Math.PI * 2;
-        const eRad = 34;
-        const pId = particles.length;
-        expertNodeIds.push(pId);
+      if (layoutMode === 'obsidian') {
+        // =========================================================================
+        // Obsidian 3D Biological Brain Topology (Dual Hemispheres & Fissure)
+        // =========================================================================
+        // 1. Sensory Gateway (Input/Embed Node): lower anterior base
         particles.push({
-          id: pId,
+          id: 0,
+          tier: 0,
+          tierName: 'Input',
+          x: -78,
+          y: -42,
+          z: 0,
+          phaseX: 0,
+          phaseY: 0,
+          phaseZ: 0,
+          baseR: 5.6,
+          charge: 0,
+          color: '#00f0ff',
+          glowColor: '#38bdf8',
+          auraColor: 'rgba(0, 240, 255, 0.75)',
+          isInput: true,
+          label: 'Input/Embed'
+        });
+
+        // 2. Tier 0: Reflex Layers (Brainstem Column & Bilateral Cerebellar Bulges)
+        const reflexNodeIds = [];
+        const reflexLayersCount = Math.max(1, activeSpec.reflexLayers);
+        for (let l = 0; l < reflexLayersCount; l++) {
+          const headsInLayer = Math.min(activeSpec.heads || 4, 4);
+          const stemY = -46 + l * (24 / Math.max(1, reflexLayersCount - 1));
+          for (let h = 0; h < headsInLayer; h++) {
+            const side = h % 2 === 0 ? -1 : 1;
+            const lateralZ = side * (12 + (h >= 2 ? 14 : 0));
+            const pId = particles.length;
+            reflexNodeIds.push(pId);
+            particles.push({
+              id: pId,
+              tier: 0,
+              tierName: 'Reflex',
+              layerIdx: l,
+              headIdx: h,
+              x: -44 + l * 12 + (h >= 2 ? 6 : -4),
+              y: stemY + (h >= 2 ? -6 : 4),
+              z: lateralZ,
+              phaseX: pId * 0.45,
+              phaseY: pId * 0.72,
+              phaseZ: pId * 0.31,
+              baseR: 3.6,
+              charge: 0,
+              color: '#10b981',
+              glowColor: '#34d399',
+              auraColor: 'rgba(16, 185, 129, 0.75)',
+              label: `R·L${l}H${h}`
+            });
+          }
+        }
+
+        // Reflex Exit Tap (Fast Motor Reflex Branch)
+        const reflexExitId = particles.length;
+        particles.push({
+          id: reflexExitId,
+          tier: 0,
+          tierName: 'Reflex',
+          x: -20,
+          y: -36,
+          z: 32,
+          phaseX: 1.2,
+          phaseY: 0.8,
+          phaseZ: 1.4,
+          baseR: 5.2,
+          charge: 0,
+          color: '#10b981',
+          glowColor: '#00f0ff',
+          auraColor: 'rgba(16, 185, 129, 0.85)',
+          isExit: true,
+          label: 'Reflex Exit [T0]'
+        });
+
+        // 3. Tier 1: Limbic Centroid Router (Deep Subcortical Thalamic Core & MoE Ring)
+        const routerHubId = particles.length;
+        particles.push({
+          id: routerHubId,
           tier: 1,
           tierName: 'Limbic',
-          expertIdx: e,
-          x: 10 + Math.sin(eAngle) * 8,
-          y: Math.sin(eAngle) * eRad,
-          z: Math.cos(eAngle) * eRad,
-          hubCenterX: 10,
-          hubCenterY: 0,
+          x: 0,
+          y: 4,
+          z: 0,
+          hubCenterX: 0,
+          hubCenterY: 4,
           hubCenterZ: 0,
-          orbitAngle: eAngle,
-          orbitRad: eRad,
-          orbitDir: e % 2 === 0 ? 1 : -1,
-          phaseX: pId * 0.6,
-          phaseY: pId * 0.4,
-          phaseZ: pId * 0.8,
-          baseR: 3.8,
+          phaseX: 0.5,
+          phaseY: 0.9,
+          phaseZ: 0.3,
+          baseR: 6.8,
           charge: 0,
-          color: '#fbbf24',
-          glowColor: '#f59e0b',
-          auraColor: 'rgba(251, 191, 36, 0.65)',
-          isExpert: true,
-          label: `E${e} (MoE)`
+          color: '#f59e0b',
+          glowColor: '#fbbf24',
+          auraColor: 'rgba(245, 158, 11, 0.9)',
+          isExpertHub: true,
+          isRouterHub: true,
+          label: 'Thalamus Core'
         });
-      }
 
-      // Shared Expert
-      const sharedExpertId = particles.length;
-      particles.push({
-        id: sharedExpertId,
-        tier: 1,
-        tierName: 'Limbic',
-        x: 10,
-        y: -46,
-        z: 0,
-        phaseX: 2.1,
-        phaseY: 1.5,
-        phaseZ: 0.7,
-        baseR: 4.4,
-        charge: 0,
-        color: '#f59e0b',
-        glowColor: '#fbbf24',
-        auraColor: 'rgba(245, 158, 11, 0.7)',
-        isSharedExpert: true,
-        label: 'Shared Expert'
-      });
-
-      // Limbic Exit Tap Node
-      const limbicExitId = particles.length;
-      particles.push({
-        id: limbicExitId,
-        tier: 1,
-        tierName: 'Limbic',
-        x: 42,
-        y: 38,
-        z: 0,
-        phaseX: 1.8,
-        phaseY: 1.1,
-        phaseZ: 0.9,
-        baseR: 5.2,
-        charge: 0,
-        color: '#f59e0b',
-        glowColor: '#fbbf24',
-        auraColor: 'rgba(245, 158, 11, 0.85)',
-        isExit: true,
-        label: 'Limbic Exit [T1]'
-      });
-
-      // 4. Tier 2: Cortex GLA Deep Reasoning Layers
-      const cortexNodeIds = [];
-      const cortexLayerOffset = activeSpec.reflexLayers + activeSpec.limbicLayers;
-      const cortexLayersCount = Math.max(1, activeSpec.cortexLayers);
-      for (let c = 0; c < cortexLayersCount; c++) {
-        const nodesPerCortex = 3;
-        const cX = 75 + c * (65 / Math.max(1, cortexLayersCount - 1));
-        for (let i = 0; i < nodesPerCortex; i++) {
+        // MoE Experts circling in the central limbic hippocampal loop
+        const expertNodeIds = [];
+        const numExp = Math.max(2, activeSpec.numExperts);
+        for (let e = 0; e < numExp; e++) {
+          const eAngle = (e / numExp) * Math.PI * 2;
+          const eRadX = 26;
+          const eRadY = 18;
+          const eRadZ = 22;
           const pId = particles.length;
-          cortexNodeIds.push(pId);
+          expertNodeIds.push(pId);
           particles.push({
             id: pId,
-            tier: 2,
-            tierName: 'Cortex',
-            layerIdx: cortexLayerOffset + c,
-            nodeIdx: i,
-            x: cX + (i % 2 === 1 ? 5 : -5),
-            y: (i - 1) * 28 + Math.cos(c * 1.4) * 5,
-            z: Math.sin(i * 1.8) * 32,
-            phaseX: pId * 0.55,
-            phaseY: pId * 0.35,
-            phaseZ: pId * 0.75,
+            tier: 1,
+            tierName: 'Limbic',
+            expertIdx: e,
+            x: Math.cos(eAngle) * eRadX,
+            y: 4 + Math.sin(eAngle) * eRadY,
+            z: Math.sin(2 * eAngle) * eRadZ,
+            hubCenterX: 0,
+            hubCenterY: 4,
+            hubCenterZ: 0,
+            orbitAngle: eAngle,
+            orbitRad: eRadX,
+            orbitDir: e % 2 === 0 ? 1 : -1,
+            phaseX: pId * 0.6,
+            phaseY: pId * 0.4,
+            phaseZ: pId * 0.8,
             baseR: 3.8,
             charge: 0,
-            color: '#8b5cf6',
-            glowColor: '#c084fc',
-            auraColor: 'rgba(139, 92, 246, 0.72)',
-            label: `L${cortexLayerOffset + c}·GLA`
+            color: '#fbbf24',
+            glowColor: '#f59e0b',
+            auraColor: 'rgba(251, 191, 36, 0.7)',
+            isExpert: true,
+            label: `E${e} (MoE)`
           });
         }
+
+        // Shared Expert (Mammillary Body)
+        const sharedExpertId = particles.length;
+        particles.push({
+          id: sharedExpertId,
+          tier: 1,
+          tierName: 'Limbic',
+          x: 6,
+          y: -14,
+          z: 0,
+          phaseX: 2.1,
+          phaseY: 1.5,
+          phaseZ: 0.7,
+          baseR: 4.4,
+          charge: 0,
+          color: '#f59e0b',
+          glowColor: '#fbbf24',
+          auraColor: 'rgba(245, 158, 11, 0.7)',
+          isSharedExpert: true,
+          label: 'Shared Expert'
+        });
+
+        // Limbic Exit Tap
+        const limbicExitId = particles.length;
+        particles.push({
+          id: limbicExitId,
+          tier: 1,
+          tierName: 'Limbic',
+          x: 24,
+          y: -8,
+          z: 34,
+          phaseX: 1.8,
+          phaseY: 1.1,
+          phaseZ: 0.9,
+          baseR: 5.2,
+          charge: 0,
+          color: '#f59e0b',
+          glowColor: '#fbbf24',
+          auraColor: 'rgba(245, 158, 11, 0.85)',
+          isExit: true,
+          label: 'Limbic Exit [T1]'
+        });
+
+        // 4. Tier 2: Cortex GLA Layers (Left & Right Cerebral Hemispheres with Longitudinal Fissure)
+        const cortexNodeIds = [];
+        const cortexLayerOffset = activeSpec.reflexLayers + activeSpec.limbicLayers;
+        const cortexLayersCount = Math.max(1, activeSpec.cortexLayers);
+        const nodesPerCortex = 4; // 2 in left hemisphere, 2 in right hemisphere
+        for (let c = 0; c < cortexLayersCount; c++) {
+          const u = (c + 0.5) / cortexLayersCount; // Normalized depth along anterior-posterior axis
+          const cX = -52 + u * 105; // Posterior to Anterior
+          const archY = 16 + Math.sin(u * Math.PI) * 36; // Cerebral dome arch
+          for (let i = 0; i < nodesPerCortex; i++) {
+            const isRight = i % 2 === 1;
+            const lateralTier = Math.floor(i / 2); // 0 = upper medial, 1 = lower lateral temporal
+            const fissureOffset = 12; // Medial longitudinal fissure cleft
+            const cZ = (isRight ? 1 : -1) * (fissureOffset + lateralTier * 24 + Math.sin(u * Math.PI * 1.5) * 8);
+            const cY = archY - (lateralTier * 16);
+            const pId = particles.length;
+            cortexNodeIds.push(pId);
+            particles.push({
+              id: pId,
+              tier: 2,
+              tierName: 'Cortex',
+              layerIdx: cortexLayerOffset + c,
+              nodeIdx: i,
+              hemisphere: isRight ? 'R' : 'L',
+              x: cX + (i % 2 === 1 ? 4 : -4),
+              y: cY,
+              z: cZ,
+              phaseX: pId * 0.55,
+              phaseY: pId * 0.35,
+              phaseZ: pId * 0.75,
+              baseR: 3.8,
+              charge: 0,
+              color: '#8b5cf6',
+              glowColor: '#c084fc',
+              auraColor: 'rgba(139, 92, 246, 0.75)',
+              label: `${isRight ? 'RH' : 'LH'}·L${cortexLayerOffset + c}·GLA`
+            });
+          }
+        }
+
+        // Output Hub (Prefrontal Executive Pole)
+        const outputHeadId = particles.length;
+        particles.push({
+          id: outputHeadId,
+          tier: 2,
+          tierName: 'Cortex',
+          x: 74,
+          y: 24,
+          z: 0,
+          phaseX: 0,
+          phaseY: 0,
+          phaseZ: 0,
+          baseR: 6.4,
+          charge: 0,
+          color: '#c084fc',
+          glowColor: '#8b5cf6',
+          auraColor: 'rgba(192, 132, 252, 0.88)',
+          isOutput: true,
+          label: 'Prefrontal LM Head'
+        });
+
+        // Synaptic Wiring (Obsidian Neural Fiber Tracts)
+        reflexNodeIds.slice(0, 4).forEach(rId => {
+          wires.push({ from: 0, to: rId, tierFrom: 0, tierTo: 0, isSkip: false });
+        });
+        for (let i = 0; i < reflexNodeIds.length - 1; i++) {
+          wires.push({ from: reflexNodeIds[i], to: reflexNodeIds[i + 1], tierFrom: 0, tierTo: 0, isSkip: false });
+        }
+        reflexNodeIds.forEach(rId => {
+          wires.push({ from: rId, to: reflexExitId, tierFrom: 0, tierTo: 0, isSkip: true });
+        });
+        reflexNodeIds.slice(-2).forEach(rId => {
+          wires.push({ from: rId, to: routerHubId, tierFrom: 0, tierTo: 1, isSkip: false });
+        });
+
+        expertNodeIds.forEach(eId => {
+          wires.push({ from: routerHubId, to: eId, tierFrom: 1, tierTo: 1, isSkip: false });
+          wires.push({ from: eId, to: sharedExpertId, tierFrom: 1, tierTo: 1, isSkip: false });
+          wires.push({ from: eId, to: limbicExitId, tierFrom: 1, tierTo: 1, isSkip: true });
+        });
+        wires.push({ from: routerHubId, to: limbicExitId, tierFrom: 1, tierTo: 1, isSkip: false });
+
+        cortexNodeIds.forEach(cId => {
+          if (cId % 3 === 0) {
+            wires.push({ from: routerHubId, to: cId, tierFrom: 1, tierTo: 2, isSkip: false });
+          }
+        });
+
+        for (let i = 0; i < cortexNodeIds.length - 2; i++) {
+          wires.push({ from: cortexNodeIds[i], to: cortexNodeIds[i + 2], tierFrom: 2, tierTo: 2, isSkip: false });
+        }
+
+        // Corpus Callosum Trans-Hemispheric Bridges: link Left & Right hemisphere pairs
+        for (let i = 0; i < cortexNodeIds.length - 1; i += 2) {
+          wires.push({ from: cortexNodeIds[i], to: cortexNodeIds[i + 1], tierFrom: 2, tierTo: 2, isCrossHemisphere: true });
+        }
+
+        cortexNodeIds.slice(-4).forEach(cId => {
+          wires.push({ from: cId, to: outputHeadId, tierFrom: 2, tierTo: 2, isSkip: false });
+        });
+        wires.push({ from: reflexExitId, to: outputHeadId, tierFrom: 0, tierTo: 2, isSkip: true });
+        wires.push({ from: limbicExitId, to: outputHeadId, tierFrom: 1, tierTo: 2, isSkip: true });
+      } else {
+        // Linear Pipeline Topology
+        particles.push({
+          id: 0,
+          tier: 0,
+          tierName: 'Input',
+          x: -185,
+          y: 0,
+          z: 0,
+          phaseX: 0,
+          phaseY: 0,
+          phaseZ: 0,
+          baseR: 5.6,
+          charge: 0,
+          color: '#00f0ff',
+          glowColor: '#38bdf8',
+          auraColor: 'rgba(0, 240, 255, 0.75)',
+          isInput: true,
+          label: 'Embed'
+        });
+
+        const reflexNodeIds = [];
+        const reflexLayersCount = Math.max(1, activeSpec.reflexLayers);
+        for (let l = 0; l < reflexLayersCount; l++) {
+          const headsInLayer = Math.min(activeSpec.heads || 4, 4);
+          const layerX = -145 + l * (75 / Math.max(1, reflexLayersCount - 1));
+          for (let h = 0; h < headsInLayer; h++) {
+            const hAngle = (h / headsInLayer) * Math.PI * 2;
+            const pId = particles.length;
+            reflexNodeIds.push(pId);
+            particles.push({
+              id: pId,
+              tier: 0,
+              tierName: 'Reflex',
+              layerIdx: l,
+              headIdx: h,
+              x: layerX + (h % 2 === 1 ? 5 : -5),
+              y: (h - (headsInLayer - 1) / 2) * 26 + Math.sin(l * 1.5) * 4,
+              z: Math.sin(hAngle) * 26,
+              phaseX: pId * 0.45,
+              phaseY: pId * 0.72,
+              phaseZ: pId * 0.31,
+              baseR: 3.4,
+              charge: 0,
+              color: '#10b981',
+              glowColor: '#34d399',
+              auraColor: 'rgba(16, 185, 129, 0.65)',
+              label: `L${l}·H${h}`
+            });
+          }
+        }
+
+        const reflexExitId = particles.length;
+        particles.push({
+          id: reflexExitId,
+          tier: 0,
+          tierName: 'Reflex',
+          x: -65,
+          y: 38,
+          z: 0,
+          phaseX: 1.2,
+          phaseY: 0.8,
+          phaseZ: 1.4,
+          baseR: 5.2,
+          charge: 0,
+          color: '#10b981',
+          glowColor: '#00f0ff',
+          auraColor: 'rgba(16, 185, 129, 0.85)',
+          isExit: true,
+          label: 'Reflex Exit [T0]'
+        });
+
+        const routerHubId = particles.length;
+        particles.push({
+          id: routerHubId,
+          tier: 1,
+          tierName: 'Limbic',
+          x: -15,
+          y: 0,
+          z: 0,
+          hubCenterX: -15,
+          hubCenterY: 0,
+          hubCenterZ: 0,
+          phaseX: 0.5,
+          phaseY: 0.9,
+          phaseZ: 0.3,
+          baseR: 6.4,
+          charge: 0,
+          color: '#f59e0b',
+          glowColor: '#fbbf24',
+          auraColor: 'rgba(245, 158, 11, 0.85)',
+          isExpertHub: true,
+          isRouterHub: true,
+          label: 'Centroid Router'
+        });
+
+        const expertNodeIds = [];
+        const numExp = Math.max(2, activeSpec.numExperts);
+        for (let e = 0; e < numExp; e++) {
+          const eAngle = (e / numExp) * Math.PI * 2;
+          const eRad = 34;
+          const pId = particles.length;
+          expertNodeIds.push(pId);
+          particles.push({
+            id: pId,
+            tier: 1,
+            tierName: 'Limbic',
+            expertIdx: e,
+            x: 10 + Math.sin(eAngle) * 8,
+            y: Math.sin(eAngle) * eRad,
+            z: Math.cos(eAngle) * eRad,
+            hubCenterX: 10,
+            hubCenterY: 0,
+            hubCenterZ: 0,
+            orbitAngle: eAngle,
+            orbitRad: eRad,
+            orbitDir: e % 2 === 0 ? 1 : -1,
+            phaseX: pId * 0.6,
+            phaseY: pId * 0.4,
+            phaseZ: pId * 0.8,
+            baseR: 3.8,
+            charge: 0,
+            color: '#fbbf24',
+            glowColor: '#f59e0b',
+            auraColor: 'rgba(251, 191, 36, 0.65)',
+            isExpert: true,
+            label: `E${e} (MoE)`
+          });
+        }
+
+        const sharedExpertId = particles.length;
+        particles.push({
+          id: sharedExpertId,
+          tier: 1,
+          tierName: 'Limbic',
+          x: 10,
+          y: -46,
+          z: 0,
+          phaseX: 2.1,
+          phaseY: 1.5,
+          phaseZ: 0.7,
+          baseR: 4.4,
+          charge: 0,
+          color: '#f59e0b',
+          glowColor: '#fbbf24',
+          auraColor: 'rgba(245, 158, 11, 0.7)',
+          isSharedExpert: true,
+          label: 'Shared Expert'
+        });
+
+        const limbicExitId = particles.length;
+        particles.push({
+          id: limbicExitId,
+          tier: 1,
+          tierName: 'Limbic',
+          x: 42,
+          y: 38,
+          z: 0,
+          phaseX: 1.8,
+          phaseY: 1.1,
+          phaseZ: 0.9,
+          baseR: 5.2,
+          charge: 0,
+          color: '#f59e0b',
+          glowColor: '#fbbf24',
+          auraColor: 'rgba(245, 158, 11, 0.85)',
+          isExit: true,
+          label: 'Limbic Exit [T1]'
+        });
+
+        const cortexNodeIds = [];
+        const cortexLayerOffset = activeSpec.reflexLayers + activeSpec.limbicLayers;
+        const cortexLayersCount = Math.max(1, activeSpec.cortexLayers);
+        for (let c = 0; c < cortexLayersCount; c++) {
+          const nodesPerCortex = 3;
+          const cX = 75 + c * (65 / Math.max(1, cortexLayersCount - 1));
+          for (let i = 0; i < nodesPerCortex; i++) {
+            const pId = particles.length;
+            cortexNodeIds.push(pId);
+            particles.push({
+              id: pId,
+              tier: 2,
+              tierName: 'Cortex',
+              layerIdx: cortexLayerOffset + c,
+              nodeIdx: i,
+              x: cX + (i % 2 === 1 ? 5 : -5),
+              y: (i - 1) * 28 + Math.cos(c * 1.4) * 5,
+              z: Math.sin(i * 1.8) * 32,
+              phaseX: pId * 0.55,
+              phaseY: pId * 0.35,
+              phaseZ: pId * 0.75,
+              baseR: 3.8,
+              charge: 0,
+              color: '#8b5cf6',
+              glowColor: '#c084fc',
+              auraColor: 'rgba(139, 92, 246, 0.72)',
+              label: `L${cortexLayerOffset + c}·GLA`
+            });
+          }
+        }
+
+        const outputHeadId = particles.length;
+        particles.push({
+          id: outputHeadId,
+          tier: 2,
+          tierName: 'Cortex',
+          x: 165,
+          y: 0,
+          z: 0,
+          phaseX: 0,
+          phaseY: 0,
+          phaseZ: 0,
+          baseR: 6.2,
+          charge: 0,
+          color: '#c084fc',
+          glowColor: '#8b5cf6',
+          auraColor: 'rgba(192, 132, 252, 0.85)',
+          isOutput: true,
+          label: 'Output Head'
+        });
+
+        const initialReflex = reflexNodeIds.slice(0, Math.min(4, reflexNodeIds.length));
+        initialReflex.forEach(rId => {
+          wires.push({ from: 0, to: rId, tierFrom: 0, tierTo: 0, isSkip: false });
+        });
+        for (let i = 0; i < reflexNodeIds.length - 1; i++) {
+          wires.push({ from: reflexNodeIds[i], to: reflexNodeIds[i + 1], tierFrom: 0, tierTo: 0, isSkip: false });
+        }
+        reflexNodeIds.forEach(rId => {
+          wires.push({ from: rId, to: reflexExitId, tierFrom: 0, tierTo: 0, isSkip: false });
+        });
+        wires.push({ from: reflexExitId, to: outputHeadId, tierFrom: 0, tierTo: 2, isSkip: true, bypassTier: 0 });
+
+        const reflexNodes = particles.filter(p => p.tier === 0);
+        const limbicHubs = particles.filter(p => p.tier === 1 && p.isExpertHub);
+        const limbicNodes = particles.filter(p => p.tier === 1);
+        const cortexNodes = particles.filter(p => p.tier === 2);
+        reflexNodes.forEach(rNode => {
+          const targetHub = limbicHubs[0] || particles[routerHubId];
+          wires.push({ from: rNode.id, to: targetHub.id, tierFrom: 0, tierTo: 1, isSkip: false });
+        });
+
+        expertNodeIds.forEach(eId => {
+          wires.push({ from: routerHubId, to: eId, tierFrom: 1, tierTo: 1, isSkip: false });
+          wires.push({ from: eId, to: limbicExitId, tierFrom: 1, tierTo: 1, isSkip: false });
+        });
+        wires.push({ from: routerHubId, to: sharedExpertId, tierFrom: 1, tierTo: 1, isSkip: false });
+        wires.push({ from: sharedExpertId, to: limbicExitId, tierFrom: 1, tierTo: 1, isSkip: false });
+        wires.push({ from: limbicExitId, to: outputHeadId, tierFrom: 1, tierTo: 2, isSkip: true, bypassTier: 1 });
+
+        limbicNodes.forEach(lNode => {
+          const targetCortex1 = cortexNodes[0] || particles[outputHeadId];
+          wires.push({ from: lNode.id, to: targetCortex1.id, tierFrom: 1, tierTo: 2, isSkip: false });
+        });
+
+        for (let i = 0; i < cortexNodeIds.length - 1; i++) {
+          wires.push({ from: cortexNodeIds[i], to: cortexNodeIds[i + 1], tierFrom: 2, tierTo: 2, isSkip: false });
+        }
+        cortexNodeIds.forEach(cId => {
+          wires.push({ from: cId, to: outputHeadId, tierFrom: 2, tierTo: 2, isSkip: false });
+        });
       }
-
-      // Output Head (Logits)
-      const outputHeadId = particles.length;
-      particles.push({
-        id: outputHeadId,
-        tier: 2,
-        tierName: 'Cortex',
-        x: 165,
-        y: 0,
-        z: 0,
-        phaseX: 0,
-        phaseY: 0,
-        phaseZ: 0,
-        baseR: 6.2,
-        charge: 0,
-        color: '#c084fc',
-        glowColor: '#8b5cf6',
-        auraColor: 'rgba(192, 132, 252, 0.85)',
-        isOutput: true,
-        label: 'Output Head'
-      });
-
-      // Synaptic Wires
-      // Input Embed -> initial Reflex nodes
-      const initialReflex = reflexNodeIds.slice(0, Math.min(4, reflexNodeIds.length));
-      initialReflex.forEach(rId => {
-        wires.push({ from: 0, to: rId, tierFrom: 0, tierTo: 0, isSkip: false });
-      });
-
-      // Inter-reflex layers connections
-      for (let i = 0; i < reflexNodeIds.length - 1; i++) {
-        wires.push({ from: reflexNodeIds[i], to: reflexNodeIds[i + 1], tierFrom: 0, tierTo: 0, isSkip: false });
-      }
-      // Reflex nodes connect to Reflex Exit
-      reflexNodeIds.forEach(rId => {
-        wires.push({ from: rId, to: reflexExitId, tierFrom: 0, tierTo: 0, isSkip: false });
-      });
-
-      // SHALLOW EARLY EXIT BYPASS WIRE: Reflex Exit -> Output Head
-      wires.push({ from: reflexExitId, to: outputHeadId, tierFrom: 0, tierTo: 2, isSkip: true, bypassTier: 0 });
-
-      // Forward to Limbic Router
-      const reflexNodes = particles.filter(p => p.tier === 0);
-      const limbicHubs = particles.filter(p => p.tier === 1 && p.isExpertHub);
-      const limbicNodes = particles.filter(p => p.tier === 1);
-      const cortexNodes = particles.filter(p => p.tier === 2);
-      reflexNodes.forEach(rNode => {
-        const targetHub = limbicHubs[0] || particles[routerHubId];
-        wires.push({ from: rNode.id, to: targetHub.id, tierFrom: 0, tierTo: 1, isSkip: false });
-      });
-
-      // Centroid Router -> Each Expert + Shared Expert
-      expertNodeIds.forEach(eId => {
-        wires.push({ from: routerHubId, to: eId, tierFrom: 1, tierTo: 1, isSkip: false });
-        wires.push({ from: eId, to: limbicExitId, tierFrom: 1, tierTo: 1, isSkip: false });
-      });
-      wires.push({ from: routerHubId, to: sharedExpertId, tierFrom: 1, tierTo: 1, isSkip: false });
-      wires.push({ from: sharedExpertId, to: limbicExitId, tierFrom: 1, tierTo: 1, isSkip: false });
-
-      // MID-DEPTH EXIT BYPASS WIRE: Limbic Exit -> Output Head
-      wires.push({ from: limbicExitId, to: outputHeadId, tierFrom: 1, tierTo: 2, isSkip: true, bypassTier: 1 });
-
-      // Limbic Exit -> Cortex GLA nodes
-      limbicNodes.forEach(lNode => {
-        const targetCortex1 = cortexNodes[0] || particles[outputHeadId];
-        wires.push({ from: lNode.id, to: targetCortex1.id, tierFrom: 1, tierTo: 2, isSkip: false });
-      });
-
-      // Inter-cortex layer connections and GLA recurrent loops
-      for (let i = 0; i < cortexNodeIds.length - 1; i++) {
-        wires.push({ from: cortexNodeIds[i], to: cortexNodeIds[i + 1], tierFrom: 2, tierTo: 2, isSkip: false });
-      }
-      // Final cortex nodes -> Output Head
-      cortexNodeIds.forEach(cId => {
-        wires.push({ from: cId, to: outputHeadId, tierFrom: 2, tierTo: 2, isSkip: false });
-      });
 
       // Background ambient quanta
       const quanta = [];
@@ -2460,9 +2737,10 @@
           const breathe = Math.sin(now * 0.003 + p.phaseX) * 0.35;
           const r = Math.max(2.0, (p.baseR + breathe + (isTierActive ? 1.6 : 0) + p.charge * 2.8) * scale);
 
-          if (isTierActive || p.charge > 0.1 || p.isExpertHub) {
-            const glowR = r * (p.isExpertHub ? 3.4 : (isTierActive ? 3.0 : 2.2));
-            const auraGrad = ctx.createRadialGradient(sx, sy, r * 0.3, sx, sy, glowR);
+          // Soft volumetric glow aura
+          if (isTierActive || p.charge > 0.08 || p.isExpertHub || p.isInput || p.isOutput) {
+            const glowR = r * (p.isExpertHub ? 3.4 : (isTierActive ? 3.0 : 2.4));
+            const auraGrad = ctx.createRadialGradient(sx, sy, r * 0.2, sx, sy, glowR);
             auraGrad.addColorStop(0, p.auraColor);
             auraGrad.addColorStop(1, 'rgba(0,0,0,0)');
             ctx.fillStyle = auraGrad;
@@ -2471,16 +2749,28 @@
             ctx.fill();
           }
 
+          // Obsidian dark core node body
           ctx.beginPath();
           ctx.arc(sx, sy, r, 0, Math.PI * 2);
-          ctx.fillStyle = isTierActive ? '#ffffff' : p.color;
+          ctx.fillStyle = isTierActive ? '#ffffff' : (layoutMode === 'obsidian' ? '#070a12' : p.color);
           ctx.fill();
 
+          // Luminous bioluminescent rim
           ctx.beginPath();
           ctx.arc(sx, sy, r, 0, Math.PI * 2);
-          ctx.strokeStyle = isTierActive ? p.glowColor : p.color;
-          ctx.lineWidth = Math.max(1, 1.4 * scale);
+          ctx.strokeStyle = isTierActive ? '#ffffff' : (p.glowColor || p.color);
+          ctx.lineWidth = Math.max(1.2, (layoutMode === 'obsidian' ? 2.0 : 1.4) * scale);
           ctx.stroke();
+
+          // Obsidian center specular sparkle
+          if (layoutMode === 'obsidian' && !isTierActive && scale > 0.65) {
+            ctx.beginPath();
+            ctx.arc(sx, sy, Math.max(1.0, r * 0.35), 0, Math.PI * 2);
+            ctx.fillStyle = p.color;
+            ctx.globalAlpha = 0.82;
+            ctx.fill();
+            ctx.globalAlpha = 1.0;
+          }
 
           if (p.isRouterHub || p.isExit || p.isInput || p.isOutput || p.isExpert || (isTierActive && scale > 0.85)) {
             ctx.font = `${Math.max(8.5, Math.round(9.2 * scale))}px JetBrains Mono, Fira Code, monospace`;
@@ -2497,9 +2787,9 @@
       return () => {
         if (animIdRef.current) cancelAnimationFrame(animIdRef.current);
       };
-    }, [isExpanded, activeTierIdx, route, streamVelocity, isGenerating, neuronScopeData, upgradeResult, activeModel]);
+    }, [isExpanded, layoutMode, activeTierIdx, route, streamVelocity, isGenerating, neuronScopeData, upgradeResult, activeModel]);
 
-    const targetCanvasHeight = isExpanded ? '380px' : (customHeight || '165px');
+    const targetCanvasHeight = isExpanded ? '440px' : (customHeight || `${customCanvasHeight}px`);
     return e('div', {
       ref: wrapRef,
       className: `neuron-theater-canvas-wrap ${isExpanded ? 'expanded' : ''}`,
@@ -2535,7 +2825,7 @@
         onWheel: e => {
           e.preventDefault();
           const delta = e.deltaY;
-          targetCamDistRef.current = Math.max(180, Math.min(620, targetCamDistRef.current + delta * 0.38));
+          targetCamDistRef.current = Math.max(160, Math.min(650, targetCamDistRef.current + delta * 0.38));
           autoRotatePausedUntilRef.current = performance.now() + 2500;
         }
       }),
@@ -2552,6 +2842,10 @@
           renderIcon('branch', 10, { marginRight: '4px', color: '#10b981' }),
           `${(upgradeResult.model_name || 'Triune').toUpperCase()}: ${upgradeResult.estimated_throughput_gain} Speedup · ${upgradeResult.compression_ratio}x`
         ]),
+        e('div', {
+          className: 'neuron-hud-item',
+          style: { color: layoutMode === 'obsidian' ? '#c084fc' : '#38bdf8', fontWeight: 600 }
+        }, layoutMode === 'obsidian' ? 'Obsidian Brain' : 'Linear Pipeline'),
         e('div', { className: `neuron-hud-item ${(streamVelocity && streamVelocity.current > 0) || isGenerating ? 'accent' : ''}` },
           renderIcon('bolt', 11, { marginRight: '2px' }),
           (streamVelocity && streamVelocity.current > 0) ? `${streamVelocity.current} tok/s` : (isGenerating ? 'Active Flow' : '0 tok/s')
@@ -2566,6 +2860,15 @@
           onClick: triggerStimulate
         }, [renderIcon('bolt', 11, { marginRight: '3px' }), 'Stimulate Synapses']),
         e('button', {
+          className: `neuron-ctrl-btn ${layoutMode === 'obsidian' ? 'active' : ''}`,
+          title: 'Toggle between 3D Obsidian Brain graph and Linear Pipeline view',
+          onClick: () => {
+            const next = layoutMode === 'obsidian' ? 'pipeline' : 'obsidian';
+            setLayoutMode(next);
+            try { localStorage.setItem('triune_canvas_layout', next); } catch (_) {}
+          }
+        }, [renderIcon('hub', 11, { marginRight: '3px' }), layoutMode === 'obsidian' ? 'Obsidian Brain' : 'Pipeline']),
+        e('button', {
           className: 'neuron-ctrl-btn',
           title: 'Reset camera orbit & zoom',
           onClick: resetCamera
@@ -2575,8 +2878,31 @@
           title: isExpanded ? 'Collapse 3D visualizer to compact view' : 'Expand 3D visualizer to large theater mode',
           onClick: () => setIsExpanded(!isExpanded)
         }, [renderIcon('frame', 11, { marginRight: '4px' }), isExpanded ? 'Compact' : 'Expand']),
-        e('span', { className: 'neuron-mouse-hint' }, 'Drag: Orbit · Scroll: Zoom')
-      )
+        e('span', { className: 'neuron-mouse-hint' }, 'Drag: Orbit · Scroll: Zoom · Bottom: Resize')
+      ),
+      !isExpanded && !customHeight && e('div', {
+        className: `canvas-resize-handle ${isResizing ? 'active' : ''}`,
+        title: 'Drag vertically to resize 3D Visualizer',
+        onPointerDown: (ev) => {
+          setIsResizing(true);
+          resizeStartYRef.current = ev.clientY;
+          resizeStartHRef.current = customCanvasHeight;
+          const onMove = (moveEv) => {
+            const dy = moveEv.clientY - resizeStartYRef.current;
+            const newH = Math.max(160, Math.min(560, resizeStartHRef.current + dy));
+            setCustomCanvasHeight(newH);
+            try { localStorage.setItem('triune_canvas_height', String(newH)); } catch (_) {}
+          };
+          const onUp = () => {
+            setIsResizing(false);
+            window.removeEventListener('pointermove', onMove);
+            window.removeEventListener('pointerup', onUp);
+          };
+          window.addEventListener('pointermove', onMove);
+          window.addEventListener('pointerup', onUp);
+        }
+      }, e('div', { className: 'canvas-resize-bar' }))
+    );
     );
   }
 

@@ -80,12 +80,16 @@ class JEVObjective(nn.Module):
         lambda_cov: float = 0.04,
         eps_tube: float = 0.1,
         eps_sim: float = 1e-8,
+        stp_mode: str = "euclidean",
     ) -> None:
         super().__init__()
         self.lambda_stp = float(lambda_stp)
         self.lambda_cov = float(lambda_cov)
         self.eps_tube = float(eps_tube)
         self.eps_sim = float(eps_sim)
+        if stp_mode not in ("geodesic", "euclidean", "stiefel"):
+            raise ValueError(f"Unsupported stp_mode: {stp_mode}. Must be 'geodesic', 'euclidean', or 'stiefel'.")
+        self.stp_mode = stp_mode
 
         self.last_sim_loss: Optional[float] = None
         self.last_stp_loss: Optional[float] = None
@@ -101,8 +105,31 @@ class JEVObjective(nn.Module):
     def compute_stp_loss(self, z_pred: torch.Tensor, z_target: torch.Tensor) -> torch.Tensor:
         target_sg = z_target.detach().float()
         pred_f = z_pred.float()
-        dist_sq = torch.sum((pred_f - target_sg) ** 2, dim=-1)
-        return torch.relu(dist_sq - (self.eps_tube ** 2)).mean()
+
+        if self.stp_mode == "geodesic":
+            # Exact Riemannian geodesic distance on the unit sphere S^{D-1}:
+            # d_M(z_p, z_t) = arccos(clamp(<z_p/||z_p||, z_t/||z_t||>, -1+eps, 1-eps))
+            # Tube loss enforces: d_M^2 <= eps_tube^2 along Riemannian semantic trajectories
+            p_unit = F.normalize(pred_f, p=2, dim=-1, eps=self.eps_sim)
+            t_unit = F.normalize(target_sg, p=2, dim=-1, eps=self.eps_sim)
+            cos_angle = torch.sum(p_unit * t_unit, dim=-1)
+            cos_clamped = torch.clamp(cos_angle, -1.0 + 1e-7, 1.0 - 1e-7)
+            geodesic_dist = torch.acos(cos_clamped)
+            return torch.relu((geodesic_dist ** 2) - (self.eps_tube ** 2)).mean()
+
+        elif self.stp_mode == "stiefel":
+            # Grassmannian projection metric for subspace frames:
+            # d_Gr^2 = r - Tr(Z_p^T Z_t Z_t^T Z_p)
+            p_unit = F.normalize(pred_f, p=2, dim=-1, eps=self.eps_sim)
+            t_unit = F.normalize(target_sg, p=2, dim=-1, eps=self.eps_sim)
+            overlap = torch.sum(p_unit * t_unit, dim=-1) ** 2
+            subspace_dist_sq = 1.0 - overlap
+            return torch.relu(subspace_dist_sq - (self.eps_tube ** 2)).mean()
+
+        else:
+            # Euclidean tube distance: ||z_p - z_t||_2^2 <= eps_tube^2
+            dist_sq = torch.sum((pred_f - target_sg) ** 2, dim=-1)
+            return torch.relu(dist_sq - (self.eps_tube ** 2)).mean()
 
     def compute_cov_loss(self, z: torch.Tensor) -> torch.Tensor:
         z_flat = z.float().reshape(-1, z.size(-1))
@@ -196,6 +223,9 @@ class JEVExitRouter(nn.Module):
     ) -> torch.Tensor:
         if z_ref is not None and self.distance_metric == "cosine":
             return F.cosine_similarity(z.float(), z_ref.float(), dim=-1, eps=1e-8).clamp(0.0, 1.0)
+        elif z_ref is not None and self.distance_metric == "geodesic":
+            d_geo = self.compute_latent_distance(z, z_ref)
+            return (1.0 - (d_geo / math.pi)).clamp(0.0, 1.0)
         elif z_ref is not None and self.distance_metric in ("euclidean", "stp_tube"):
             return torch.exp(-self.compute_latent_distance(z, z_ref))
 

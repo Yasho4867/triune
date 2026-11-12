@@ -1,0 +1,263 @@
+{
+  "system_telemetry": {
+    "os": "Windows-11-10.0.26300-SP0",
+    "python_version": "3.14.7",
+    "pytorch_version": "2.14.1+cu132",
+    "cuda_available": true,
+    "gpu_name": "NVIDIA GeForce RTX 5070 Laptop GPU",
+    "gpu_count": 1,
+    "total_vram_gb": 7.93,
+    "compute_capability": "12.0",
+    "cuda_version": "13.2",
+    "driver_version": "621.14",
+    "gpu_temp_c": 61.22,
+    "gpu_power_watts": 14.43,
+    "gpu_sm_clock_mhz": 982.0
+  },
+  "model_metadata": {
+    "checkpoint": "checkpoints/triune_step_24501.pt",
+    "step": 24501,
+    "vocab_size": 32000,
+    "hidden_dim": 384,
+    "num_layers": 8,
+    "num_heads": 6,
+    "head_dim": 64,
+    "num_experts": 4,
+    "router_prefix_layers": 1,
+    "reflex_exit_layer": 2,
+    "limbic_exit_layer": 5,
+    "total_params": 90789271,
+    "active_params": 90789271,
+    "precision": "bf16"
+  },
+  "prefill_benchmarks": [
+    {
+      "batch_size": 1,
+      "seq_len": 128,
+      "total_tokens": 128,
+      "mean_latency_ms": 11.023,
+      "p50_latency_ms": 11.062,
+      "tokens_per_sec": 11612,
+      "vram_allocated_mb": 276.67
+    },
+    {
+      "batch_size": 1,
+      "seq_len": 512,
+      "total_tokens": 512,
+      "mean_latency_ms": 7.587,
+      "p50_latency_ms": 7.574,
+      "tokens_per_sec": 67484,
+      "vram_allocated_mb": 353.27
+    },
+    {
+      "batch_size": 1,
+      "seq_len": 1024,
+      "total_tokens": 1024,
+      "mean_latency_ms": 12.695,
+      "p50_latency_ms": 12.731,
+      "tokens_per_sec": 80662,
+      "vram_allocated_mb": 417.72
+    },
+    {
+      "batch_size": 1,
+      "seq_len": 2048,
+      "total_tokens": 2048,
+      "mean_latency_ms": 24.81,
+      "p50_latency_ms": 25.244,
+      "tokens_per_sec": 82546,
+      "vram_allocated_mb": 611.23
+    },
+    {
+      "batch_size": 4,
+      "seq_len": 128,
+      "total_tokens": 512,
+      "mean_latency_ms": 9.257,
+      "p50_latency_ms": 9.329,
+      "tokens_per_sec": 55312,
+      "vram_allocated_mb": 611.23
+    },
+    {
+      "batch_size": 4,
+      "seq_len": 512,
+      "total_tokens": 2048,
+      "mean_latency_ms": 27.278,
+      "p50_latency_ms": 27.354,
+      "tokens_per_sec": 75080,
+      "vram_allocated_mb": 731.54
+    },
+    {
+      "batch_size": 4,
+      "seq_len": 1024,
+      "total_tokens": 4096,
+      "mean_latency_ms": 52.056,
+      "p50_latency_ms": 52.06,
+      "tokens_per_sec": 78685,
+      "vram_allocated_mb": 989.37
+    },
+    {
+      "batch_size": 4,
+      "seq_len": 2048,
+      "total_tokens": 8192,
+      "mean_latency_ms": 100.149,
+      "p50_latency_ms": 101.338,
+      "tokens_per_sec": 81798,
+      "vram_allocated_mb": 1751.28
+    },
+    {
+      "batch_size": 16,
+      "seq_len": 128,
+      "total_tokens": 2048,
+      "mean_latency_ms": 52.565,
+      "p50_latency_ms": 54.163,
+      "tokens_per_sec": 38961,
+      "vram_allocated_mb": 1751.28
+    },
+    {
+      "batch_size": 16,
+      "seq_len": 512,
+      "total_tokens": 8192,
+      "mean_latency_ms": 118.241,
+      "p50_latency_ms": 118.413,
+      "tokens_per_sec": 69282,
+      "vram_allocated_mb": 2399.5
+    },
+    {
+      "batch_size": 16,
+      "seq_len": 1024,
+      "total_tokens": 16384,
+      "mean_latency_ms": 309.546,
+      "p50_latency_ms": 310.27,
+      "tokens_per_sec": 52929,
+      "vram_allocated_mb": 3442.06
+    },
+    {
+      "batch_size": 16,
+      "seq_len": 2048,
+      "total_tokens": 32768,
+      "mean_latency_ms": 1121.904,
+      "p50_latency_ms": 1087.91,
+      "tokens_per_sec": 29207,
+      "vram_allocated_mb": 6490.19
+    },
+    {
+      "batch_size": 32,
+      "seq_len": 128,
+      "total_tokens": 4096,
+      "mean_latency_ms": 74.62,
+      "p50_latency_ms": 75.103,
+      "tokens_per_sec": 54892,
+      "vram_allocated_mb": 6490.19
+    },
+    {
+      "batch_size": 32,
+      "seq_len": 512,
+      "total_tokens": 16384,
+      "mean_latency_ms": 1317.346,
+      "p50_latency_ms": 1267.726,
+      "tokens_per_sec": 12437,
+      "vram_allocated_mb": 6490.19
+    },
+    {
+      "batch_size": 32,
+      "seq_len": 1024,
+      "total_tokens": 32768,
+      "mean_latency_ms": 3655.861,
+      "p50_latency_ms": 3665.762,
+      "tokens_per_sec": 8963,
+      "vram_allocated_mb": 6490.19
+    },
+    {
+      "batch_size": 32,
+      "seq_len": 2048,
+      "total_tokens": 65536,
+      "mean_latency_ms": 8579.484,
+      "p50_latency_ms": 8570.147,
+      "tokens_per_sec": 7639,
+      "vram_allocated_mb": 12459.44
+    }
+  ],
+  "decode_benchmark": {
+    "prompt_len": 64,
+    "generated_tokens": 64,
+    "avg_step_latency_ms": 20.705,
+    "decode_tokens_per_sec": 48,
+    "total_gen_time_ms": 1325.21
+  },
+  "exit_latency_benchmarks": {
+    "Reflex (L2)": {
+      "mean_latency_ms": 59.506,
+      "throughput_tok_s": 34417,
+      "speedup_vs_cortex": 2.82
+    },
+    "Limbic (L5)": {
+      "mean_latency_ms": 117.012,
+      "throughput_tok_s": 17502,
+      "speedup_vs_cortex": 1.43
+    },
+    "Cortex (L8 / Full)": {
+      "mean_latency_ms": 167.901,
+      "throughput_tok_s": 12198,
+      "speedup_vs_cortex": 1.0
+    }
+  },
+  "jev_evaluation": {
+    "source_exit": "Reflex (Layer 2)",
+    "target_exit": "Cortex (Layer 8)",
+    "latent_dim": 384,
+    "cosine_similarity": 0.967,
+    "geodesic_distance_rad": 0.2574,
+    "geodesic_angle_deg": 14.75,
+    "verified_manifold_alignment": true
+  },
+  "tokenizer_generalization": {
+    "domains": {
+      "Python Code": {
+        "uncompressed_tokens": 2183,
+        "compressed_tokens": 839,
+        "compression_ratio": 2.6,
+        "encode_time_ms": 38.53,
+        "decode_time_ms": 1.6,
+        "lossless_parity": true
+      },
+      "Mathematical Prose": {
+        "uncompressed_tokens": 555,
+        "compressed_tokens": 211,
+        "compression_ratio": 2.63,
+        "encode_time_ms": 15.3,
+        "decode_time_ms": 0.39,
+        "lossless_parity": true
+      },
+      "JSON Structured Config": {
+        "uncompressed_tokens": 2044,
+        "compressed_tokens": 786,
+        "compression_ratio": 2.6,
+        "encode_time_ms": 9.87,
+        "decode_time_ms": 0.66,
+        "lossless_parity": true
+      },
+      "Repetitive Log & Delimiters": {
+        "uncompressed_tokens": 1464,
+        "compressed_tokens": 552,
+        "compression_ratio": 2.65,
+        "encode_time_ms": 9.84,
+        "decode_time_ms": 0.41,
+        "lossless_parity": true
+      }
+    },
+    "aggregate_compression_ratio": 2.62,
+    "total_uncompressed_tokens": 6246,
+    "total_compressed_tokens": 2388
+  },
+  "moe_sparse_vs_dense": {
+    "dim": 384,
+    "num_experts": 8,
+    "top_k": 2,
+    "tokens_evaluated": 4096,
+    "sparse_scatter_gather_ms": 20.941,
+    "dense_bmm_ms": 18.007,
+    "sparse_theoretical_flops": 9663676416,
+    "dense_theoretical_flops": 38654705664,
+    "theoretical_flop_reduction_pct": 75.0,
+    "numerical_parity_max_diff": 0.000167
+  }
+}
