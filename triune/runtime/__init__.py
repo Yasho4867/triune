@@ -4,6 +4,7 @@ try:
     from .memory_planner import MemoryEstimate, MemoryPlanner
     from .memory_planner import MemoryEstimate as MemoryPlan
     from .neuron_scope import NeuronScope
+    from .parallel_engine import GLAPipelineBlock, MoERoutingBlock, ParallelEngine
     from .resource_manager import (
         AllotmentPlan,
         DynamicResourceManager,
@@ -66,4 +67,7 @@ __all__ = [
     "AutoOffloader",
     "CUDAGraphEngine",
     "NeuronScope",
+    "ParallelEngine",
+    "GLAPipelineBlock",
+    "MoERoutingBlock",
 ]

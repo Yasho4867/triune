@@ -17,6 +17,18 @@ from .block import TransformerBlock
 from .factory import build_model
 from .fp4 import FP4Linear
 from .fp8 import FP8Linear
+from .jev import (
+    ContinuousLatentExitRouter,
+    JEVExitRouter,
+    JEVLatentPredictor,
+    JEVObjective,
+    JEVRoutingResult,
+    JointEmbeddingObjective,
+    LatentPredictor,
+    TriuneContinuousExitRouter,
+    TriuneLatentObjective,
+    TriuneLatentPredictor,
+)
 from .manifold_embedding import UniversalAdaptiveEmbedding
 from .moe import MoE_FFN, RoutingResult
 from .norms import RMSNorm
@@ -54,4 +66,11 @@ __all__ = [
     "attach_early_exits",
     "generate_adaptive",
     "UniversalAdaptiveEmbedding",
+    "JEVLatentPredictor",
+    "JEVObjective",
+    "JEVExitRouter",
+    "JEVRoutingResult",
+    "TriuneLatentPredictor",
+    "TriuneLatentObjective",
+    "TriuneContinuousExitRouter",
 ]

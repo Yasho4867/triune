@@ -1,0 +1,301 @@
+{
+  "timestamp": "2026-11-12T06:10:21Z",
+  "hardware": {
+    "available": true,
+    "device_name": "NVIDIA GeForce RTX 5070 Laptop GPU",
+    "device_count": 1,
+    "total_memory_gb": 7.93,
+    "major_minor": "12.0",
+    "cuda_version": "13.2",
+    "pytorch_version": "2.14.1+cu132"
+  },
+  "engine_config": {
+    "dim": 256,
+    "heads": 4,
+    "head_dim": 64,
+    "chunk_size": 64,
+    "num_streams": 4,
+    "dtype": "torch.bfloat16"
+  },
+  "max_prefill_throughput_tok_s": 5207916.015015403,
+  "exceeds_million_tok_s": true,
+  "prefill_benchmarks": [
+    {
+      "batch_size": 1,
+      "seq_len": 512,
+      "total_tokens": 512,
+      "latency_ms": 1.317,
+      "throughput_tok_s": 388625.0,
+      "exceeds_million": false
+    },
+    {
+      "batch_size": 1,
+      "seq_len": 1024,
+      "total_tokens": 1024,
+      "latency_ms": 1.932,
+      "throughput_tok_s": 529975.9,
+      "exceeds_million": false
+    },
+    {
+      "batch_size": 1,
+      "seq_len": 2048,
+      "total_tokens": 2048,
+      "latency_ms": 3.192,
+      "throughput_tok_s": 641704.4,
+      "exceeds_million": false
+    },
+    {
+      "batch_size": 1,
+      "seq_len": 4096,
+      "total_tokens": 4096,
+      "latency_ms": 5.817,
+      "throughput_tok_s": 704163.0,
+      "exceeds_million": false
+    },
+    {
+      "batch_size": 1,
+      "seq_len": 8192,
+      "total_tokens": 8192,
+      "latency_ms": 10.81,
+      "throughput_tok_s": 757849.2,
+      "exceeds_million": false
+    },
+    {
+      "batch_size": 4,
+      "seq_len": 512,
+      "total_tokens": 2048,
+      "latency_ms": 13.516,
+      "throughput_tok_s": 151527.7,
+      "exceeds_million": false
+    },
+    {
+      "batch_size": 4,
+      "seq_len": 1024,
+      "total_tokens": 4096,
+      "latency_ms": 19.6,
+      "throughput_tok_s": 208981.0,
+      "exceeds_million": false
+    },
+    {
+      "batch_size": 4,
+      "seq_len": 2048,
+      "total_tokens": 8192,
+      "latency_ms": 32.045,
+      "throughput_tok_s": 255639.3,
+      "exceeds_million": false
+    },
+    {
+      "batch_size": 4,
+      "seq_len": 4096,
+      "total_tokens": 16384,
+      "latency_ms": 57.366,
+      "throughput_tok_s": 285603.5,
+      "exceeds_million": false
+    },
+    {
+      "batch_size": 4,
+      "seq_len": 8192,
+      "total_tokens": 32768,
+      "latency_ms": 108.763,
+      "throughput_tok_s": 301277.8,
+      "exceeds_million": false
+    },
+    {
+      "batch_size": 16,
+      "seq_len": 512,
+      "total_tokens": 8192,
+      "latency_ms": 13.054,
+      "throughput_tok_s": 627567.0,
+      "exceeds_million": false
+    },
+    {
+      "batch_size": 16,
+      "seq_len": 1024,
+      "total_tokens": 16384,
+      "latency_ms": 18.925,
+      "throughput_tok_s": 865749.5,
+      "exceeds_million": false
+    },
+    {
+      "batch_size": 16,
+      "seq_len": 2048,
+      "total_tokens": 32768,
+      "latency_ms": 30.677,
+      "throughput_tok_s": 1068150.8,
+      "exceeds_million": true
+    },
+    {
+      "batch_size": 16,
+      "seq_len": 4096,
+      "total_tokens": 65536,
+      "latency_ms": 56.058,
+      "throughput_tok_s": 1169075.9,
+      "exceeds_million": true
+    },
+    {
+      "batch_size": 16,
+      "seq_len": 8192,
+      "total_tokens": 131072,
+      "latency_ms": 104.555,
+      "throughput_tok_s": 1253616.5,
+      "exceeds_million": true
+    },
+    {
+      "batch_size": 32,
+      "seq_len": 512,
+      "total_tokens": 16384,
+      "latency_ms": 13.051,
+      "throughput_tok_s": 1255375.1,
+      "exceeds_million": true
+    },
+    {
+      "batch_size": 32,
+      "seq_len": 1024,
+      "total_tokens": 32768,
+      "latency_ms": 15.812,
+      "throughput_tok_s": 2072347.2,
+      "exceeds_million": true
+    },
+    {
+      "batch_size": 32,
+      "seq_len": 2048,
+      "total_tokens": 65536,
+      "latency_ms": 12.876,
+      "throughput_tok_s": 5089649.4,
+      "exceeds_million": true
+    },
+    {
+      "batch_size": 32,
+      "seq_len": 4096,
+      "total_tokens": 131072,
+      "latency_ms": 25.168,
+      "throughput_tok_s": 5207916.0,
+      "exceeds_million": true
+    },
+    {
+      "batch_size": 32,
+      "seq_len": 8192,
+      "total_tokens": 262144,
+      "latency_ms": 187.163,
+      "throughput_tok_s": 1400618.8,
+      "exceeds_million": true
+    }
+  ],
+  "cuda_graph_benchmark": {
+    "supported": true,
+    "batch_size": 32,
+    "seq_len": 1024,
+    "eager_ms": 11.335,
+    "graph_ms": 9.345,
+    "speedup": 1.21,
+    "graph_throughput_tok_s": 3506543.7
+  },
+  "jev_speculative_verification": [
+    {
+      "batch_size": 8,
+      "k_candidates": 4,
+      "total_candidates": 32,
+      "latency_us": 291.26,
+      "verify_throughput_tok_s": 109867.5,
+      "vocab_compute_flops": 0
+    },
+    {
+      "batch_size": 8,
+      "k_candidates": 8,
+      "total_candidates": 64,
+      "latency_us": 298.74,
+      "verify_throughput_tok_s": 214231.7,
+      "vocab_compute_flops": 0
+    },
+    {
+      "batch_size": 8,
+      "k_candidates": 16,
+      "total_candidates": 128,
+      "latency_us": 298.27,
+      "verify_throughput_tok_s": 429135.6,
+      "vocab_compute_flops": 0
+    },
+    {
+      "batch_size": 16,
+      "k_candidates": 4,
+      "total_candidates": 64,
+      "latency_us": 314.55,
+      "verify_throughput_tok_s": 203466.6,
+      "vocab_compute_flops": 0
+    },
+    {
+      "batch_size": 16,
+      "k_candidates": 8,
+      "total_candidates": 128,
+      "latency_us": 284.13,
+      "verify_throughput_tok_s": 450504.4,
+      "vocab_compute_flops": 0
+    },
+    {
+      "batch_size": 16,
+      "k_candidates": 16,
+      "total_candidates": 256,
+      "latency_us": 298.22,
+      "verify_throughput_tok_s": 858426.7,
+      "vocab_compute_flops": 0
+    },
+    {
+      "batch_size": 32,
+      "k_candidates": 4,
+      "total_candidates": 128,
+      "latency_us": 280.85,
+      "verify_throughput_tok_s": 455756.1,
+      "vocab_compute_flops": 0
+    },
+    {
+      "batch_size": 32,
+      "k_candidates": 8,
+      "total_candidates": 256,
+      "latency_us": 288.68,
+      "verify_throughput_tok_s": 886807.4,
+      "vocab_compute_flops": 0
+    },
+    {
+      "batch_size": 32,
+      "k_candidates": 16,
+      "total_candidates": 512,
+      "latency_us": 280.53,
+      "verify_throughput_tok_s": 1825129.7,
+      "vocab_compute_flops": 0
+    },
+    {
+      "batch_size": 64,
+      "k_candidates": 4,
+      "total_candidates": 256,
+      "latency_us": 282.61,
+      "verify_throughput_tok_s": 905835.6,
+      "vocab_compute_flops": 0
+    },
+    {
+      "batch_size": 64,
+      "k_candidates": 8,
+      "total_candidates": 512,
+      "latency_us": 289.28,
+      "verify_throughput_tok_s": 1769887.0,
+      "vocab_compute_flops": 0
+    },
+    {
+      "batch_size": 64,
+      "k_candidates": 16,
+      "total_candidates": 1024,
+      "latency_us": 276.9,
+      "verify_throughput_tok_s": 3698139.4,
+      "vocab_compute_flops": 0
+    }
+  ],
+  "dynamic_tokenizer": {
+    "code_uncompressed_length": 418,
+    "code_compressed_length": 160,
+    "code_compression_ratio": 2.61,
+    "code_lossless_parity": true,
+    "text_uncompressed_length": 340,
+    "text_compressed_length": 130,
+    "text_compression_ratio": 2.62,
+    "text_lossless_parity": true
+  }
+}

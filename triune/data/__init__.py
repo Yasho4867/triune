@@ -1,4 +1,5 @@
 from .dataloader import AsyncDevicePrefetcher, CyclingDataLoader
+from .dynamic_tokenizer import DynamicTokenizer, DynamicTokenizerOutput
 from .tokenizer import TriuneTokenizer, build_tokenizer, load_tokenizer
 
 try:
@@ -10,6 +11,8 @@ except ImportError:
 __all__ = [
     "AsyncDevicePrefetcher",
     "CyclingDataLoader",
+    "DynamicTokenizer",
+    "DynamicTokenizerOutput",
     "TokenStreamDataset",
     "TriuneTokenizer",
     "build_dataloader",

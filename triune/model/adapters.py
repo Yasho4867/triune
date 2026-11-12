@@ -15,6 +15,35 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from triune.kernels import FastRMSNorm
+from triune.model.jev import (
+    ContinuousLatentExitRouter,
+    JEVExitRouter,
+    JEVLatentPredictor,
+    JEVObjective,
+    JEVRoutingResult,
+    JointEmbeddingObjective,
+    LatentPredictor,
+    TriuneContinuousExitRouter,
+    TriuneLatentObjective,
+    TriuneLatentPredictor,
+)
+
+__all__ = [
+    "WeightTiedExitProjection",
+    "EarlyExitManager",
+    "attach_early_exits",
+    "generate_adaptive",
+    "JEVLatentPredictor",
+    "JEVObjective",
+    "JEVExitRouter",
+    "JEVRoutingResult",
+    "LatentPredictor",
+    "JointEmbeddingObjective",
+    "ContinuousLatentExitRouter",
+    "TriuneLatentPredictor",
+    "TriuneLatentObjective",
+    "TriuneContinuousExitRouter",
+]
 
 
 class WeightTiedExitProjection(nn.Module):
@@ -95,6 +124,8 @@ def attach_early_exits(
     reflex_layer: Optional[int] = None,
     limbic_layer: Optional[int] = None,
     rank: int = 64,
+    use_jev: bool = False,
+    jev_threshold: float = 0.85,
 ) -> nn.Module:
     """Attaches universal 3-tier early exits to any Hugging Face model or Triune model.
 
@@ -103,6 +134,8 @@ def attach_early_exits(
         reflex_layer: Intermediate layer index for Reflex exit (defaults to ~25% depth).
         limbic_layer: Intermediate layer index for Limbic exit (defaults to ~60% depth).
         rank: Bottleneck projection rank (default: 64 -> 1 MB per exit).
+        use_jev: Whether to attach Triune JEV continuous latent distance gating (eliminates O(V) heads).
+        jev_threshold: Confidence threshold for JEV continuous exit verification.
 
     Returns:
         The model retrofitted with `.reflex_head`, `.limbic_head`, and `.generate_adaptive()`.
@@ -174,6 +207,23 @@ def attach_early_exits(
     mgr = EarlyExitManager(model, r_idx, l_idx, reflex_head, limbic_head, layer_list)
     model._exit_manager = mgr
 
+    if use_jev:
+        reflex_pred = JEVLatentPredictor(hidden_dim)
+        limbic_pred = JEVLatentPredictor(hidden_dim)
+        reflex_router = JEVExitRouter(hidden_dim, threshold=jev_threshold, predictor=reflex_pred)
+        limbic_router = JEVExitRouter(hidden_dim, threshold=jev_threshold * 0.85, predictor=limbic_pred)
+
+        reflex_pred.to(device=p_first.device, dtype=p_first.dtype)
+        limbic_pred.to(device=p_first.device, dtype=p_first.dtype)
+        reflex_router.to(device=p_first.device, dtype=p_first.dtype)
+        limbic_router.to(device=p_first.device, dtype=p_first.dtype)
+
+        model.reflex_jev_predictor = reflex_pred
+        model.limbic_jev_predictor = limbic_pred
+        model.reflex_jev_router = reflex_router
+        model.limbic_jev_router = limbic_router
+        model.use_jev = True
+
     # Register forward hooks on intermediate layers to capture activations
     layer_list[r_idx].register_forward_hook(mgr.capture_hook(r_idx))
     layer_list[l_idx].register_forward_hook(mgr.capture_hook(l_idx))
@@ -186,6 +236,7 @@ def attach_early_exits(
         temperature: float = 0.7,
         pad_token_id: Optional[int] = None,
         eos_token_id: Optional[int] = None,
+        use_jev: Optional[bool] = None,
     ) -> Dict[str, Any]:
         return generate_adaptive(
             model=model,
@@ -195,6 +246,7 @@ def attach_early_exits(
             temperature=temperature,
             pad_token_id=pad_token_id,
             eos_token_id=eos_token_id,
+            use_jev=use_jev,
         )
 
     model.generate_adaptive = _generate_adaptive_bound
@@ -210,6 +262,7 @@ def generate_adaptive(
     temperature: float = 0.7,
     pad_token_id: Optional[int] = None,
     eos_token_id: Optional[int] = None,
+    use_jev: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """Autoregressive generation with token-level dynamic Softmax Margin gating.
 
@@ -234,17 +287,59 @@ def generate_adaptive(
         if hasattr(model, "_exit_manager"):
             model._exit_manager.intermediate_activations.clear()
 
+        use_jev_active = (getattr(model, "use_jev", False) or hasattr(model, "reflex_jev_router")) if use_jev is None else use_jev
+        mgr = getattr(model, "_exit_manager", None)
+        has_intermediate = mgr and r_idx in mgr.intermediate_activations and l_idx in mgr.intermediate_activations
+
         # If native TriuneTransformer with force_depth support
         if hasattr(model, "forward_all_exits"):
             reflex_logits, limbic_logits, cortex_logits, _ = model.forward_all_exits(curr_ids)
             r_logits = reflex_logits[:, -1, :]
             l_logits = limbic_logits[:, -1, :]
             c_logits = cortex_logits[:, -1, :]
+            def _evaluate_exit(logits: torch.Tensor, scale: float = 1.0) -> bool:
+                probs = F.softmax(logits.float() / max(temperature, 1e-5), dim=-1)
+                k_val = min(16, probs.size(-1))
+                topk = torch.topk(probs, k=k_val, dim=-1).values
+                p1 = topk[0, 0].item()
+                p2 = topk[0, 1].item() if k_val > 1 else 0.0
+                margin = p1 - p2
+                topk_norm = topk / topk.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+                h_norm = -(topk_norm * torch.log(topk_norm.clamp_min(1e-12))).sum().item() / max(math.log(k_val), 1e-12)
+                return (margin >= confidence_threshold * scale) or (p1 >= 0.70 * scale and h_norm <= 0.35)
+
+            if _evaluate_exit(r_logits, scale=1.0):
+                selected_logits = r_logits
+                exit_counts["reflex"] += 1
+            elif _evaluate_exit(l_logits, scale=0.85):
+                selected_logits = l_logits
+                exit_counts["limbic"] += 1
+            else:
+                selected_logits = c_logits
+                exit_counts["cortex"] += 1
+        elif use_jev_active and hasattr(model, "reflex_jev_router") and has_intermediate:
+            out = model(curr_ids)
+            c_logits = out.logits[:, -1, :] if hasattr(out, "logits") else out[:, -1, :]
+            r_act = mgr.intermediate_activations[r_idx][:, -1, :]
+            exit_r, _ = model.reflex_jev_router.evaluate_latent_exit(r_act, threshold=confidence_threshold)
+            should_r = exit_r.item() if isinstance(exit_r, torch.Tensor) else bool(exit_r)
+            if should_r:
+                selected_logits = model.reflex_head(r_act)
+                exit_counts["reflex"] += 1
+            else:
+                l_act = mgr.intermediate_activations[l_idx][:, -1, :]
+                exit_l, _ = model.limbic_jev_router.evaluate_latent_exit(l_act, threshold=confidence_threshold * 0.85)
+                should_l = exit_l.item() if isinstance(exit_l, torch.Tensor) else bool(exit_l)
+                if should_l:
+                    selected_logits = model.limbic_head(l_act)
+                    exit_counts["limbic"] += 1
+                else:
+                    selected_logits = c_logits
+                    exit_counts["cortex"] += 1
         else:
             out = model(curr_ids)
             c_logits = out.logits[:, -1, :] if hasattr(out, "logits") else out[:, -1, :]
-            mgr = getattr(model, "_exit_manager", None)
-            if mgr and r_idx in mgr.intermediate_activations and l_idx in mgr.intermediate_activations:
+            if has_intermediate:
                 r_act = mgr.intermediate_activations[r_idx][:, -1, :]
                 l_act = mgr.intermediate_activations[l_idx][:, -1, :]
                 r_logits = model.reflex_head(r_act)
@@ -253,26 +348,26 @@ def generate_adaptive(
                 r_logits = c_logits
                 l_logits = c_logits
 
-        def _evaluate_exit(logits: torch.Tensor, scale: float = 1.0) -> bool:
-            probs = F.softmax(logits.float() / max(temperature, 1e-5), dim=-1)
-            k_val = min(16, probs.size(-1))
-            topk = torch.topk(probs, k=k_val, dim=-1).values
-            p1 = topk[0, 0].item()
-            p2 = topk[0, 1].item() if k_val > 1 else 0.0
-            margin = p1 - p2
-            topk_norm = topk / topk.sum(dim=-1, keepdim=True).clamp_min(1e-12)
-            h_norm = -(topk_norm * torch.log(topk_norm.clamp_min(1e-12))).sum().item() / max(math.log(k_val), 1e-12)
-            return (margin >= confidence_threshold * scale) or (p1 >= 0.70 * scale and h_norm <= 0.35)
+            def _evaluate_exit(logits: torch.Tensor, scale: float = 1.0) -> bool:
+                probs = F.softmax(logits.float() / max(temperature, 1e-5), dim=-1)
+                k_val = min(16, probs.size(-1))
+                topk = torch.topk(probs, k=k_val, dim=-1).values
+                p1 = topk[0, 0].item()
+                p2 = topk[0, 1].item() if k_val > 1 else 0.0
+                margin = p1 - p2
+                topk_norm = topk / topk.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+                h_norm = -(topk_norm * torch.log(topk_norm.clamp_min(1e-12))).sum().item() / max(math.log(k_val), 1e-12)
+                return (margin >= confidence_threshold * scale) or (p1 >= 0.70 * scale and h_norm <= 0.35)
 
-        if _evaluate_exit(r_logits, scale=1.0):
-            selected_logits = r_logits
-            exit_counts["reflex"] += 1
-        elif _evaluate_exit(l_logits, scale=0.85):
-            selected_logits = l_logits
-            exit_counts["limbic"] += 1
-        else:
-            selected_logits = c_logits
-            exit_counts["cortex"] += 1
+            if _evaluate_exit(r_logits, scale=1.0):
+                selected_logits = r_logits
+                exit_counts["reflex"] += 1
+            elif _evaluate_exit(l_logits, scale=0.85):
+                selected_logits = l_logits
+                exit_counts["limbic"] += 1
+            else:
+                selected_logits = c_logits
+                exit_counts["cortex"] += 1
 
         next_logits = selected_logits[0].float() / max(temperature, 1e-5)
         if pad_token_id is not None:
