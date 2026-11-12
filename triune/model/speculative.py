@@ -74,7 +74,15 @@ class SelfSpeculativeGenerator:
 
         # Tokenize prompt if string
         if isinstance(prompt, str):
-            token_ids = self.tokenizer.encode(prompt).ids
+            if hasattr(self.tokenizer, "encode"):
+                try:
+                    enc = self.tokenizer.encode(prompt, compress=False)
+                    token_ids = enc.ids if hasattr(enc, "ids") else enc
+                except TypeError:
+                    enc = self.tokenizer.encode(prompt)
+                    token_ids = enc.ids if hasattr(enc, "ids") else enc
+            else:
+                token_ids = list(prompt.encode("utf-8"))
             input_ids = torch.tensor(token_ids, dtype=torch.long, device=device).unsqueeze(0)
         else:
             input_ids = prompt.to(device=device, dtype=torch.long)
@@ -191,6 +199,7 @@ class SelfSpeculativeGenerator:
         return {
             "text": decoded_text,
             "token_ids": generated_tokens,
+            "generated_tokens": generated_tokens,
             "tokens_count": len(generated_tokens),
             "tokens_per_second": round(len(generated_tokens) / t_elapsed, 2),
             "wall_time_seconds": round(t_elapsed, 4),

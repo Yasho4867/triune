@@ -3,6 +3,7 @@ from typing import Any, List, Optional
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from .block import TransformerBlock
 from .config import (
@@ -101,6 +102,7 @@ class TriuneTransformer(nn.Module):
             ]
         )
         self.router = GumbelSoftmaxRouter(hidden_dim, target_depth_dist=target_depth_dist, balance_coef=balance_coef)
+        self.jev_router = None
         self.final_norm = RMSNorm(hidden_dim)
         self.final_head = nn.Linear(hidden_dim, vocab_size, bias=False)
         self.apply(self._init_weights)
@@ -118,6 +120,14 @@ class TriuneTransformer(nn.Module):
                 nn.init.zeros_(module.bias)
         elif isinstance(module, nn.Embedding):
             nn.init.normal_(module.weight, mean=0.0, std=0.02)
+
+    def enable_jev_routing(self, threshold: float = 0.85, distance_metric: str = "geodesic"):
+        """Enable Joint-Embedding Predictive Architecture (JEV) representation-driven exit routing."""
+        from triune.model.jev import JEVExitRouter
+        device = next(self.parameters()).device
+        dtype = next(self.parameters()).dtype
+        self.jev_router = JEVExitRouter(dim=self.hidden_dim, threshold=threshold, distance_metric=distance_metric).to(device=device, dtype=dtype)
+        return self.jev_router
 
     def init_cache(self, batch_size: int = 1) -> list[Any]:
         """Initializes empty recurrent GLA cache states for all layers."""
@@ -186,6 +196,8 @@ class TriuneTransformer(nn.Module):
         temperature: float = 1.0,
         return_balance_loss: bool = False,
         last_token_only: bool = False,
+        exit_policy: str = "gumbel",
+        confidence_threshold: float = 0.8,
     ):
         if force_depth is not None and force_depth not in (0, 1, 2):
             raise ValueError(f"force_depth must be 0, 1, or 2; got {force_depth}")
@@ -201,43 +213,116 @@ class TriuneTransformer(nn.Module):
         self.last_depth_choice = depth_choice.detach()
         self.last_balance_loss = balance_loss
 
+        if exit_policy in ("calm", "confidence") and force_depth is None:
+            # Confident Adaptive Language Modeling (CALM - Schuster et al., Google Research NeurIPS)
+            # Step 1: Execute prefix through Reflex Exit (L2)
+            x_reflex, new_cache = self._run_layers(
+                x_prefix, self.router_prefix_layers, self.reflex_exit_layer, cache=new_cache
+            )
+            blk_ref = self.layers[self.reflex_exit_layer]
+            layer_c = new_cache[self.reflex_exit_layer] if new_cache is not None else None
+            x_reflex, _, new_c = self._forward_block(blk_ref, x_reflex, False, cache=layer_c)
+            if new_cache is not None:
+                new_cache[self.reflex_exit_layer] = new_c
+            x_pos_r = x_reflex[:, -1:, :] if last_token_only else x_reflex
+            logits_r = blk_ref.exit_head(blk_ref.exit_norm(x_pos_r))
+
+            probs_r = F.softmax(logits_r[:, -1, :].float(), dim=-1)
+            top2_r = torch.topk(probs_r, 2, dim=-1).values
+            margin_r = top2_r[:, 0] - top2_r[:, 1]
+            if (margin_r >= confidence_threshold).all():
+                if cache is not None:
+                    return logits_r, new_cache
+                if return_balance_loss:
+                    return logits_r, route_logits, balance_loss
+                return logits_r, route_logits
+
+            # Step 2: Continue forward from Reflex to Limbic Exit (L5) without recomputing early layers
+            x_limbic, new_cache = self._run_layers(
+                x_reflex, self.reflex_exit_layer + 1, self.limbic_exit_layer, cache=new_cache
+            )
+            blk_lim = self.layers[self.limbic_exit_layer]
+            layer_c = new_cache[self.limbic_exit_layer] if new_cache is not None else None
+            x_limbic, _, new_c = self._forward_block(blk_lim, x_limbic, False, cache=layer_c)
+            if new_cache is not None:
+                new_cache[self.limbic_exit_layer] = new_c
+            x_pos_l = x_limbic[:, -1:, :] if last_token_only else x_limbic
+            logits_l = blk_lim.exit_head(blk_lim.exit_norm(x_pos_l))
+
+            probs_l = F.softmax(logits_l[:, -1, :].float(), dim=-1)
+            top2_l = torch.topk(probs_l, 2, dim=-1).values
+            margin_l = top2_l[:, 0] - top2_l[:, 1]
+            if (margin_l >= confidence_threshold * 0.85).all():
+                if cache is not None:
+                    return logits_l, new_cache
+                if return_balance_loss:
+                    return logits_l, route_logits, balance_loss
+                return logits_l, route_logits
+
+            # Step 3: Continue forward from Limbic to full Cortex depth (L8)
+            x_cortex, new_cache = self._run_layers(
+                x_limbic, self.limbic_exit_layer + 1, self.num_layers, cache=new_cache
+            )
+            x_pos_c = x_cortex[:, -1:, :] if last_token_only else x_cortex
+            logits_c = self.final_head(self.final_norm(x_pos_c))
+            if cache is not None:
+                return logits_c, new_cache
+            if return_balance_loss:
+                return logits_c, route_logits, balance_loss
+            return logits_c, route_logits
+
+        if exit_policy == "jev" and self.jev_router is not None and force_depth is None:
+            # Joint-Embedding Predictive Architecture (JEV) representation routing
+            x_reflex, new_cache = self._run_layers(
+                x_prefix, self.router_prefix_layers, self.reflex_exit_layer, cache=new_cache
+            )
+            blk_ref = self.layers[self.reflex_exit_layer]
+            x_reflex, _, new_c = self._forward_block(blk_ref, x_reflex, False)
+            if new_cache is not None:
+                new_cache[self.reflex_exit_layer] = new_c
+            jev_res = self.jev_router(x_reflex)
+            if jev_res.should_exit.float().mean() >= 0.5:
+                x_pos = x_reflex[:, -1:, :] if last_token_only else x_reflex
+                logits = blk_ref.exit_head(blk_ref.exit_norm(x_pos))
+                if cache is not None:
+                    return logits, new_cache
+                if return_balance_loss:
+                    return logits, route_logits, balance_loss
+                return logits, route_logits
+
         if force_depth is not None:
             if force_depth == 0:
                 x_out, new_cache = self._run_layers(
                     x_prefix, self.router_prefix_layers, self.reflex_exit_layer, cache=new_cache
                 )
-                if last_token_only:
-                    blk = self.layers[self.reflex_exit_layer]
-                    logits = blk.exit_head(blk.exit_norm(x_out[:, -1:, :]))
-                else:
-                    layer_c = new_cache[self.reflex_exit_layer] if new_cache is not None else None
-                    if new_cache is not None and layer_c is None:
-                        layer_c = (None, 0)
-                    _, logits, new_c = self._forward_block(self.layers[self.reflex_exit_layer], x_out, True, cache=layer_c)
-                    if new_cache is not None:
-                        new_cache[self.reflex_exit_layer] = new_c
+                layer_c = new_cache[self.reflex_exit_layer] if new_cache is not None else None
+                if new_cache is not None and layer_c is None:
+                    layer_c = (None, 0)
+                blk = self.layers[self.reflex_exit_layer]
+                x_out, _, new_c = self._forward_block(blk, x_out, False, cache=layer_c)
+                if new_cache is not None:
+                    new_cache[self.reflex_exit_layer] = new_c
+                x_pos = x_out[:, -1:, :] if last_token_only else x_out
+                logits = blk.exit_head(blk.exit_norm(x_pos))
             elif force_depth == 1:
                 x_out, new_cache = self._run_layers(
                     x_prefix, self.router_prefix_layers, self.limbic_exit_layer, cache=new_cache
                 )
-                if last_token_only:
-                    blk = self.layers[self.limbic_exit_layer]
-                    logits = blk.exit_head(blk.exit_norm(x_out[:, -1:, :]))
-                else:
-                    layer_c = new_cache[self.limbic_exit_layer] if new_cache is not None else None
-                    if new_cache is not None and layer_c is None:
-                        layer_c = (None, 0)
-                    _, logits, new_c = self._forward_block(self.layers[self.limbic_exit_layer], x_out, True, cache=layer_c)
-                    if new_cache is not None:
-                        new_cache[self.limbic_exit_layer] = new_c
+                layer_c = new_cache[self.limbic_exit_layer] if new_cache is not None else None
+                if new_cache is not None and layer_c is None:
+                    layer_c = (None, 0)
+                blk = self.layers[self.limbic_exit_layer]
+                x_out, _, new_c = self._forward_block(blk, x_out, False, cache=layer_c)
+                if new_cache is not None:
+                    new_cache[self.limbic_exit_layer] = new_c
+                x_pos = x_out[:, -1:, :] if last_token_only else x_out
+                logits = blk.exit_head(blk.exit_norm(x_pos))
             else:
                 x_out, new_cache = self._run_layers(
                     x_prefix, self.router_prefix_layers, self.num_layers, cache=new_cache
                 )
-                if last_token_only:
-                    logits = self.final_head(self.final_norm(x_out[:, -1:, :]))
-                else:
-                    logits = self.final_head(self.final_norm(x_out))
+                x_pos = x_out[:, -1:, :] if last_token_only else x_out
+                logits = self.final_head(self.final_norm(x_pos))
 
             if cache is not None:
                 return logits, new_cache
@@ -263,34 +348,30 @@ class TriuneTransformer(nn.Module):
 
             if d == 0:
                 x_d, d_cache = self._run_layers(x_d, self.router_prefix_layers, self.reflex_exit_layer, cache=d_cache)
-                if last_token_only:
-                    blk = self.layers[self.reflex_exit_layer]
-                    logits_d = blk.exit_head(blk.exit_norm(x_d[:, -1:, :]))
-                else:
-                    layer_c = d_cache[self.reflex_exit_layer] if d_cache is not None else None
-                    if d_cache is not None and layer_c is None:
-                        layer_c = (None, 0)
-                    _, logits_d, new_c = self._forward_block(self.layers[self.reflex_exit_layer], x_d, True, cache=layer_c)
-                    if d_cache is not None:
-                        d_cache[self.reflex_exit_layer] = new_c
+                layer_c = d_cache[self.reflex_exit_layer] if d_cache is not None else None
+                if d_cache is not None and layer_c is None:
+                    layer_c = (None, 0)
+                blk = self.layers[self.reflex_exit_layer]
+                x_d, _, new_c = self._forward_block(blk, x_d, False, cache=layer_c)
+                if d_cache is not None:
+                    d_cache[self.reflex_exit_layer] = new_c
+                x_pos = x_d[:, -1:, :] if last_token_only else x_d
+                logits_d = blk.exit_head(blk.exit_norm(x_pos))
             elif d == 1:
                 x_d, d_cache = self._run_layers(x_d, self.router_prefix_layers, self.limbic_exit_layer, cache=d_cache)
-                if last_token_only:
-                    blk = self.layers[self.limbic_exit_layer]
-                    logits_d = blk.exit_head(blk.exit_norm(x_d[:, -1:, :]))
-                else:
-                    layer_c = d_cache[self.limbic_exit_layer] if d_cache is not None else None
-                    if d_cache is not None and layer_c is None:
-                        layer_c = (None, 0)
-                    _, logits_d, new_c = self._forward_block(self.layers[self.limbic_exit_layer], x_d, True, cache=layer_c)
-                    if d_cache is not None:
-                        d_cache[self.limbic_exit_layer] = new_c
+                layer_c = d_cache[self.limbic_exit_layer] if d_cache is not None else None
+                if d_cache is not None and layer_c is None:
+                    layer_c = (None, 0)
+                blk = self.layers[self.limbic_exit_layer]
+                x_d, _, new_c = self._forward_block(blk, x_d, False, cache=layer_c)
+                if d_cache is not None:
+                    d_cache[self.limbic_exit_layer] = new_c
+                x_pos = x_d[:, -1:, :] if last_token_only else x_d
+                logits_d = blk.exit_head(blk.exit_norm(x_pos))
             else:
                 x_d, d_cache = self._run_layers(x_d, self.router_prefix_layers, self.num_layers, cache=d_cache)
-                if last_token_only:
-                    logits_d = self.final_head(self.final_norm(x_d[:, -1:, :]))
-                else:
-                    logits_d = self.final_head(self.final_norm(x_d))
+                x_pos = x_d[:, -1:, :] if last_token_only else x_d
+                logits_d = self.final_head(self.final_norm(x_pos))
 
             T_out = 1 if last_token_only else T
             if final_logits is None:
