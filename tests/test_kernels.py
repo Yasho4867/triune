@@ -444,10 +444,13 @@ class TestKernelSuite(unittest.TestCase):
         self.assertIn("fast_gla", telem["kernels"])
         self.assertIn("fast_lora", telem["kernels"])
         self.assertIn("benchmarks_vs_baselines", telem)
+        self.assertEqual(telem["benchmarks_vs_baselines"]["status"], "not_benchmarked")
 
         # Toggle test
         set_turbo_mode(False)
         self.assertFalse(is_turbo_mode_enabled())
+        disabled = get_kernel_telemetry()
+        self.assertTrue(all(k["status"].startswith("Disabled") for k in disabled["kernels"].values()))
         set_turbo_mode(True)
         self.assertTrue(is_turbo_mode_enabled())
 

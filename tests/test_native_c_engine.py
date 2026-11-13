@@ -102,4 +102,10 @@ def test_neuron_scope_end_to_end():
     assert len(snap["layers"]) > 0
     assert snap["active_tier"] in (0, 1, 2)
     assert "native_c_engine" in snap
+    scope.detach(clear=False)
+    assert scope.is_active is False
+    assert scope._hooks == []
+    assert scope.activations
+    assert all(not activation.is_cuda for activation in scope.activations.values())
     scope.detach()
+    assert not scope.activations

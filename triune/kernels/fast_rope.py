@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import torch
 
-from .dispatcher import is_triton_available
+from .dispatcher import is_triton_available, is_turbo_mode_enabled
 
 if is_triton_available():
     import triton
@@ -165,7 +165,7 @@ def fast_rope(
         cos: [T, D] or [1, 1, T, D]
         sin: [T, D] or [1, 1, T, D]
     """
-    if is_triton_available() and q.is_cuda and q.dim() == 4 and k.shape == q.shape:
+    if is_turbo_mode_enabled() and is_triton_available() and q.is_cuda and q.dim() == 4 and k.shape == q.shape:
         try:
             B, H, T, D = q.shape
             half_d = D // 2

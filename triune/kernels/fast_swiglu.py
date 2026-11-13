@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .dispatcher import is_triton_available
+from .dispatcher import is_triton_available, is_turbo_mode_enabled
 
 if is_triton_available():
     import triton
@@ -65,7 +65,7 @@ class _FusedSwiGLUFunction(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
-        if is_triton_available() and gate.is_cuda:
+        if is_turbo_mode_enabled() and is_triton_available() and gate.is_cuda:
             g = gate.contiguous() if not gate.is_contiguous() else gate
             u = up.contiguous() if not up.is_contiguous() else up
             ctx.save_for_backward(g, u)
@@ -81,7 +81,7 @@ class _FusedSwiGLUFunction(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output: torch.Tensor):
         gate, up = ctx.saved_tensors
-        if is_triton_available() and grad_output.is_cuda:
+        if is_turbo_mode_enabled() and is_triton_available() and grad_output.is_cuda:
             go = grad_output.contiguous() if not grad_output.is_contiguous() else grad_output
             g = gate.contiguous() if not gate.is_contiguous() else gate
             u = up.contiguous() if not up.is_contiguous() else up

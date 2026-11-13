@@ -2191,12 +2191,18 @@ if HAS_FASTAPI:
                     if on_text:
                         on_text("".join(accumulated_tokens))
 
-                with self.model_autocast():
-                    spec_out = spec_gen.generate(
-                        prompt,
-                        max_new_tokens=max_new_tokens,
-                        on_token=_spec_on_tok if on_text else None,
-                    )
+                try:
+                    with self.model_autocast():
+                        spec_out = spec_gen.generate(
+                            prompt,
+                            max_new_tokens=max_new_tokens,
+                            on_token=_spec_on_tok if on_text else None,
+                        )
+                except BaseException:
+                    self.neuron_scope.detach(clear=False)
+                    raise
+                neuron_snapshot = self.neuron_scope.get_snapshot()
+                self.neuron_scope.detach(clear=False)
                 spec_dt_ms = round((time.perf_counter() - t_spec_start) * 1000, 1)
                 spec_text = sanitize_text(str(spec_out["text"]))
                 if not self.weights_loaded:
@@ -2217,27 +2223,32 @@ if HAS_FASTAPI:
                     "cancelled": False,
                     "speculative_telemetry": spec_out.get("telemetry", {}),
                     "acceptance_rate": spec_out.get("acceptance_rate", 0.0),
+                    "neuron_scope": neuron_snapshot,
                 }
 
-            with self.model_autocast():
-                result = generate_response(
-                    self.model,
-                    self.tokenizer,
-                    prompt,
-                    device=self.device,
-                    pad_token_id=pad_id,
-                    eos_token_id=eos_id,
-                    force_depth=force_depth,
-                    temperature=temperature,
-                    top_k=50,
-                    repetition_penalty=1.2,
-                    max_new_tokens=max_new_tokens,
-                    prompt_is_formatted=prompt_is_formatted,
-                    cancel_event=cancel_event,
-                    on_text=on_text,
-                    return_info=True,
-                    cache=cache,
-                )
+            try:
+                with self.model_autocast():
+                    result = generate_response(
+                        self.model,
+                        self.tokenizer,
+                        prompt,
+                        device=self.device,
+                        pad_token_id=pad_id,
+                        eos_token_id=eos_id,
+                        force_depth=force_depth,
+                        temperature=temperature,
+                        top_k=50,
+                        repetition_penalty=1.2,
+                        max_new_tokens=max_new_tokens,
+                        prompt_is_formatted=prompt_is_formatted,
+                        cancel_event=cancel_event,
+                        on_text=on_text,
+                        return_info=True,
+                        cache=cache,
+                    )
+            except BaseException:
+                self.neuron_scope.detach(clear=False)
+                raise
             generated_text = sanitize_text(str(result["text"]))
             if not self.weights_loaded:
                 banner = "[Notice: Model is running with initialized weights without trained checkpoint. Train this model or load weights in Checkpoints & Weights.]\n\n"
@@ -2247,6 +2258,8 @@ if HAS_FASTAPI:
             tier_idx = 0 if "REFLEX" in route_str else (1 if "LIMBIC" in route_str else 2)
             if getattr(self, "neuron_scope", None) is not None:
                 self.neuron_scope.record_routing(tier_idx)
+            neuron_snapshot = self.neuron_scope.get_snapshot()
+            self.neuron_scope.detach(clear=False)
             return {
                 "text": generated_text,
                 "route": result["route"],
@@ -2260,9 +2273,7 @@ if HAS_FASTAPI:
                 "weights_loaded": self.weights_loaded,
                 "cancelled": result["cancelled"],
                 "cache": result.get("cache"),
-                "neuron_scope": self.neuron_scope.get_snapshot()
-                if getattr(self, "neuron_scope", None) is not None
-                else None,
+                "neuron_scope": neuron_snapshot,
             }
 
         def warmup_inference_kernels(self) -> None:
@@ -5121,7 +5132,7 @@ if HAS_FASTAPI:
                     "param_count": 0,
                     "param_pct": 0.0,
                     "target": "2D Attention Projections & Shared Weights",
-                    "vram_saving": "50% (Zero Variance State)",
+                    "vram_saving": "Not active",
                     "kernel": "triune/kernels/fast_muon.py",
                 },
                 "tier2_centroid": {
@@ -5129,8 +5140,8 @@ if HAS_FASTAPI:
                     "param_count": 0,
                     "param_pct": 0.0,
                     "target": "MoE Routed Experts (Feed-Forward Blocks)",
-                    "vram_saving": "80% State Compression",
-                    "basis_transport": "Active",
+                    "vram_saving": "Not active",
+                    "basis_transport": "Not active",
                     "steer_invariant": "P^T c_orth = 0",
                 },
                 "tier3_adamw": {
@@ -5150,19 +5161,19 @@ if HAS_FASTAPI:
         data["comparison_vs_unsloth"] = {
             "triune": {
                 "optimizer": "3-Tier Partitioned (Muon + CentroidSteer + AdamW)",
-                "memory_compression": "80% MoE state reduction, 50% Attention state reduction",
-                "moe_anti_collapse": "Active Gram-Schmidt Centroid Steering (P^T c_orth = 0)",
+                "memory_compression": "Not measured for this model and runtime",
+                "moe_anti_collapse": "CentroidSteer configured; runtime state determines whether it is active",
                 "matrix_geometry": "Riemannian 5th-Order Newton-Schulz Orthogonalization",
-                "basis_change": "Subspace transport T = P_old^T @ P_new (Zero loss spike)",
-                "convergence_speed": "+35% faster loss reduction",
+                "basis_change": "Subspace transport T = P_old^T @ P_new (loss impact not benchmarked)",
+                "convergence_speed": "Not benchmarked",
             },
             "unsloth": {
                 "optimizer": "Standard 8-bit / FP32 AdamW",
-                "memory_compression": "0% (Full coordinate M & V states stored for all weights)",
+                "memory_compression": "Baseline details depend on optimizer configuration",
                 "moe_anti_collapse": "None (Subject to expert representation collapse)",
                 "matrix_geometry": "None (Coordinate-wise element updates)",
                 "basis_change": "N/A",
-                "convergence_speed": "Standard AdamW baseline",
+                "convergence_speed": "Not benchmarked",
             },
         }
         return data
@@ -6332,11 +6343,6 @@ SYSTEM \"\"\"You are Triune AI, a high-efficiency cognitive language model train
             + (1.0 - avg_tokens_exiting_reflex) * (limbic_active_params + cortex_params)
         )
 
-        compression_ratio = round(dense_params_total / max(1, weighted_active_params), 2)
-        compute_ratio = weighted_active_params / dense_params_total
-        throughput_gain = round(max(1.8, min(4.8, 1.0 / max(0.2, compute_ratio * 0.85))), 2)
-        ttft_gain_pct = round((1.0 - (reflex_layers / layers)) * avg_tokens_exiting_reflex * 100 + 25.0, 1)
-
         layer_mapping = []
         for i in range(layers):
             if i < reflex_layers:
@@ -6405,12 +6411,15 @@ SYSTEM \"\"\"You are Triune AI, a high-efficiency cognitive language model train
                     limbic_exit_layer=max(2, safe_layers - (max(1, int(round(safe_layers * 0.25))) if cortex_gla else 0))
                 )
                 pytorch_state.active_model_id = active_model_id
-                pytorch_state.weights_loaded = True
-                pytorch_state.active_checkpoint = f"{active_model_id} (Transmuted In-Memory)"
+                # Reconfiguration builds fresh Triune weights; it does not import
+                # or map tensors from the selected dense source architecture.
+                pytorch_state.weights_loaded = False
+                pytorch_state.active_checkpoint = None
                 if getattr(pytorch_state, "model", None) is not None and hasattr(pytorch_state.model, "model_spec"):
                     pytorch_state.model.model_spec.model_id = active_model_id
                 if getattr(pytorch_state, "neuron_scope", None) is not None and pytorch_state.model is not None:
-                    pytorch_state.neuron_scope.attach(pytorch_state.model)
+                    pytorch_state.neuron_scope.detach()
+                    pytorch_state.neuron_scope.model = pytorch_state.model
                 activated = True
             except Exception as e:
                 activated = False
@@ -6420,6 +6429,8 @@ SYSTEM \"\"\"You are Triune AI, a high-efficiency cognitive language model train
         return {
             "status": "success",
             "activated": activated,
+            "weights_transferred": False,
+            "activation_kind": "fresh_architecture" if activated else "preview_only",
             "active_model_id": active_model_id,
             "model_name": req.model_name,
             "source_type": source_type,
@@ -6445,16 +6456,18 @@ SYSTEM \"\"\"You are Triune AI, a high-efficiency cognitive language model train
                 "num_heads": heads,
                 "ffn_dim": ffn_dim,
             },
-            "compression_ratio": compression_ratio,
-            "estimated_throughput_gain": f"{throughput_gain}x",
-            "throughput_multiplier": throughput_gain,
-            "estimated_ttft_gain": f"{ttft_gain_pct}%",
+            "estimated_active_parameter_ratio": round(weighted_active_params / max(1, dense_params_total), 3),
+            "throughput_status": "not_benchmarked",
+            "ttft_status": "not_benchmarked",
             "layer_mapping": layer_mapping,
             "transmutation_summary": {
-                "early_exit_bypass_rate": "45.0%",
+                "early_exit_assumption": "45% (model estimate; not measured)",
                 "moe_expert_reduction": f"Top-2 of {limbic_experts} ({round((1 - 2/limbic_experts)*100, 1)}% FFN sparsity)",
                 "gla_linear_memory": "O(1) KV cache footprint per token" if cortex_gla else "O(S) standard KV",
-                "message": f"Successfully mapped {arch_family} ({_fmt(dense_params_total)}) to Triune 3-Tier architecture with {throughput_gain}x projected throughput."
+                "message": (
+                    f"Built a Triune architecture profile for {arch_family} ({_fmt(dense_params_total)}). "
+                    "Source weights were not converted or transferred; train the new model or load a compatible checkpoint."
+                )
             }
         }
 
@@ -7011,13 +7024,13 @@ SYSTEM \"\"\"You are Triune AI, a high-efficiency cognitive language model train
         if current_model is not None:
             if scope is None:
                 scope = NeuronScope(current_model)
-                scope.attach(current_model)
                 pytorch_state.neuron_scope = scope
             elif getattr(scope, "model", None) is not current_model:
-                scope.attach(current_model)
+                scope.detach()
+                scope.model = current_model
 
         has_cuda = bool(HAS_TORCH and torch is not None and torch.cuda.is_available())
-        graphics_interop = "CUDA Zero-Copy 120 FPS" if has_cuda else "Vulkan Zero-Copy 120 FPS"
+        graphics_interop = "CPU-rendered canvas; CUDA device detected" if has_cuda else "CPU-rendered canvas"
 
         arch_spec = getattr(pytorch_state, "architecture_spec", {}) or {}
         active_id = getattr(pytorch_state, "active_model_id", "triune-base") or "triune-base"
@@ -7085,16 +7098,14 @@ SYSTEM \"\"\"You are Triune AI, a high-efficiency cognitive language model train
             "limbic_exit_layer": limbic_exit,
             "tier_summary": tier_summary,
             "layer_mapping": layer_mapping,
-            "compression_ratio": "1.32x",
-            "estimated_throughput_gain": "2.4x",
-            "estimated_ttft_gain": "45%",
+            "performance_status": "not_benchmarked",
         }
 
         if scope is not None:
             snap = scope.get_snapshot()
             snap["graphics_interop"] = graphics_interop
             snap["cuda_active"] = has_cuda
-            snap["graphics_api"] = "CUDA" if has_cuda else "Vulkan"
+            snap["graphics_api"] = "Canvas 2D"
             snap["active_model_id"] = active_id
             snap["architecture"] = arch_spec
             snap["active_model_spec"] = active_model_spec
@@ -7109,7 +7120,7 @@ SYSTEM \"\"\"You are Triune AI, a high-efficiency cognitive language model train
             "native_c_engine": get_native_c_info(),
             "graphics_interop": graphics_interop,
             "cuda_active": has_cuda,
-            "graphics_api": "CUDA" if has_cuda else "Vulkan",
+            "graphics_api": "Canvas 2D",
             "active_model_id": active_id,
             "architecture": arch_spec,
             "active_model_spec": active_model_spec,

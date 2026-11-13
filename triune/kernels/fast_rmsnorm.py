@@ -10,7 +10,7 @@ from typing import Optional, Tuple
 import torch
 import torch.nn as nn
 
-from .dispatcher import is_triton_available
+from .dispatcher import is_triton_available, is_turbo_mode_enabled
 
 # Try importing Triton language bindings
 if is_triton_available():
@@ -327,7 +327,7 @@ def fast_rmsnorm(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-6) -> to
     w = weight.to(x.dtype) if weight.dtype != x.dtype else weight
     if hasattr(torch.nn.functional, "rms_norm"):
         return torch.nn.functional.rms_norm(x, (x.size(-1),), weight=w, eps=eps)
-    if is_triton_available() and x.is_cuda:
+    if is_turbo_mode_enabled() and is_triton_available() and x.is_cuda:
         try:
             return _FastRMSNormFunction.apply(x, weight, eps)
         except Exception:
@@ -348,7 +348,7 @@ def fast_fused_add_rmsnorm(
         (normed_output, residual_output)
     """
     w = weight.to(x.dtype) if weight.dtype != x.dtype else weight
-    if is_triton_available() and x.is_cuda:
+    if is_turbo_mode_enabled() and is_triton_available() and x.is_cuda:
         try:
             return _FusedAddRMSNormFunction.apply(x, residual, w, eps)
         except Exception:

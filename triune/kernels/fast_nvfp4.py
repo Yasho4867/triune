@@ -11,7 +11,7 @@ from typing import Tuple
 import torch
 import torch.nn as nn
 
-from .dispatcher import is_triton_available
+from .dispatcher import is_triton_available, is_turbo_mode_enabled
 
 NVFP4_GROUP_SIZE = 16
 _E2M1_VALUES = (0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0)
@@ -146,7 +146,7 @@ def nvfp4_dequantize(
     rows, half_cols = packed.shape
     cols = half_cols * 2
 
-    if is_triton_available() and packed.is_cuda:
+    if is_turbo_mode_enabled() and is_triton_available() and packed.is_cuda:
         out = torch.empty((rows, cols), device=packed.device, dtype=dtype)
         _nvfp4_dequant_kernel[(rows,)](
             packed,

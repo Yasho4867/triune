@@ -1,8 +1,7 @@
-"""Real-Time Neuron Activation Microscope & Router Telemetry Tap.
+"""On-demand layer activation and routing telemetry for Triune Studio.
 
-Extracts live layer activations, attention matrices, and dynamic routing
-decisions directly on-chip for 120 FPS visualization in Triune Studio.
-Zero host memory overhead when idle.
+Hooks are attached only while a local inference request is running. The most
+recent sampled activations are retained on CPU for the read-only visualization.
 """
 
 from __future__ import annotations
@@ -93,10 +92,15 @@ class NeuronScope:
             "native_c_engine": get_native_c_info(),
         }
 
-    def detach(self) -> None:
-        """Remove hooks to restore zero-overhead execution."""
+    def detach(self, *, clear: bool = True) -> None:
+        """Remove hooks; optionally retain the last sample for read-only display."""
         for hook in self._hooks:
             hook.remove()
         self._hooks.clear()
-        self.activations.clear()
+        if clear:
+            self.activations.clear()
+        else:
+            # Keep only CPU snapshots so the viewer does not pin GPU allocations
+            # between inference requests.
+            self.activations = {idx: act.detach().cpu() for idx, act in self.activations.items()}
         self.is_active = False

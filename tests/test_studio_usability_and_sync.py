@@ -226,10 +226,11 @@ def test_upgrade_to_triune_architecture_endpoint(app_client):
     assert data["status"] == "success"
     assert data["model_name"] == "llama-3-8b"
     assert data["architecture_family"] == "Llama 3 Dense"
-    assert "compression_ratio" in data
-    assert data["compression_ratio"] > 1.0
-    assert "throughput_multiplier" in data
-    assert data["throughput_multiplier"] >= 1.8
+    assert "estimated_active_parameter_ratio" in data
+    assert 0 < data["estimated_active_parameter_ratio"] <= 1
+    assert data["throughput_status"] == "not_benchmarked"
+    assert data["ttft_status"] == "not_benchmarked"
+    assert data["weights_transferred"] is False
     assert "layer_mapping" in data
     assert len(data["layer_mapping"]) == 32
 
@@ -250,6 +251,9 @@ def test_upgrade_to_triune_architecture_endpoint(app_client):
     assert data_gpt2["status"] == "success"
     assert data_gpt2["activated"] is True
     assert data_gpt2["active_model_id"] == "triune-gpt2"
+    assert data_gpt2["activation_kind"] == "fresh_architecture"
+    assert pytorch_state.weights_loaded is False
+    assert pytorch_state.active_checkpoint is None
     assert len(data_gpt2["layer_mapping"]) == 12
     assert data_gpt2["tier_summary"]["limbic_experts"] == 4
 
@@ -258,8 +262,10 @@ def test_upgrade_to_triune_architecture_endpoint(app_client):
     assert res_neurons.status_code == 200
     n_data = res_neurons.json()
     assert "graphics_interop" in n_data
-    assert "Zero-Copy 120 FPS" in n_data["graphics_interop"]
+    assert n_data["graphics_interop"].startswith("CPU-rendered canvas")
+    assert "120 FPS" not in n_data["graphics_interop"]
     assert "cuda_active" in n_data
+    assert n_data["graphics_api"] == "Canvas 2D"
 
 
 def test_upgrade_all_seven_standard_models(app_client):
@@ -289,8 +295,8 @@ def test_upgrade_all_seven_standard_models(app_client):
         assert data["status"] == "success"
         assert data["architecture_family"] == expected_family
         assert len(data["layer_mapping"]) == expected_layers
-        assert data["compression_ratio"] > 1.0
-        assert data["throughput_multiplier"] >= 1.8
+        assert 0 < data["estimated_active_parameter_ratio"] <= 1
+        assert data["throughput_status"] == "not_benchmarked"
         tiers = {m["upgraded_tier"] for m in data["layer_mapping"]}
         assert tiers == {"reflex", "limbic", "cortex"}
 

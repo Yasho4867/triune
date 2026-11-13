@@ -78,7 +78,7 @@ def get_triton_error() -> str | None:
 
 
 def get_kernel_telemetry() -> Dict[str, Any]:
-    """Return comprehensive live status of the Triune Custom Kernel Suite."""
+    """Return detected kernel capabilities without presenting estimates as measurements."""
     has_cuda = torch.cuda.is_available()
     device_name = torch.cuda.get_device_name(0) if has_cuda else "CPU Host"
     bf16_supported = torch.cuda.is_bf16_supported() if has_cuda else False
@@ -101,6 +101,25 @@ def get_kernel_telemetry() -> Dict[str, Any]:
         else:
             arch = f"CUDA Architecture {major}.{minor}"
 
+    if not _TURBO_MODE:
+        kernel_state = "Disabled (Turbo Mode off)"
+    elif has_cuda and is_triton_available():
+        kernel_state = "Available (CUDA + Triton detected; per-kernel use not traced)"
+    elif has_cuda:
+        kernel_state = "Available (CUDA analytical/PyTorch fallback; per-kernel use not traced)"
+    else:
+        kernel_state = "Available (vectorized CPU fallback; per-kernel use not traced)"
+
+    kernels = {
+        "fast_cross_entropy": ("Chunked Linear + Cross Entropy", "Chunked autograd implementation"),
+        "fast_swiglu": ("Analytical SwiGLU / GeLU", "Analytical autograd implementation"),
+        "fast_rmsnorm": ("Fused RMSNorm", "Triton / vectorized implementation"),
+        "fast_rope": ("RoPE", "Triton / in-place implementation"),
+        "fast_muon": ("Newton-Schulz Muon", "In-place polar decomposition"),
+        "fast_gla": ("Chunked Gated Linear Attention", "Chunkwise linear attention"),
+        "fast_lora": ("Dual-Rank LoRA GEMM", "Analytical low-rank autograd"),
+    }
+
     return {
         "turbo_mode": _TURBO_MODE,
         "backend": get_kernel_backend(),
@@ -111,55 +130,11 @@ def get_kernel_telemetry() -> Dict[str, Any]:
         "triton_available": is_triton_available(),
         "triton_notice": _TRITON_ERROR,
         "kernels": {
-            "fast_cross_entropy": {
-                "name": "Chunked Fused Linear + Cross Entropy",
-                "status": "Active (Zero [N, V] Logits Allocation)",
-                "vram_saved_pct": "85%",
-                "type": "Chunked Streaming autograd",
-            },
-            "fast_swiglu": {
-                "name": "Fused Analytical SwiGLU / GeLU",
-                "status": "Active (In-Place Derivative Bypass)",
-                "vram_saved_pct": "50%",
-                "type": "Analytical Autograd Function",
-            },
-            "fast_rmsnorm": {
-                "name": "In-Place Fused RMSNorm",
-                "status": "Active (Variance-Recomputed Backward)",
-                "vram_saved_pct": "60%",
-                "type": "Triton / Vectorized Fused",
-            },
-            "fast_rope": {
-                "name": "Zero-Copy In-Place RoPE",
-                "status": "Active (In-Place Q/K Rotation)",
-                "vram_saved_pct": "70%",
-                "type": "In-Place Complex Rotation",
-            },
-            "fast_muon": {
-                "name": "Fused 5th-Order Newton-Schulz Optimizer",
-                "status": "Active (Buffer Reuse + Tensor Core GEMMs)",
-                "speedup_vs_baseline": "2.8x faster orthogonalization",
-                "type": "In-Place Polar Decomposition",
-            },
-            "fast_gla": {
-                "name": "Chunked Gated Linear Attention (GLA)",
-                "status": "Active (O(N) Complexity vs O(N^2) Softmax)",
-                "speedup_vs_baseline": "4.2x faster at 8k+ context",
-                "type": "Chunkwise Linear Attention",
-            },
-            "fast_lora": {
-                "name": "Fused Dual-Rank LoRA GEMM",
-                "status": "Active (Single-Pass Scaling Accumulation)",
-                "speedup_vs_baseline": "2.5x faster adapter backward",
-                "type": "Analytical Low-Rank Autograd",
-            },
+            key: {"name": name, "status": kernel_state, "type": implementation}
+            for key, (name, implementation) in kernels.items()
         },
         "benchmarks_vs_baselines": {
-            "triune_native_speedup": 4.18,
-            "unsloth_speedup": 2.50,
-            "vanilla_pytorch_speedup": 1.00,
-            "triune_vram_reduction_pct": 78.4,
-            "unsloth_vram_reduction_pct": 65.2,
-            "vanilla_vram_reduction_pct": 0.0,
+            "status": "not_benchmarked",
+            "message": "No compatible measured benchmark artifact is available for this runtime.",
         },
     }

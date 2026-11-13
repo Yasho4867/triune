@@ -11,7 +11,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .dispatcher import is_triton_available
+from .dispatcher import is_triton_available, is_turbo_mode_enabled
 
 if is_triton_available():
     import triton
@@ -325,7 +325,7 @@ def fast_cross_entropy(
     ignore_index: int = -100,
 ) -> torch.Tensor:
     """Computes high-performance cross-entropy loss with fused Triton kernel or chunked streaming fallback."""
-    if is_triton_available() and logits.is_cuda and logits.dtype != torch.float64:
+    if is_turbo_mode_enabled() and is_triton_available() and logits.is_cuda and logits.dtype != torch.float64:
         try:
             return _TritonCrossEntropyFunction.apply(logits, targets, ignore_index)
         except Exception:

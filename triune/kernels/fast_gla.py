@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import torch
 
-from triune.kernels.dispatcher import is_triton_available
+from triune.kernels.dispatcher import is_triton_available, is_turbo_mode_enabled
 
 try:
     import triton
@@ -283,7 +283,7 @@ def _run_gla_chunks(
         out_inter = torch.matmul(q_exp, state.unsqueeze(2))
         kv_0 = torch.matmul(k_decayed_all[:, :, 0].transpose(-1, -2), v_c[:, :, 0])
         state = torch.addcmul(kv_0, state, chunk_decay[:, :, 0])
-    elif device.type == "cuda" and dtype != torch.float64 and FusedRecurrentScan is not None and is_triton_available() and B <= 4:
+    elif device.type == "cuda" and dtype != torch.float64 and FusedRecurrentScan is not None and is_turbo_mode_enabled() and is_triton_available() and B <= 4:
         kv_all = torch.matmul(k_decayed_all.transpose(-1, -2), v_c)
         S_all, state = FusedRecurrentScan.apply(kv_all, chunk_decay, state)
         out_inter = torch.matmul(q_exp, S_all)

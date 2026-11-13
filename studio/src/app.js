@@ -1629,7 +1629,7 @@
     const canvasRef = useRef(null);
     const wrapRef = useRef(null);
     const [isExpanded, setIsExpanded] = useState(false);
-    const [fps, setFps] = useState(120);
+    const [fps, setFps] = useState(0);
     const [layoutMode, setLayoutMode] = useState(() => {
       try { return localStorage.getItem('triune_canvas_layout') || 'obsidian'; } catch (_) { return 'obsidian'; }
     });
@@ -2301,7 +2301,7 @@
         return;
       }
       if (pulses.length >= 24) {
-        pulses.shift(); // Evict oldest pulse to maintain 120 FPS
+        pulses.shift(); // Bound the number of active visual pulses.
       }
       lastPulseEmitTimeRef.current = now;
 
@@ -2865,7 +2865,7 @@
           style: { color: '#10b981', borderColor: 'rgba(16, 185, 129, 0.4)', fontWeight: 600 }
         }, [
           renderIcon('branch', 10, { marginRight: '4px', color: '#10b981' }),
-          `${(upgradeResult.model_name || 'Triune').toUpperCase()}: ${upgradeResult.estimated_throughput_gain} Speedup · ${upgradeResult.compression_ratio}x`
+          `${(upgradeResult.model_name || 'Triune').toUpperCase()}: architecture estimate · not benchmarked`
         ]),
         e('div', {
           className: 'neuron-hud-item',
@@ -2932,7 +2932,7 @@
 
   // ============================================================================
   // High-Performance Syntax Highlighting, Incremental Markdown & DOM Virtualization
-  // Ensures Silky-Smooth 120 FPS Even During Massive 8192-Token Stream Outputs
+  // Keeps large conversations responsive by rendering a bounded window of blocks.
   // ============================================================================
 
   const SYNTAX_KEYWORDS = new Set([
@@ -3279,7 +3279,7 @@
           e('button', {
             className: 'virtualized-toggle-btn',
             onClick: () => setIsForceFullDom(false)
-          }, 'Enable 120 FPS Virtual Window')
+          }, 'Enable Virtual Window')
         ),
         blocks.map(block => renderSingleBlock(block))
       );
@@ -3297,7 +3297,7 @@
       e('div', { className: 'virtualized-meta-bar' },
         e('div', { className: 'virtualized-meta-pill' }, [
           renderIcon('bolt', 11, { marginRight: '4px', color: '#38bdf8' }),
-          `⚡ Virtual DOM Active · ${approxTokens.toLocaleString()} Tokens · 120 FPS Window (${visibleWindow.start + 1}–${Math.min(visibleWindow.end, totalBlocks)} of ${totalBlocks} blocks)`
+          `⚡ Virtual Window Active · ${approxTokens.toLocaleString()} Tokens · Showing ${visibleWindow.start + 1}–${Math.min(visibleWindow.end, totalBlocks)} of ${totalBlocks} blocks`
         ]),
         e('button', {
           className: 'virtualized-toggle-btn',
@@ -4020,9 +4020,9 @@
               window.localStorage.setItem('triune.studio.activeModel', nextActiveId);
             } catch (_) {}
             refreshNeuronScope();
-            showToast(`Transmuted ${targetModel} into active Triune 3-Tier model (${data.estimated_throughput_gain} speedup)!`);
+            showToast('Triune architecture activated with fresh weights. The selected source model weights were not transferred; load a compatible checkpoint or train before inference.');
           } else {
-            showToast(`Transmutation profile ready for ${targetModel} (${data.estimated_throughput_gain} speedup)!`);
+            showToast(`Architecture profile ready for ${targetModel}. Source weights are not converted, and performance is not benchmarked.`);
           }
         } else {
           showToast('Failed to transmute model architecture');
@@ -6686,23 +6686,18 @@
 
     // Triune High-Performance Custom Kernel Accelerator & Engine Turbo Deck
     const renderKernelAcceleratorDeck = () => {
-      const isTurbo = kernelTelemetry?.turbo_mode ?? true;
+      const isTurbo = Boolean(kernelTelemetry?.turbo_mode);
       const kernels = kernelTelemetry?.kernels || {
-        fast_cross_entropy: { name: 'Chunked Fused Linear + Cross Entropy', status: 'Active (Zero [N, V] Logits Allocation)', vram_saved_pct: '85%' },
-        fast_swiglu: { name: 'Fused Analytical SwiGLU / GeLU', status: 'Active (In-Place Derivative Bypass)', vram_saved_pct: '50%' },
-        fast_rmsnorm: { name: 'In-Place Fused RMSNorm', status: 'Active (Variance-Recomputed Backward)', vram_saved_pct: '60%' },
-        fast_rope: { name: 'Zero-Copy In-Place RoPE', status: 'Active (In-Place Q/K Rotation)', vram_saved_pct: '70%' },
-        fast_muon: { name: 'Fused 5th-Order Newton-Schulz Optimizer', status: 'Active (Buffer Reuse + Tensor Core GEMMs)', speedup_vs_baseline: '2.8x faster' },
-        fast_gla: { name: 'Chunked Gated Linear Attention (GLA)', status: 'Active (O(N) Complexity vs O(N^2) Softmax)', speedup_vs_baseline: '4.2x faster' },
-        fast_lora: { name: 'Fused Dual-Rank LoRA GEMM', status: 'Active (Single-Pass Scaling Accumulation)', speedup_vs_baseline: '2.5x faster' },
+        fast_cross_entropy: { name: 'Chunked Linear + Cross Entropy', status: 'Backend telemetry unavailable' },
+        fast_swiglu: { name: 'Analytical SwiGLU / GeLU', status: 'Backend telemetry unavailable' },
+        fast_rmsnorm: { name: 'Fused RMSNorm', status: 'Backend telemetry unavailable' },
+        fast_rope: { name: 'RoPE', status: 'Backend telemetry unavailable' },
+        fast_muon: { name: 'Newton-Schulz Muon', status: 'Backend telemetry unavailable' },
+        fast_gla: { name: 'Chunked Gated Linear Attention', status: 'Backend telemetry unavailable' },
+        fast_lora: { name: 'Dual-Rank LoRA GEMM', status: 'Backend telemetry unavailable' },
       };
-      const bmarks = kernelTelemetry?.benchmarks_vs_baselines || {
-        triune_native_speedup: 4.18,
-        unsloth_speedup: 2.50,
-        vanilla_pytorch_speedup: 1.00,
-        triune_vram_reduction_pct: 78.4,
-        unsloth_vram_reduction_pct: 65.2,
-      };
+      const bmarks = kernelTelemetry?.benchmarks_vs_baselines;
+      const hasMeasuredBenchmarks = bmarks?.status === 'measured';
 
       return e('div', { className: 'kernel-deck-card' },
         e('div', { className: 'kernel-deck-header' },
@@ -6713,11 +6708,11 @@
                 'Triune Custom Kernel Accelerator & Engine Turbo'
               ),
               e('span', { className: 'badge-ckpt-active', style: { background: isTurbo ? 'rgba(43, 76, 63, 0.18)' : 'rgba(154, 52, 18, 0.18)', color: isTurbo ? 'var(--accent-olive, #2b4c3f)' : 'var(--accent-terracotta, #e05b38)', border: 'none' } },
-                isTurbo ? 'Turbo Mode Active' : 'Vanilla PyTorch Fallback'
+                !kernelTelemetry ? 'Checking backend…' : (isTurbo ? 'Turbo Mode Enabled' : 'Turbo Mode Disabled')
               )
             ),
             e('p', { style: { color: 'var(--text-muted)', fontSize: '12.5px', margin: '4px 0 0 0' } },
-              `Hardware: ${kernelTelemetry?.hardware_arch || 'NVIDIA Tensor Core Acceleration'} | Backend: ${kernelTelemetry?.backend || 'native-cuda-analytical'}`
+              `Hardware: ${kernelTelemetry?.hardware_arch || 'Unknown'} | Backend: ${kernelTelemetry?.backend || 'Checking…'}`
             )
           ),
           e('button', {
@@ -6730,19 +6725,19 @@
         // Live Benchmark Comparison vs Baselines
         e('div', { className: 'benchmark-comparison-grid' },
           e('div', { className: 'benchmark-box highlight' },
-            e('div', { className: 'benchmark-title' }, 'Triune Native Kernels (Active)'),
-            e('div', { className: 'benchmark-speedup', style: { color: 'var(--accent-olive, #2b4c3f)' } }, `${bmarks.triune_native_speedup}x`),
-            e('span', { className: 'benchmark-badge', style: { background: 'rgba(43, 76, 63, 0.15)', color: 'var(--accent-olive, #2b4c3f)' } }, `-${bmarks.triune_vram_reduction_pct}% VRAM`)
+            e('div', { className: 'benchmark-title' }, 'Triune Kernel Path'),
+            e('div', { className: 'benchmark-speedup', style: { color: 'var(--accent-olive, #2b4c3f)' } }, hasMeasuredBenchmarks ? `${bmarks.triune_native_speedup}x` : 'Not benchmarked'),
+            e('span', { className: 'benchmark-badge', style: { background: 'rgba(43, 76, 63, 0.15)', color: 'var(--accent-olive, #2b4c3f)' } }, hasMeasuredBenchmarks ? `-${bmarks.triune_vram_reduction_pct}% VRAM` : 'No measured VRAM comparison')
           ),
           e('div', { className: 'benchmark-box' },
             e('div', { className: 'benchmark-title' }, 'Unsloth Baseline'),
-            e('div', { className: 'benchmark-speedup' }, `${bmarks.unsloth_speedup}x`),
-            e('span', { className: 'benchmark-badge', style: { background: 'rgba(0,0,0,0.06)', color: 'var(--text-muted)' } }, `-${bmarks.unsloth_vram_reduction_pct}% VRAM`)
+            e('div', { className: 'benchmark-speedup' }, hasMeasuredBenchmarks ? `${bmarks.unsloth_speedup}x` : 'Not benchmarked'),
+            e('span', { className: 'benchmark-badge', style: { background: 'rgba(0,0,0,0.06)', color: 'var(--text-muted)' } }, hasMeasuredBenchmarks ? `-${bmarks.unsloth_vram_reduction_pct}% VRAM` : 'No measured VRAM comparison')
           ),
           e('div', { className: 'benchmark-box' },
             e('div', { className: 'benchmark-title' }, 'Standard PyTorch'),
-            e('div', { className: 'benchmark-speedup' }, `${bmarks.vanilla_pytorch_speedup}x`),
-            e('span', { className: 'benchmark-badge', style: { background: 'rgba(0,0,0,0.06)', color: 'var(--text-muted)' } }, '0% reduction (baseline)')
+            e('div', { className: 'benchmark-speedup' }, hasMeasuredBenchmarks ? `${bmarks.vanilla_pytorch_speedup}x` : 'Not benchmarked'),
+            e('span', { className: 'benchmark-badge', style: { background: 'rgba(0,0,0,0.06)', color: 'var(--text-muted)' } }, hasMeasuredBenchmarks ? 'Baseline reference' : 'No measured VRAM comparison')
           )
         ),
 
@@ -6755,7 +6750,7 @@
                 e('span', { className: 'kernel-chip-title' }, k.name),
                 e('span', { className: 'kernel-chip-desc' }, k.status)
               ),
-              e('span', { className: 'kernel-status-tag' }, k.vram_saved_pct ? `-${k.vram_saved_pct}` : (k.speedup_vs_baseline ? k.speedup_vs_baseline.split(' ')[0] : 'ACTIVE'))
+              e('span', { className: 'kernel-status-tag' }, !kernelTelemetry ? 'Checking…' : (!kernelTelemetry.turbo_mode ? 'Disabled' : (kernelTelemetry.triton_available ? 'Triton path available' : 'Fallback path')))
             );
           })
         )
@@ -6777,33 +6772,33 @@
         total_params: 90789271,
         tier1_muon: {
           name: '5th-Order Newton-Schulz Muon',
-          param_count: 18284544,
-          param_pct: 20.1,
+          param_count: 0,
+          param_pct: 0,
           target: '2D Attention Projections & Shared Weights',
-          vram_saving: '50% (Zero Variance State)',
+          vram_saving: 'Not measured',
           kernel: 'triune/kernels/fast_muon.py'
         },
         tier2_centroid: {
           name: 'Adaptive SVD CentroidSteer',
-          param_count: 35389440,
-          param_pct: 39.0,
+          param_count: 0,
+          param_pct: 0,
           target: 'MoE Routed Experts (Feed-Forward Blocks)',
-          vram_saving: '83.3% State Compression',
+          vram_saving: 'Not measured',
           basis_transport: 'Active (T = P_old^T @ P_new)',
           steer_invariant: 'P^T c_orth = 0 (sin θ scaling)'
         },
         tier3_adamw: {
           name: 'Decoupled AdamW / 8-bit AdamW',
-          param_count: 37115287,
-          param_pct: 40.9,
+          param_count: 0,
+          param_pct: 0,
           target: '1D RMSNorm, Biases, Router Gates, Embeddings',
-          vram_saving: 'Uncompressed FP32'
+          vram_saving: 'Not measured'
         },
         memory: {
-          uncompressed_state_mb: 692.7,
-          triune_state_mb: 397.9,
-          saved_state_mb: 294.8,
-          compression_ratio: 1.74
+          uncompressed_state_mb: null,
+          triune_state_mb: null,
+          saved_state_mb: null,
+          compression_ratio: null
         }
       };
 
@@ -6816,7 +6811,9 @@
                 'Triune 3-Tier Custom Optimizer Cockpit'
               ),
               e('span', { className: 'badge-ckpt-active', style: { background: 'rgba(43, 76, 63, 0.18)', color: 'var(--accent-olive, #2b4c3f)', border: 'none' } },
-                `● ${opt.memory?.compression_ratio || 1.74}x State Compression (${opt.memory?.saved_state_mb || 294.8} MB VRAM Saved)`
+                opt.memory?.compression_ratio && opt.memory?.saved_state_mb != null
+                  ? `${opt.memory.compression_ratio}x State Compression (${opt.memory.saved_state_mb} MB saved)`
+                  : 'Optimizer memory savings not measured'
               ),
               e('span', { className: 'badge-ckpt-active', style: { background: 'rgba(224, 91, 56, 0.15)', color: 'var(--accent-terracotta, #e05b38)', border: 'none' } },
                 'Fused fast_muon.py'
@@ -6975,7 +6972,7 @@
         e('details', { style: { marginTop: '16px', background: 'var(--bg-surface)', padding: '12px 16px', borderRadius: '8px', border: '1px solid var(--border-color)' } },
           e('summary', { style: { display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', outline: 'none', userSelect: 'none' } },
             e('span', { style: { fontWeight: 700, fontSize: '13px', color: 'var(--accent-sage, #3f8f70)' } }, '▼ Compare Architectural Moat vs Unsloth Baseline'),
-            e('span', { className: 'benchmark-badge', style: { background: 'rgba(43, 76, 63, 0.15)', color: 'var(--accent-olive, #2b4c3f)' } }, 'Verified Analytical Moat')
+            e('span', { className: 'benchmark-badge', style: { background: 'rgba(43, 76, 63, 0.15)', color: 'var(--accent-olive, #2b4c3f)' } }, 'Research design · not benchmarked')
           ),
           e('table', { className: 'optimizer-unsloth-table' },
             e('thead', null,
@@ -9838,9 +9835,9 @@
                             e('span', { className: 'pill', style: { background: 'var(--primary-glow)', color: 'var(--primary)' } }, `${activeModelSpec.num_experts} MoE Experts`),
                             !isCompact && e('span', { className: 'pill', style: { color: 'var(--text-muted)' } }, 'Live Architecture')
                           ) : (upgradeResult && e('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--font-mono)', fontSize: '10.5px' } },
-                            e('span', { className: 'pill online', style: { color: 'var(--accent-sage)' } }, `${upgradeResult.estimated_throughput_gain} Speedup`),
-                            e('span', { className: 'pill', style: { background: 'var(--primary-glow)', color: 'var(--primary)' } }, `${upgradeResult.compression_ratio}x Compression`),
-                            !isCompact && e('span', { className: 'pill', style: { color: 'var(--text-muted)' } }, `-${upgradeResult.estimated_ttft_gain} TTFT`)
+                            e('span', { className: 'pill', style: { color: 'var(--text-muted)' } }, 'Performance not benchmarked'),
+                            e('span', { className: 'pill', style: { background: 'var(--primary-glow)', color: 'var(--primary)' } }, `${Math.round((upgradeResult.estimated_active_parameter_ratio || 0) * 100)}% estimated active params`),
+                            !isCompact && e('span', { className: 'pill', style: { color: 'var(--text-muted)' } }, 'Source weights not transferred')
                           ))
                         ),
                         activeLayers.length > 0 && e('div', { className: 'transmutation-layer-matrix', style: { maxHeight: isCompact ? '85px' : '110px', margin: '2px 0', padding: '6px 8px' } },
@@ -10027,9 +10024,9 @@
                             style: { fontSize: '10px', padding: '1px 6px' }
                           }, cInfo.available ? `Native C/AVX2: ${cInfo.version || 'active'}${cInfo.cuda_runtime_bound ? ' · CUDA Bound' : ''}` : 'PyTorch Kernel Path'),
                           e('span', {
-                            className: 'pill online',
-                            style: { fontSize: '10px', padding: '1px 6px', color: '#10b981' }
-                          }, neuronScopeData?.graphics_interop || (cInfo?.cuda_runtime_bound ? 'CUDA Zero-Copy 120 FPS' : 'Vulkan Zero-Copy 120 FPS')),
+                            className: 'pill',
+                            style: { fontSize: '10px', padding: '1px 6px' }
+                          }, neuronScopeData?.graphics_interop || 'Canvas renderer · frame rate measured below'),
                           e('button', {
                             className: 'neural-console-close-btn',
                             style: { padding: '2px 6px', fontSize: '11px', minWidth: 'auto', border: '1px solid rgba(255, 255, 255, 0.08)', background: 'transparent', color: 'var(--text-muted)' },
@@ -12260,7 +12257,7 @@
                   'Pre-configured Mixture-of-Experts architectures with real dynamic parameter counts, hardware budgets, and one-click IDE synchronization.'
                 )
               ),
-              e('div', { className: 'badge-folder' }, `${MODEL_PRESETS.length} Verified Architectures`)
+              e('div', { className: 'badge-folder' }, `${MODEL_PRESETS.length} Available Presets`)
             ),
             e('div', { className: 'transmutation-wizard-card' },
               e('div', { className: 'transmutation-header' },
@@ -12270,11 +12267,11 @@
                     'Universal Model Upgrader to Triune Architecture'
                   ),
                   e('p', { style: { color: 'var(--text-muted)', fontSize: '13px', margin: '4px 0 0 0' } },
-                    'Transmute standard dense Transformer architectures into high-efficiency Triune 3-Tier models (Reflex early exit + Limbic MoE with CentroidSteer + Cortex GLA).'
+                    'Preview a Triune architecture layout from a dense-model specification. This does not import or convert the source model weights; activating it creates a fresh Triune model.'
                   )
                 ),
                 upgradeResult && e('div', { className: 'transmutation-badge-glow' },
-                  `${upgradeResult.estimated_throughput_gain} Projected Throughput`
+                  'Performance not benchmarked'
                 )
               ),
               e('div', { className: 'transmutation-controls-grid' },
@@ -12348,20 +12345,20 @@
               upgradeResult && e('div', null,
                 e('div', { className: 'transmutation-kpi-grid' },
                   e('div', { className: 'transmutation-kpi-tile' },
-                    e('span', { className: 'transmutation-kpi-label' }, 'Projected Throughput'),
-                    e('span', { className: 'transmutation-kpi-val highlight-green' }, upgradeResult.estimated_throughput_gain)
+                    e('span', { className: 'transmutation-kpi-label' }, 'Measured Throughput'),
+                    e('span', { className: 'transmutation-kpi-val highlight-green' }, 'Not benchmarked')
                   ),
                   e('div', { className: 'transmutation-kpi-tile' },
-                    e('span', { className: 'transmutation-kpi-label' }, 'Compression Ratio'),
-                    e('span', { className: 'transmutation-kpi-val highlight-amber' }, `${upgradeResult.compression_ratio}x`)
+                    e('span', { className: 'transmutation-kpi-label' }, 'Estimated Active Parameter Ratio'),
+                    e('span', { className: 'transmutation-kpi-val highlight-amber' }, `${Math.round((upgradeResult.estimated_active_parameter_ratio || 0) * 100)}% (assumption-based)`)
                   ),
                   e('div', { className: 'transmutation-kpi-tile' },
                     e('span', { className: 'transmutation-kpi-label' }, 'Active Forward Pass Params'),
                     e('span', { className: 'transmutation-kpi-val highlight-violet' }, `${upgradeResult.parameter_count.weighted_inference_active_str} / ${upgradeResult.parameter_count.original_dense_str}`)
                   ),
                   e('div', { className: 'transmutation-kpi-tile' },
-                    e('span', { className: 'transmutation-kpi-label' }, 'TTFT Latency Reduction'),
-                    e('span', { className: 'transmutation-kpi-val highlight-green' }, `-${upgradeResult.estimated_ttft_gain}`)
+                    e('span', { className: 'transmutation-kpi-label' }, 'Measured First-Token Latency'),
+                    e('span', { className: 'transmutation-kpi-val highlight-green' }, 'Not benchmarked')
                   )
                 ),
                 e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' } },
@@ -12712,7 +12709,7 @@
             e('div', { className: 'card-notebook' },
               e('h3', { style: { fontFamily: 'var(--font-heading)', fontSize: '20px', marginBottom: '6px' } }, 'Sandboxed Interactive Python Environment'),
               e('p', { style: { color: 'var(--text-muted)', fontSize: '13px' } },
-                'Execute Python snippets safely to inspect model layers, VRAM stats, or run DAG pipelines.'
+                'Run trusted local Python snippets to inspect model layers, VRAM stats, or DAG pipelines. This runner is restricted, but it is not an operating-system security boundary.'
               ),
               e('textarea', {
                 className: 'notebook-textarea',
