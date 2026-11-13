@@ -3859,6 +3859,44 @@ body {
 /* SECTION 1: BLENDER/UNREAL SOCKET TAXONOMY & NODE VISUAL FEATURES          */
 /* ========================================================================== */
 
+/* Keep the graph usable inside the embedded WebView at laptop and compact
+   window sizes. A fixed 620px canvas combined with page scrolling made the
+   toolbar and graph compete for the same viewport. */
+.view-nodegraph,
+.node-canvas-react {
+  min-width: 0;
+  min-height: 0;
+}
+
+.node-canvas-react {
+  padding: clamp(10px, 1.4vw, 20px);
+}
+
+.node-grid-area {
+  min-height: clamp(340px, calc(100vh - 340px), 760px);
+  flex: 1 1 auto;
+}
+
+@media (max-width: 960px) {
+  .view-nodegraph {
+    min-height: 0;
+  }
+
+  .node-grid-area {
+    min-height: clamp(320px, 58vh, 620px);
+  }
+}
+
+@media (max-width: 640px) {
+  .node-canvas-react {
+    padding: 8px;
+  }
+
+  .node-grid-area {
+    min-height: 54vh;
+  }
+}
+
 /* Base Socket (12px circle, border, cursor: pointer) */
 .node-socket {
   width: 12px;
