@@ -1280,6 +1280,7 @@
       '--primary': accent,
       '--primary-hover': accent,
       '--primary-glow': `${accent}33`,
+      '--primary-contrast': contrastRatio('#ffffff', accent) >= contrastRatio('#111827', accent) ? '#ffffff' : '#111827',
       '--chart-grid': palette.border,
       '--chart-axis': palette.muted,
       colorScheme: theme.mode === 'Light' ? 'light' : 'dark'
@@ -9684,13 +9685,13 @@
                 onClick: handlePurgeVRAM,
                 title: 'Clear unused GPU cache; active model memory is not released',
                 style: {
-                  background: 'rgba(139, 92, 246, 0.12)',
-                  border: '1px solid rgba(139, 92, 246, 0.3)',
+                  background: 'var(--primary-glow)',
+                  border: '1px solid var(--border-glow)',
                   borderRadius: '4px',
                   cursor: 'pointer',
                   padding: '2px 6px',
                   fontSize: '10px',
-                  color: 'var(--primary, #8b5cf6)',
+                  color: 'var(--primary)',
                   fontWeight: 600,
                   marginLeft: '2px'
                 }
@@ -9700,7 +9701,7 @@
             // Model Selector Dropdown
             e('div', {
               className: 'pill',
-              style: { display: 'inline-flex', alignItems: 'center', gap: '5px', borderColor: 'rgba(139, 92, 246, 0.35)', padding: '2px 8px' },
+              style: { display: 'inline-flex', alignItems: 'center', gap: '5px', borderColor: 'var(--border-glow)', padding: '2px 8px' },
               title: 'Select Active Architecture or Model Preset'
             },
               renderIcon('models', 13, { color: 'var(--primary)' }),

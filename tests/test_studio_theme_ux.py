@@ -34,6 +34,18 @@ def test_styles_do_not_reference_missing_font_token():
     assert "var(--font-sans)" not in CSS
 
 
+def test_live_active_states_and_primary_actions_follow_selected_palette():
+    nav_active = CSS.split(".nav-item.active {", 1)[1].split("}", 1)[0]
+    assert "background: var(--primary-glow)" in nav_active
+    assert "border-color: var(--border-glow)" in nav_active
+    assert "color: var(--primary)" in nav_active
+    assert "rgba(139, 92, 246" not in nav_active
+    assert "background: var(--primary);" in CSS.split(".btn-send {", 1)[1].split("}", 1)[0]
+    assert "color: var(--primary-contrast);" in CSS.split(".btn-send {", 1)[1].split("}", 1)[0]
+    assert "--primary-contrast': contrastRatio" in APP
+    assert "borderColor: 'var(--border-glow)'" in APP
+
+
 def test_neural_graph_scales_to_canvas_and_avoids_overlapping_labels():
     assert "const sceneScale = Math.min(2, Math.max(0.8, Math.min(width / 600, height / 150)))" in APP
     assert "const labelRects = [];" in APP
