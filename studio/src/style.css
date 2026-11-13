@@ -2799,7 +2799,7 @@ body {
   padding: 5px 12px;
   border-radius: 14px;
   font-size: 12px;
-  font-family: var(--font-sans);
+  font-family: var(--font-family);
   font-weight: 600;
   cursor: pointer;
   transition: all 0.15s ease;
@@ -8194,7 +8194,7 @@ body {
   align-items: center;
   gap: 5px;
   transition: all 0.15s ease;
-  font-family: var(--font-sans);
+  font-family: var(--font-family);
   user-select: none;
 }
 
@@ -8540,8 +8540,107 @@ body {
   box-shadow: 0 30px 90px rgba(0, 0, 0, 0.95) !important;
 }
 
+/* Theme-safe inspector surfaces. These controls are shared by the Playground
+   and Model Zoo; fixed near-black surfaces made the text disappear in light
+   themes and also ignored user-selected accents. */
+.react-studio-app {
+  --inspector-reflex: #047857;
+  --inspector-limbic: #a16207;
+  --inspector-cortex: #6d28d9;
+}
 
+.react-studio-app.theme-modern-dark,
+.react-studio-app.theme-modern-forest,
+.react-studio-app.theme-classic-dark,
+.react-studio-app.theme-obsidian-glass,
+.react-studio-app.theme-cyberpunk-dark,
+.react-studio-app.theme-emerald-terminal {
+  --inspector-reflex: #6ee7b7;
+  --inspector-limbic: #fbbf24;
+  --inspector-cortex: #c4b5fd;
+}
 
+.react-studio-app .transmutation-kpi-tile,
+.react-studio-app .transmutation-layer-matrix,
+.react-studio-app .transmutation-layer-inspector,
+.react-studio-app .neural-intelligence-console {
+  background: var(--bg-card);
+  color: var(--text-main);
+  border-color: var(--border-color);
+}
 
+.react-studio-app .transmutation-kpi-val,
+.react-studio-app .neural-console-header,
+.react-studio-app .neural-console-tab-btn.active,
+.react-studio-app .neural-console-tab-btn:hover {
+  color: var(--text-main);
+}
 
+.react-studio-app .transmutation-layer-matrix,
+.react-studio-app .transmutation-layer-inspector,
+.react-studio-app .neural-console-tabs {
+  background: var(--bg-surface);
+}
+
+.react-studio-app .layer-block-node.tier-reflex { color: var(--inspector-reflex); }
+.react-studio-app .layer-block-node.tier-limbic { color: var(--inspector-limbic); }
+.react-studio-app .layer-block-node.tier-cortex { color: var(--inspector-cortex); }
+
+.react-studio-app .neural-console-tab-btn:hover {
+  background: var(--bg-card-hover);
+}
+
+.react-studio-app .neural-console-tab-btn.active {
+  color: var(--primary);
+  background: var(--primary-glow);
+  border-color: var(--primary);
+  box-shadow: none;
+}
+
+.react-studio-app .neural-dock-btn,
+.react-studio-app .neural-size-btn,
+.react-studio-app .neural-console-close-btn {
+  color: var(--text-muted);
+  border-color: var(--border-color);
+}
+
+.react-studio-app .neural-dock-btn:hover,
+.react-studio-app .neural-dock-btn.active,
+.react-studio-app .neural-size-btn:hover,
+.react-studio-app .neural-console-close-btn:hover {
+  color: var(--primary) !important;
+  background: var(--primary-glow) !important;
+  border-color: var(--primary) !important;
+}
+
+.react-studio-app .neural-intelligence-console.dock-right,
+.react-studio-app .neural-intelligence-console.floating,
+.react-studio-app .neural-intelligence-console.fullscreen {
+  background: var(--bg-card) !important;
+  color: var(--text-main);
+  border-color: var(--border-color) !important;
+}
+
+@media (max-width: 640px) {
+  .react-studio-app .neural-intelligence-console.dock-right {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  .react-studio-app .neural-console-tabs {
+    overflow-x: auto;
+    justify-content: flex-start;
+  }
+
+  .react-studio-app .neural-console-tab-btn {
+    min-height: 36px;
+    flex: 0 0 auto;
+  }
+
+  .react-studio-app .neural-dock-control-group,
+  .react-studio-app .neural-size-preset-group {
+    flex-wrap: wrap;
+  }
+}
 

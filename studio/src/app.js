@@ -9430,7 +9430,7 @@
                 },
                 style: { background: 'transparent', border: 'none', color: 'var(--text-main)', fontSize: '11px', outline: 'none', cursor: 'pointer', fontFamily: 'var(--font-mono)' }
               },
-                APPEARANCE_THEMES.map(t => e('option', { key: t.id, value: t.id, style: { background: '#111318', color: '#f3f4f6' } }, t.name))
+                APPEARANCE_THEMES.map(t => e('option', { key: t.id, value: t.id, style: { background: 'var(--bg-card)', color: 'var(--text-main)' } }, t.name))
               )
             ),
             e('span', {
@@ -9525,15 +9525,15 @@
                   paddingRight: '4px'
                 }
               },
-                MODEL_PRESETS.map(p => e('option', { key: p.id, value: p.id, style: { background: '#111318', color: '#f3f4f6' } }, p.name)),
+                MODEL_PRESETS.map(p => e('option', { key: p.id, value: p.id, style: { background: 'var(--bg-card)', color: 'var(--text-main)' } }, p.name)),
                 !MODEL_PRESETS.some(p => p.id === activeModel) && !['gpt-4o-mini', 'claude-3-5-sonnet-latest', 'gemini-2.5-flash'].includes(activeModel) && e('option', {
                   key: activeModel,
                   value: activeModel,
-                  style: { background: '#111318', color: '#10b981', fontWeight: 700 }
+                  style: { background: 'var(--bg-card)', color: 'var(--accent-sage)', fontWeight: 700 }
                 }, `⚡ ${activeModel.toUpperCase()} (Active Transmuted)`),
-                e('option', { value: 'gpt-4o-mini', style: { background: '#111318', color: '#f3f4f6' } }, 'GPT-4o Mini (BYOK)'),
-                e('option', { value: 'claude-3-5-sonnet-latest', style: { background: '#111318', color: '#f3f4f6' } }, 'Claude 3.5 Sonnet (BYOK)'),
-                e('option', { value: 'gemini-2.5-flash', style: { background: '#111318', color: '#f3f4f6' } }, 'Gemini 2.5 Flash (BYOK)')
+                e('option', { value: 'gpt-4o-mini', style: { background: 'var(--bg-card)', color: 'var(--text-main)' } }, 'GPT-4o Mini (BYOK)'),
+                e('option', { value: 'claude-3-5-sonnet-latest', style: { background: 'var(--bg-card)', color: 'var(--text-main)' } }, 'Claude 3.5 Sonnet (BYOK)'),
+                e('option', { value: 'gemini-2.5-flash', style: { background: 'var(--bg-card)', color: 'var(--text-main)' } }, 'Gemini 2.5 Flash (BYOK)')
               )
             ),
             e('span', { className: 'pill' }, `Precision: ${trainPrecision || precision}`)
@@ -9765,7 +9765,7 @@
                       },
                         e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' } },
                           e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
-                            e('span', { style: { fontWeight: 700, fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.04em', color: '#a78bfa' } }, isCompact ? 'Arch Transmute:' : 'Visual Architecture Inspector:'),
+                            e('span', { style: { fontWeight: 700, fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--primary)' } }, isCompact ? 'Arch Transmute:' : 'Visual Architecture Inspector:'),
                             e('select', {
                               value: upgradeModelName,
                               onChange: ev => {
@@ -9809,12 +9809,12 @@
                             ])
                           ),
                           isInspectActive ? e('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--font-mono)', fontSize: '10.5px' } },
-                            e('span', { className: 'pill online', style: { color: '#10b981' } }, `${activeModelSpec.num_layers} Layers`),
-                            e('span', { className: 'pill', style: { background: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa' } }, `${activeModelSpec.num_experts} MoE Experts`),
+                            e('span', { className: 'pill online', style: { color: 'var(--accent-sage)' } }, `${activeModelSpec.num_layers} Layers`),
+                            e('span', { className: 'pill', style: { background: 'var(--primary-glow)', color: 'var(--primary)' } }, `${activeModelSpec.num_experts} MoE Experts`),
                             !isCompact && e('span', { className: 'pill', style: { color: 'var(--text-muted)' } }, 'Live Architecture')
                           ) : (upgradeResult && e('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--font-mono)', fontSize: '10.5px' } },
-                            e('span', { className: 'pill online', style: { color: '#10b981' } }, `${upgradeResult.estimated_throughput_gain} Speedup`),
-                            e('span', { className: 'pill', style: { background: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa' } }, `${upgradeResult.compression_ratio}x Compression`),
+                            e('span', { className: 'pill online', style: { color: 'var(--accent-sage)' } }, `${upgradeResult.estimated_throughput_gain} Speedup`),
+                            e('span', { className: 'pill', style: { background: 'var(--primary-glow)', color: 'var(--primary)' } }, `${upgradeResult.compression_ratio}x Compression`),
                             !isCompact && e('span', { className: 'pill', style: { color: 'var(--text-muted)' } }, `-${upgradeResult.estimated_ttft_gain} TTFT`)
                           ))
                         ),
@@ -9836,13 +9836,13 @@
                         ),
                         selectedInspectorLayer && e('div', { className: 'transmutation-layer-inspector', style: { padding: '6px 10px', fontSize: '10.5px' } },
                           e('div', { className: 'transmutation-layer-inspector-row' },
-                            e('span', { style: { fontWeight: 700, color: '#f3f4f6' } }, `L${selectedInspectorLayer.layer_index}: ${selectedInspectorLayer.upgraded_label}`),
+                            e('span', { style: { fontWeight: 700, color: 'var(--text-main)' } }, `L${selectedInspectorLayer.layer_index}: ${selectedInspectorLayer.upgraded_label}`),
                             e('span', { className: `inspector-tag ${selectedInspectorLayer.upgraded_tier === 'reflex' ? 'online' : (selectedInspectorLayer.upgraded_tier === 'limbic' ? 'warning' : 'active')}` }, selectedInspectorLayer.upgraded_tier.toUpperCase())
                           ),
                           e('div', { className: 'transmutation-layer-inspector-row', style: { color: 'var(--text-muted)' } },
                             e('span', null, `Attention: ${selectedInspectorLayer.attention_complexity}`),
                             selectedInspectorLayer.upgraded_tier === 'limbic' && e('span', { style: { color: '#f59e0b' } }, `MoE Sparsity: ${selectedInspectorLayer.sparsity_pct}%`),
-                            selectedInspectorLayer.upgraded_tier === 'reflex' && e('span', { style: { color: '#10b981' } }, `Early Exit: ${Math.round((selectedInspectorLayer.reflex_early_exit_prob || 0) * 100)}%`)
+                            selectedInspectorLayer.upgraded_tier === 'reflex' && e('span', { style: { color: 'var(--accent-sage)' } }, `Early Exit: ${Math.round((selectedInspectorLayer.reflex_early_exit_prob || 0) * 100)}%`)
                           )
                         )
                       );
@@ -9929,7 +9929,7 @@
                           dockMode === 'float' && e('span', { className: 'neural-drag-indicator', title: 'Drag titlebar to move floating window' }, renderIcon('grip', 13, { color: 'var(--primary)' })),
                           e('div', { style: { display: 'flex', alignItems: 'center', gap: '6px' } },
                             renderIcon('bolt', 13, { color: 'var(--primary)' }),
-                            e('span', { style: { fontWeight: 700, fontFamily: 'var(--font-mono)', fontSize: '11px', letterSpacing: '0.04em', textTransform: 'uppercase', color: '#e5e7eb' } }, 'Neural Intelligence Console')
+                e('span', { style: { fontWeight: 700, fontFamily: 'var(--font-mono)', fontSize: '11px', letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--text-main)' } }, 'Neural Intelligence Console')
                           ),
                           e('div', { className: 'neural-console-tabs' },
                             e('button', {
@@ -12290,7 +12290,7 @@
                 ),
                 e('div', { className: 'transmutation-form-field' },
                   e('label', { className: 'transmutation-label' }, 'Cortex Linear Attn (GLA)'),
-                  e('label', { style: { display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', height: '34px', fontFamily: 'var(--font-mono)', fontSize: '12px', color: '#f3f4f6' } },
+                  e('label', { style: { display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', height: '34px', fontFamily: 'var(--font-mono)', fontSize: '12px', color: 'var(--text-main)' } },
                     e('input', {
                       type: 'checkbox',
                       checked: upgradeCortexGla,
@@ -12310,7 +12310,7 @@
                   ]),
                   e('button', {
                     className: 'btn-transmute-action',
-                    style: { background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)', color: '#fff' },
+                    style: { background: 'var(--accent-olive)', color: '#fff' },
                     onClick: () => handleUpgradeModel(upgradeModelName, true),
                     disabled: isUpgradingModel,
                     title: 'Transmute layers and activate as active model in engine'
@@ -12363,7 +12363,7 @@
                 selectedInspectorLayer && e('div', { className: 'transmutation-layer-inspector' },
                   e('div', { className: 'transmutation-layer-inspector-row' },
                     e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
-                      e('span', { style: { fontWeight: 700, fontSize: '13px', color: '#f3f4f6' } },
+                      e('span', { style: { fontWeight: 700, fontSize: '13px', color: 'var(--text-main)' } },
                         `Layer ${selectedInspectorLayer.layer_index}: ${selectedInspectorLayer.original_name} → ${selectedInspectorLayer.upgraded_label}`
                       ),
                       e('span', {
@@ -12374,13 +12374,13 @@
                   ),
                   e('div', { className: 'transmutation-layer-inspector-row', style: { color: 'var(--text-muted)' } },
                     e('span', null, `Transformation: ${selectedInspectorLayer.mechanism}`),
-                    selectedInspectorLayer.upgraded_tier === 'limbic' && e('span', { style: { color: '#f59e0b', fontWeight: 600 } },
+                    selectedInspectorLayer.upgraded_tier === 'limbic' && e('span', { style: { color: 'var(--accent-bronze)', fontWeight: 600 } },
                       `Sparsity: ${selectedInspectorLayer.sparsity_pct}% (${selectedInspectorLayer.active_experts}/${selectedInspectorLayer.total_experts} Active Experts)`
                     ),
-                    selectedInspectorLayer.upgraded_tier === 'reflex' && e('span', { style: { color: '#10b981', fontWeight: 600 } },
+                    selectedInspectorLayer.upgraded_tier === 'reflex' && e('span', { style: { color: 'var(--accent-sage)', fontWeight: 600 } },
                       `Early-Exit Rate: ~${Math.round(selectedInspectorLayer.reflex_early_exit_prob * 100)}% token bypass`
                     ),
-                    selectedInspectorLayer.upgraded_tier === 'cortex' && e('span', { style: { color: '#a78bfa', fontWeight: 600 } },
+                    selectedInspectorLayer.upgraded_tier === 'cortex' && e('span', { style: { color: 'var(--primary)', fontWeight: 600 } },
                       'Linear KV Cache Memory: O(1) per token'
                     )
                   )
