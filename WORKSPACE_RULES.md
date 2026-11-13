@@ -48,6 +48,10 @@ All tests must be 100% green. Never bypass or disable failing tests.
 - **Obsidian 3D Brain**: Dual-hemisphere biological topology with deep limbic core, brainstem base, corpus callosum axonal tracts, and obsidian neon node styling.
 - **Ergonomics**: Vertical resize handle (`.canvas-resize-handle`) persisted via `localStorage` with bounded constraints ($160\text{px} \le h \le 560\text{px}$).
 - **Realtime Sync**: The Studio UI must always reflect the active model's real weights and architecture without hardcoded simulations.
+- **Clean visual language**: Do not use emoji or decorative Unicode pictographs in the product UI. Use the existing icon system or clear text labels.
+- **Premium, cohesive styling**: No gradients in UI surfaces, controls, backgrounds, or accent treatments. Keep colors, typography, spacing, borders, and interaction patterns coherent across every page and theme; theme variants may change palette, not the design language.
+- **Typography**: Use the shared Outfit heading, Inter interface, and Fira Code technical-data pairing consistently. Do not introduce page-specific font stacks or external decorative styles.
+- **Motion**: Use restrained, purposeful transitions and feedback; preserve useful functional animation, respect reduced-motion settings, and avoid decorative motion that obscures data or controls.
 
 ---
 

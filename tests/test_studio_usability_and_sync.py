@@ -191,6 +191,34 @@ def test_chat_script_argument_parsing():
     assert args.max_new_tokens == 50
 
 
+def test_studio_chat_composer_uses_the_normal_send_path():
+    from pathlib import Path
+
+    app_js = (Path(__file__).parents[1] / "studio" / "src" / "app.js").read_text(encoding="utf-8")
+    assert "handleSendMessage(); } }" in app_js
+    assert "handleSendMessage(ta ? ta.value : chatInput)" not in app_js
+    assert "handleSendMessage(ev.target.value)" not in app_js
+
+
+def test_studio_uses_the_shared_clean_visual_system():
+    from pathlib import Path
+
+    studio_src = Path(__file__).parents[1] / "studio" / "src"
+    app_js = (studio_src / "app.js").read_text(encoding="utf-8")
+    style_css = (studio_src / "style.css").read_text(encoding="utf-8")
+    index_html = (studio_src / "index.html").read_text(encoding="utf-8")
+    forbidden_ui_pictographs = {0x26A1, 0x1F4E6, 0x1F504, 0x2728, 0x1F680, 0x1F4A1, 0x1F9E0}
+    assert not any(ord(char) in forbidden_ui_pictographs for char in app_js)
+    assert "--font-heading: 'Outfit'" in style_css
+    assert "--font-family: 'Inter'" in style_css
+    assert "--font-mono: 'Fira Code'" in style_css
+    assert "Newsreader" not in index_html + style_css + app_js
+    assert "linear-gradient(" not in style_css
+    assert "radial-gradient(" not in style_css
+    assert "linear-gradient(" not in app_js
+    assert "radial-gradient(" not in app_js
+
+
 def test_train_script_argument_parsing():
     """Verify scripts/train.py parser handles optimizer arguments."""
     from scripts.train import build_parser

@@ -1350,7 +1350,7 @@
       e('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 } },
         e('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700, fontSize: '12px' } },
           renderIcon('hardware', 15),
-          e('span', { style: { fontFamily: 'var(--font-heading, Newsreader)', fontSize: '13px' } }, hardware || 'NVIDIA RTX GPU')
+          e('span', { style: { fontFamily: 'var(--font-heading, Outfit)', fontSize: '13px' } }, hardware || 'NVIDIA RTX GPU')
         ),
         e('div', {
           style: {
@@ -3299,7 +3299,7 @@
       e('div', { className: 'virtualized-meta-bar' },
         e('div', { className: 'virtualized-meta-pill' }, [
           renderIcon('bolt', 11, { marginRight: '4px', color: '#38bdf8' }),
-          `⚡ Virtual Window Active · ${approxTokens.toLocaleString()} Tokens · Showing ${visibleWindow.start + 1}–${Math.min(visibleWindow.end, totalBlocks)} of ${totalBlocks} blocks`
+          `Virtual window active · ${approxTokens.toLocaleString()} tokens · Showing ${visibleWindow.start + 1}–${Math.min(visibleWindow.end, totalBlocks)} of ${totalBlocks} blocks`
         ]),
         e('button', {
           className: 'virtualized-toggle-btn',
@@ -3395,7 +3395,7 @@
       ),
       e('div', { className: 'bubble-text' }, renderFormattedText(parsedThought && parsedThought.hasThought ? parsedThought.cleanText : m.text)),
       m.telemetry && e('div', { className: 'bubble-telemetry-pill' },
-        e('span', { className: 'telem-route-tag' }, `⚡ ${m.telemetry.route ? m.telemetry.route.toUpperCase() : 'REFLEX'}`),
+        e('span', { className: 'telem-route-tag' }, m.telemetry.route ? m.telemetry.route.toUpperCase() : 'REFLEX'),
         m.telemetry.throughput > 0 && e('span', { className: 'telem-item' }, `${m.telemetry.throughput} t/s`),
         m.telemetry.ttft > 0 && e('span', { className: 'telem-item' }, `TTFT ${m.telemetry.ttft}ms`),
         m.telemetry.vram_gb && e('span', { className: 'telem-item' }, `${m.telemetry.vram_gb} GB`),
@@ -5980,7 +5980,7 @@
           });
         } else {
           ctx.fillStyle = chartColors.axis;
-          ctx.font = 'italic 13px Newsreader, Georgia, serif';
+          ctx.font = 'italic 13px Outfit, sans-serif';
           ctx.textAlign = 'center';
           ctx.fillText('No training metrics yet. Start Training or choose Train 1 Step to begin.', width / 2, height / 2);
           ctx.textAlign = 'start';
@@ -9500,7 +9500,7 @@
                   style: {
                     width: `${vramUsage.total > 0 ? Math.min(100, Math.max(0, (vramUsage.allocated / vramUsage.total) * 100)) : 0}%`,
                     height: '100%',
-                    background: vramUsage.oom_risk ? '#ef4444' : 'linear-gradient(90deg, #10b981, #8b5cf6)',
+                    background: vramUsage.oom_risk ? '#ef4444' : '#10b981',
                     borderRadius: '3px',
                     transition: 'width 0.3s ease'
                   }
@@ -9554,7 +9554,7 @@
                   key: activeModel,
                   value: activeModel,
                   style: { background: 'var(--bg-card)', color: 'var(--accent-sage)', fontWeight: 700 }
-                }, `⚡ ${activeModel.toUpperCase()} (Active Transmuted)`),
+                }, `${activeModel.toUpperCase()} (Active Transmuted)`),
                 e('option', { value: 'gpt-4o-mini', style: { background: 'var(--bg-card)', color: 'var(--text-main)' } }, 'GPT-4o Mini (BYOK)'),
                 e('option', { value: 'claude-3-5-sonnet-latest', style: { background: 'var(--bg-card)', color: 'var(--text-main)' } }, 'Claude 3.5 Sonnet (BYOK)'),
                 e('option', { value: 'gemini-2.5-flash', style: { background: 'var(--bg-card)', color: 'var(--text-main)' } }, 'Gemini 2.5 Flash (BYOK)')
@@ -9810,13 +9810,13 @@
                               className: 'transmutation-select',
                               style: { padding: '2px 8px', fontSize: '11px' }
                             },
-                              e('optgroup', { label: '⚡ Active Engine Architecture' },
-                                e('option', { value: 'active', style: { fontWeight: 700, color: '#10b981' } }, `⚡ Active Model: ${activeModelSpec.model_name || activeModel} (${activeModelSpec.num_layers}L / ${activeModelSpec.num_experts}E)`)
+                              e('optgroup', { label: 'Active Engine Architecture' },
+                                e('option', { value: 'active', style: { fontWeight: 700, color: '#10b981' } }, `Active Model: ${activeModelSpec.model_name || activeModel} (${activeModelSpec.num_layers}L / ${activeModelSpec.num_experts}E)`)
                               ),
-                              e('optgroup', { label: '📦 Switch Local Engine Model' },
+                              e('optgroup', { label: 'Switch Local Engine Model' },
                                 MODEL_PRESETS.map(p => e('option', { key: p.id, value: p.id }, `${p.name}`))
                               ),
-                              e('optgroup', { label: '🔄 Transmute External Dense Architecture' },
+                              e('optgroup', { label: 'Transmute External Dense Architecture' },
                                 UPGRADEABLE_MODELS.map(m => e('option', { key: m.id, value: m.id }, `Transmute: ${m.name} (${m.layers}) → Triune`))
                               )
                             ),
@@ -10152,7 +10152,7 @@
                           disabled: isGenerating,
                           rows: 2,
                           onChange: ev => setChatInput(ev.target.value),
-                          onKeyDown: ev => { if (ev.key === 'Enter' && !ev.shiftKey && !isGenerating) { ev.preventDefault(); handleSendMessage(ev.target.value); } }
+                          onKeyDown: ev => { if (ev.key === 'Enter' && !ev.shiftKey && !isGenerating) { ev.preventDefault(); handleSendMessage(); } }
                         })
                       ),
                       e('div', { className: 'chat-input-actions-bar' },
@@ -10252,8 +10252,7 @@
                             disabled: !chatInput.trim(),
                             style: !chatInput.trim() ? { opacity: 0.45, cursor: 'not-allowed' } : {},
                             onClick: () => {
-                              const ta = document.querySelector('.chat-input-textarea');
-                              handleSendMessage(ta ? ta.value : chatInput);
+                              handleSendMessage();
                             }
                           }, [renderIcon('arrowRight', 12, { marginRight: '5px' }), 'Send', e('kbd', { className: 'kbd-hint' }, '↵')])
                         )
@@ -10987,7 +10986,7 @@
                   e('button', {
                     className: 'btn-action-compile-live',
                     style: {
-                      background: 'linear-gradient(135deg, #9a3412 0%, #c2410c 100%)',
+                      background: '#c2410c',
                       color: '#ffffff',
                       fontWeight: 700,
                       boxShadow: '0 2px 8px rgba(154, 52, 18, 0.3)',
@@ -11870,7 +11869,7 @@
                     style: {
                       width: `${fineTuningProgress.total_steps ? Math.min(100, Math.round((fineTuningProgress.step / fineTuningProgress.total_steps) * 100)) : (isFineTuningRunning ? 50 : 100)}%`,
                       height: '100%',
-                      background: 'linear-gradient(90deg, var(--accent-sage, #2b4c3f), var(--accent-terracotta, #c2410c))',
+                      background: 'var(--accent-sage, #2b4c3f)',
                       transition: 'width 0.3s ease'
                     }
                   })
@@ -12343,7 +12342,7 @@
                     title: 'Transmute layers and activate as active model in engine'
                   }, [
                     renderIcon('bolt', 13, { marginRight: '4px' }),
-                    isUpgradingModel ? 'Transmuting & Activating…' : '⚡ Transmute & Run'
+                    isUpgradingModel ? 'Transmuting & Activating…' : 'Transmute & Run'
                   ])
                 )
               ),
