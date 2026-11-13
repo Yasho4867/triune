@@ -352,6 +352,10 @@ def test_neuron_scope_3d_synapse_simulator_integration():
     assert "streamVelocity.current" in app_js
     assert "pulsesRef.current" in app_js
     assert "triggerStimulate" in app_js
+    assert "setFps(Math.max(0, measuredFps))" in app_js
+    assert "Math.min(120, Math.max(30, measuredFps))" not in app_js
+    assert "not an inference-speed metric" in app_js
+    assert "visual nodes · ${wiresRef.current ? wiresRef.current.length : '—'} links" in app_js
 
     # 5. Interactive controls & CSS styling
     css_path = Path("studio/src/style.css")

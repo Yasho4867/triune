@@ -2443,7 +2443,7 @@
         frameCountRef.current++;
         if (now - lastFpsCalcRef.current >= 500) {
           const measuredFps = Math.round((frameCountRef.current * 1000) / (now - lastFpsCalcRef.current));
-          setFps(Math.min(120, Math.max(30, measuredFps)));
+          setFps(Math.max(0, measuredFps));
           frameCountRef.current = 0;
           lastFpsCalcRef.current = now;
         }
@@ -2875,8 +2875,10 @@
           renderIcon('bolt', 11, { marginRight: '2px' }),
           (streamVelocity && streamVelocity.current > 0) ? `${streamVelocity.current} tok/s` : (isGenerating ? 'Active Flow' : '0 tok/s')
         ),
-        e('div', { className: 'neuron-hud-item' }, `${fps} FPS`),
-        e('div', { className: 'neuron-hud-item' }, `${particlesRef.current ? particlesRef.current.length : 50}N · ${wiresRef.current ? wiresRef.current.length : 84}W`)
+        e('div', { className: 'neuron-hud-item', title: 'Canvas frame rate measured from animation frames; not an inference-speed metric.' }, `Canvas ${fps} FPS`),
+        e('div', { className: 'neuron-hud-item', title: 'Counts of rendered graph primitives, not model neurons or individual neural connections.' },
+          `${particlesRef.current ? particlesRef.current.length : '—'} visual nodes · ${wiresRef.current ? wiresRef.current.length : '—'} links`
+        )
       ),
       e('div', { className: 'neuron-theater-controls' },
         e('button', {
