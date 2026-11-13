@@ -356,6 +356,8 @@ def test_neuron_scope_3d_synapse_simulator_integration():
     assert "Math.min(120, Math.max(30, measuredFps))" not in app_js
     assert "not an inference-speed metric" in app_js
     assert "visual nodes · ${wiresRef.current ? wiresRef.current.length : '—'} links" in app_js
+    assert "bodyHeight = '100%'" in app_js
+    assert "Math.max(165, neuralConsoleHeight - 56)" not in app_js
 
     # 5. Interactive controls & CSS styling
     css_path = Path("studio/src/style.css")
@@ -365,6 +367,8 @@ def test_neuron_scope_3d_synapse_simulator_integration():
     assert ".neuron-theater-canvas-wrap.expanded" in css_text
     assert ".neuron-tier-pill" in css_text
     assert ".btn-stimulate-synapse" in css_text
+    assert ".neural-console-content-wrap > .neuron-theater-canvas-wrap" in css_text
+    assert "top: 40px;\n  right: 10px;\n  width: max-content;" in css_text
 
 
 def test_appearance_themes_and_synchronization_invariants():

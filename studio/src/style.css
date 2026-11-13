@@ -7508,6 +7508,8 @@ body {
   border-radius: 6px;
   padding: 3px 8px;
   z-index: 5;
+  max-width: calc(100% - 20px);
+  flex-wrap: wrap;
 }
 
 .neuron-tier-pill {
@@ -7544,10 +7546,14 @@ body {
 
 .neuron-theater-hud {
   position: absolute;
-  top: 8px;
-  right: 12px;
+  top: 40px;
+  right: 10px;
+  width: max-content;
+  max-width: calc(100% - 20px);
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 8px;
   pointer-events: none;
   background: rgba(8, 10, 16, 0.82);
@@ -7580,6 +7586,8 @@ body {
   align-items: center;
   gap: 8px;
   z-index: 10;
+  max-width: calc(100% - 24px);
+  flex-wrap: wrap;
 }
 
 .btn-stimulate-synapse {
@@ -8221,6 +8229,12 @@ body {
   gap: 12px;
   align-items: stretch;
   min-height: 165px;
+}
+
+.neural-console-content-wrap > .neuron-theater-canvas-wrap {
+  flex: 1 1 auto;
+  min-height: 165px;
+  height: 100%;
 }
 
 @media (max-width: 1024px) {

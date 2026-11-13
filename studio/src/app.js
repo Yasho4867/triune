@@ -9902,7 +9902,10 @@
                         flexDirection: 'column',
                         flexShrink: 0
                       };
-                      bodyHeight = `${Math.max(165, neuralConsoleHeight - 56)}px`;
+                      // Let the canvas fill the remaining flex space after the header.
+                      // Subtracting a guessed header height made the canvas either
+                      // clip or leave a dead blank band as controls wrapped.
+                      bodyHeight = '100%';
                     } else if (dockMode === 'float') {
                       containerCls += isDraggingConsoleWindow ? ' dragging' : '';
                       containerStyle = {
