@@ -32,3 +32,11 @@ def test_neural_console_has_compact_viewport_fallbacks():
 
 def test_styles_do_not_reference_missing_font_token():
     assert "var(--font-sans)" not in CSS
+
+
+def test_neural_graph_scales_to_canvas_and_avoids_overlapping_labels():
+    assert "const sceneScale = Math.min(2, Math.max(0.8, Math.min(width / 600, height / 150)))" in APP
+    assert "const labelRects = [];" in APP
+    assert "labelRects.some(other =>" in APP
+    assert "labelRects.length >= 12" in APP
+    assert "customHeight: dockMode === 'dock-top' ? '100%' : bodyHeight" in APP

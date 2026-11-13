@@ -2392,7 +2392,10 @@
       }
     }, [upgradeResult]);
 
-    const project = (x, y, z, cx, cy) => {
+    const project = (x, y, z, cx, cy, sceneScale = 1) => {
+      x *= sceneScale;
+      y *= sceneScale;
+      z *= sceneScale;
       const cosY = Math.cos(rotYRef.current);
       const sinY = Math.sin(rotYRef.current);
       const x1 = x * cosY - z * sinY;
@@ -2472,6 +2475,7 @@
 
         const cx = width / 2;
         const cy = height / 2;
+        const sceneScale = Math.min(2, Math.max(0.8, Math.min(width / 600, height / 150)));
 
         ctx.fillStyle = '#06080d';
         ctx.fillRect(0, 0, width, height);
@@ -2484,8 +2488,8 @@
         ctx.fillRect(0, 0, width, height);
 
         const ringY = 72;
-        const ringP0 = project(-160, ringY, 0, cx, cy);
-        const ringP1 = project(160, ringY, 0, cx, cy);
+        const ringP0 = project(-160, ringY, 0, cx, cy, sceneScale);
+        const ringP1 = project(160, ringY, 0, cx, cy, sceneScale);
         if (ringP0 && ringP1) {
           const ringCenterX = (ringP0.sx + ringP1.sx) / 2;
           const ringCenterY = (ringP0.sy + ringP1.sy) / 2;
@@ -2514,7 +2518,7 @@
             if (q.y < -110) q.y = 110; else if (q.y > 110) q.y = -110;
             if (q.z < -80) q.z = 80; else if (q.z > 80) q.z = -80;
 
-            const qProj = project(q.x, q.y, q.z, cx, cy);
+            const qProj = project(q.x, q.y, q.z, cx, cy, sceneScale);
             if (qProj) {
               ctx.beginPath();
               ctx.arc(qProj.sx, qProj.sy, q.r * qProj.scale, 0, Math.PI * 2);
@@ -2568,7 +2572,7 @@
           if (p.charge < binBoost) p.charge = binBoost;
           p.charge *= 0.94;
 
-          const proj = project(px + fx, py + fy, pz + fz, cx, cy);
+          const proj = project(px + fx, py + fy, pz + fz, cx, cy, sceneScale);
           currentPos.push({
             p,
             proj,
@@ -2670,14 +2674,14 @@
           const py = posA.curY + (posB.curY - posA.curY) * t;
           const pz = posA.curZ + (posB.curZ - posA.curZ) * t;
 
-          const pulseProj = project(px, py, pz, cx, cy);
+          const pulseProj = project(px, py, pz, cx, cy, sceneScale);
           if (!pulseProj) continue;
 
           const tTrail = Math.max(0, t - pulse.trailLen);
           const tx = posA.curX + (posB.curX - posA.curX) * tTrail;
           const ty = posA.curY + (posB.curY - posA.curY) * tTrail;
           const tz = posA.curZ + (posB.curZ - posA.curZ) * tTrail;
-          const trailProj = project(tx, ty, tz, cx, cy);
+          const trailProj = project(tx, ty, tz, cx, cy, sceneScale);
 
           if (trailProj) {
             const cometGrad = ctx.createLinearGradient(trailProj.sx, trailProj.sy, pulseProj.sx, pulseProj.sy);
@@ -2714,7 +2718,7 @@
             ripples.splice(i, 1);
             continue;
           }
-          const ripProj = project(rip.x, rip.y, rip.z, cx, cy);
+          const ripProj = project(rip.x, rip.y, rip.z, cx, cy, sceneScale);
           if (ripProj) {
             ctx.beginPath();
             ctx.arc(ripProj.sx, ripProj.sy, rip.r * ripProj.scale, 0, Math.PI * 2);
@@ -2772,12 +2776,33 @@
             ctx.globalAlpha = 1.0;
           }
 
-          if (p.isRouterHub || p.isExit || p.isInput || p.isOutput || p.isExpert || (isTierActive && scale > 0.85)) {
-            ctx.font = `${Math.max(8.5, Math.round(9.2 * scale))}px JetBrains Mono, Fira Code, monospace`;
-            ctx.fillStyle = isTierActive ? '#ffffff' : 'rgba(255, 255, 255, 0.72)';
-            ctx.fillText(p.label, sx + r + 4, sy + 3);
-          }
         });
+
+        const labelCandidates = visibleParticles
+          .filter(({ p, proj }) => p.isInput || p.isOutput || p.isRouterHub || p.isExit ||
+            (p.isExpert && activeTierIdx === 1 && proj.scale > 0.9) ||
+            (p.tier === activeTierIdx && !p.isExpert && proj.scale > 0.85))
+          .sort((a, b) => {
+            const priority = p => p.isInput || p.isOutput ? 4 : p.isRouterHub ? 3 : p.isExit ? 2 : p.isExpert ? 0 : 1;
+            return priority(b.p) - priority(a.p) || a.proj.depth - b.proj.depth;
+          });
+        const labelRects = [];
+        for (const { p, proj } of labelCandidates) {
+          const { sx, sy, scale } = proj;
+          const fontSize = Math.max(9, Math.min(12, Math.round(10 * scale)));
+          const radius = Math.max(2, p.baseR * scale);
+          ctx.font = `600 ${fontSize}px JetBrains Mono, Fira Code, monospace`;
+          const textWidth = ctx.measureText(p.label).width;
+          let textX = sx + radius + 5;
+          if (textX + textWidth > width - 5) textX = sx - radius - 5 - textWidth;
+          const rect = { left: textX - 3, right: textX + textWidth + 3, top: sy - fontSize - 2, bottom: sy + 5 };
+          if (rect.left < 3 || rect.right > width - 3 || rect.top < 3 || rect.bottom > height - 3) continue;
+          if (labelRects.some(other => rect.left < other.right + 3 && rect.right + 3 > other.left && rect.top < other.bottom + 2 && rect.bottom + 2 > other.top)) continue;
+          labelRects.push(rect);
+          ctx.fillStyle = '#f8fafc';
+          ctx.fillText(p.label, textX, sy + 3);
+          if (labelRects.length >= 12) break;
+        }
 
         ctx.restore();
         animIdRef.current = requestAnimationFrame(render);
@@ -10031,7 +10056,7 @@
                           upgradeResult,
                           activeModel,
                           height: '165px',
-                          customHeight: bodyHeight
+                          customHeight: dockMode === 'dock-top' ? '100%' : bodyHeight
                         }),
                         neuralConsoleView === 'transmute' && e('div', { className: 'neural-console-body-panel', style: { height: bodyHeight, overflowY: 'auto' } },
                           renderArchitectureTransmutationPanel(false)

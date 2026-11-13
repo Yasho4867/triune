@@ -337,7 +337,7 @@ def test_neuron_scope_3d_synapse_simulator_integration():
     # 3. Dynamic synapsing wires & perspective projection
     assert "wires.push({ from: rNode.id, to: targetHub.id" in app_js
     assert "wires.push({ from: lNode.id, to: targetCortex1.id" in app_js
-    assert "const project = (x, y, z, cx, cy) =>" in app_js
+    assert "const project = (x, y, z, cx, cy, sceneScale = 1) =>" in app_js
     assert "camDistRef.current" in app_js
     assert "rotXRef.current" in app_js
     assert "rotYRef.current" in app_js
