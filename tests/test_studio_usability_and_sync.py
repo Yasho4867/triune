@@ -15,6 +15,7 @@ Verifies:
 """
 
 from unittest.mock import patch
+from pathlib import Path
 
 import pytest
 
@@ -400,24 +401,19 @@ def test_neuron_scope_3d_synapse_simulator_integration():
 
 
 def test_appearance_themes_and_synchronization_invariants():
-    """Verify all 9 themes in APPEARANCE_THEMES, default to obsidian-glass, topbar sync, and zero personas."""
+    """Verify the curated theme set, legacy migration, persistence, and topbar sync."""
     from pathlib import Path
 
     app_js_path = Path("studio/src/app.js")
     assert app_js_path.exists()
     app_js = app_js_path.read_text(encoding="utf-8")
 
-    # 1. Verify all 9 themes in APPEARANCE_THEMES
+    # 1. Verify four curated, intentionally distinct themes.
     expected_themes = [
         "obsidian-glass",
-        "cyberpunk-dark",
-        "emerald-terminal",
-        "modern-dark",
         "modern-forest",
-        "classic-dark",
-        "editorial-cream",
         "modern-light",
-        "classic-light",
+        "editorial-paper",
     ]
     for theme_id in expected_themes:
         assert f"id: '{theme_id}'" in app_js, f"Missing theme {theme_id} in APPEARANCE_THEMES"
@@ -430,11 +426,13 @@ def test_appearance_themes_and_synchronization_invariants():
     assert "value: studioTheme" in app_js
     assert "Switch Studio Theme" in app_js
     assert "APPEARANCE_THEMES.map" in app_js
+    assert "allAppearanceThemes.map" in app_js
+    assert "legacyThemeIds" in app_js
 
     # 4. Verify Current Theme card shows edition, mode, and Reset action
     assert "CURRENT THEME" in app_js
-    assert "edition ·" in app_js
-    assert "Reset to Studio Carbon (Default)" in app_js
+    assert "activeAppearanceTheme.edition} · ${rootTheme.mode} mode" in app_js
+    assert "Restored Studio Carbon (Default) theme." in app_js
 
     # 5. Verify zero persona chips, dropdowns, or system prompt presets
     assert "SYSTEM_PROMPT_PRESETS" not in app_js
@@ -481,34 +479,17 @@ def test_neural_intelligence_console_layout_and_ergonomics():
 
 
 def test_appearance_theme_css_definitions_and_miniature_chrome_invariants():
-    """Verify all 9 themes in style.css have rich miniature chrome preview cards, palette tokens, and ghost buttons."""
+    """Verify theme previews use shared palette data and preserve miniature app chrome."""
     from pathlib import Path
 
     css_path = Path("studio/src/style.css")
     assert css_path.exists()
     css = css_path.read_text(encoding="utf-8")
+    app_js = (Path(__file__).parents[1] / "studio" / "src" / "app.js").read_text(encoding="utf-8")
 
-    all_9_themes = [
-        "obsidian-glass",
-        "cyberpunk-dark",
-        "emerald-terminal",
-        "modern-dark",
-        "modern-forest",
-        "classic-dark",
-        "editorial-cream",
-        "modern-light",
-        "classic-light",
-    ]
-
-    # 1. Verify all 9 themes have actual theme class definitions
-    for theme_id in all_9_themes:
-        assert f".theme-{theme_id}" in css or f".react-studio-app.theme-{theme_id}" in css, (
-            f"Missing theme definition for {theme_id}"
-        )
-
-    # 2. Verify all 9 preview card classes exist with theme-specific miniature tokens
-    for theme_id in all_9_themes:
-        assert f".preview-{theme_id}" in css, f"Missing preview card class for {theme_id}"
+    assert "'--preview-bg': theme.palette.bg" in app_js
+    assert "'--preview-accent': theme.palette.accent" in app_js
+    assert ".appearance-preview { background: var(--preview-bg, var(--bg-card)); }" in css
 
     # 3. Verify actual UI miniature chrome components in preview cards
     assert ".preview-sidebar" in css
@@ -531,10 +512,27 @@ def test_appearance_theme_css_definitions_and_miniature_chrome_invariants():
     assert ".appearance-apply" in css
     assert ".appearance-apply:hover:not(:disabled)" in css
     assert ".appearance-apply:disabled" in css or ".appearance-apply.applied" in css
+    assert ".appearance-empty-state" in css
 
     # 6. Verify zero dead persona CSS rules in style.css
     assert ".persona-ribbon-bar" not in css
     assert ".persona-chip-btn" not in css
+
+
+def test_custom_theme_library_is_persistent_editable_and_palette_only():
+    app_js = (Path(__file__).parents[1] / "studio" / "src" / "app.js").read_text(encoding="utf-8")
+
+    assert "triune.studio.customThemes.v1" in app_js
+    assert "setCustomThemes(updated)" in app_js
+    assert "payload.format !== 'triune-theme' || payload.version !== 1" in app_js
+    assert "file.size > 32_768" in app_js
+    assert "paletteKeys.every(key => isThemeHex(value.palette[key]))" in app_js
+    assert "Theme files contain colors only—no scripts or CSS." in app_js
+    assert "setThemeDraft({ ...theme, palette: { ...theme.palette } })" in app_js
+    assert "Export draft" in app_js
+    assert "contrastRatio(themeDraft.palette.text" in app_js
+    assert "customCSS" not in app_js
+    assert "eval(" not in app_js
 
 
 def test_realtime_active_model_simulation_and_telemetry(app_client):

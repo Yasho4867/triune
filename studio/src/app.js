@@ -1172,7 +1172,7 @@
     checkpoints: 'Model Checkpoints & Weights Archive',
     finetune: 'LoRA & QLoRA Fine-Tuning Workshop',
     modules: 'Extensions Marketplace',
-    customize: 'Appearance Marketplace',
+    customize: 'Appearance & Themes',
     environment: 'System Diagnostics & Hardware Inspector',
     models: 'Model Zoo & Exporter Engine',
     datasets: 'Dataset Streaming & Corpus Management',
@@ -1187,7 +1187,7 @@
     checkpoints: 'Save, restore, and manage model checkpoints.',
     finetune: 'Configure and attach LoRA or QLoRA adapters.',
     modules: 'Discover curated integrations, local plugins, and community repositories.',
-    customize: 'Choose a Studio edition, light or dark mode, and a curated color theme.',
+    customize: 'Preview, create, save, and share Studio color themes.',
     environment: 'Inspect hardware, runtime health, and performance settings.',
     models: 'Choose architectures and export trained models.',
     datasets: 'Connect streaming or local datasets and configure tokenization.',
@@ -1195,16 +1195,102 @@
     byok: 'Configure and test external model-provider credentials.'
   };
 
+  const CUSTOM_THEME_STORAGE_KEY = 'triune.studio.customThemes.v1';
+  const DEFAULT_THEME_DRAFT = {
+    id: '',
+    name: 'My Triune Theme',
+    mode: 'Dark',
+    edition: 'Custom',
+    description: 'A personal workspace theme.',
+    palette: {
+      bg: '#0d1117', surface: '#151b23', card: '#1b232d', hover: '#25303d', input: '#111820',
+      text: '#edf2f7', muted: '#a9b5c3', dim: '#8190a1', border: '#303c4a', accent: '#8b83ff'
+    }
+  };
+
+  const legacyThemeIds = {
+    'cyberpunk-dark': 'obsidian-glass',
+    'emerald-terminal': 'obsidian-glass',
+    'modern-dark': 'obsidian-glass',
+    'classic-dark': 'obsidian-glass',
+    'editorial-cream': 'modern-light',
+    'classic-light': 'editorial-paper'
+  };
+
+  function isThemeHex(value) {
+    return typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value);
+  }
+
+  function contrastRatio(foreground, background) {
+    const luminance = hex => {
+      const channels = hex.slice(1).match(/.{2}/g).map(channel => parseInt(channel, 16) / 255).map(channel =>
+        channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
+      );
+      return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+    };
+    const first = luminance(foreground);
+    const second = luminance(background);
+    return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+  }
+
+  function normalizeThemeRecord(value) {
+    if (!value || typeof value !== 'object' || typeof value.name !== 'string' || !value.palette) return null;
+    const paletteKeys = Object.keys(DEFAULT_THEME_DRAFT.palette);
+    if (!paletteKeys.every(key => isThemeHex(value.palette[key]))) return null;
+    const name = value.name.trim().replace(/[<>]/g, '').slice(0, 40);
+    if (!name) return null;
+    const id = typeof value.id === 'string' && /^custom-[a-z0-9-]{1,48}$/i.test(value.id)
+      ? value.id
+      : `custom-${Date.now().toString(36)}`;
+    return {
+      id,
+      name,
+      mode: value.mode === 'Light' ? 'Light' : 'Dark',
+      edition: 'Custom',
+      description: 'User-created theme · stored on this device',
+      palette: Object.fromEntries(paletteKeys.map(key => [key, value.palette[key].toLowerCase()]))
+    };
+  }
+
+  function readCustomThemes() {
+    try {
+      const records = JSON.parse(window.localStorage.getItem(CUSTOM_THEME_STORAGE_KEY) || '[]');
+      return Array.isArray(records) ? records.map(normalizeThemeRecord).filter(Boolean).slice(0, 50) : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function themePaletteStyle(theme, accentOverride = '') {
+    if (!theme || !theme.palette) return {};
+    const palette = theme.palette;
+    const accent = isThemeHex(accentOverride) ? accentOverride : palette.accent;
+    return {
+      '--bg-dark': palette.bg,
+      '--bg-surface': palette.surface,
+      '--bg-card': palette.card,
+      '--bg-card-hover': palette.hover,
+      '--bg-input': palette.input,
+      '--text-main': palette.text,
+      '--text-muted': palette.muted,
+      '--text-dim': palette.dim,
+      '--border-color': palette.border,
+      '--border-dark': palette.border,
+      '--border-glow': `${accent}55`,
+      '--primary': accent,
+      '--primary-hover': accent,
+      '--primary-glow': `${accent}33`,
+      '--chart-grid': palette.border,
+      '--chart-axis': palette.muted,
+      colorScheme: theme.mode === 'Light' ? 'light' : 'dark'
+    };
+  }
+
   const APPEARANCE_THEMES = [
-    { id: 'obsidian-glass', name: 'Studio Carbon (Default)', mode: 'Dark', edition: 'Modern', accent: '#6366f1', description: 'Precision dark slate with deep charcoal surfaces, indigo accents, and crisp contrast.' },
-    { id: 'cyberpunk-dark', name: 'Graphite Pro', mode: 'Dark', edition: 'Modern', accent: '#38bdf8', description: 'High-contrast monochrome engineering dark theme with precision sky-blue telemetry highlights.' },
-    { id: 'emerald-terminal', name: 'Midnight Slate', mode: 'Dark', edition: 'Modern', accent: '#3b82f6', description: 'Deep slate midnight console with surgical cobalt accents for long research sessions.' },
-    { id: 'editorial-cream', name: 'Studio Light Pro', mode: 'Light', edition: 'Classic', accent: '#4f46e5', description: 'Clean Apple Pro studio daylight theme with razor-sharp contrast and clean typography.' },
-    { id: 'modern-dark', name: 'Studio Midnight', mode: 'Dark', edition: 'Modern', accent: '#8b83ff', description: 'A low-glare dark workspace with clear hierarchy and high-contrast controls.' },
-    { id: 'modern-forest', name: 'Studio Forest', mode: 'Dark', edition: 'Modern', accent: '#55b987', description: 'A calm green-accented dark theme for long training and debugging sessions.' },
-    { id: 'classic-light', name: 'Classic Editorial', mode: 'Light', edition: 'Classic', accent: '#9a3412', description: 'Warm paper, serif headings, and editorial character.' },
-    { id: 'classic-dark', name: 'Classic Ink', mode: 'Dark', edition: 'Classic', accent: '#e08a63', description: 'The original editorial style adapted for a comfortable dark workspace.' },
-    { id: 'modern-light', name: 'Studio Modern', mode: 'Light', edition: 'Modern', accent: '#635bff', description: 'Clean surfaces, compact navigation, and a focused technical workspace.' }
+    { id: 'obsidian-glass', name: 'Carbon', mode: 'Dark', edition: 'Studio', description: 'Quiet graphite surfaces with a restrained violet signal color.', palette: { bg: '#0d1117', surface: '#151b23', card: '#1b232d', hover: '#25303d', input: '#111820', text: '#edf2f7', muted: '#a9b5c3', dim: '#8190a1', border: '#303c4a', accent: '#8b83ff' } },
+    { id: 'modern-light', name: 'Porcelain', mode: 'Light', edition: 'Studio', description: 'Clear neutral surfaces, cool ink, and focused indigo actions.', palette: { bg: '#f3f5f8', surface: '#e9edf2', card: '#ffffff', hover: '#f5f7fa', input: '#ffffff', text: '#17212d', muted: '#536273', dim: '#728092', border: '#d5dde6', accent: '#4f67d8' } },
+    { id: 'modern-forest', name: 'Verdant', mode: 'Dark', edition: 'Studio', description: 'Low-glare evergreen surfaces with a measured mint accent.', palette: { bg: '#0d1512', surface: '#141e19', card: '#1a2821', hover: '#23352b', input: '#111b16', text: '#edf4ef', muted: '#aebfb3', dim: '#82968a', border: '#304438', accent: '#62bd91' } },
+    { id: 'editorial-paper', name: 'Fieldnote', mode: 'Light', edition: 'Studio', description: 'Warm mineral paper and deep botanical ink for long sessions.', palette: { bg: '#f4f1e9', surface: '#e9e5da', card: '#fffdf8', hover: '#f7f4ec', input: '#fffdf8', text: '#252a27', muted: '#58615b', dim: '#778079', border: '#d9d4c8', accent: '#35685b' } }
   ];
 
   let activeApiBase = '';
@@ -3475,18 +3561,25 @@
     const [weightsLoaded, setWeightsLoaded] = useState(false);
     const [precision, setPrecision] = useState('bf16');
     const [statusToast, setStatusToast] = useState(null);
+    const [customThemes, setCustomThemes] = useState(readCustomThemes);
+    const [themeDraft, setThemeDraft] = useState(() => ({ ...DEFAULT_THEME_DRAFT, palette: { ...DEFAULT_THEME_DRAFT.palette } }));
+    const [previewThemeDraft, setPreviewThemeDraft] = useState(false);
+    const [editingThemeId, setEditingThemeId] = useState('');
     const [studioTheme, setStudioTheme] = useState(() => {
       try {
         const migrated = window.localStorage.getItem('triune.studio.theme_migrated_v2');
         let saved = window.localStorage.getItem('triune.studio.theme');
         if (!migrated) {
           window.localStorage.setItem('triune.studio.theme_migrated_v2', 'true');
-          if (!saved || saved === 'modern-light' || saved === 'classic-light' || saved === 'editorial-cream') {
-            saved = 'obsidian-glass';
-            window.localStorage.setItem('triune.studio.theme', 'obsidian-glass');
-          }
+          if (!saved) saved = 'obsidian-glass';
+          if (legacyThemeIds[saved]) saved = legacyThemeIds[saved];
+          window.localStorage.setItem('triune.studio.theme', saved);
         }
-        if (saved && APPEARANCE_THEMES.some(theme => theme.id === saved)) {
+        if (legacyThemeIds[saved]) {
+          saved = legacyThemeIds[saved];
+          window.localStorage.setItem('triune.studio.theme', saved);
+        }
+        if (saved && (APPEARANCE_THEMES.some(theme => theme.id === saved) || readCustomThemes().some(theme => theme.id === saved))) {
           return saved;
         }
         window.localStorage.setItem('triune.studio.theme', 'obsidian-glass');
@@ -3508,10 +3601,11 @@
         window.localStorage.setItem('triune.studio.activeTab', activeTab);
         window.localStorage.setItem('triune.studio.sidebarCollapsed', String(sidebarCollapsed));
         window.localStorage.setItem('triune.studio.theme', studioTheme);
+        window.localStorage.setItem(CUSTOM_THEME_STORAGE_KEY, JSON.stringify(customThemes));
         if (customAccent) window.localStorage.setItem('triune.studio.customAccent', customAccent);
         else window.localStorage.removeItem('triune.studio.customAccent');
       } catch (e) {}
-    }, [activeTab, sidebarCollapsed, studioTheme, customAccent]);
+    }, [activeTab, sidebarCollapsed, studioTheme, customAccent, customThemes]);
 
     // Chat State & Conversation History
     const [chatSessions, setChatSessions] = useState(() => {
@@ -8993,9 +9087,86 @@
       }
     };
 
+    const allAppearanceThemes = APPEARANCE_THEMES.concat(customThemes);
+    const activeAppearanceTheme = allAppearanceThemes.find(theme => theme.id === studioTheme) || APPEARANCE_THEMES[0];
+    const rootTheme = previewThemeDraft ? themeDraft : activeAppearanceTheme;
+    const rootThemeStyle = themePaletteStyle(rootTheme, !previewThemeDraft && !String(studioTheme).startsWith('custom-') ? customAccent : '');
+    const draftTextContrast = Math.min(contrastRatio(themeDraft.palette.text, themeDraft.palette.bg), contrastRatio(themeDraft.palette.text, themeDraft.palette.card));
+
+    const saveThemeDraft = () => {
+      const theme = normalizeThemeRecord({ ...themeDraft, id: editingThemeId || `custom-${Date.now().toString(36)}` });
+      if (!theme) {
+        showToast('Enter a theme name and valid colors before saving.');
+        return;
+      }
+      const updated = [theme, ...customThemes.filter(item => item.id !== theme.id && item.name.toLowerCase() !== theme.name.toLowerCase())].slice(0, 50);
+      setCustomThemes(updated);
+      setStudioTheme(theme.id);
+      setPreviewThemeDraft(false);
+      setEditingThemeId(theme.id);
+      showToast(`${theme.name} saved to your theme library.`);
+    };
+
+    const startNewThemeDraft = () => {
+      setThemeDraft({ ...DEFAULT_THEME_DRAFT, palette: { ...DEFAULT_THEME_DRAFT.palette } });
+      setEditingThemeId('');
+      setPreviewThemeDraft(false);
+    };
+
+    const exportTheme = theme => {
+      const normalized = normalizeThemeRecord(theme);
+      if (!normalized) {
+        showToast('This theme cannot be exported because its palette is invalid.');
+        return;
+      }
+      const payload = JSON.stringify({ format: 'triune-theme', version: 1, ...normalized }, null, 2);
+      const url = URL.createObjectURL(new Blob([payload], { type: 'application/json' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${normalized.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.triunetheme`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    };
+
+    const importTheme = async event => {
+      const input = event.currentTarget;
+      const file = input.files && input.files[0];
+      if (!file) return;
+      try {
+        if (file.size > 32_768) throw new Error('Theme files must be 32 KB or smaller.');
+        const payload = JSON.parse(await file.text());
+        if (payload.format !== 'triune-theme' || payload.version !== 1) throw new Error('This is not a supported Triune theme file.');
+        const imported = normalizeThemeRecord({ ...payload, id: `custom-${Date.now().toString(36)}` });
+        if (!imported) throw new Error('The file has missing or invalid color values.');
+        const updated = [imported, ...customThemes.filter(theme => theme.name.toLowerCase() !== imported.name.toLowerCase())].slice(0, 50);
+        setCustomThemes(updated);
+        setStudioTheme(imported.id);
+        setPreviewThemeDraft(false);
+        setEditingThemeId(imported.id);
+        setThemeDraft({ ...imported, palette: { ...imported.palette } });
+        showToast(`${imported.name} imported and applied.`);
+      } catch (error) {
+        showToast(`Could not import theme: ${error.message || 'invalid theme file'}`);
+      } finally {
+        input.value = '';
+      }
+    };
+
+    const deleteCustomTheme = theme => {
+      if (!window.confirm(`Remove “${theme.name}” from this device?`)) return;
+      const updated = customThemes.filter(item => item.id !== theme.id);
+      setCustomThemes(updated);
+      if (editingThemeId === theme.id) {
+        setEditingThemeId('');
+        setThemeDraft({ ...DEFAULT_THEME_DRAFT, palette: { ...DEFAULT_THEME_DRAFT.palette } });
+      }
+      if (studioTheme === theme.id) setStudioTheme('obsidian-glass');
+      showToast(`${theme.name} removed from your library.`);
+    };
+
     return e('div', {
       className: `react-studio-app theme-${studioTheme}`,
-      style: customAccent ? { '--user-accent': customAccent } : undefined,
+      style: rootThemeStyle,
       onMouseMove: handleMouseMove,
       onMouseUp: handleMouseUp
     },
@@ -9237,7 +9408,7 @@
             !sidebarCollapsed && e('span', { className: 'nav-label' }, 'Extensions Marketplace'),
             !sidebarCollapsed && e('span', { className: 'nav-badge' }, 'Hub')
           ),
-          e('button', { className: `nav-item ${activeTab === 'customize' ? 'active' : ''}`, title: 'Appearance Marketplace', onClick: () => setActiveTab('customize') },
+          e('button', { className: `nav-item ${activeTab === 'customize' ? 'active' : ''}`, title: 'Appearance & Themes', onClick: () => setActiveTab('customize') },
             e('span', { className: 'nav-icon' }, renderIcon('sparkle', 17)),
             !sidebarCollapsed && e('span', { className: 'nav-label' }, 'Appearance & Themes'),
             !sidebarCollapsed && e('span', { className: 'nav-badge' }, 'Themes')
@@ -9445,16 +9616,19 @@
                 'aria-label': 'Switch Studio Theme',
                 onChange: ev => {
                   const val = ev.target.value;
-                  if (APPEARANCE_THEMES.some(t => t.id === val)) {
+                  if (allAppearanceThemes.some(t => t.id === val)) {
                     setStudioTheme(val);
+                    setPreviewThemeDraft(false);
+                    setEditingThemeId('');
+                    setCustomAccent('');
                     try { window.localStorage.setItem('triune.studio.theme', val); } catch (_) {}
-                    const themeName = APPEARANCE_THEMES.find(t => t.id === val)?.name || val;
+                    const themeName = allAppearanceThemes.find(t => t.id === val)?.name || val;
                     showToast(`Theme: ${themeName}`);
                   }
                 },
                 style: { background: 'transparent', border: 'none', color: 'var(--text-main)', fontSize: '11px', outline: 'none', cursor: 'pointer', fontFamily: 'var(--font-mono)' }
               },
-                APPEARANCE_THEMES.map(t => e('option', { key: t.id, value: t.id, style: { background: 'var(--bg-card)', color: 'var(--text-main)' } }, t.name))
+                allAppearanceThemes.map(t => e('option', { key: t.id, value: t.id, style: { background: 'var(--bg-card)', color: 'var(--text-main)' } }, t.name))
               )
             ),
             e('span', {
@@ -12861,30 +13035,32 @@
               e('div', null,
                 e('span', { className: 'appearance-eyebrow' }, 'STUDIO PERSONALIZATION'),
                 e('h2', null, 'Make the workspace yours'),
-                e('p', null, 'Choose a visual edition and color theme. Your choice is saved on this device and applied across Studio.')
+                e('p', null, 'Choose a theme, tune every color, or import and export theme files. Your library stays on this device.')
               ),
               e('div', { className: 'appearance-current' },
                 e('span', null, 'CURRENT THEME'),
-                e('strong', null, (APPEARANCE_THEMES.find(theme => theme.id === studioTheme) || APPEARANCE_THEMES[0]).name),
-                e('small', null, `${(APPEARANCE_THEMES.find(theme => theme.id === studioTheme) || APPEARANCE_THEMES[0]).edition} edition · ${(APPEARANCE_THEMES.find(theme => theme.id === studioTheme) || APPEARANCE_THEMES[0]).mode} mode`),
-                studioTheme !== 'obsidian-glass' && e('button', {
+                e('strong', null, previewThemeDraft ? `${themeDraft.name} · preview` : activeAppearanceTheme.name),
+                e('small', null, `${previewThemeDraft ? 'Unsaved preview' : activeAppearanceTheme.edition} · ${rootTheme.mode} mode`),
+                (studioTheme !== 'obsidian-glass' || previewThemeDraft || customAccent) && e('button', {
                   className: 'btn-clear-chat',
                   style: { marginTop: '8px', padding: '3px 8px', fontSize: '10.5px' },
                   onClick: () => {
                     setStudioTheme('obsidian-glass');
+                    setCustomAccent('');
+                    setPreviewThemeDraft(false);
                     try { window.localStorage.setItem('triune.studio.theme', 'obsidian-glass'); } catch (_) {}
                     showToast('Restored Studio Carbon (Default) theme.');
                   }
-                }, 'Reset to Studio Carbon (Default)')
+                }, 'Use Carbon')
               )
             ),
             e('div', { className: 'appearance-section-heading' },
               e('div', null,
-                e('h3', null, 'Theme marketplace'),
-                e('p', null, 'Curated, built-in themes—no downloads, third-party CSS, or executable theme packages.')
+                e('h3', null, 'Theme library'),
+                e('p', null, 'Four curated starting points, plus themes you create or import. Theme files contain colors only—no scripts or CSS.')
               ),
               e('div', { className: 'appearance-mode-switch', role: 'group', 'aria-label': 'Filter themes by appearance' },
-                ['All', 'Light', 'Dark'].map(mode => e('button', {
+                ['All', 'Light', 'Dark', 'Custom'].map(mode => e('button', {
                   key: mode,
                   type: 'button',
                   className: `appearance-filter ${appearanceFilter === mode ? 'active' : ''}`,
@@ -12893,9 +13069,38 @@
               )
             ),
             e('div', { className: 'appearance-theme-grid' },
-              APPEARANCE_THEMES.filter(theme => appearanceFilter === 'All' || theme.mode === appearanceFilter).map(theme =>
+              !allAppearanceThemes.some(theme => appearanceFilter === 'All' || (appearanceFilter === 'Custom' ? theme.edition === 'Custom' : theme.mode === appearanceFilter)) &&
+                e('div', { className: 'appearance-empty-state' },
+                  e('strong', null, 'No custom themes yet'),
+                  e('span', null, 'Start with a curated palette below, or import a .triunetheme file from someone else.')
+                ),
+              allAppearanceThemes.filter(theme => appearanceFilter === 'All' || (appearanceFilter === 'Custom' ? theme.edition === 'Custom' : theme.mode === appearanceFilter)).map(theme =>
                 e('article', { key: theme.id, className: `appearance-theme-card ${studioTheme === theme.id ? 'selected' : ''}` },
-                  e('div', { className: `appearance-preview preview-${theme.id}`, 'aria-hidden': 'true' },
+                  e('div', {
+                    className: `appearance-preview preview-${theme.id}`,
+                    'aria-hidden': 'true',
+                    style: {
+                      background: theme.palette.bg,
+                      '--preview-bg': theme.palette.bg,
+                      '--preview-sidebar-bg': theme.palette.surface,
+                      '--preview-topbar-bg': theme.palette.card,
+                      '--preview-card-bg': theme.palette.card,
+                      '--preview-text-main': theme.palette.text,
+                      '--preview-accent': theme.palette.accent,
+                      '--preview-accent-sec': theme.palette.accent,
+                      '--preview-accent-glow': `${theme.palette.accent}66`,
+                      '--preview-chart-glow': `${theme.palette.accent}55`,
+                      '--preview-chart-fade': `${theme.palette.accent}0a`,
+                      '--preview-sidebar-inactive': theme.palette.muted,
+                      '--preview-sidebar-border': theme.palette.border,
+                      '--preview-topbar-border': theme.palette.border,
+                      '--preview-card-border': theme.palette.border,
+                      '--preview-track': theme.palette.border,
+                      '--preview-chip-bg': `${theme.palette.accent}18`,
+                      '--preview-chip-border': theme.palette.border,
+                      '--preview-chip-text': theme.palette.text
+                    }
+                  },
                     e('div', { className: 'preview-sidebar' }, e('i', null), e('i', null), e('i', null), e('i', null)),
                     e('div', { className: 'preview-workspace' },
                       e('div', { className: 'preview-topbar' },
@@ -12919,56 +13124,108 @@
                       e('h4', null, theme.name),
                       studioTheme === theme.id && e('span', { className: 'appearance-applied-badge' }, 'Applied')
                     ),
-                    e('div', { className: 'appearance-theme-meta' }, `${theme.edition} edition · ${theme.mode} mode`),
+                    e('div', { className: 'appearance-theme-meta' }, `${theme.edition} · ${theme.mode} mode`),
                     e('p', null, theme.description),
-                    e('button', {
-                      className: studioTheme === theme.id ? 'appearance-apply applied' : 'appearance-apply',
-                      type: 'button',
-                      disabled: studioTheme === theme.id,
-                      style: studioTheme === theme.id ? {} : {
-                        background: theme.accent,
-                        borderColor: theme.accent,
-                        color: '#ffffff',
-                        boxShadow: `0 2px 8px ${theme.accent}40`
-                      },
-                      onClick: () => {
-                        setStudioTheme(theme.id);
-                        try { window.localStorage.setItem('triune.studio.theme', theme.id); } catch (_) {}
-                        showToast(`${theme.name} applied.`);
-                      }
-                    }, studioTheme === theme.id ? 'Currently applied' : 'Apply theme')
+                    e('div', { className: 'appearance-theme-actions' },
+                      e('button', {
+                        className: studioTheme === theme.id ? 'appearance-apply applied' : 'appearance-apply',
+                        type: 'button',
+                        disabled: studioTheme === theme.id,
+                        onClick: () => {
+                          setStudioTheme(theme.id);
+                          setPreviewThemeDraft(false);
+                          setCustomAccent('');
+                          try { window.localStorage.setItem('triune.studio.theme', theme.id); } catch (_) {}
+                          showToast(`${theme.name} applied.`);
+                        }
+                      }, studioTheme === theme.id ? 'Applied' : 'Apply'),
+                      e('button', { className: 'appearance-secondary-action', type: 'button', onClick: () => exportTheme(theme) }, 'Export'),
+                      theme.edition === 'Custom' && e('button', {
+                        className: 'appearance-secondary-action',
+                        type: 'button',
+                        onClick: () => {
+                          setThemeDraft({ ...theme, palette: { ...theme.palette } });
+                          setEditingThemeId(theme.id);
+                          setPreviewThemeDraft(false);
+                        }
+                      }, 'Edit'),
+                      theme.edition === 'Custom' && e('button', { className: 'appearance-secondary-action danger', type: 'button', onClick: () => deleteCustomTheme(theme) }, 'Remove')
+                    )
                   )
                 )
               )
             ),
-            e('section', { className: 'appearance-custom-card' },
-              e('div', null,
-                e('h3', null, 'Personal accent color'),
-                e('p', null, 'Optional: choose an accent color on top of any theme. This only changes Studio appearance.')
-              ),
-              e('div', { className: 'appearance-color-controls' },
-                e('label', { className: 'appearance-color-picker' },
-                  e('input', {
-                    type: 'color',
-                    value: customAccent || (APPEARANCE_THEMES.find(theme => theme.id === studioTheme) || APPEARANCE_THEMES[0]).accent,
-                    'aria-label': 'Choose personal accent color',
-                    onChange: event => setCustomAccent(event.target.value)
-                  }),
-                  e('span', null, customAccent || 'Theme default')
+            e('section', { className: 'appearance-custom-card theme-builder' },
+              e('div', { className: 'theme-builder-heading' },
+                e('div', null,
+                  e('span', { className: 'appearance-eyebrow' }, 'THEME EDITOR'),
+                  e('h3', null, editingThemeId ? 'Edit your theme' : 'Build a theme'),
+                  e('p', null, 'Tune the whole workspace palette. Preview it live, save it locally, or share it as a .triunetheme file.')
                 ),
-                customAccent && e('button', { className: 'appearance-reset', type: 'button', onClick: () => setCustomAccent('') }, 'Reset to theme color')
-              )
-            ),
-            e('section', { className: 'appearance-custom-card extension-marketplace-link' },
-              e('div', null,
-                e('h3', null, 'Looking for tools and integrations?'),
-                e('p', null, 'Triune’s extension marketplace includes curated modules, local plugins, and GitHub or Hugging Face repositories. Remote plugins stay dormant until a signed manifest is verified and you explicitly approve activation.')
+                e('div', { className: 'theme-builder-heading-actions' },
+                  editingThemeId && e('button', { className: 'appearance-secondary-action', type: 'button', onClick: startNewThemeDraft }, 'New theme'),
+                  e('label', { className: 'theme-import-control' }, [
+                    'Import theme',
+                    e('input', { key: 'import', type: 'file', accept: '.triunetheme,application/json', onChange: importTheme })
+                  ])
+                )
               ),
-              e('button', {
-                className: 'appearance-apply',
-                type: 'button',
-                onClick: () => { setMarketplaceSubTab('curated'); setActiveTab('modules'); fetchInstalledModules(); searchMarketplace('', 'all', 'all'); }
-              }, 'Browse extensions')
+              e('div', { className: 'theme-builder-meta' },
+                e('label', { className: 'theme-builder-name' },
+                  e('span', null, 'Theme name'),
+                  e('input', { type: 'text', maxLength: 40, value: themeDraft.name, onChange: ev => setThemeDraft(current => ({ ...current, name: ev.target.value })) })
+                ),
+                e('label', { className: 'theme-builder-name' },
+                  e('span', null, 'Start from'),
+                  e('select', {
+                    value: '',
+                    onChange: ev => {
+                      const starter = APPEARANCE_THEMES.find(theme => theme.id === ev.target.value);
+                      if (starter) {
+                        setThemeDraft(current => ({ ...starter, id: '', name: current.name, edition: 'Custom' }));
+                        setEditingThemeId('');
+                      }
+                    }
+                  },
+                    e('option', { value: '' }, 'Keep current draft'),
+                    APPEARANCE_THEMES.map(theme => e('option', { key: theme.id, value: theme.id }, theme.name))
+                  )
+                ),
+                e('label', { className: 'theme-builder-name' },
+                  e('span', null, 'Color mode'),
+                  e('select', { value: themeDraft.mode, onChange: ev => setThemeDraft(current => ({ ...current, mode: ev.target.value })) },
+                    e('option', { value: 'Dark' }, 'Dark'),
+                    e('option', { value: 'Light' }, 'Light')
+                  )
+                )
+              ),
+              e('div', { className: 'theme-builder-grid' },
+                [
+                  ['bg', 'Canvas'], ['surface', 'Sidebar'], ['card', 'Panels'], ['hover', 'Hover surface'], ['input', 'Inputs'],
+                  ['text', 'Primary text'], ['muted', 'Secondary text'], ['dim', 'Quiet text'], ['border', 'Borders'], ['accent', 'Accent']
+                ].map(([key, label]) => e('label', { key, className: 'theme-color-field' },
+                  e('span', null, label),
+                  e('span', { className: 'theme-color-control' },
+                    e('input', {
+                      type: 'color',
+                      value: themeDraft.palette[key],
+                      'aria-label': `${label} color`,
+                      onChange: ev => setThemeDraft(current => ({ ...current, palette: { ...current.palette, [key]: ev.target.value } }))
+                    }),
+                    e('code', null, themeDraft.palette[key].toUpperCase())
+                  )
+                ))
+              ),
+              e('div', { className: 'theme-builder-footer' },
+                e('span', { className: `theme-builder-safety ${draftTextContrast < 4.5 ? 'low-contrast' : ''}` },
+                  `${customThemes.length} of 50 saved · text contrast ${draftTextContrast.toFixed(1)}:1${draftTextContrast < 4.5 ? ' · below 4.5:1' : ' · accessible'} · palette-only files`
+                ),
+                e('div', { className: 'theme-builder-actions' },
+                  e('button', { className: 'appearance-secondary-action', type: 'button', onClick: () => setPreviewThemeDraft(value => !value) }, previewThemeDraft ? 'Stop preview' : 'Preview live'),
+                  e('button', { className: 'appearance-secondary-action', type: 'button', onClick: () => exportTheme(themeDraft) }, 'Export draft'),
+                  e('button', { className: 'appearance-apply', type: 'button', onClick: saveThemeDraft }, 'Save theme')
+                )
+              )
             )
           ),
 
