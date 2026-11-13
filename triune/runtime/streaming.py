@@ -558,10 +558,20 @@ class LayerStreamingEngine:
             if orig_forward_block is not None:
                 self.model._orig_forward_block = orig_forward_block
 
-                def streaming_forward_block(layer, x, return_exit, cache=None, update_stats=True):
+                def streaming_forward_block(
+                    layer, x, return_exit, cache=None, update_stats=True, exit_decider=None, exit_last_token_only=False
+                ):
                     idx = layer_to_idx.get(layer)
                     if idx is None:
-                        return orig_forward_block(layer, x, return_exit, cache=cache, update_stats=update_stats)
+                        return orig_forward_block(
+                            layer,
+                            x,
+                            return_exit,
+                            cache=cache,
+                            update_stats=update_stats,
+                            exit_decider=exit_decider,
+                            exit_last_token_only=exit_last_token_only,
+                        )
                     in_bwd = getattr(layer, "_in_backward", False)
 
                     if (
@@ -603,7 +613,15 @@ class LayerStreamingEngine:
                         next_layer._is_prefetched = True
 
                     try:
-                        out = orig_forward_block(layer, x, return_exit, cache=cache, update_stats=update_stats)
+                        out = orig_forward_block(
+                            layer,
+                            x,
+                            return_exit,
+                            cache=cache,
+                            update_stats=update_stats,
+                            exit_decider=exit_decider,
+                            exit_last_token_only=exit_last_token_only,
+                        )
                     finally:
                         if not getattr(layer, "_in_backward", False):
                             self.stager.release_layer(layer)

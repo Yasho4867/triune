@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using Microsoft.Win32;
 
 namespace TriuneStudio.Installer;
 
@@ -14,6 +15,7 @@ public partial class MainWindow : Window
     private Process? _activeProcess;
     private bool _unattended;
     private bool _noLaunch;
+    private readonly string _logPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Triune", "logs", $"studio-setup-{DateTime.Now:yyyyMMdd-HHmmss}.log");
 
     public MainWindow()
     {
@@ -27,6 +29,16 @@ public partial class MainWindow : Window
         _unattended = args.Any(a => a.Equals("--yes", StringComparison.OrdinalIgnoreCase) || a.Equals("-y", StringComparison.OrdinalIgnoreCase));
         _noLaunch = args.Any(a => a.Equals("--no-launch", StringComparison.OrdinalIgnoreCase));
         var verifyOnly = args.Any(a => a.Equals("--verify", StringComparison.OrdinalIgnoreCase));
+        var uninstall = args.Any(a => a.Equals("--uninstall", StringComparison.OrdinalIgnoreCase));
+
+        if (uninstall)
+        {
+            InstallButton.IsEnabled = false;
+            VerifyButton.IsEnabled = false;
+            Uninstall();
+            if (_unattended) Application.Current.Shutdown(0);
+            return;
+        }
 
         try
         {
@@ -39,6 +51,7 @@ public partial class MainWindow : Window
             AppendLog($"[ERROR] {ex.Message}");
             InstallButton.IsEnabled = false;
             VerifyButton.IsEnabled = false;
+            if (_unattended || verifyOnly) Application.Current.Shutdown(1);
             return;
         }
 
@@ -60,19 +73,13 @@ public partial class MainWindow : Window
 
         if (verifyOnly)
         {
-            await RunInstallerProcessAsync(verifyOnly: true);
+            Application.Current.Shutdown(await RunInstallerProcessAsync(verifyOnly: true));
         }
         else if (_unattended)
         {
             var code = await RunInstallerProcessAsync(verifyOnly: false);
-            if (code == 0 && _noLaunch)
-            {
-                Application.Current.Shutdown(0);
-            }
-            else if (code != 0 && _noLaunch)
-            {
-                Application.Current.Shutdown(code);
-            }
+            if (code == 0 && !_noLaunch) LaunchStudio();
+            Application.Current.Shutdown(code);
         }
     }
 
@@ -241,6 +248,7 @@ public partial class MainWindow : Window
         Dispatcher.Invoke(() =>
         {
             var clean = StripAnsi(line);
+            try { Directory.CreateDirectory(Path.GetDirectoryName(_logPath)!); File.AppendAllText(_logPath, clean + Environment.NewLine); } catch (IOException) { }
             ConsoleOutputBox.AppendText(clean + Environment.NewLine);
             ConsoleOutputBox.ScrollToEnd();
 
@@ -334,6 +342,7 @@ public partial class MainWindow : Window
 
             if (exitCode == 0)
             {
+                if (!verifyOnly) RegisterUninstallEntry();
                 MarkAllStagesComplete();
                 StatusHeadlineText.Text = verifyOnly
                     ? "All Triune Studio & AI Engine subsystems passed verification!"
@@ -360,41 +369,89 @@ public partial class MainWindow : Window
         }
     }
 
+    private const string UninstallKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\TriuneStudio";
+    private const string ShortcutName = "Triune Studio.lnk";
+    private const string SetupShortcutName = "Triune Studio Setup.lnk";
+
+    private static string? ResolveStudioTarget(string root) => new[]
+    {
+        Path.Combine(AppContext.BaseDirectory, "TriuneStudio.exe"),
+        Path.Combine(root, "TriuneStudio.exe"),
+        Path.Combine(root, "studio", "publish", "TriuneStudio.exe"),
+        Path.Combine(root, "studio", "windows", "publish", "TriuneStudio.exe"),
+        Path.Combine(root, "studio", "windows", "TriuneStudio.Windows", "bin", "Release", "net10.0-windows", "TriuneStudio.exe"),
+        Path.Combine(root, "studio", "TriuneStudio.bat")
+    }.FirstOrDefault(File.Exists);
+
+    private static string[] DesktopDirectories()
+    {
+        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        return new[]
+        {
+            Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
+            Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+            Path.Combine(userProfile, "OneDrive", "Desktop"),
+            Path.Combine(userProfile, "Desktop")
+        }
+        .Where(d => !string.IsNullOrWhiteSpace(d) && Directory.Exists(d))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+    }
+
+    private void RegisterUninstallEntry()
+    {
+        if (_workspaceRoot is null || Environment.ProcessPath is not { } setupExe) return;
+        var studioExe = ResolveStudioTarget(_workspaceRoot);
+        using var key = Registry.CurrentUser.CreateSubKey(UninstallKeyPath);
+        key.SetValue("DisplayName", "Triune Studio");
+        key.SetValue("DisplayVersion", typeof(App).Assembly.GetName().Version?.ToString(3) ?? "0.0.0");
+        key.SetValue("Publisher", "Triune AI");
+        key.SetValue("InstallLocation", _workspaceRoot);
+        key.SetValue("DisplayIcon", studioExe ?? setupExe);
+        key.SetValue("UninstallString", $"\"{setupExe}\" --uninstall");
+        key.SetValue("QuietUninstallString", $"\"{setupExe}\" --uninstall --yes");
+        key.SetValue("NoModify", 1, RegistryValueKind.DWord);
+        key.SetValue("NoRepair", 1, RegistryValueKind.DWord);
+        AppendLog("[Registry] Registered Apps & Features uninstall entry (HKCU).");
+    }
+
+    private void Uninstall()
+    {
+        var removed = 0;
+        var links = DesktopDirectories()
+            .Select(d => Path.Combine(d, ShortcutName))
+            .Concat(new[]
+            {
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), ShortcutName),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), SetupShortcutName)
+            });
+        foreach (var link in links.Where(File.Exists))
+        {
+            File.Delete(link);
+            removed++;
+        }
+        Registry.CurrentUser.DeleteSubKeyTree(UninstallKeyPath, throwOnMissingSubKey: false);
+        StatusHeadlineText.Text = "Triune Studio shortcuts and uninstall entry were removed.";
+        AppendLog($"[Uninstall] Removed {removed} shortcut(s) and the HKCU uninstall entry. Program files and the managed Python environment were left in place.");
+    }
     private async Task EnsureWindowsShortcutsAsync()
     {
         if (_workspaceRoot is null) return;
         try
         {
-            var studioCandidates = new[]
-            {
-                Path.Combine(_workspaceRoot, "TriuneStudio.exe"),
-                Path.Combine(_workspaceRoot, "studio", "windows", "publish", "TriuneStudio.exe"),
-                Path.Combine(_workspaceRoot, "studio", "windows", "TriuneStudio.Windows", "bin", "Release", "net10.0-windows", "TriuneStudio.exe"),
-                Path.Combine(_workspaceRoot, "studio", "TriuneStudio.bat")
-            };
-            var studioExe = studioCandidates.FirstOrDefault(File.Exists) ?? studioCandidates[0];
-            var setupExe = Path.Combine(_workspaceRoot, "TriuneStudioSetup.exe");
+            var studioExe = ResolveStudioTarget(_workspaceRoot) ?? Path.Combine(_workspaceRoot, "TriuneStudio.exe");
+            var setupExe = Environment.ProcessPath ?? Path.Combine(_workspaceRoot, "TriuneStudioSetup.exe");
             var iconPath = Path.Combine(_workspaceRoot, "studio", "windows", "triune.ico");
             var iconTarget = File.Exists(iconPath) ? iconPath : studioExe;
 
-            var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            var desktopDirs = new[]
-            {
-                Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
-                Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
-                Path.Combine(userProfile, "OneDrive", "Desktop"),
-                Path.Combine(userProfile, "Desktop")
-            }
-            .Where(d => !string.IsNullOrWhiteSpace(d) && Directory.Exists(d))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+            var desktopDirs = DesktopDirectories();
 
             var startMenuDir = Environment.GetFolderPath(Environment.SpecialFolder.Programs);
             var sb = new StringBuilder();
             sb.AppendLine("$WshShell = New-Object -comObject WScript.Shell");
             foreach (var dir in desktopDirs)
             {
-                var lnk = Path.Combine(dir, "Triune Studio.lnk");
+                var lnk = Path.Combine(dir, ShortcutName);
                 try { if (File.Exists(lnk)) File.Delete(lnk); } catch { }
                 sb.AppendLine($"$s = $WshShell.CreateShortcut('{lnk.Replace("'", "''")}');");
                 sb.AppendLine($"$s.TargetPath = '{studioExe.Replace("'", "''")}';");
@@ -406,7 +463,7 @@ public partial class MainWindow : Window
 
             if (!string.IsNullOrWhiteSpace(startMenuDir) && Directory.Exists(startMenuDir))
             {
-                var startLnk = Path.Combine(startMenuDir, "Triune Studio.lnk");
+                var startLnk = Path.Combine(startMenuDir, ShortcutName);
                 try { if (File.Exists(startLnk)) File.Delete(startLnk); } catch { }
                 sb.AppendLine($"$sm = $WshShell.CreateShortcut('{startLnk.Replace("'", "''")}');");
                 sb.AppendLine($"$sm.TargetPath = '{studioExe.Replace("'", "''")}';");
@@ -417,7 +474,7 @@ public partial class MainWindow : Window
 
                 if (File.Exists(setupExe))
                 {
-                    var setupLnk = Path.Combine(startMenuDir, "Triune Studio Setup.lnk");
+                    var setupLnk = Path.Combine(startMenuDir, SetupShortcutName);
                     try { if (File.Exists(setupLnk)) File.Delete(setupLnk); } catch { }
                     sb.AppendLine($"$su = $WshShell.CreateShortcut('{setupLnk.Replace("'", "''")}');");
                     sb.AppendLine($"$su.TargetPath = '{setupExe.Replace("'", "''")}';");
@@ -473,20 +530,18 @@ public partial class MainWindow : Window
 
     private void LaunchStudioButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_workspaceRoot is null) return;
-        var candidates = new[]
-        {
-            Path.Combine(_workspaceRoot, "TriuneStudio.exe"),
-            Path.Combine(_workspaceRoot, "studio", "windows", "publish", "TriuneStudio.exe"),
-            Path.Combine(_workspaceRoot, "studio", "windows", "TriuneStudio.Windows", "bin", "Release", "net10.0-windows", "TriuneStudio.exe"),
-            Path.Combine(_workspaceRoot, "studio", "TriuneStudio.bat")
-        };
+        if (LaunchStudio()) Close();
+    }
 
-        var target = candidates.FirstOrDefault(File.Exists);
+    private bool LaunchStudio()
+    {
+        if (_workspaceRoot is null) return false;
+        var target = ResolveStudioTarget(_workspaceRoot);
+
         if (target is null)
         {
             AppendLog("[ERROR] Could not locate TriuneStudio.exe.");
-            return;
+            return false;
         }
 
         Process.Start(new ProcessStartInfo
@@ -495,7 +550,7 @@ public partial class MainWindow : Window
             WorkingDirectory = _workspaceRoot,
             UseShellExecute = true
         });
-        Close();
+        return true;
     }
 
     private void Window_Closing(object? sender, System.ComponentModel.CancelEventArgs e)

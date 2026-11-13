@@ -1,0 +1,118 @@
+{
+  "device": "NVIDIA GeForce RTX 5070 Laptop GPU",
+  "dtype": "torch.bfloat16",
+  "mode": "eval, MoE_FFN.forward (dense) vs sparse_forward (sort-by-expert, per-expert matmul)",
+  "configs": {
+    "default_1536d_8e_top1": [
+      {
+        "tokens": 1,
+        "dense_ms": 5.945,
+        "sparse_ms": 1.752,
+        "sparse_speedup_x": 3.394,
+        "max_abs_diff": 0.00390625
+      },
+      {
+        "tokens": 16,
+        "dense_ms": 7.256,
+        "sparse_ms": 4.186,
+        "sparse_speedup_x": 1.733,
+        "max_abs_diff": 0.0078125
+      },
+      {
+        "tokens": 256,
+        "dense_ms": 12.046,
+        "sparse_ms": 4.779,
+        "sparse_speedup_x": 2.521,
+        "max_abs_diff": 0.015625
+      },
+      {
+        "tokens": 1024,
+        "dense_ms": 29.334,
+        "sparse_ms": 8.026,
+        "sparse_speedup_x": 3.655,
+        "max_abs_diff": 0.0078125
+      },
+      {
+        "tokens": 4096,
+        "dense_ms": 122.667,
+        "sparse_ms": 28.293,
+        "sparse_speedup_x": 4.336,
+        "max_abs_diff": 0.009765625
+      }
+    ],
+    "default_1536d_8e_top2": [
+      {
+        "tokens": 1,
+        "dense_ms": 6.826,
+        "sparse_ms": 2.77,
+        "sparse_speedup_x": 2.464,
+        "max_abs_diff": 0.00390625
+      },
+      {
+        "tokens": 16,
+        "dense_ms": 10.866,
+        "sparse_ms": 4.27,
+        "sparse_speedup_x": 2.545,
+        "max_abs_diff": 0.0078125
+      },
+      {
+        "tokens": 256,
+        "dense_ms": 24.516,
+        "sparse_ms": 5.408,
+        "sparse_speedup_x": 4.534,
+        "max_abs_diff": 0.01171875
+      },
+      {
+        "tokens": 1024,
+        "dense_ms": 57.472,
+        "sparse_ms": 12.337,
+        "sparse_speedup_x": 4.658,
+        "max_abs_diff": 0.0078125
+      },
+      {
+        "tokens": 4096,
+        "dense_ms": 222.955,
+        "sparse_ms": 34.932,
+        "sparse_speedup_x": 6.383,
+        "max_abs_diff": 0.01171875
+      }
+    ],
+    "checkpoint_384d_4e_top1": [
+      {
+        "tokens": 1,
+        "dense_ms": 2.062,
+        "sparse_ms": 1.93,
+        "sparse_speedup_x": 1.068,
+        "max_abs_diff": 0.00390625
+      },
+      {
+        "tokens": 16,
+        "dense_ms": 2.48,
+        "sparse_ms": 3.398,
+        "sparse_speedup_x": 0.73,
+        "max_abs_diff": 0.00390625
+      },
+      {
+        "tokens": 256,
+        "dense_ms": 3.111,
+        "sparse_ms": 3.328,
+        "sparse_speedup_x": 0.935,
+        "max_abs_diff": 0.0078125
+      },
+      {
+        "tokens": 1024,
+        "dense_ms": 3.16,
+        "sparse_ms": 3.604,
+        "sparse_speedup_x": 0.877,
+        "max_abs_diff": 0.0078125
+      },
+      {
+        "tokens": 4096,
+        "dense_ms": 7.039,
+        "sparse_ms": 3.362,
+        "sparse_speedup_x": 2.094,
+        "max_abs_diff": 0.0078125
+      }
+    ]
+  }
+}

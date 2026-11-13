@@ -14,6 +14,14 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>..\triune.ico</ApplicationIcon>
     <AssemblyName>TriuneStudio</AssemblyName>
+    <Version>2.1.0</Version>
+    <Product>Triune Studio</Product>
+    <Company>Triune AI</Company>
+    <Authors>Triune AI</Authors>
+    <Description>Triune Studio - Triune AI engine and research IDE</Description>
+    <Copyright>Copyright (c) Triune AI</Copyright>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <DebugType>none</DebugType>
     <RootNamespace>TriuneStudio.Windows</RootNamespace>
   </PropertyGroup>
   <ItemGroup>

@@ -14,6 +14,11 @@ if "%~1"=="" (
         start "" "%~dp0..\..\TriuneStudioSetup.exe"
         exit /b 0
     )
+    if exist "%~dp0..\publish\TriuneStudioSetup.exe" (
+        echo [Setup] Launching Native Windows Setup Wizard (TriuneStudioSetup.exe)...
+        start "" "%~dp0..\publish\TriuneStudioSetup.exe"
+        exit /b 0
+    )
     if exist "%~dp0..\windows\publish\TriuneStudioSetup.exe" (
         echo [Setup] Launching Native Windows Setup Wizard (TriuneStudioSetup.exe)...
         start "" "%~dp0..\windows\publish\TriuneStudioSetup.exe"

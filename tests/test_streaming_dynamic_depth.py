@@ -80,6 +80,32 @@ class TestStreamingDynamicDepth(unittest.TestCase):
 
         engine.detach()
 
+    def test_jev_early_exit_projection_runs_while_layer_is_staged(self):
+        model = TriuneTransformer(
+            vocab_size=64,
+            hidden_dim=64,
+            num_layers=4,
+            num_heads=2,
+            head_dim=32,
+            num_experts=2,
+            router_prefix_layers=1,
+            reflex_exit_layer=2,
+            limbic_exit_layer=3,
+        )
+        model.enable_jev_routing(threshold=0.0)
+        engine = LayerStreamingEngine(
+            model,
+            device=self.device,
+            config=StreamingConfig(enabled=True, async_prefetch=False, pin_memory=False),
+        )
+        engine.attach()
+        input_ids = torch.randint(0, 64, (2, 8), device=self.device)
+
+        logits, _ = model(input_ids, exit_policy="jev")
+
+        self.assertEqual(logits.shape, (2, 8, 64))
+        engine.detach()
+
 
 if __name__ == "__main__":
     unittest.main()

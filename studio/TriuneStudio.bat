@@ -16,6 +16,11 @@ if "%~1"=="" (
         start "" "TriuneStudio.exe"
         exit /b 0
     )
+    if exist "studio\publish\TriuneStudio.exe" (
+        echo [Studio] Launching Native Windows Application ^(studio\publish\TriuneStudio.exe^)...
+        start "" "studio\publish\TriuneStudio.exe"
+        exit /b 0
+    )
     if exist "studio\windows\publish\TriuneStudio.exe" (
         echo [Studio] Launching Native Windows Application ^(studio\windows\publish\TriuneStudio.exe^)...
         start "" "studio\windows\publish\TriuneStudio.exe"

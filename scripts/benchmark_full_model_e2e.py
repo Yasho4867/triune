@@ -98,6 +98,7 @@ def load_trained_model(
         vocab_size, hidden_dim, num_layers, num_heads, head_dim, num_experts = 32000, 384, 8, 6, 64, 4
         router_prefix, reflex_exit, limbic_exit = 1, 2, 5
         step = 0
+        tokens_trained = None
         model = TriuneTransformer(
             vocab_size=vocab_size,
             hidden_dim=hidden_dim,
@@ -123,6 +124,7 @@ def load_trained_model(
         reflex_exit = spec.get("reflex_exit_layer", 2)
         limbic_exit = spec.get("limbic_exit_layer", 5)
         step = ckpt.get("step", 24501)
+        tokens_trained = ckpt.get("total_tokens_trained")
         
         model = TriuneTransformer(
             vocab_size=vocab_size,
@@ -155,6 +157,7 @@ def load_trained_model(
     meta = {
         "checkpoint": str(checkpoint_path),
         "step": step,
+        "tokens_trained": tokens_trained,
         "vocab_size": vocab_size,
         "hidden_dim": hidden_dim,
         "num_layers": num_layers,

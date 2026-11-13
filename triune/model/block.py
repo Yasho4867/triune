@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Callable
+
 import torch
 import torch.nn as nn
 
@@ -56,7 +58,16 @@ class TransformerBlock(nn.Module):
         self.use_moe = use_moe
         self._use_gradient_checkpointing = False
 
-    def forward(self, x: torch.Tensor, return_exit: bool = False, cache=None, update_stats: bool = True):
+    def forward(
+        self,
+        x: torch.Tensor,
+        return_exit: bool = False,
+        cache=None,
+        update_stats: bool = True,
+        exit_decider: Callable[[torch.Tensor], bool] | None = None,
+        exit_last_token_only: bool = False,
+    ):
+
         if self._use_gradient_checkpointing and self.training and torch.is_grad_enabled():
             attn_out, new_cache = torch.utils.checkpoint.checkpoint(
                 lambda n: self.attn(n, cache=cache),
@@ -88,7 +99,8 @@ class TransformerBlock(nn.Module):
                 x = x + self.ffn(self.norm2(x), update_stats=update_stats)
             else:
                 x = x + self.ffn(self.norm2(x))
-        if self.exit_head and return_exit:
-            exit_logits = self.exit_head(self.exit_norm(x))
+        if self.exit_head and (return_exit or (exit_decider is not None and exit_decider(x))):
+            x_exit = x[:, -1:, :] if exit_last_token_only else x
+            exit_logits = self.exit_head(self.exit_norm(x_exit))
             return x, exit_logits, new_cache
         return x, None, new_cache

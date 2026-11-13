@@ -234,7 +234,7 @@ public partial class MainWindow : Window
             File.Exists(Path.Combine(Environment.CurrentDirectory, "studio", "src", "index.html")))
             return Environment.CurrentDirectory;
 
-        for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
+        for (var directory = new DirectoryInfo(Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
         {
             if (File.Exists(Path.Combine(directory.FullName, "pyproject.toml")) &&
                 File.Exists(Path.Combine(directory.FullName, "studio", "src", "index.html")))

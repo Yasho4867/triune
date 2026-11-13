@@ -129,6 +129,31 @@ class TriuneTransformer(nn.Module):
         self.jev_router = JEVExitRouter(dim=self.hidden_dim, threshold=threshold, distance_metric=distance_metric).to(device=device, dtype=dtype)
         return self.jev_router
 
+    def embed_compressed(self, input_ids: torch.Tensor, tokenizer: Any, mean_pool: bool = True) -> torch.Tensor:
+        """Embed DynamicTokenizer ids, expanding composite ids into base-vocabulary embeddings.
+
+        mean_pool=True keeps one vector per compressed position (mean of its constituent base
+        embeddings). mean_pool=False returns the fully expanded base sequence, so the model
+        output is identical to running the uncompressed ids; it requires equal expanded length per row.
+        """
+        uniq, inverse = input_ids.unique(return_inverse=True)
+        expansions = [tokenizer.decompress_tokens([t]) for t in uniq.tolist()]
+        bad = [b for e in expansions for b in e if not 0 <= b < self.vocab_size]
+        if bad:
+            raise ValueError(f"Expanded base id {bad[0]} outside model vocab_size={self.vocab_size}")
+        dev = input_ids.device
+        if mean_pool:
+            lens = torch.tensor([len(e) for e in expansions], device=dev)
+            emb = self.token_embed(torch.tensor([b for e in expansions for b in e], device=dev))
+            seg = torch.repeat_interleave(torch.arange(uniq.numel(), device=dev), lens)
+            pooled = emb.new_zeros(uniq.numel(), emb.size(-1)).index_add_(0, seg, emb)
+            return (pooled / lens.unsqueeze(-1).to(emb.dtype))[inverse]
+        by_id = dict(zip(uniq.tolist(), expansions))
+        rows = [[b for t in row for b in by_id[t]] for row in input_ids.tolist()]
+        if len({len(r) for r in rows}) != 1:
+            raise ValueError("mean_pool=False requires equal expanded length across batch rows")
+        return self.token_embed(torch.tensor(rows, device=dev))
+
     def init_cache(self, batch_size: int = 1) -> list[Any]:
         """Initializes empty recurrent GLA cache states for all layers."""
         return [(None, 0) for _ in range(self.num_layers)]
@@ -166,8 +191,24 @@ class TriuneTransformer(nn.Module):
         self._streaming_engine = engine
         return engine
 
-    def _forward_block(self, layer, x, return_exit, cache=None, update_stats=True):
-        return layer(x, return_exit, cache, update_stats=update_stats)
+    def _forward_block(
+        self,
+        layer,
+        x,
+        return_exit,
+        cache=None,
+        update_stats=True,
+        exit_decider=None,
+        exit_last_token_only=False,
+    ):
+        return layer(
+            x,
+            return_exit,
+            cache,
+            update_stats=update_stats,
+            exit_decider=exit_decider,
+            exit_last_token_only=exit_last_token_only,
+        )
 
     def _run_layers(self, x, start_layer, end_layer, cache=None, update_stats=True):
         new_cache = list(cache) if cache is not None else None
@@ -190,7 +231,7 @@ class TriuneTransformer(nn.Module):
 
     def forward(
         self,
-        input_ids: torch.Tensor,
+        input_ids: Optional[torch.Tensor],
         force_depth: Optional[int] = None,
         cache: Optional[List[Any]] = None,
         temperature: float = 1.0,
@@ -198,12 +239,15 @@ class TriuneTransformer(nn.Module):
         last_token_only: bool = False,
         exit_policy: str = "gumbel",
         confidence_threshold: float = 0.8,
+        inputs_embeds: Optional[torch.Tensor] = None,
     ):
         if force_depth is not None and force_depth not in (0, 1, 2):
             raise ValueError(f"force_depth must be 0, 1, or 2; got {force_depth}")
-        B, T = input_ids.shape
-        device = input_ids.device
-        x = self.token_embed(input_ids)
+        if (input_ids is None) == (inputs_embeds is None):
+            raise ValueError("Provide exactly one of input_ids or inputs_embeds")
+        x = self.token_embed(input_ids) if inputs_embeds is None else inputs_embeds
+        B, T = x.shape[:2]
+        device = x.device
 
         x_prefix, new_cache = self._run_layers(x, 0, self.router_prefix_layers, cache=cache)
         route_logits, y_route, depth_choice, balance_loss = self._route(
@@ -221,11 +265,11 @@ class TriuneTransformer(nn.Module):
             )
             blk_ref = self.layers[self.reflex_exit_layer]
             layer_c = new_cache[self.reflex_exit_layer] if new_cache is not None else None
-            x_reflex, _, new_c = self._forward_block(blk_ref, x_reflex, False, cache=layer_c)
+            x_reflex, logits_r, new_c = self._forward_block(
+                blk_ref, x_reflex, True, cache=layer_c, exit_last_token_only=last_token_only
+            )
             if new_cache is not None:
                 new_cache[self.reflex_exit_layer] = new_c
-            x_pos_r = x_reflex[:, -1:, :] if last_token_only else x_reflex
-            logits_r = blk_ref.exit_head(blk_ref.exit_norm(x_pos_r))
 
             probs_r = F.softmax(logits_r[:, -1, :].float(), dim=-1)
             top2_r = torch.topk(probs_r, 2, dim=-1).values
@@ -243,11 +287,11 @@ class TriuneTransformer(nn.Module):
             )
             blk_lim = self.layers[self.limbic_exit_layer]
             layer_c = new_cache[self.limbic_exit_layer] if new_cache is not None else None
-            x_limbic, _, new_c = self._forward_block(blk_lim, x_limbic, False, cache=layer_c)
+            x_limbic, logits_l, new_c = self._forward_block(
+                blk_lim, x_limbic, True, cache=layer_c, exit_last_token_only=last_token_only
+            )
             if new_cache is not None:
                 new_cache[self.limbic_exit_layer] = new_c
-            x_pos_l = x_limbic[:, -1:, :] if last_token_only else x_limbic
-            logits_l = blk_lim.exit_head(blk_lim.exit_norm(x_pos_l))
 
             probs_l = F.softmax(logits_l[:, -1, :].float(), dim=-1)
             top2_l = torch.topk(probs_l, 2, dim=-1).values
@@ -277,13 +321,22 @@ class TriuneTransformer(nn.Module):
                 x_prefix, self.router_prefix_layers, self.reflex_exit_layer, cache=new_cache
             )
             blk_ref = self.layers[self.reflex_exit_layer]
-            x_reflex, _, new_c = self._forward_block(blk_ref, x_reflex, False)
+
+            jev_res = None
+
+            def should_exit(hidden):
+                nonlocal jev_res
+                jev_res = self.jev_router(hidden)
+                return jev_res.should_exit.float().mean() >= 0.5
+
+            x_reflex, jev_logits, new_c = self._forward_block(
+                blk_ref, x_reflex, False, exit_decider=should_exit, exit_last_token_only=last_token_only
+            )
             if new_cache is not None:
                 new_cache[self.reflex_exit_layer] = new_c
-            jev_res = self.jev_router(x_reflex)
-            if jev_res.should_exit.float().mean() >= 0.5:
-                x_pos = x_reflex[:, -1:, :] if last_token_only else x_reflex
-                logits = blk_ref.exit_head(blk_ref.exit_norm(x_pos))
+
+            if jev_res is not None and jev_res.should_exit.float().mean() >= 0.5:
+                logits = jev_logits
                 if cache is not None:
                     return logits, new_cache
                 if return_balance_loss:
@@ -299,11 +352,11 @@ class TriuneTransformer(nn.Module):
                 if new_cache is not None and layer_c is None:
                     layer_c = (None, 0)
                 blk = self.layers[self.reflex_exit_layer]
-                x_out, _, new_c = self._forward_block(blk, x_out, False, cache=layer_c)
+                x_out, logits, new_c = self._forward_block(
+                    blk, x_out, True, cache=layer_c, exit_last_token_only=last_token_only
+                )
                 if new_cache is not None:
                     new_cache[self.reflex_exit_layer] = new_c
-                x_pos = x_out[:, -1:, :] if last_token_only else x_out
-                logits = blk.exit_head(blk.exit_norm(x_pos))
             elif force_depth == 1:
                 x_out, new_cache = self._run_layers(
                     x_prefix, self.router_prefix_layers, self.limbic_exit_layer, cache=new_cache
@@ -312,17 +365,17 @@ class TriuneTransformer(nn.Module):
                 if new_cache is not None and layer_c is None:
                     layer_c = (None, 0)
                 blk = self.layers[self.limbic_exit_layer]
-                x_out, _, new_c = self._forward_block(blk, x_out, False, cache=layer_c)
+                x_out, logits, new_c = self._forward_block(
+                    blk, x_out, True, cache=layer_c, exit_last_token_only=last_token_only
+                )
                 if new_cache is not None:
                     new_cache[self.limbic_exit_layer] = new_c
-                x_pos = x_out[:, -1:, :] if last_token_only else x_out
-                logits = blk.exit_head(blk.exit_norm(x_pos))
             else:
                 x_out, new_cache = self._run_layers(
                     x_prefix, self.router_prefix_layers, self.num_layers, cache=new_cache
                 )
-                x_pos = x_out[:, -1:, :] if last_token_only else x_out
-                logits = self.final_head(self.final_norm(x_pos))
+                x_final = x_out[:, -1:, :] if last_token_only else x_out
+                logits = self.final_head(self.final_norm(x_final))
 
             if cache is not None:
                 return logits, new_cache
@@ -352,26 +405,26 @@ class TriuneTransformer(nn.Module):
                 if d_cache is not None and layer_c is None:
                     layer_c = (None, 0)
                 blk = self.layers[self.reflex_exit_layer]
-                x_d, _, new_c = self._forward_block(blk, x_d, False, cache=layer_c)
+                x_d, logits_d, new_c = self._forward_block(
+                    blk, x_d, True, cache=layer_c, exit_last_token_only=last_token_only
+                )
                 if d_cache is not None:
                     d_cache[self.reflex_exit_layer] = new_c
-                x_pos = x_d[:, -1:, :] if last_token_only else x_d
-                logits_d = blk.exit_head(blk.exit_norm(x_pos))
             elif d == 1:
                 x_d, d_cache = self._run_layers(x_d, self.router_prefix_layers, self.limbic_exit_layer, cache=d_cache)
                 layer_c = d_cache[self.limbic_exit_layer] if d_cache is not None else None
                 if d_cache is not None and layer_c is None:
                     layer_c = (None, 0)
                 blk = self.layers[self.limbic_exit_layer]
-                x_d, _, new_c = self._forward_block(blk, x_d, False, cache=layer_c)
+                x_d, logits_d, new_c = self._forward_block(
+                    blk, x_d, True, cache=layer_c, exit_last_token_only=last_token_only
+                )
                 if d_cache is not None:
                     d_cache[self.limbic_exit_layer] = new_c
-                x_pos = x_d[:, -1:, :] if last_token_only else x_d
-                logits_d = blk.exit_head(blk.exit_norm(x_pos))
             else:
                 x_d, d_cache = self._run_layers(x_d, self.router_prefix_layers, self.num_layers, cache=d_cache)
-                x_pos = x_d[:, -1:, :] if last_token_only else x_d
-                logits_d = self.final_head(self.final_norm(x_pos))
+                x_final = x_d[:, -1:, :] if last_token_only else x_d
+                logits_d = self.final_head(self.final_norm(x_final))
 
             T_out = 1 if last_token_only else T
             if final_logits is None:
