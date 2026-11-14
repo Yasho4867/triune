@@ -160,6 +160,16 @@ def polar_stiefel_retraction(P: torch.Tensor, eps: float = 1e-7) -> torch.Tensor
     return P
 
 
+def _fast_chol_ortho_2d(Y_f: torch.Tensor, eps_shift: float = 1e-6) -> torch.Tensor:
+    """Single-pass shifted Cholesky preconditioning in 2D without CPU synchronization."""
+    col_norms = torch.linalg.norm(Y_f, dim=0, keepdim=True).clamp_min(1e-12)
+    Y_norm = Y_f / col_norms
+    Gram = torch.mm(Y_norm.t(), Y_norm)
+    Gram.diagonal().add_(eps_shift)
+    L, _ = torch.linalg.cholesky_ex(Gram)
+    return torch.linalg.solve_triangular(L, Y_norm.t(), upper=False).t()
+
+
 def subspace_projection(
     grad: torch.Tensor,
     rank: int,
@@ -176,13 +186,13 @@ def subspace_projection(
     if side == "left":
         Omega = torch.randn(n, q, device=device, dtype=dtype)
         Y = torch.mm(grad, Omega)
-        Q = cholesky_qr(Y.float(), cond_threshold=cond_threshold, eps_shift=eps_shift, orth_tol=orth_tol).to(dtype)
         for _ in range(niter):
+            Q = _fast_chol_ortho_2d(Y.float()).to(dtype)
             Z = torch.mm(grad.t(), Q)
-            Q_z = cholesky_qr(Z.float(), cond_threshold=cond_threshold, eps_shift=eps_shift, orth_tol=orth_tol).to(dtype)
+            Q_z = _fast_chol_ortho_2d(Z.float()).to(dtype)
             Y = torch.mm(grad, Q_z)
-            Q = cholesky_qr(Y.float(), cond_threshold=cond_threshold, eps_shift=eps_shift, orth_tol=orth_tol).to(dtype)
-        
+        Q = cholesky_qr(Y.float(), cond_threshold=cond_threshold, eps_shift=eps_shift, orth_tol=orth_tol).to(dtype)
+
         B = torch.mm(Q.t(), grad)
         B_small = torch.mm(B, B.t())
         S, U_B = torch.linalg.eigh(B_small.float())
@@ -192,13 +202,13 @@ def subspace_projection(
     else:
         Omega = torch.randn(m, q, device=device, dtype=dtype)
         Y = torch.mm(grad.t(), Omega)
-        Q = cholesky_qr(Y.float(), cond_threshold=cond_threshold, eps_shift=eps_shift, orth_tol=orth_tol).to(dtype)
         for _ in range(niter):
+            Q = _fast_chol_ortho_2d(Y.float()).to(dtype)
             Z = torch.mm(grad, Q)
-            Q_z = cholesky_qr(Z.float(), cond_threshold=cond_threshold, eps_shift=eps_shift, orth_tol=orth_tol).to(dtype)
+            Q_z = _fast_chol_ortho_2d(Z.float()).to(dtype)
             Y = torch.mm(grad.t(), Q_z)
-            Q = cholesky_qr(Y.float(), cond_threshold=cond_threshold, eps_shift=eps_shift, orth_tol=orth_tol).to(dtype)
-        
+        Q = cholesky_qr(Y.float(), cond_threshold=cond_threshold, eps_shift=eps_shift, orth_tol=orth_tol).to(dtype)
+
         B = torch.mm(grad, Q)
         B_small = torch.mm(B.t(), B)
         S, V_B = torch.linalg.eigh(B_small.float())

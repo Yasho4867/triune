@@ -101,7 +101,7 @@ class SelfSpeculativeGenerator:
             draft_ctx = curr_ids.clone()
 
             for _ in range(self.k_draft):
-                res_draft = self.model(draft_ctx, force_depth=0)
+                res_draft = self.model(draft_ctx, force_depth=0, last_token_only=True)
                 logits_draft = res_draft[0] if isinstance(res_draft, (tuple, list)) else res_draft
                 next_draft_logits = logits_draft[0, -1]
 

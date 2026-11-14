@@ -38,6 +38,11 @@ class TestCompetitiveBenchmarks(unittest.TestCase):
         chunk_size = 512
 
         torch.manual_seed(42)
+        if self.device.type == "cuda":
+            torch.cuda.empty_cache()
+            pre_test_mem = torch.cuda.memory_allocated(self.device)
+        else:
+            pre_test_mem = 0
         head = nn.Linear(D, V, bias=False, device=self.device, dtype=self.dtype)
         h1 = torch.randn(N, D, device=self.device, dtype=self.dtype, requires_grad=True)
         h2 = h1.detach().clone().requires_grad_(True)
@@ -51,9 +56,11 @@ class TestCompetitiveBenchmarks(unittest.TestCase):
         l_std = F.cross_entropy(head(h1).float(), y)
         loss_std_val = l_std.item()
         l_std.backward()
-        std_vram = torch.cuda.max_memory_allocated(self.device) if self.device.type == "cuda" else 100.0
+        std_vram = (torch.cuda.max_memory_allocated(self.device) - pre_test_mem) if self.device.type == "cuda" else 100.0
 
         # Triune chunked loss
+        h1_grad = h1.grad.detach().cpu()
+        h1.grad = None
         del l_std
         if self.device.type == "cuda":
             torch.cuda.empty_cache()
@@ -62,11 +69,11 @@ class TestCompetitiveBenchmarks(unittest.TestCase):
         l_tri = chunked_cross_entropy_from_hidden(h2, head, y, chunk_size=chunk_size)
         loss_tri_val = l_tri.item()
         l_tri.backward()
-        tri_vram = torch.cuda.max_memory_allocated(self.device) if self.device.type == "cuda" else 20.0
+        tri_vram = (torch.cuda.max_memory_allocated(self.device) - pre_test_mem) if self.device.type == "cuda" else 20.0
 
         # Parity checks
         loss_diff = abs(loss_std_val - loss_tri_val)
-        grad_diff = (h1.grad - h2.grad).abs().max().item()
+        grad_diff = (h1_grad.to(h2.grad.device) - h2.grad).abs().max().item()
         self.assertLess(loss_diff, 1e-4, f"Loss parity failed: diff = {loss_diff}")
         self.assertLess(grad_diff, 1e-4, f"Grad parity failed: diff = {grad_diff}")
 

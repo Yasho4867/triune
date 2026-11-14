@@ -87,6 +87,15 @@ class TestDynamicTokenizerModelCompat(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.model(self.base, inputs_embeds=torch.zeros(1, 4, self.model.hidden_dim))
 
+    def test_forward_accepts_compressed_ids_with_tokenizer_and_sparse_moe(self):
+        for layer in self.model.layers:
+            if hasattr(layer.ffn, "use_sparse_eval"):
+                layer.ffn.use_sparse_eval = True
+        with torch.no_grad():
+            logits, _ = self.model(self.comp, force_depth=2, last_token_only=True, tokenizer=self.tok)
+        self.assertEqual(logits.shape, (1, 1, self.model.vocab_size))
+        self.assertTrue(torch.isfinite(logits).all())
+
 
 if __name__ == "__main__":
     unittest.main()

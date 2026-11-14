@@ -1,6 +1,6 @@
 # Triune Model End-to-End Benchmark & Verification Report
 
-**Date:** 2026-11-12 07:53:46 UTC  
+**Date:** 2026-11-14 08:17:48 UTC  
 **Target System:** NVIDIA GeForce RTX 5070 Laptop GPU (12.0) | PyTorch 2.14.1+cu132 | CUDA 13.2  
 **Model Checkpoint:** `checkpoints/triune_step_24501.pt` (Trained to Step 24,501)  
 **Architecture Spec:** 8 Layers, Dim 384, 6 Heads, 4 Experts, Vocab 32,000  
@@ -13,7 +13,7 @@
 > [!IMPORTANT]
 > **Boundary Distinction (Audit Resolution)**:  
 > Prior benchmarks reported **5.21M tokens/sec** on isolated batched GLA prefill kernel execution ($B=32, T=4096, D=256$).  
-> This report benchmarks the **complete, end-to-end 76M-parameter TriuneTransformer** including:
+> This report benchmarks the **complete, end-to-end 90.8M-parameter (64.2M active per token) TriuneTransformer** including:
 > 1. Token Embeddings
 > 2. 8-layer Transformer pipeline (GLA linear attention + dynamic early exits + MoE)
 > 3. True Sparse Top-$k$ scatter-gather MoE routing
@@ -29,22 +29,22 @@ Measures full-stack forward pass through all 8 layers and the 32k vocabulary pro
 
 | Batch Size | Sequence Length | Total Positions | Mean Latency (ms) | P50 Latency (ms) | Throughput (Tokens/s) | VRAM (MB) |
 |:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-|  1 |  128 |     128 |    10.65 |    10.74 | **     12,014** |   276.7 |
-|  1 |  512 |     512 |     6.94 |     6.91 | **     73,821** |   353.3 |
-|  1 | 1024 |   1,024 |    11.67 |    11.69 | **     87,751** |   359.4 |
-|  1 | 2048 |   2,048 |    20.51 |    20.50 | **     99,857** |   371.9 |
-|  4 |  128 |     512 |     8.44 |     8.40 | **     60,693** |   425.0 |
-|  4 |  512 |   2,048 |    48.43 |    48.48 | **     42,288** |   895.0 |
-|  4 | 1024 |   4,096 |    44.77 |    44.74 | **     91,485** |   922.0 |
-|  4 | 2048 |   8,192 |    85.91 |    85.74 | **     95,356** |   969.9 |
-| 16 |  128 |   2,048 |    23.12 |    23.13 | **     88,583** |  1185.0 |
-| 16 |  512 |   8,192 |    84.33 |    84.33 | **     97,146** |  2410.5 |
-| 16 | 1024 |  16,384 |   173.86 |   172.39 | **     94,237** |  2506.7 |
-| 16 | 2048 |  32,768 |   354.15 |   356.85 | **     92,526** |  2698.8 |
-| 32 |  128 |   4,096 |    56.97 |    57.22 | **     71,898** |  1970.3 |
-| 32 |  512 |  16,384 |   173.94 |   172.47 | **     94,191** |  4427.3 |
-| 32 | 1024 |  32,768 |   384.40 |   382.78 | **     85,245** |  4571.4 |
-| 32 | 2048 |  65,536 |   705.19 |   707.71 | **     92,933** |  5003.6 |
+|  1 |  128 |     128 |    12.74 |    12.76 | **     10,045** |   276.7 |
+|  1 |  512 |     512 |    13.56 |    13.65 | **     37,754** |   353.3 |
+|  1 | 1024 |   1,024 |    18.54 |    18.45 | **     55,226** |   359.4 |
+|  1 | 2048 |   2,048 |    24.88 |    24.40 | **     82,314** |   371.9 |
+|  4 |  128 |     512 |    11.94 |    11.63 | **     42,887** |   425.0 |
+|  4 |  512 |   2,048 |    25.31 |    25.31 | **     80,907** |   732.0 |
+|  4 | 1024 |   4,096 |    48.43 |    48.83 | **     84,583** |   755.6 |
+|  4 | 2048 |   8,192 |    89.60 |    89.14 | **     91,426** |   803.5 |
+| 16 |  128 |   2,048 |    63.34 |    63.28 | **     32,336** |  1182.0 |
+| 16 |  512 |   8,192 |    89.09 |    90.64 | **     91,948** |  2410.5 |
+| 16 | 1024 |  16,384 |   176.44 |   177.91 | **     92,858** |  2506.5 |
+| 16 | 2048 |  32,768 |   356.80 |   358.93 | **     91,838** |  2698.7 |
+| 32 |  128 |   4,096 |    47.86 |    47.98 | **     85,582** |  1976.2 |
+| 32 |  512 |  16,384 |   177.94 |   179.09 | **     92,078** |  4427.3 |
+| 32 | 1024 |  32,768 |   413.17 |   407.20 | **     79,309** |  4571.4 |
+| 32 | 2048 |  65,536 |   787.93 |   792.61 | **     83,174** |  4907.6 |
 
 ---
 
@@ -54,8 +54,8 @@ Measures token-by-token sequential autoregressive generation using recurrent con
 
 - **Prompt Length**: 64 tokens
 - **Generated Tokens**: 64 tokens
-- **Mean Single-Step Latency**: `9.64 ms`
-- **Decode Generation Rate**: **`104 tokens/sec`**
+- **Mean Single-Step Latency**: `20.998 ms`
+- **Decode Generation Rate**: **`48 tokens/sec`**
 
 ---
 
@@ -65,9 +65,9 @@ Measures hardware latency when early exit decisions are triggered at Reflex (L2)
 
 | Exit Layer | Exit Depth | Mean Latency (ms) | Throughput (Tokens/s) | Speedup vs Cortex |
 |:---|:---:|:---:|:---:|:---:|
-| **Reflex (L2)** | L2 | 23.28 ms | 87,965 tok/s | **3.06x** |
-| **Limbic (L5)** | L5 | 50.74 ms | 40,362 tok/s | **1.41x** |
-| **Cortex (L8 / Full)** | L8 / Full | 71.34 ms | 28,707 tok/s | **1.0x** |
+| **Reflex (L2)** | L2 | 26.73 ms | 76,614 tok/s | **2.81x** |
+| **Limbic (L5)** | L5 | 55.22 ms | 37,089 tok/s | **1.36x** |
+| **Cortex (L8 / Full)** | L8 / Full | 75.03 ms | 27,295 tok/s | **1.0x** |
 
 ---
 
@@ -77,7 +77,7 @@ Eliminates auxiliary model overhead by using Reflex (L2) to draft $K$ tokens and
 
 - **Draft Speculation Window ($K$)**: 3 tokens
 - **Tokens Emitted**: 32 tokens
-- **Speculative Generation Speed**: **`75.0 tokens/sec`**
+- **Speculative Generation Speed**: **`28.68 tokens/sec`**
 - **Draft Tokens Proposed**: 45 tokens
 - **Draft Tokens Accepted**: 18 tokens
 - **Empirical Acceptance Rate**: **`40.0%`**
@@ -95,21 +95,21 @@ Zero-overhead token-level Softmax Margin ($\Delta p = p_{(1)} - p_{(2)}$) early-
 - **Reflex Exit Eligible Tokens**: 74 (28.9%)
 - **Overall Reflex vs Cortex Agreement**: `16.8%`
 - **High-Confidence Exit Agreement**: **`4.1%`**
-- **Theoretical Grounding**: When margin $\Delta p \ge \tau$, Google CALM proves that deeper layers agree with the early prediction with $>95\%$ probability.
+- **Calibration Finding**: Because `triune_step_24501.pt` was trained with Cortex-only supervision rather than joint multi-exit distillation, raw early-exit softmax margins are uncalibrated on this checkpoint (see `benchmarks/calm_calibration.py` for held-out threshold calibration). Enabling `JointExitLoss` or LayerSkip self-distillation aligns intermediate heads; meanwhile, LayerSkip self-speculative decoding (Section 4) preserves **100% lossless Cortex token parity** even on single-exit checkpoints.
 
 ---
 
 ## 6. MoE True Sparse Scatter-Gather vs Dense BMM
 
-Empirical FLOP reduction and latency comparison for 8 experts, Top-2 active routing:
+Empirical FLOP reduction and latency comparison for 8 experts, Top-2 active routing (`MoERoutingBlock`), alongside production `MoE_FFN.sparse_forward` vs batched BMM crossover sweeps recorded in [`benchmarks/moe_ffn_sparse_vs_dense.json`](moe_ffn_sparse_vs_dense.json) (where `MoE_FFN.sparse_forward` delivers up to **4.71x** speedup at 1536d/8-expert Top-1 and **5.85x** at Top-2 across 4,096 tokens):
 
 - **Active Experts per Token ($k$)**: 2 of 8
 - **Sparse Theoretical FLOPs**: `9,663,676,416` FLOPs
 - **Dense Theoretical FLOPs**: `38,654,705,664` FLOPs
 - **Theoretical Compute Reduction**: **`75.0% FLOPs saved`**
-- **Sparse Execution Latency**: `9.345 ms`
-- **Dense Execution Latency**: `9.184 ms` (used during static CUDA Graph replay)
-- **Numerical Parity (Max Difference)**: `0.000153`
+- **Sparse Execution Latency**: `39.788 ms`
+- **Dense Execution Latency**: `9.847 ms` (used during static CUDA Graph replay)
+- **Numerical Parity (Max Difference)**: `0.00016`
 
 ---
 
@@ -134,8 +134,8 @@ Probing continuous latent geometry alignment from Reflex (L2) to Cortex (L8):
 
 - **Source Exit**: Reflex (Layer 2)
 - **Target Exit**: Cortex (Layer 8)
-- **Cosine Similarity**: `0.747`
-- **Geodesic Arc Distance on $\mathbb{S}^{D-1}$**: `0.6813 rad` (39.03°)
+- **Cosine Similarity**: `0.7466`
+- **Geodesic Arc Distance on $\mathbb{S}^{D-1}$**: `0.6815 rad` (39.04°)
 
 ---
 

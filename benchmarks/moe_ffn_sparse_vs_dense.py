@@ -10,7 +10,6 @@ import time
 from pathlib import Path
 
 import torch
-import torch.nn.functional as F
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -21,28 +20,6 @@ CONFIGS = {
     "default_1536d_8e_top2": dict(dim=1536, num_experts=8, top_k=2),
     "checkpoint_384d_4e_top1": dict(dim=384, num_experts=4, top_k=1),
 }
-
-
-@torch.no_grad()
-def sparse_forward(moe: MoE_FFN, x: torch.Tensor) -> torch.Tensor:
-    B, T, D = x.shape
-    flat_x = x.reshape(-1, D)
-    logits = moe.router(flat_x)
-    _, top_idx = torch.topk(logits + moe.expert_bias, moe.top_k, dim=-1)
-    weights = torch.gather(F.softmax(logits, dim=-1), 1, top_idx)
-    if moe.top_k > 1:
-        weights = weights / (weights.sum(dim=-1, keepdim=True) + 1e-20)
-    expert_ids = top_idx.reshape(-1)
-    order = expert_ids.argsort(stable=True)
-    token_ids = torch.arange(flat_x.size(0), device=x.device).repeat_interleave(moe.top_k)[order]
-    counts = torch.bincount(expert_ids, minlength=moe.num_experts).tolist()
-    chunks = flat_x[token_ids].split(counts)
-    y = torch.cat([moe.experts[e](c) for e, c in enumerate(chunks) if c.numel()])
-    y = y * weights.reshape(-1)[order].unsqueeze(-1).to(y.dtype)
-    out = torch.zeros_like(flat_x).index_add_(0, token_ids, y)
-    if moe.shared_expert:
-        out = out + moe.shared_scale * moe.shared(flat_x)
-    return out.reshape(B, T, D)
 
 
 def time_ms(fn, reps: int, device: torch.device) -> float:
@@ -68,10 +45,10 @@ def run(cfg: dict, token_counts: list[int], dtype: torch.dtype, device: torch.de
     for n in token_counts:
         x = torch.randn(1, n, cfg["dim"], device=device, dtype=dtype)
         with torch.no_grad():
-            dense_out, sparse_out = moe(x), sparse_forward(moe, x)
+            dense_out, sparse_out = moe(x), moe.sparse_forward(x)
             max_diff = (dense_out.float() - sparse_out.float()).abs().max().item()
             dense_ms = time_ms(lambda: moe(x), reps, device)
-            sparse_ms = time_ms(lambda: sparse_forward(moe, x), reps, device)
+            sparse_ms = time_ms(lambda: moe.sparse_forward(x), reps, device)
         rows.append(
             {
                 "tokens": n,

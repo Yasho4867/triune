@@ -240,12 +240,20 @@ class TriuneTransformer(nn.Module):
         exit_policy: str = "gumbel",
         confidence_threshold: float = 0.8,
         inputs_embeds: Optional[torch.Tensor] = None,
+        tokenizer: Optional[Any] = None,
     ):
         if force_depth is not None and force_depth not in (0, 1, 2):
             raise ValueError(f"force_depth must be 0, 1, or 2; got {force_depth}")
         if (input_ids is None) == (inputs_embeds is None):
             raise ValueError("Provide exactly one of input_ids or inputs_embeds")
-        x = self.token_embed(input_ids) if inputs_embeds is None else inputs_embeds
+        if inputs_embeds is not None:
+            x = inputs_embeds
+        else:
+            active_tok = tokenizer if tokenizer is not None else getattr(self, "tokenizer", None)
+            if active_tok is not None and input_ids.numel() > 0 and int(input_ids.max().item()) >= self.vocab_size:
+                x = self.embed_compressed(input_ids, active_tok)
+            else:
+                x = self.token_embed(input_ids)
         B, T = x.shape[:2]
         device = x.device
 

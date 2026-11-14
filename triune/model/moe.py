@@ -54,6 +54,7 @@ class MoE_FFN(nn.Module):
         self.use_fp8 = use_fp8
         self.shared_expert = shared_expert
         self.shared_scale = shared_scale
+        self.use_sparse_eval = False
 
         Linear = FP8Linear if use_fp8 else (FP4Linear if use_fp4 else nn.Linear)
         hidden_dim = dim * EXPERT_HIDDEN_MULTIPLIER
@@ -121,8 +122,34 @@ class MoE_FFN(nn.Module):
             value = torch.tensor(int(value), dtype=torch.long)
         super().__setattr__(name, value)
 
+    def sparse_forward(self, x: torch.Tensor) -> torch.Tensor:
+        """True Top-k sparse scatter-gather forward pass grouped by selected expert."""
+        B, T, D = x.shape
+        flat_x = x.reshape(-1, D)
+        logits = self.router(flat_x)
+        _, top_idx = torch.topk(logits + self.expert_bias, self.top_k, dim=-1)
+        weights = torch.gather(F.softmax(logits, dim=-1), 1, top_idx)
+        if self.top_k > 1:
+            weights = weights / (weights.sum(dim=-1, keepdim=True) + 1e-20)
+        expert_ids = top_idx.reshape(-1)
+        order = expert_ids.argsort(stable=True)
+        token_ids = torch.arange(flat_x.size(0), device=x.device).repeat_interleave(self.top_k)[order]
+        counts = torch.bincount(expert_ids, minlength=self.num_experts).tolist()
+        chunks = flat_x[token_ids].split(counts)
+        ys = [self.experts[e](c) for e, c in enumerate(chunks) if c.numel()]
+        out = torch.zeros_like(flat_x)
+        if ys:
+            y = torch.cat(ys)
+            y = y * weights.reshape(-1)[order].unsqueeze(-1).to(y.dtype)
+            out.index_add_(0, token_ids, y.to(out.dtype))
+        if self.shared_expert:
+            out = out + (self.shared_scale * self.shared(flat_x)).to(out.dtype)
+        return out.reshape(B, T, D)
+
     def forward(self, x, update_stats=True):
         """If update_stats=False, skip bias/centroid updates (used during label generation)."""
+        if not self.training and getattr(self, "use_sparse_eval", False):
+            return self.sparse_forward(x)
         B, T, D = x.shape
         N_tok = B * T
         flat_x = x.reshape(N_tok, D)

@@ -13,7 +13,7 @@
   - **Tier 3 (`AdamW` / `8-bit AdamW`)**: Fused adaptive moments for 1D vectors, norms, router gates, and vocabulary embeddings ($4.54\text{ B/p}$ model-wide with standard FP32 AdamW, or $1.27\text{ B/p}$ with 8-bit AdamW).
 - **Layer Streaming Runtime (`LayerStreamingEngine`)**: On-demand layer staging and immediate gradient offloading between host RAM and GPU VRAM with configurable `resident_gpu_layers`, reducing peak GPU VRAM by **up to 47.9%** without pegging system RAM.
 - **Native C/AVX2/CUDA/Triton Operator Engine (`csrc/` & `triune.ops`)**: Zero-copy `ctypes` / P/Invoke C ABI (`triune_core.dll` / `libtriune_core.so`) and Triton/Tensor Core kernels for RMSNorm, RoPE, GLA recurrent decode, chunked vocabulary-projection Cross-Entropy (**up to 91.3% peak transient VRAM saved**), and Neuron Scope activation telemetry.
-- **Triune AI Studio (`TriuneStudio.exe`)**: Self-contained native Windows desktop application (`.NET 10` + `WebView2` + `triune_core.dll`) and visual DAG IDE for interactive training, LoRA/QLoRA fine-tuning, live Neuron Scope inspection, and OpenAI-compatible serving.
+- **Triune AI Studio (`TriuneStudio.exe` / `TriuneStudioSetup.exe`)**: Self-contained native Windows desktop application (`.NET 10` + `WebView2` + `triune_core.dll`), WPF installer (`TriuneStudioSetup.exe`), and visual DAG IDE for interactive training, LoRA/QLoRA fine-tuning, live Neuron Scope inspection, and OpenAI-compatible serving.
 
 ## 3-Tier Refactored Repository Structure
 
@@ -56,13 +56,14 @@ TriuneTransformer/
 5. **Native Desktop IDE & Unified CLI (`TriuneStudio.exe` / `triune studio` / `triune serve` / `triune doctor`)**:
    Launch the self-contained Windows desktop application (`TriuneStudio.exe`) or serve models locally at `http://127.0.0.1:8000/v1/chat/completions` for drop-in integration with Cursor, Continue, LangChain, or OpenAI SDK clients.
 
-## 🚀 1-Click Installation (Recommended)
+## 1-Click Installation (Recommended)
 
-Triune provides an automated installer in `studio/installer/` that inspects your hardware (NVIDIA CUDA, AMD ROCm, Apple Silicon Metal, or CPU), configures a virtual environment, installs the optimal PyTorch distribution, and creates desktop launchers.
+Triune provides a native Windows installer (`TriuneStudioSetup.exe` built in `studio/publish/`) as well as automated installers in `studio/installer/` that inspect your hardware (NVIDIA CUDA, AMD ROCm, Apple Silicon Metal, or CPU), configure a virtual environment, install the optimal PyTorch distribution, and create desktop launchers.
 
-### Windows (Double-Click or Command Prompt / PowerShell)
+### Windows (Installer, Double-Click, or PowerShell)
 ```cmd
-:: Double-click install_studio.bat or run from terminal:
+:: Run the native Windows installer or automated setup script:
+studio\publish\TriuneStudioSetup.exe
 studio\installer\install_studio.bat
 ```
 
@@ -79,26 +80,23 @@ python studio/installer/installer.py
 
 ---
 
-## 🖥️ Launching Triune AI Studio
+## Launching Triune AI Studio
 
 After installation, launch **Triune AI Studio** as a native desktop application:
 
-- **Windows (Self-Contained Native Executable)**: Double-click `TriuneStudio.exe` at the repository root (bundles `.NET 10`, `WebView2`, and `triune_core.dll` into a single native executable).
+- **Windows (Self-Contained Native Executable)**: Double-click `TriuneStudio.exe` at the repository root or `studio\publish\TriuneStudio.exe` (bundles `.NET 10`, `WebView2`, and `triune_core.dll` into a single native executable).
 - **Windows (Batch Fallback)**: `studio\TriuneStudio.bat`
 - **Linux / macOS**: `./studio/TriuneStudio.sh`
 - **Python / CLI**: `triune studio --port 8000` or `python scripts/launch_studio.py --port 8000`
 
-### Rebuilding the Native Windows App (`TriuneStudio.exe`)
+### Rebuilding the Native Windows App (`TriuneStudio.exe`) and Installer (`TriuneStudioSetup.exe`)
 
-To build the native C/AVX2 shared library (`triune_core.dll`) and publish the single-file self-contained `TriuneStudio.exe` at the repository root:
+To build the native C/AVX2 shared library (`triune_core.dll`) and publish both `studio/publish/TriuneStudio.exe` and `studio/publish/TriuneStudioSetup.exe` (plus portable ZIP archives in `dist/`):
 
 ```powershell
 python csrc/build_native.py
-dotnet publish studio/windows/TriuneStudio.Windows/TriuneStudio.Windows.csproj `
-  -c Release -r win-x64 --self-contained true `
-  -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
-  -o studio/windows/publish
-Copy-Item studio/windows/publish/TriuneStudio.exe .\TriuneStudio.exe -Force
+powershell -ExecutionPolicy Bypass -File scripts/publish_studio_windows.ps1
+Copy-Item studio/publish/TriuneStudio.exe .\TriuneStudio.exe -Force
 ```
 
 ### Studio appearance and extensions

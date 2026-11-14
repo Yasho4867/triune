@@ -16,9 +16,9 @@ From a developer checkout with the .NET 10 SDK and Windows WebView2 Runtime:
 powershell -ExecutionPolicy Bypass -File scripts/publish_studio_windows.ps1
 ```
 
-This creates a versioned folder and ZIP under `dist/`; it does not delete or
+This creates a versioned folder and ZIP under `dist/` as well as local binaries in `studio/publish/` (`TriuneStudio.exe` and `TriuneStudioSetup.exe`); it does not delete or
 overwrite earlier packages. Extract the ZIP and launch
-`studio/windows/publish/TriuneStudio.exe`. If the Python/CUDA environment has
+`TriuneStudio.exe` (or run `TriuneStudioSetup.exe` to install). If the Python/CUDA environment has
 not yet been provisioned, use **Install / repair Studio environment** on the
 startup screen. The package contains the framework and UI sources but not user
 checkpoints, credentials, datasets, or model weights.

@@ -82,8 +82,8 @@ def test_dom_virtualization_and_markdown_highlighter():
     assert "visibleWindow" in app_js
     assert "topSpacerHeight" in app_js
     assert "bottomSpacerHeight" in app_js
-    assert "Virtual DOM Active" in app_js
-    assert "Enable 120 FPS Virtual Window" in app_js
+    assert "Virtual window active" in app_js
+    assert "Enable Virtual Window" in app_js
     assert "Expand Full DOM" in app_js
 
 
