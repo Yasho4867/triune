@@ -1,11 +1,17 @@
 import ast
+import sys
 from pathlib import Path
 
 import pytest
-import yaml
-from markdown_it import MarkdownIt
 
-SKILLS_DIR = Path("C:/Users/yashb_f1ls/.gemini/config/skills")
+try:
+    import yaml
+    from markdown_it import MarkdownIt
+except ImportError:  # pragma: no cover - optional dev/agent skill validation deps
+    yaml = None
+    MarkdownIt = None
+
+SKILLS_DIR = Path.home() / ".gemini" / "config" / "skills"
 TARGET_SKILLS = [
     "creative-studio-design",
     "frontier-deep-learning-engineering",
@@ -14,6 +20,10 @@ TARGET_SKILLS = [
 ]
 
 
+@pytest.mark.skipif(
+    yaml is None or MarkdownIt is None or not SKILLS_DIR.is_dir(),
+    reason="Local agent skills directory or optional yaml/markdown-it-py dependencies unavailable.",
+)
 @pytest.mark.parametrize("skill_name", TARGET_SKILLS)
 def test_skill_frontmatter_and_markdown(skill_name):
     skill_path = SKILLS_DIR / skill_name
@@ -39,6 +49,7 @@ def test_skill_frontmatter_and_markdown(skill_name):
     assert len(tokens) > 10, "Markdown body should have substantial content"
 
 
+@pytest.mark.skipif(not SKILLS_DIR.is_dir(), reason="Local agent skills directory unavailable.")
 def test_agentic_workflow_scripts_execution():
     script_dir = SKILLS_DIR / "agentic-developer-workflow" / "scripts"
     telemetry_script = script_dir / "benchmark_telemetry.py"
@@ -52,12 +63,17 @@ def test_agentic_workflow_scripts_execution():
     ast.parse(invariants_script.read_text(encoding="utf-8"))
 
 
+@pytest.mark.skipif(not SKILLS_DIR.is_dir(), reason="Local agent skills directory unavailable.")
 def test_frontier_examples_python():
     nvme_script = SKILLS_DIR / "frontier-deep-learning-engineering" / "examples" / "nvme_streamer.py"
     assert nvme_script.is_file()
     ast.parse(nvme_script.read_text(encoding="utf-8"))
 
 
+@pytest.mark.skipif(
+    sys.platform != "win32" or not SKILLS_DIR.is_dir(),
+    reason="Host app viewer PowerShell scripts require Windows and local skills directory.",
+)
 def test_host_app_viewer_scripts():
     scripts_dir = SKILLS_DIR / "host-app-viewer" / "scripts"
     list_script = scripts_dir / "list_windows.ps1"
