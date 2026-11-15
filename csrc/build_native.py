@@ -94,10 +94,12 @@ def build_windows_msvc(vcvars64: Path | None = None) -> bool:
     if not cl_in_path and vcvars64:
         batch_commands.append(f'call "{vcvars64}"')
 
-    batch_commands.extend([
-        f'lib.exe /NOLOGO /DEF:"{def_file}" /OUT:"{lib_file}" /MACHINE:X64',
-        f'cl.exe /nologo /O2 /Oi /Ot /arch:AVX2 /GS- /LD "{engine_cpp}" /Fe:"{dll_out}" /Fo:"{obj_out}" /link /NODEFAULTLIB /ENTRY:DllMain "{lib_file}" libvcruntime.lib',
-    ])
+    batch_commands.extend(
+        [
+            f'lib.exe /NOLOGO /DEF:"{def_file}" /OUT:"{lib_file}" /MACHINE:X64',
+            f'cl.exe /nologo /O2 /Oi /Ot /arch:AVX2 /GS- /LD "{engine_cpp}" /Fe:"{dll_out}" /Fo:"{obj_out}" /link /NODEFAULTLIB /ENTRY:DllMain "{lib_file}" libvcruntime.lib',
+        ]
+    )
 
     cmd_script = "\n".join(batch_commands)
     temp_bat = CSRC_DIR / "_temp_build.bat"
@@ -112,7 +114,13 @@ def build_windows_msvc(vcvars64: Path | None = None) -> bool:
     finally:
         if temp_bat.is_file():
             temp_bat.unlink(missing_ok=True)
-        for junk in [lib_file, obj_out, CSRC_DIR / "engine" / "kernel32.exp", OPS_DIR / "triune_core.exp", OPS_DIR / "triune_core.lib"]:
+        for junk in [
+            lib_file,
+            obj_out,
+            CSRC_DIR / "engine" / "kernel32.exp",
+            OPS_DIR / "triune_core.exp",
+            OPS_DIR / "triune_core.lib",
+        ]:
             if junk.is_file():
                 junk.unlink(missing_ok=True)
 
@@ -182,7 +190,12 @@ def main():
     args = parser.parse_args()
 
     if args.clean:
-        for f in [OPS_DIR / "triune_core.dll", OPS_DIR / "libtriune_core.so", OPS_DIR / "libtriune_core.dylib", STUDIO_WINDOWS_DIR / "triune_core.dll"]:
+        for f in [
+            OPS_DIR / "triune_core.dll",
+            OPS_DIR / "libtriune_core.so",
+            OPS_DIR / "libtriune_core.dylib",
+            STUDIO_WINDOWS_DIR / "triune_core.dll",
+        ]:
             if f.is_file():
                 f.unlink()
                 print(f"[build_native] Removed {f}")

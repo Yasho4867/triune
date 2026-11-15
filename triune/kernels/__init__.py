@@ -20,7 +20,7 @@ from .fast_fp8 import FastFP8Linear, fast_fp8_linear, is_fp8_available
 from .fast_gla import fast_chunk_gated_deltanet, fast_chunk_gla, fast_recurrent_gated_deltanet
 from .fast_lora import fast_gate_up_lora_linear, fast_lora_forward, fast_lora_linear, fast_qkv_lora_linear
 from .fast_muon import fast_zeropower_via_newtonschulz5
-from .fast_nvfp4 import NVFP4Linear, nvfp4_dequantize, nvfp4_quantize
+from .fast_nvfp4 import NVFP4Linear, fwht_16, nvfp4_dequantize, nvfp4_linear, nvfp4_quantize
 from .fast_rmsnorm import FastRMSNorm, fast_fused_add_rmsnorm, fast_rmsnorm
 from .fast_rope import fast_rope
 from .fast_swiglu import FastGELU, FastSwiGLU, fast_gelu, fast_swiglu
@@ -62,5 +62,7 @@ __all__ = [
     "FastFP8Linear",
     "nvfp4_quantize",
     "nvfp4_dequantize",
+    "nvfp4_linear",
+    "fwht_16",
     "NVFP4Linear",
 ]

@@ -152,21 +152,22 @@ class TriuneTransformer(nn.Module):
             compress_mode: Optional explicit mode overriding ``mean_pool``:
                 - ``"mean_pool"`` (``mean_pool=True``): averages constituent base embeddings per
                   compressed position ($T_{comp} < T_{base}$). Preserves lossless tokenizer text
-                  reconstruction, but alters sequence length and requires pooled-embedding training
-                  or ``extend_vocabulary_for_tokenizer()`` for model-output equivalence.
+                  reconstruction, but alters sequence length and is permutation-invariant within spans.
+                - ``"order_pool"``: applies orthogonal intra-span phase rotation (identity at offset 0,
+                  norm-preserving RoPE-style pairs for offset > 0) prior to segment averaging,
+                  preserving constituent token order (e.g., ``"ab" != "ba"``) while leaving singletons exact.
                 - ``"expand"`` (``mean_pool=False``): expands composite IDs to base tokens before
                   embedding lookup, yielding bit-for-bit identical logits to uncompressed input IDs
                   (requires equal expanded length across batch rows).
         """
         if compress_mode is not None:
-            if compress_mode == "expand":
-                use_mean_pool = False
-            elif compress_mode == "mean_pool":
-                use_mean_pool = True
-            else:
-                raise ValueError(f"Unknown compress_mode={compress_mode!r}; expected 'mean_pool' or 'expand'")
+            if compress_mode not in ("mean_pool", "order_pool", "expand"):
+                raise ValueError(
+                    f"Unknown compress_mode={compress_mode!r}; expected 'mean_pool', 'order_pool', or 'expand'"
+                )
+            mode = compress_mode
         else:
-            use_mean_pool = bool(mean_pool)
+            mode = "mean_pool" if bool(mean_pool) else "expand"
 
         uniq, inverse = input_ids.unique(return_inverse=True)
         expansions = [tokenizer.decompress_tokens([t]) for t in uniq.tolist()]
@@ -175,9 +176,30 @@ class TriuneTransformer(nn.Module):
         if bad:
             raise ValueError(f"Expanded base id {bad[0]} outside model vocab_size={self.vocab_size}")
         dev = input_ids.device
-        if use_mean_pool:
+        if mode in ("mean_pool", "order_pool"):
             lens = torch.tensor([len(e) for e in expansions], device=dev)
             emb = self.token_embed(torch.tensor([b for e in expansions for b in e], device=dev))
+            if mode == "order_pool":
+                starts = torch.cumsum(lens, dim=0) - lens
+                intra_pos = (torch.arange(emb.size(0), device=dev) - torch.repeat_interleave(starts, lens)).float()
+                pair_dim = (emb.size(-1) // 2) * 2
+                if pair_dim > 0 and bool((intra_pos > 0).any()):
+                    inv_freq = 1.0 / (
+                        10000.0 ** (torch.arange(0, pair_dim, 2, device=dev, dtype=torch.float32) / max(pair_dim, 2))
+                    )
+                    angles = intra_pos.unsqueeze(-1) * inv_freq.unsqueeze(0)
+                    cos_a = torch.cos(angles).to(emb.dtype)
+                    sin_a = torch.sin(angles).to(emb.dtype)
+                    emb_pairs = emb[:, :pair_dim]
+                    e0 = emb_pairs[:, 0::2]
+                    e1 = emb_pairs[:, 1::2]
+                    rot = torch.empty_like(emb_pairs)
+                    rot[:, 0::2] = e0 * cos_a - e1 * sin_a
+                    rot[:, 1::2] = e0 * sin_a + e1 * cos_a
+                    if pair_dim < emb.size(-1):
+                        emb = torch.cat([rot, emb[:, pair_dim:]], dim=-1)
+                    else:
+                        emb = rot
             seg = torch.repeat_interleave(torch.arange(uniq.numel(), device=dev), lens)
             pooled = emb.new_zeros(uniq.numel(), emb.size(-1)).index_add_(0, seg, emb)
             return (pooled / lens.unsqueeze(-1).to(emb.dtype))[inverse]
@@ -308,6 +330,7 @@ class TriuneTransformer(nn.Module):
         grad_clip: float = 1.0,
         instant_optimizer: bool = True,
         resident_gpu_layers: int = 0,
+        activation_checkpointing: bool = True,
     ):
         """Enables AirLLM-style layer streaming, keeping layers in CPU RAM and streaming on-demand."""
         from triune.runtime.streaming import LayerStreamingEngine, StreamingConfig
@@ -321,6 +344,7 @@ class TriuneTransformer(nn.Module):
             grad_clip=grad_clip,
             instant_optimizer=instant_optimizer,
             resident_gpu_layers=resident_gpu_layers,
+            activation_checkpointing=activation_checkpointing,
         )
         engine = LayerStreamingEngine(self, device=device, config=cfg)
         engine.attach()
@@ -336,7 +360,18 @@ class TriuneTransformer(nn.Module):
         update_stats=True,
         exit_decider=None,
         exit_last_token_only=False,
+        active_mask=None,
     ):
+        if active_mask is not None:
+            return layer(
+                x,
+                return_exit,
+                cache,
+                update_stats=update_stats,
+                exit_decider=exit_decider,
+                exit_last_token_only=exit_last_token_only,
+                active_mask=active_mask,
+            )
         return layer(
             x,
             return_exit,
@@ -346,13 +381,20 @@ class TriuneTransformer(nn.Module):
             exit_last_token_only=exit_last_token_only,
         )
 
-    def _run_layers(self, x, start_layer, end_layer, cache=None, update_stats=True):
+    def _run_layers(self, x, start_layer, end_layer, cache=None, update_stats=True, active_mask=None):
         new_cache = list(cache) if cache is not None else None
         for i in range(start_layer, end_layer):
             layer_cache = cache[i] if cache is not None and i < len(cache) else None
             if cache is not None and layer_cache is None:
                 layer_cache = (None, 0)
-            x, _, new_c = self._forward_block(self.layers[i], x, False, cache=layer_cache, update_stats=update_stats)
+            x, _, new_c = self._forward_block(
+                self.layers[i],
+                x,
+                False,
+                cache=layer_cache,
+                update_stats=update_stats,
+                active_mask=active_mask,
+            )
             if new_cache is not None:
                 new_cache[i] = new_c
         return x, new_cache
@@ -439,85 +481,196 @@ class TriuneTransformer(nn.Module):
             logits_out = logits_r.clone()
             calm_exit_depths = torch.full(settled_r.shape, 2, dtype=torch.long, device=device)
             calm_exit_depths = torch.where(settled_r, torch.zeros_like(calm_exit_depths), calm_exit_depths)
+            total_exit_tokens = int(settled_r.numel())
 
             need_limbic = (~settled_r.all(dim=1)).nonzero(as_tuple=True)[0]
             if need_limbic.numel() == 0:
                 self.last_calm_exit_depths = calm_exit_depths.detach()
                 self.last_depth_choice = calm_exit_depths[:, -1].detach()
+                self.last_calm_compaction_stats = {
+                    "total_tokens": total_exit_tokens,
+                    "reflex_tokens": total_exit_tokens,
+                    "limbic_tokens": 0,
+                    "cortex_tokens": 0,
+                    "limbic_rows": 0,
+                    "cortex_rows": 0,
+                    "limbic_seq_len": 0,
+                    "cortex_seq_len": 0,
+                }
                 if cache is not None:
                     return logits_out, new_cache
                 if return_balance_loss:
                     return logits_out, route_logits, balance_loss
                 return logits_out, route_logits
 
-            # Step 2: Compact to unsettled batch items and continue from Reflex to Limbic Exit (L5)
+            # Step 2: Compact to unsettled batch items & tokens and continue Reflex -> Limbic Exit (L5)
             x_r_act = x_reflex.index_select(0, need_limbic)
+            settled_r_act = settled_r.index_select(0, need_limbic)
+            unsettled_r_act = ~settled_r_act
+            n_limbic_tokens = int(unsettled_r_act.sum().item())
+            n_limbic_rows = int(need_limbic.numel())
             l_cache = self._slice_cache(new_cache, need_limbic) if cache is not None else None
+
+            if not last_token_only and cache is None:
+                lim_cols = unsettled_r_act.any(dim=0).nonzero(as_tuple=True)[0]
+                T_lim = int(lim_cols[-1].item()) + 1
+                if T_lim < x_r_act.size(1):
+                    x_r_act = x_r_act[:, :T_lim, :]
+                    unsettled_r_act = unsettled_r_act[:, :T_lim]
+                    settled_r_act = settled_r_act[:, :T_lim]
+            else:
+                T_lim = int(x_r_act.size(1))
+
+            active_mask_l = unsettled_r_act if (not last_token_only or x_r_act.size(1) == 1) else None
             x_limbic_act, l_cache = self._run_layers(
-                x_r_act, self.reflex_exit_layer + 1, self.limbic_exit_layer, cache=l_cache
+                x_r_act,
+                self.reflex_exit_layer + 1,
+                self.limbic_exit_layer,
+                cache=l_cache,
+                active_mask=active_mask_l,
             )
             blk_lim = self.layers[self.limbic_exit_layer]
             layer_c = l_cache[self.limbic_exit_layer] if l_cache is not None else None
-            x_limbic_act, logits_l_act, new_c = self._forward_block(
-                blk_lim, x_limbic_act, True, cache=layer_c, exit_last_token_only=last_token_only
-            )
-            if l_cache is not None:
-                l_cache[self.limbic_exit_layer] = new_c
-                new_cache = self._scatter_cache(new_cache, l_cache, need_limbic, B, device)
 
-            probs_l = F.softmax(logits_l_act.float(), dim=-1)
-            top2_l = torch.topk(probs_l, 2, dim=-1).values
-            margin_l = top2_l[..., 0] - top2_l[..., 1]  # [B_act, T_out]
-            settled_r_act = settled_r.index_select(0, need_limbic)
-            settled_l_act = (~settled_r_act) & (margin_l >= confidence_threshold * 0.85)
+            if not last_token_only and getattr(blk_lim, "exit_head", None) is not None and active_mask_l is not None:
+                x_limbic_act, _, new_c = self._forward_block(
+                    blk_lim,
+                    x_limbic_act,
+                    False,
+                    cache=layer_c,
+                    active_mask=active_mask_l,
+                )
+                if l_cache is not None:
+                    l_cache[self.limbic_exit_layer] = new_c
+                    new_cache = self._scatter_cache(new_cache, l_cache, need_limbic, B, device)
 
-            prev_logits_act = logits_out.index_select(0, need_limbic)
-            updated_l_act = torch.where(
-                settled_r_act.unsqueeze(-1),
-                prev_logits_act,
-                logits_l_act.to(logits_out.dtype),
-            )
-            logits_out = logits_out.index_copy(0, need_limbic, updated_l_act)
+                r_idx_l, t_idx_l = active_mask_l.nonzero(as_tuple=True)
+                x_pos_l = x_limbic_act[r_idx_l, t_idx_l]
+                logits_l_compact = blk_lim.exit_head(blk_lim.exit_norm(x_pos_l.unsqueeze(0))).squeeze(0)
+                probs_l = F.softmax(logits_l_compact.float(), dim=-1)
+                top2_l = torch.topk(probs_l, 2, dim=-1).values
+                margin_l = top2_l[..., 0] - top2_l[..., 1]
+                settled_l_flat = margin_l >= confidence_threshold * 0.85
 
-            prev_depths_act = calm_exit_depths.index_select(0, need_limbic)
-            updated_depths_l = torch.where(settled_l_act, torch.ones_like(prev_depths_act), prev_depths_act)
-            calm_exit_depths = calm_exit_depths.index_copy(0, need_limbic, updated_depths_l)
+                abs_rows_l = need_limbic.index_select(0, r_idx_l)
+                logits_out = logits_out.index_put((abs_rows_l, t_idx_l), logits_l_compact.to(logits_out.dtype))
 
-            still_unsettled_act = ~(settled_r_act | settled_l_act)
+                cur_depths_l = calm_exit_depths[abs_rows_l, t_idx_l]
+                new_depths_l = torch.where(settled_l_flat, torch.ones_like(cur_depths_l), cur_depths_l)
+                calm_exit_depths = calm_exit_depths.index_put((abs_rows_l, t_idx_l), new_depths_l)
+
+                settled_l_act = torch.zeros_like(active_mask_l)
+                settled_l_act[r_idx_l, t_idx_l] = settled_l_flat
+                still_unsettled_act = active_mask_l & (~settled_l_act)
+            else:
+                x_limbic_act, logits_l_act, new_c = self._forward_block(
+                    blk_lim,
+                    x_limbic_act,
+                    True,
+                    cache=layer_c,
+                    exit_last_token_only=last_token_only,
+                    active_mask=active_mask_l,
+                )
+                if l_cache is not None:
+                    l_cache[self.limbic_exit_layer] = new_c
+                    new_cache = self._scatter_cache(new_cache, l_cache, need_limbic, B, device)
+
+                probs_l = F.softmax(logits_l_act.float(), dim=-1)
+                top2_l = torch.topk(probs_l, 2, dim=-1).values
+                margin_l = top2_l[..., 0] - top2_l[..., 1]  # [B_act, T_out]
+                settled_l_act = (~settled_r_act) & (margin_l >= confidence_threshold * 0.85)
+
+                prev_logits_act = logits_out.index_select(0, need_limbic)
+                updated_l_act = torch.where(
+                    settled_r_act.unsqueeze(-1),
+                    prev_logits_act,
+                    logits_l_act.to(logits_out.dtype),
+                )
+                logits_out = logits_out.index_copy(0, need_limbic, updated_l_act)
+
+                prev_depths_act = calm_exit_depths.index_select(0, need_limbic)
+                updated_depths_l = torch.where(settled_l_act, torch.ones_like(prev_depths_act), prev_depths_act)
+                calm_exit_depths = calm_exit_depths.index_copy(0, need_limbic, updated_depths_l)
+
+                still_unsettled_act = ~(settled_r_act | settled_l_act)
+
             rel_cortex = still_unsettled_act.any(dim=1).nonzero(as_tuple=True)[0]
             if rel_cortex.numel() == 0:
                 self.last_calm_exit_depths = calm_exit_depths.detach()
                 self.last_depth_choice = calm_exit_depths[:, -1].detach()
+                self.last_calm_compaction_stats = {
+                    "total_tokens": total_exit_tokens,
+                    "reflex_tokens": total_exit_tokens,
+                    "limbic_tokens": n_limbic_tokens,
+                    "cortex_tokens": 0,
+                    "limbic_rows": n_limbic_rows,
+                    "cortex_rows": 0,
+                    "limbic_seq_len": T_lim,
+                    "cortex_seq_len": 0,
+                }
                 if cache is not None:
                     return logits_out, new_cache
                 if return_balance_loss:
                     return logits_out, route_logits, balance_loss
                 return logits_out, route_logits
 
-            # Step 3: Compact to remaining unsettled items and continue from Limbic to full Cortex depth (L8)
+            # Step 3: Compact to remaining unsettled items & tokens and continue Limbic -> Cortex depth (L8)
             abs_cortex = need_limbic.index_select(0, rel_cortex)
             x_l_act = x_limbic_act.index_select(0, rel_cortex)
+            still_unsettled_c = still_unsettled_act.index_select(0, rel_cortex)
+            n_cortex_tokens = int(still_unsettled_c.sum().item())
+            n_cortex_rows = int(rel_cortex.numel())
             c_cache = self._slice_cache(l_cache, rel_cortex) if cache is not None else None
+
+            if not last_token_only and cache is None:
+                cor_cols = still_unsettled_c.any(dim=0).nonzero(as_tuple=True)[0]
+                T_cor = int(cor_cols[-1].item()) + 1
+                if T_cor < x_l_act.size(1):
+                    x_l_act = x_l_act[:, :T_cor, :]
+                    still_unsettled_c = still_unsettled_c[:, :T_cor]
+            else:
+                T_cor = int(x_l_act.size(1))
+
+            active_mask_c = still_unsettled_c if (not last_token_only or x_l_act.size(1) == 1) else None
             x_cortex_act, c_cache = self._run_layers(
-                x_l_act, self.limbic_exit_layer + 1, self.num_layers, cache=c_cache
+                x_l_act,
+                self.limbic_exit_layer + 1,
+                self.num_layers,
+                cache=c_cache,
+                active_mask=active_mask_c,
             )
             if cache is not None and c_cache is not None:
                 new_cache = self._scatter_cache(new_cache, c_cache, abs_cortex, B, device)
 
-            x_pos_c = x_cortex_act[:, -1:, :] if last_token_only else x_cortex_act
-            logits_c_act = self.final_head(self.final_norm(x_pos_c))
-
-            still_unsettled_c = still_unsettled_act.index_select(0, rel_cortex)
-            prev_logits_c = logits_out.index_select(0, abs_cortex)
-            updated_c_act = torch.where(
-                still_unsettled_c.unsqueeze(-1),
-                logits_c_act.to(logits_out.dtype),
-                prev_logits_c,
-            )
-            logits_out = logits_out.index_copy(0, abs_cortex, updated_c_act)
+            if not last_token_only:
+                cr_idx, ct_idx = still_unsettled_c.nonzero(as_tuple=True)
+                x_pos_c = x_cortex_act[cr_idx, ct_idx]
+                logits_c_compact = self.final_head(self.final_norm(x_pos_c.unsqueeze(0))).squeeze(0)
+                abs_rows_c = abs_cortex.index_select(0, cr_idx)
+                logits_out = logits_out.index_put((abs_rows_c, ct_idx), logits_c_compact.to(logits_out.dtype))
+            else:
+                x_pos_c = x_cortex_act[:, -1:, :]
+                logits_c_act = self.final_head(self.final_norm(x_pos_c))
+                prev_logits_c = logits_out.index_select(0, abs_cortex)
+                updated_c_act = torch.where(
+                    still_unsettled_c.unsqueeze(-1),
+                    logits_c_act.to(logits_out.dtype),
+                    prev_logits_c,
+                )
+                logits_out = logits_out.index_copy(0, abs_cortex, updated_c_act)
 
             self.last_calm_exit_depths = calm_exit_depths.detach()
             self.last_depth_choice = calm_exit_depths[:, -1].detach()
+            self.last_calm_compaction_stats = {
+                "total_tokens": total_exit_tokens,
+                "reflex_tokens": total_exit_tokens,
+                "limbic_tokens": n_limbic_tokens,
+                "cortex_tokens": n_cortex_tokens,
+                "limbic_rows": n_limbic_rows,
+                "cortex_rows": n_cortex_rows,
+                "limbic_seq_len": T_lim,
+                "cortex_seq_len": T_cor,
+            }
             if cache is not None:
                 return logits_out, new_cache
             if return_balance_loss:
@@ -721,10 +874,17 @@ class TriuneTransformer(nn.Module):
                     opt.zero_grad()
                     with autocast_ctx:
                         r_logits, l_logits, c_logits, _ = self.forward_all_exits(batch, update_stats=False)
-                        p_cortex = F.softmax(c_logits.detach().float(), dim=-1)
+                        v = c_logits.size(-1)
+                        p_cortex = F.softmax(c_logits.detach().float().reshape(-1, v), dim=-1)
                         loss = F.kl_div(
-                            F.log_softmax(r_logits.float(), dim=-1), p_cortex, reduction="batchmean"
-                        ) + F.kl_div(F.log_softmax(l_logits.float(), dim=-1), p_cortex, reduction="batchmean")
+                            F.log_softmax(r_logits.float().reshape(-1, v), dim=-1),
+                            p_cortex,
+                            reduction="batchmean",
+                        ) + F.kl_div(
+                            F.log_softmax(l_logits.float().reshape(-1, v), dim=-1),
+                            p_cortex,
+                            reduction="batchmean",
+                        )
                     loss.backward()
                     opt.step()
                     step_loss += float(loss.detach().item())

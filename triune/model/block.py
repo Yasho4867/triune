@@ -66,9 +66,13 @@ class TransformerBlock(nn.Module):
         update_stats: bool = True,
         exit_decider: Callable[[torch.Tensor], bool] | None = None,
         exit_last_token_only: bool = False,
+        active_mask: torch.Tensor | None = None,
     ):
 
-        if self._use_gradient_checkpointing and self.training and torch.is_grad_enabled():
+        use_token_compaction = (
+            active_mask is not None and active_mask.shape == x.shape[:2] and not bool(active_mask.all())
+        )
+        if self._use_gradient_checkpointing and self.training and torch.is_grad_enabled() and not use_token_compaction:
             attn_out, new_cache = torch.utils.checkpoint.checkpoint(
                 lambda n: self.attn(n, cache=cache),
                 self.norm1(x),
@@ -95,7 +99,17 @@ class TransformerBlock(nn.Module):
         else:
             attn_out, new_cache = self.attn(self.norm1(x), cache=cache)
             x = x + attn_out
-            if isinstance(self.ffn, MoE_FFN):
+            if use_token_compaction:
+                x_active = x[active_mask]
+                if x_active.numel() > 0:
+                    x_norm = self.norm2(x_active.unsqueeze(0))
+                    if isinstance(self.ffn, MoE_FFN):
+                        ffn_active = self.ffn(x_norm, update_stats=update_stats).squeeze(0)
+                    else:
+                        ffn_active = self.ffn(x_norm).squeeze(0)
+                    x = x.clone()
+                    x[active_mask] = x_active + ffn_active.to(x.dtype)
+            elif isinstance(self.ffn, MoE_FFN):
                 x = x + self.ffn(self.norm2(x), update_stats=update_stats)
             else:
                 x = x + self.ffn(self.norm2(x))

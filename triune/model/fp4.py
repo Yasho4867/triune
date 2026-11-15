@@ -79,13 +79,36 @@ class FP4Linear(nn.Module):
         return self.linear(x)
 
 
-def convert_to_nvfp4(module: nn.Module, target_classes=(nn.Linear, FP4Linear)) -> nn.Module:
-    """Recursively converts compatible Linear/FP4Linear layers into packed 4-bit NVFP4Linear."""
+_SENSITIVE_NVFP4_EXACT_NAMES = frozenset({"router", "exit_head", "final_head", "lm_head", "embed", "embed_tokens"})
+
+
+def convert_to_nvfp4(
+    module: nn.Module,
+    target_classes=(nn.Linear, FP4Linear),
+    hadamard: bool = True,
+    protect_sensitive: bool = True,
+) -> nn.Module:
+    """Recursively converts compatible Linear/FP4Linear layers into packed 4-bit NVFP4Linear.
+
+    When ``protect_sensitive=True`` (default), small routing gates and vocabulary
+    output heads (``router``, ``exit_head``, ``final_head``, ``lm_head``, small ``gate``)
+    remain in full precision to preserve softmax/routing calibration.
+    When ``hadamard=True`` (default), applies orthogonal block-16 Walsh-Hadamard
+    preconditioning (FWHT-16) prior to E2M1 packing to suppress weight outliers.
+    """
     for name, child in list(module.named_children()):
         if isinstance(child, target_classes) and not isinstance(child, NVFP4Linear):
+            out_f = child.out_features if hasattr(child, "out_features") else child.weight.size(0)
+            if protect_sensitive and (name in _SENSITIVE_NVFP4_EXACT_NAMES or (name == "gate" and out_f <= 64)):
+                continue
             in_f = child.in_features if hasattr(child, "in_features") else child.weight.size(1)
             if in_f % NVFP4_GROUP_SIZE == 0:
-                setattr(module, name, NVFP4Linear.from_linear(child))
+                setattr(module, name, NVFP4Linear.from_linear(child, hadamard=hadamard))
         else:
-            convert_to_nvfp4(child, target_classes=target_classes)
+            convert_to_nvfp4(
+                child,
+                target_classes=target_classes,
+                hadamard=hadamard,
+                protect_sensitive=protect_sensitive,
+            )
     return module

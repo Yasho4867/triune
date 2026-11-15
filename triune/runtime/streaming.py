@@ -37,6 +37,7 @@ class StreamingConfig:
     layers_path: Optional[str] = None
     resident_gpu_layers: int = 0
     capture_forward_snapshots: bool = True  # Mode 1 (True: with snapshots) vs Mode 2 (False: deferred zero-snapshot)
+    activation_checkpointing: bool = True  # Release SavedVariables & activations across streamed blocks
 
 
 def _offload_grad_hook(param: nn.Parameter) -> None:
@@ -513,6 +514,7 @@ class LayerStreamingEngine:
                                 torch.cuda.current_stream().wait_stream(prefetch_stream)
                             self.stager.apply_staged_tensors(l)
                             l._is_bwd_prefetched = False
+                            l._is_bwd_staged = True
                         else:
                             self.stager.stage_layer(
                                 l,
@@ -522,6 +524,7 @@ class LayerStreamingEngine:
                                 _from_backward=True,
                             )
                             self.stager.apply_staged_tensors(l)
+                            l._is_bwd_staged = True
 
                         if prefetch_stream is not None and b_idx > 0:
                             prev_layer = self.layers[b_idx - 1]
@@ -536,6 +539,7 @@ class LayerStreamingEngine:
                                 prev_layer._is_bwd_prefetched = True
                     except Exception:
                         l._in_backward = False
+                        l._is_bwd_staged = False
                         self.cleanup_resident_layers()
                         raise
 
@@ -546,6 +550,7 @@ class LayerStreamingEngine:
             def make_bwd_post_hook(l: nn.Module):
                 def bwd_post_hook(module, grad_input, grad_output):
                     l._in_backward = False
+                    l._is_bwd_staged = False
                     l._pending_bwd_count = max(0, getattr(l, "_pending_bwd_count", 1) - 1)
                     self.stager.release_layer(l, clear_snapshot=(l._pending_bwd_count == 0))
 
@@ -560,7 +565,15 @@ class LayerStreamingEngine:
                 self.model._orig_forward_block = orig_forward_block
 
                 def streaming_forward_block(
-                    layer, x, return_exit, cache=None, update_stats=True, exit_decider=None, exit_last_token_only=False
+                    layer,
+                    x,
+                    return_exit,
+                    cache=None,
+                    update_stats=True,
+                    exit_decider=None,
+                    exit_last_token_only=False,
+                    active_mask=None,
+                    **extra_kwargs,
                 ):
                     idx = layer_to_idx.get(layer)
                     if idx is None:
@@ -572,6 +585,8 @@ class LayerStreamingEngine:
                             update_stats=update_stats,
                             exit_decider=exit_decider,
                             exit_last_token_only=exit_last_token_only,
+                            active_mask=active_mask,
+                            **extra_kwargs,
                         )
                     in_bwd = getattr(layer, "_in_backward", False)
                     if torch.is_grad_enabled() and not in_bwd:
@@ -624,13 +639,88 @@ class LayerStreamingEngine:
                             update_stats=update_stats,
                             exit_decider=exit_decider,
                             exit_last_token_only=exit_last_token_only,
+                            active_mask=active_mask,
+                            **extra_kwargs,
                         )
                     finally:
                         if not getattr(layer, "_in_backward", False):
                             self.stager.release_layer(layer)
                     return out
 
-                self.model._forward_block = streaming_forward_block
+                if getattr(self.config, "activation_checkpointing", True):
+                    from triune.model.config import checkpoint_bwd_ctx, checkpoint_fwd_ctx, is_checkpoint_recomputing
+
+                    streamed_layer_ids = {id(l) for l in self.layers}
+                    raw_streaming_forward_block = streaming_forward_block
+
+                    def checkpointed_streaming_forward_block(
+                        layer,
+                        x,
+                        return_exit: bool = False,
+                        cache=None,
+                        update_stats: bool = True,
+                        exit_decider=None,
+                        exit_last_token_only: bool = False,
+                        active_mask=None,
+                        **extra_kwargs,
+                    ):
+                        if (
+                            torch.is_grad_enabled()
+                            and id(layer) in streamed_layer_ids
+                            and cache is None
+                            and exit_decider is None
+                            and not getattr(layer, "_in_backward", False)
+                            and not is_checkpoint_recomputing()
+                        ):
+                            x_in = (
+                                x
+                                if (not isinstance(x, torch.Tensor) or not x.is_floating_point() or x.requires_grad)
+                                else x.detach().requires_grad_(True)
+                            )
+
+                            def _ckpt_block(x_arg, mask_arg):
+                                prev_inner_ckpt = getattr(layer, "_use_gradient_checkpointing", False)
+                                if prev_inner_ckpt:
+                                    layer._use_gradient_checkpointing = False
+                                try:
+                                    return raw_streaming_forward_block(
+                                        layer,
+                                        x_arg,
+                                        return_exit=return_exit,
+                                        cache=None,
+                                        update_stats=(update_stats and not is_checkpoint_recomputing()),
+                                        exit_decider=None,
+                                        exit_last_token_only=exit_last_token_only,
+                                        active_mask=mask_arg,
+                                        **extra_kwargs,
+                                    )
+                                finally:
+                                    if prev_inner_ckpt:
+                                        layer._use_gradient_checkpointing = prev_inner_ckpt
+
+                            return torch.utils.checkpoint.checkpoint(
+                                _ckpt_block,
+                                x_in,
+                                active_mask,
+                                use_reentrant=False,
+                                preserve_rng_state=True,
+                                context_fn=lambda: (checkpoint_fwd_ctx(), checkpoint_bwd_ctx()),
+                            )
+                        return raw_streaming_forward_block(
+                            layer,
+                            x,
+                            return_exit=return_exit,
+                            cache=cache,
+                            update_stats=update_stats,
+                            exit_decider=exit_decider,
+                            exit_last_token_only=exit_last_token_only,
+                            active_mask=active_mask,
+                            **extra_kwargs,
+                        )
+
+                    self.model._forward_block = checkpointed_streaming_forward_block
+                else:
+                    self.model._forward_block = streaming_forward_block
             else:
                 for idx, layer in enumerate(self.layers):
 
@@ -710,6 +800,58 @@ class LayerStreamingEngine:
                     except TypeError:
                         self._hooks.append(layer.register_forward_hook(make_fwd_post_hook(layer)))
 
+                    if getattr(self.config, "activation_checkpointing", True):
+                        from triune.model.config import (
+                            checkpoint_bwd_ctx,
+                            checkpoint_fwd_ctx,
+                            is_checkpoint_recomputing,
+                        )
+
+                        orig_layer_forward = layer.forward
+                        layer._orig_forward_for_streaming = orig_layer_forward
+
+                        def make_ckpt_layer_forward(l_ref: nn.Module, orig_fn):
+                            def ckpt_forward(*f_args, **f_kwargs):
+                                has_cache = bool(
+                                    f_kwargs.get("use_cache", False)
+                                    or f_kwargs.get("past_key_value") is not None
+                                    or f_kwargs.get("past_key_values") is not None
+                                )
+                                first_is_tensor = len(f_args) > 0 and isinstance(f_args[0], torch.Tensor)
+                                if (
+                                    torch.is_grad_enabled()
+                                    and not has_cache
+                                    and first_is_tensor
+                                    and not getattr(l_ref, "_in_backward", False)
+                                    and not is_checkpoint_recomputing()
+                                ):
+                                    x0 = f_args[0]
+                                    if x0.is_floating_point() and not x0.requires_grad:
+                                        f_args = (x0.detach().requires_grad_(True),) + f_args[1:]
+
+                                    def _ckpt_call(x_arg, *rest_args):
+                                        try:
+                                            return orig_fn(x_arg, *rest_args, **f_kwargs)
+                                        except Exception:
+                                            l_ref._in_backward = False
+                                            l_ref._is_bwd_staged = False
+                                            self.cleanup_resident_layers()
+                                            raise
+
+                                    return torch.utils.checkpoint.checkpoint(
+                                        _ckpt_call,
+                                        f_args[0],
+                                        *f_args[1:],
+                                        use_reentrant=False,
+                                        preserve_rng_state=True,
+                                        context_fn=lambda: (checkpoint_fwd_ctx(), checkpoint_bwd_ctx()),
+                                    )
+                                return orig_fn(*f_args, **f_kwargs)
+
+                            return ckpt_forward
+
+                        layer.forward = make_ckpt_layer_forward(layer, orig_layer_forward)
+
             def make_model_forward_hook():
                 def model_forward_hook(module, args, output):
                     for l in self.layers:
@@ -728,6 +870,10 @@ class LayerStreamingEngine:
         self.model._streaming_engine = self
         self.model._layer_streaming_active = True
         self.is_attached = True
+        if self.device.type == "cuda":
+            if hasattr(torch._C, "_cuda_clearCublasWorkspaces"):
+                torch._C._cuda_clearCublasWorkspaces()
+            torch.cuda.empty_cache()
         allocated_mb = torch.cuda.memory_allocated(self.device) / (1024**2) if self.device.type == "cuda" else 0.0
         res_n = len(getattr(self, "resident_layers", []))
         print(
@@ -743,6 +889,7 @@ class LayerStreamingEngine:
             self.stager.cleanup_all()
         for layer in self.layers:
             layer._pending_bwd_count = 0
+            layer._is_bwd_staged = False
             if hasattr(layer, "_is_prefetched"):
                 layer._is_prefetched = False
             if hasattr(layer, "_is_bwd_prefetched"):
@@ -801,6 +948,8 @@ class LayerStreamingEngine:
         if self.stager is not None:
             self.stager.clear()
             self.stager = None
+        if self.device.type == "cuda" and hasattr(torch._C, "_cuda_clearCublasWorkspaces"):
+            torch._C._cuda_clearCublasWorkspaces()
 
         for layer in getattr(self, "resident_layers", []):
             for t in list(layer.parameters()) + list(layer.buffers()):
@@ -812,6 +961,11 @@ class LayerStreamingEngine:
                     delattr(t, "_grad_norm_sq")
 
         for layer in self.layers:
+            if hasattr(layer, "_orig_forward_for_streaming"):
+                layer.forward = layer._orig_forward_for_streaming
+                delattr(layer, "_orig_forward_for_streaming")
+            if hasattr(layer, "_is_bwd_staged"):
+                delattr(layer, "_is_bwd_staged")
             if hasattr(layer, "_pending_bwd_count"):
                 delattr(layer, "_pending_bwd_count")
             if hasattr(layer, "_is_prefetched"):
@@ -1027,6 +1181,7 @@ def enable_layer_streaming(
     fp8_weights: bool = False,
     capture_forward_snapshots: bool = True,
     optimizer: Optional[Any] = None,
+    activation_checkpointing: bool = True,
 ) -> LayerStreamingEngine:
     """Enable layer streaming on any PyTorch model (Triune, Llama, Mistral, Qwen, etc.)."""
     if device is None:
@@ -1043,6 +1198,7 @@ def enable_layer_streaming(
         async_prefetch=async_prefetch,
         fp8_weights=fp8_weights,
         capture_forward_snapshots=capture_forward_snapshots,
+        activation_checkpointing=activation_checkpointing,
     )
     engine = LayerStreamingEngine(model, device=target_device, config=cfg, optimizer=optimizer)
     engine.attach(optimizer=optimizer)
@@ -1068,6 +1224,7 @@ def apply_layer_streaming_if_requested(
         grad_clip=config.get("grad_clip", 1.0),
         instant_optimizer=True,
         capture_forward_snapshots=config.get("streaming_capture_forward_snapshots", True),
+        activation_checkpointing=config.get("streaming_activation_checkpointing", True),
     )
     engine = LayerStreamingEngine(model, device=device, config=streaming_cfg, optimizer=optimizer)
     engine.attach()

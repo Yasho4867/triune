@@ -11,15 +11,15 @@ from triune.model import TriuneTransformer
 
 model = TriuneTransformer(
     vocab_size=32000,
-    hidden_dim=1280,            # Must equal num_heads * head_dim
+    hidden_dim=1280,  # Must equal num_heads * head_dim
     num_layers=18,
     num_heads=10,
     head_dim=128,
-    num_experts=8,              # MoE experts per routed layer
-    router_prefix_layers=3,     # Prefix layers before routing decision
-    reflex_exit_layer=5,        # Intermediate exit 1
-    limbic_exit_layer=13,       # Intermediate exit 2
-    use_fp8=True                # FP8 scaled GEMM execution
+    num_experts=8,  # MoE experts per routed layer
+    router_prefix_layers=3,  # Prefix layers before routing decision
+    reflex_exit_layer=5,  # Intermediate exit 1
+    limbic_exit_layer=13,  # Intermediate exit 2
+    use_fp8=True,  # FP8 scaled GEMM execution
 )
 ```
 
@@ -62,7 +62,7 @@ from triune.model.router import GumbelSoftmaxRouter
 router = GumbelSoftmaxRouter(
     hidden_dim=1280,
     target_depth_dist=(0.40, 0.35, 0.25),  # Reflex, Limbic, Cortex target distribution
-    balance_coef=0.30                      # Auxiliary load-balancing coefficient
+    balance_coef=0.30,  # Auxiliary load-balancing coefficient
 )
 ```
 

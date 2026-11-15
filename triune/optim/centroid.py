@@ -1,10 +1,9 @@
 from typing import Any
 
 import torch
-import torch.nn.functional as F
 
 import triune.model.config as defaults
-from triune.model import FP4Linear, MoE_FFN
+from triune.model import MoE_FFN
 
 from .muon import Muon
 
@@ -122,6 +121,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
         min_subspace_gap: int = 5,
         max_subspace_gap: int = 50,
         param_roles: dict[str | torch.nn.Parameter, str] | None = None,
+        core_mask_mode: str = "full",
     ):
         if expert_lr is None:
             expert_lr = lr
@@ -150,6 +150,9 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
         self.initial_muon_lr = muon_lr
         self._last_synced_lr = lr
         self.use_triangular_core = use_triangular_core
+        if core_mask_mode not in ("full", "triu"):
+            raise ValueError(f"Unknown core_mask_mode={core_mask_mode!r}; expected 'full' or 'triu'")
+        self.core_mask_mode = core_mask_mode
         self.use_8bit_base = use_8bit_base
         self.subspace_stride = max(1, int(subspace_stride))
         self.adaptive_subspace_refresh = adaptive_subspace_refresh
@@ -327,23 +330,29 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
             for name, module in model.named_modules():
                 if isinstance(module, MoE_FFN):
                     for expert_idx, expert in enumerate(module.experts):
+                        expert_params = []
                         for subname, submod in expert.named_modules():
                             if hasattr(submod, "weight") and isinstance(submod.weight, torch.nn.Parameter):
                                 p = submod.weight
                                 if p.requires_grad and p.dim() >= 2 and id(p) not in seen_param_ids:
                                     seen_param_ids.add(id(p))
-                                    self.layer_groups.append(
-                                        {
-                                            "module": module,
-                                            "expert_idx": expert_idx,
-                                            "param": p,
-                                            "projection": None,
-                                            "projection_side": "left" if p.shape[0] <= p.shape[1] else "right",
-                                            "proj_step": 0,
-                                            "state": {"momentum": None, "variance": None, "step": 0},
-                                        }
-                                    )
-                                    group_idx += 1
+                                    expert_params.append((subname, p))
+                        for pos_idx, (subname, p) in enumerate(expert_params):
+                            steer_role = "input" if pos_idx == 0 else "hidden"
+                            self.layer_groups.append(
+                                {
+                                    "module": module,
+                                    "expert_idx": expert_idx,
+                                    "expert": expert,
+                                    "steer_role": steer_role,
+                                    "param": p,
+                                    "projection": None,
+                                    "projection_side": "left" if p.shape[0] <= p.shape[1] else "right",
+                                    "proj_step": 0,
+                                    "state": {"momentum": None, "variance": None, "step": 0},
+                                }
+                            )
+                            group_idx += 1
 
             # 2. Populate remaining 2D parameters
             for name, param in model.named_parameters():
@@ -601,12 +610,13 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
             if not hasattr(self, "_bucket_buffers"):
                 self._bucket_buffers = {}
 
-            # Group active_groups by (m, n, r) so each bucket occupies a contiguous slice [start:end] in R_batch
+            # Group active_groups by (m, n, r, steer_role) so each bucket has uniform geometry & steering axis
             raw_buckets = {}
             for g in active_groups:
                 m, n = g["param"].shape
                 r = min(self.rank, min(m, n))
-                key = (m, n, r)
+                s_role = g.get("steer_role", "input")
+                key = (m, n, r, s_role)
                 if key not in raw_buckets:
                     raw_buckets[key] = []
                 raw_buckets[key].append(g)
@@ -634,13 +644,14 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
             step_list = [0.0] * N
 
             # 1 & 2. Batched Subspace Init/Update, Batched Centroid Steering, and Batched Projection
-            for (m, n, r), start, end, g_list in shape_buckets:
+            for (m, n, r, steer_role), start, end, g_list in shape_buckets:
                 K = end - start
                 d_small = min(m, n)
                 d_large = max(m, n)
                 side = "left" if m <= n else "right"
+                centroid_on_ql = m > n
 
-                bkey = (K, m, n, r, device, dtype)
+                bkey = (K, m, n, r, steer_role, device, dtype)
                 if bkey not in self._bucket_buffers:
                     self._bucket_buffers[bkey] = {
                         "QL_stack": torch.zeros(K, d_small, self.rank + 1, device=device, dtype=dtype),
@@ -795,50 +806,86 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                     batch_mom[start:end, r, : r + 1].zero_()
                     batch_var[start:end, : r + 1, r].zero_()
                     batch_var[start:end, r, : r + 1].zero_()
-                    can_steer = self.steer_scale > 0 and all(
-                        g["module"] is not None
-                        and getattr(g["module"], "last_centroids", None) is not None
-                        and g["expert_idx"] is not None
-                        and g["expert_idx"] < g["module"].last_centroids.size(0)
-                        and g["module"].last_centroids.size(1) == d_small
-                        for g in g_list
+                    in_dim = n
+
+                    def _extract_input_centroid(g):
+                        mod = g["module"]
+                        e_idx = g["expert_idx"]
+                        if mod is None or getattr(mod, "last_centroids", None) is None or e_idx is None:
+                            return None
+                        if e_idx >= mod.last_centroids.size(0):
+                            return None
+                        c_e = mod.last_centroids[e_idx].to(device=device, dtype=dtype)
+                        if steer_role == "hidden":
+                            exp = g.get("expert")
+                            if exp is not None and len(exp) >= 2:
+                                with torch.no_grad():
+                                    h = exp[0](c_e.unsqueeze(0))
+                                    if len(exp) > 2:
+                                        h = exp[1](h)
+                                    return h.squeeze(0).to(device=device, dtype=dtype)
+                            return None
+                        return c_e
+
+                    c_list = [_extract_input_centroid(g) for g in g_list] if self.steer_scale > 0 else []
+                    can_steer = (
+                        self.steer_scale > 0
+                        and len(c_list) == K
+                        and all(c_vec is not None and c_vec.numel() == in_dim for c_vec in c_list)
                     )
                     if can_steer:
-                        C = torch.stack(
-                            [
-                                g["module"].last_centroids[g["expert_idx"]].to(device=device, dtype=dtype)
-                                for g in g_list
-                            ],
-                            dim=0,
-                        ).unsqueeze(-1)  # [K, d_small, 1]
+                        C = torch.stack(c_list, dim=0).unsqueeze(-1)  # [K, in_dim, 1]
                         QL_r = QL_stack[:, :, :r]
                         QR_r = QR_stack[:, :, :r]
-                        # Twice re-orthogonalization (Kahan-Parlett) for numerical machine precision
-                        c_proj1 = torch.bmm(QL_r, torch.bmm(QL_r.transpose(1, 2), C))
-                        c_res1 = C - c_proj1
-                        c_proj2 = torch.bmm(QL_r, torch.bmm(QL_r.transpose(1, 2), c_res1))
-                        c_res = (c_res1 - c_proj2).squeeze(-1)
-                        c_res_norm = c_res.norm(dim=-1, keepdim=True)
-                        c_orth = torch.where(
-                            c_res_norm > 1e-8, c_res / c_res_norm.clamp_min(1e-8), torch.zeros_like(c_res)
-                        )
+                        if centroid_on_ql:
+                            # Input centroid sits on QL (m > n, e.g. e[0] transposed); dual v = G_stack^T c_orth sits on QR
+                            c_proj1 = torch.bmm(QL_r, torch.bmm(QL_r.transpose(1, 2), C))
+                            c_res1 = C - c_proj1
+                            c_proj2 = torch.bmm(QL_r, torch.bmm(QL_r.transpose(1, 2), c_res1))
+                            c_res = (c_res1 - c_proj2).squeeze(-1)
+                            c_res_norm = c_res.norm(dim=-1, keepdim=True)
+                            c_orth = torch.where(
+                                c_res_norm > 1e-8, c_res / c_res_norm.clamp_min(1e-8), torch.zeros_like(c_res)
+                            )
 
-                        v = torch.bmm(G_stack.transpose(1, 2), c_orth.unsqueeze(-1))
-                        v_proj1 = torch.bmm(QR_r, torch.bmm(QR_r.transpose(1, 2), v))
-                        v_res1 = v - v_proj1
-                        v_proj2 = torch.bmm(QR_r, torch.bmm(QR_r.transpose(1, 2), v_res1))
-                        v_res = (v_res1 - v_proj2).squeeze(-1)
-                        v_res_norm = v_res.norm(dim=-1, keepdim=True)
-                        steer_mask = (c_res_norm.squeeze(-1) > 1e-8) & (v_res_norm.squeeze(-1) > 1e-8)
-                        v_orth = torch.where(
-                            steer_mask.unsqueeze(-1), v_res / v_res_norm.clamp_min(1e-8), torch.zeros_like(v_res)
-                        )
-                        c_orth = torch.where(steer_mask.unsqueeze(-1), c_orth, torch.zeros_like(c_orth))
+                            v = torch.bmm(G_stack.transpose(1, 2), c_orth.unsqueeze(-1))
+                            v_proj1 = torch.bmm(QR_r, torch.bmm(QR_r.transpose(1, 2), v))
+                            v_res1 = v - v_proj1
+                            v_proj2 = torch.bmm(QR_r, torch.bmm(QR_r.transpose(1, 2), v_res1))
+                            v_res = (v_res1 - v_proj2).squeeze(-1)
+                            v_res_norm = v_res.norm(dim=-1, keepdim=True)
+                            steer_mask = (c_res_norm.squeeze(-1) > 1e-8) & (v_res_norm.squeeze(-1) > 1e-8)
+                            ql_vec = torch.where(steer_mask.unsqueeze(-1), c_orth, torch.zeros_like(c_orth))
+                            qr_vec = torch.where(
+                                steer_mask.unsqueeze(-1), v_res / v_res_norm.clamp_min(1e-8), torch.zeros_like(v_res)
+                            )
+                        else:
+                            # Input centroid sits on QR (m <= n, e.g. e[2]); dual u = G_stack v_orth sits on QL
+                            v_proj1 = torch.bmm(QR_r, torch.bmm(QR_r.transpose(1, 2), C))
+                            v_res1 = C - v_proj1
+                            v_proj2 = torch.bmm(QR_r, torch.bmm(QR_r.transpose(1, 2), v_res1))
+                            v_res = (v_res1 - v_proj2).squeeze(-1)
+                            v_res_norm = v_res.norm(dim=-1, keepdim=True)
+                            v_orth = torch.where(
+                                v_res_norm > 1e-8, v_res / v_res_norm.clamp_min(1e-8), torch.zeros_like(v_res)
+                            )
 
-                        QL_stack[:, :, r].copy_(c_orth)
-                        QR_stack[:, :, r].copy_(v_orth)
-                        for g in g_list:
-                            g["steer_applied"] = bool(g.get("_has_nonzero_grad", True))
+                            u = torch.bmm(G_stack, v_orth.unsqueeze(-1))
+                            u_proj1 = torch.bmm(QL_r, torch.bmm(QL_r.transpose(1, 2), u))
+                            u_res1 = u - u_proj1
+                            u_proj2 = torch.bmm(QL_r, torch.bmm(QL_r.transpose(1, 2), u_res1))
+                            u_res = (u_res1 - u_proj2).squeeze(-1)
+                            u_res_norm = u_res.norm(dim=-1, keepdim=True)
+                            steer_mask = (v_res_norm.squeeze(-1) > 1e-8) & (u_res_norm.squeeze(-1) > 1e-8)
+                            ql_vec = torch.where(
+                                steer_mask.unsqueeze(-1), u_res / u_res_norm.clamp_min(1e-8), torch.zeros_like(u_res)
+                            )
+                            qr_vec = torch.where(steer_mask.unsqueeze(-1), v_orth, torch.zeros_like(v_orth))
+
+                        QL_stack[:, :, r].copy_(ql_vec)
+                        QR_stack[:, :, r].copy_(qr_vec)
+                        for b_i, g in enumerate(g_list):
+                            g["steer_applied"] = bool(g.get("_has_nonzero_grad", True)) and bool(steer_mask[b_i].item())
                             g["last_steer_step"] = self.step_count
                     else:
                         QL_stack[:, :, r].zero_()
@@ -860,7 +907,9 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                     for b_idx, g in enumerate(g_list):
                         g["last_energy_ratio"] = ratios[b_idx]
 
-                R_batch[start:end, : r + 1, : r + 1].copy_(torch.triu(S_bmm))
+                R_batch[start:end, : r + 1, : r + 1].copy_(
+                    torch.triu(S_bmm) if self.core_mask_mode == "triu" else S_bmm
+                )
 
                 for b_idx, g in enumerate(g_list):
                     idx = start + b_idx
@@ -877,7 +926,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
             else:
                 step_vals.copy_(torch.tensor(step_list, device=device, dtype=torch.float32).view(N, 1, 1))
 
-            # 3. Unified Fused Triton Triangular AdamW Step with PyTorch Vectorized Fallback
+            # 3. Unified Fused Triton Core AdamW Step with PyTorch Vectorized Fallback
             from triune.kernels.fast_triangular import fast_triangular_adamw
 
             fast_triangular_adamw(
@@ -889,6 +938,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                 beta1=expert_beta1,
                 beta2=expert_beta2,
                 eps=1e-8,
+                mask_mode=self.core_mask_mode,
             )
 
             # 4. Batched BMM Reconstruction & Fused Multi-Tensor Weight Update
@@ -896,9 +946,14 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
             alpha_upd = -expert_lr
             for m, n, r, start, end, g_list, QL_act, QR_act, QL_stack, QR_stack in bucket_cache:
                 delta_stack = batch_delta_R[start:end, : r + 1, : r + 1]
-                if self.steer_scale > 0 and any(g.get("steer_applied", False) for g in g_list):
-                    # Unsteered matrices already have column r zeroed on GPU via steer_mask
-                    delta_stack[:, : r + 1, r].mul_(1.0 + self.steer_scale)
+                if self.steer_scale > 0:
+                    steer_rows = [b_i for b_i, g in enumerate(g_list) if g.get("steer_applied", False)]
+                    if steer_rows:
+                        s_idx = torch.tensor(steer_rows, dtype=torch.long, device=delta_stack.device)
+                        scale_mult = 1.0 + self.steer_scale
+                        delta_stack[s_idx, : r + 1, r] = delta_stack[s_idx, : r + 1, r] * scale_mult
+                        if self.core_mask_mode == "full":
+                            delta_stack[s_idx, r, :r] = delta_stack[s_idx, r, :r] * scale_mult
 
                 if m <= n:
                     temp_recon = torch.bmm(QL_act, delta_stack)
@@ -1080,10 +1135,14 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                     target_dim = m if side == "left" else n
                     if c.size(0) != target_dim:
                         expert = module.experts[expert_idx]
-                        first_linear = expert[0]
-                        w = first_linear.linear.weight if isinstance(first_linear, FP4Linear) else first_linear.weight
-                        b = first_linear.linear.bias if isinstance(first_linear, FP4Linear) else first_linear.bias
-                        c_projected = F.linear(c.unsqueeze(0).to(device=w.device, dtype=w.dtype), w, b).squeeze(0)
+                        with torch.no_grad():
+                            c_in = c.unsqueeze(0).to(device=proj.device, dtype=proj.dtype)
+                            h = expert[0](
+                                c_in.to(dtype=expert[0].weight.dtype if hasattr(expert[0], "weight") else proj.dtype)
+                            )
+                            if len(expert) > 2:
+                                h = expert[1](h)
+                            c_projected = h.squeeze(0).to(device=proj.device, dtype=proj.dtype)
                     else:
                         c_projected = c.to(device=proj.device, dtype=proj.dtype)
 

@@ -45,7 +45,7 @@
 \maketitle
 
 \begin{abstract}
-First-order adaptive optimizers such as AdamW maintain persistent first and second gradient moments that consume $8.0$ bytes of high-bandwidth memory (HBM) per parameter, constituting a primary bottleneck in scaling modern foundation models. While low-rank gradient projection methods mitigate optimizer memory, they project updates onto arbitrary principal directions that ignore the dynamic activation geometry of routed expert tokens in sparse Mixture-of-Experts (MoE) architectures. Furthermore, recent matrix polar optimization methods (such as Muon) treat parameter tensors uniformly, causing empirical instability when applied indiscriminately to high-aspect-ratio vocabulary embeddings. In this paper, we propose \textbf{CentroidSteer}, a mathematically grounded, activation-guided, tri-tier partitioned optimizer operating on the compact Stiefel manifold for sparse MoE architectures. CentroidSteer dynamically partitions weights into: (1) \textbf{Tier 1} (Muon), applying 5th-order Newton-Schulz polar orthogonalization to 2D attention matrices; (2) \textbf{Tier 2} (CentroidSteer), projecting routed expert updates into an augmented low-rank subspace steered along empirical router activation centroids and retracting onto the Stiefel manifold $\operatorname{St}(r+1, d)$ via two-pass shifted Cholesky-QR Gram orthogonalization; and (3) \textbf{Tier 3} (Base AdamW), preserving 1D normalization layers, router gates, and vocabulary embeddings under standard fused adaptive updates. Mathematically, we prove that alternating orthogonal subspace iteration combined with activation augmentation produces an exact upper-triangular block Krylov core $\bar{S} = \bar{Q}_L^T G \bar{Q}_R$, establishing the theoretical validity of the triangular projection without discarding legitimate gradient information. We further prove that router gating entropy $\mathcal{H}(p)$ strictly bounds the intra-cluster activation dispersion and residual subspace perturbation, establishing a formal connection between routing certainty and subspace alignment. In multi-seed pre-training evaluations on FineWeb-Edu ($N=3$ seeds from scratch; $N=12$ seeds, $df=11$, $200$ steps from a 75.8M 6-layer Studio checkpoint at step $36,500$ [$222.7\text{M}$ tokens] across balanced $3 \times 3$ Latin squares), CentroidSteer reduces persistent expert optimizer memory by $98.4\%$ to \textbf{0.128} bytes/param ($4.54$ bytes/param model-wide with standard Tier 3 AdamW, or $1.27$ bytes/param with 8-bit AdamW) and demonstrates equivalence within $\pm 0.01$ nats ($p_{\text{TOST}} = 1.52 \times 10^{-7}$), establishing its viability as an activation-informed inductive prior without degradation.
+First-order adaptive optimizers such as AdamW maintain persistent first and second gradient moments that consume $8.0$ bytes of high-bandwidth memory (HBM) per parameter in FP32 ($4.0$\,B/p in BF16), constituting a primary bottleneck in scaling modern foundation models. While low-rank gradient projection methods mitigate optimizer memory, they project updates onto arbitrary principal directions that ignore the dynamic activation geometry of routed expert tokens in sparse Mixture-of-Experts (MoE) architectures. Furthermore, recent matrix polar optimization methods (such as Muon) treat parameter tensors uniformly, causing empirical instability when applied indiscriminately to high-aspect-ratio vocabulary embeddings. In this paper, we propose \textbf{CentroidSteer}, an activation-guided, tri-tier partitioned optimizer operating on the compact Stiefel manifold for sparse MoE architectures. CentroidSteer partitions weights into: (1) \textbf{Tier 1} (Muon), applying 5th-order Newton-Schulz polar orthogonalization to 2D attention matrices; (2) \textbf{Tier 2} (CentroidSteer), projecting routed expert updates into an augmented low-rank subspace steered along empirical router activation centroids and retracting onto the Stiefel manifold $\operatorname{St}(r+1, d)$ via two-pass shifted Cholesky-QR Gram orthogonalization; and (3) \textbf{Tier 3} (Base AdamW / 8-bit AdamW), preserving 1D normalization layers, router gates, and vocabulary embeddings under adaptive updates. Mathematically, we prove that alternating orthogonal subspace iteration combined with activation augmentation produces an exact upper-triangular block Krylov core $\bar{S} = \bar{Q}_L^T G \bar{Q}_R$, and establish an exact \textbf{second-moment ANOVA identity} and \textbf{Total Covariance decomposition} on normalized routed inputs ($\mathbb{E}[\|h\|_2^2] = \mathbb{E}[\|\mu_e\|_2^2] + \mathbb{E}[\operatorname{tr}(\Sigma_e)]$, $\mathbb{E}[\operatorname{tr}(\Sigma_e)] \le \operatorname{tr}(\Sigma_{\text{total}})$), directly quantifying intra-expert dispersion reduction ($46.86\%$ empirically on 90.8M MoE). In multi-seed evaluations on FineWeb-Edu ($N=8$ seeds from scratch on 90.79M MoE; $N=3$ dense; $N=12$ seeds, $200$ steps from a 76.0M Studio checkpoint at step $36,500$ [$222.7\text{M}$ tokens] across balanced $3 \times 3$ Latin squares), CentroidSteer reduces persistent expert optimizer memory by $97.2\%$ vs.\ BF16 AdamW ($98.6\%$ vs.\ FP32 AdamW) to $0.1118$\,B/p ($3.78$\,MB on Tier 2; $0.128$\,B/p analytically on $384 \times 1024$), significantly outperforms Standard AdamW ($7.6521$ vs.\ $7.8035$ val loss, paired $p=0.0082$) and BAdam ($8.4076$), matches GaLore ($7.6561, p=0.73$) with $43.4\%$ less expert state ($3.78$ vs.\ $6.68$\,MB) and faster steps ($91.49$ vs.\ $98.79$\,ms), and establishes equivalence within $\pm 0.01$ nats on checkpoint continuation ($p_{\text{TOST}} = 1.52 \times 10^{-7}$). At 100 cold-start steps, we transparently observe that centroid augmentation shifts geometric concentration without statistically separating in loss from unsteered or random orthogonal projection ($p=0.12$--$0.14$), isolating low-rank Stiefel subspace updates as the primary driver of short-horizon efficiency.
 \end{abstract}
 
 \section{Introduction}
@@ -64,7 +64,7 @@ To address these challenges, we introduce \textbf{CentroidSteer}, a mathematical
     \item \textbf{Tri-Tier Parameter Partitioning}: We introduce a principled parameter role taxonomy that separates 2D attention projections (Tier 1: Polar Orthogonalization), routed expert MLP matrices (Tier 2: Activation-Guided Subspace), and sensitive embeddings/normalizations (Tier 3: Fused AdamW).
     \item \textbf{Activation-Guided Subspace Steering}: We augment the low-rank gradient projection basis with the empirical activation centroid of tokens assigned to each expert, mathematically proving that the augmented basis remains strictly orthonormal and provides robust rank-deficient fallbacks.
     \item \textbf{Augmented Krylov Core Triangularization}: We prove that alternating orthogonal subspace iteration and activation centroid augmentation naturally yield an exact block upper-triangular projection core $\bar{S} = \bar{Q}_L^T G \bar{Q}_R = \begin{bmatrix} R_L & Q_L^T G \tilde{v}_\perp \\ \mathbf{0} & \tilde{c}_\perp^T G \tilde{v}_\perp \end{bmatrix}$, establishing that strictly lower-triangular entries are algebraically zero and resolving the theoretical validity of triangular core updates.
-    \item \textbf{Routing Entropy Concentration Bounds}: We prove that the Shannon entropy of token routing probabilities strictly bounds the intra-cluster activation dispersion and residual subspace perturbation, establishing a rigorous connection between expert specialization and low-rank alignment.
+    \item \textbf{Exact ANOVA Dispersion \& Moment Conservation}: We prove an exact second-moment ANOVA energy partition on RMSNorm-normalized routed inputs and apply the Law of Total Covariance ($\Sigma_{\text{total}} = \Sigma_{\text{between}} + \mathbb{E}[\Sigma_e]$) together with a Cauchy--Schwarz residual bound on centered gradient fluctuations, empirically verified across $N=8$ runs ($46.86\%$ within-expert variance reduction).
     \item \textbf{Two-Pass Shifted Cholesky-QR Stability \& Convergence}: We prove the unconditional orthogonal stability of two-pass shifted Cholesky-QR (\texttt{sCholQR2}) under shift regularization and establish the non-convex convergence of Riemannian CentroidSteer on smooth objectives.
 \end{itemize}
 
@@ -292,42 +292,46 @@ Combining all four blocks, every strictly lower-triangular entry with $i > j$ is
 This completes the proof.
 \end{proof}
 
-\begin{theorem}[Routing Entropy Bounds \& Subspace Concentration]
-\label{thm:routing_entropy}
-Let $p(x) = \operatorname{softmax}(W_{\text{gate}} x) \in \Delta^{E-1}$ denote the gating probability over $E$ experts for token $x$, and let $\mathcal{H}(p(x)) = -\sum_{e=1}^E p_e(x) \log p_e(x)$ denote the Shannon routing entropy. Let $\mathcal{S}_e = \{x_i \mid e = \arg\max_j p_j(x_i)\}$ be the partition of tokens routed to expert $e$, with empirical centroid $c_e = \frac{1}{|\mathcal{S}_e|} \sum_{i \in \mathcal{S}_e} x_i$ and intra-cluster covariance $\Sigma_e = \frac{1}{|\mathcal{S}_e|} \sum_{i \in \mathcal{S}_e} (x_i - c_e)(x_i - c_e)^T$.
-Suppose that across the token population, routing entropy satisfies $\mathbb{E}[\mathcal{H}(p(x))] \le \mathcal{H}_0 < \log E$. Then:
+\begin{theorem}[Second-Moment ANOVA Conservation \& Total Covariance Dispersion]
+\label{thm:anova_concentration}
+Let $h \in \mathbb{R}^d$ denote RMSNorm-normalized routed token inputs partitioned across active experts $e \in \{1,\dots,E\}$ into finite token sets $\mathcal{S}_e$ of cardinality $N_e = |\mathcal{S}_e| \ge 1$, with empirical expert centroids $\mu_e = \frac{1}{N_e} \sum_{i \in \mathcal{S}_e} h_i$, within-expert covariance matrices $\Sigma_e = \frac{1}{N_e} \sum_{i \in \mathcal{S}_e} (h_i - \mu_e)(h_i - \mu_e)^T$, population mean $\bar{\mu} = \mathbb{E}[h]$, and total covariance $\Sigma_{\text{total}} = \operatorname{Cov}(h)$. Then:
 \begin{enumerate}
-    \item \textbf{Cluster Dispersion Bound}: The intra-expert trace dispersion is bounded by:
+    \item \textbf{Exact Second-Moment ANOVA Identity}: On every finite partition $\{\mathcal{S}_e\}_{e=1}^E$, the input second moment decomposes orthogonally without cross-terms:
     \begin{equation}
-        \operatorname{tr}(\Sigma_e) \le \frac{2 \mathcal{H}_0}{\gamma^2} \cdot \operatorname{tr}(\Sigma_{\text{total}})
+        \mathbb{E}\!\left[\|h\|_2^2\right] = \mathbb{E}\!\left[\|\mu_e\|_2^2\right] + \mathbb{E}\!\left[\operatorname{tr}(\Sigma_e)\right],
     \end{equation}
-    where $\gamma = \min_{j \neq e} \|W_{\text{gate}, e} - W_{\text{gate}, j}\|_2$ is the router margin and $\Sigma_{\text{total}}$ is the total activation covariance.
-    \item \textbf{Centroid Perturbation Bound}: The residual orthogonal steering energy satisfies:
+    so under RMSNorm normalization ($\mathbb{E}[\|h\|_2^2] = d$ for unit-scale weights, or weighted scale $d_\gamma = \sum_j \gamma_j^2$), defining the centroid energy fraction $\eta_{\text{cent}} := \mathbb{E}[\|\mu_e\|_2^2] / \mathbb{E}[\|h\|_2^2]$ satisfies $\eta_{\text{cent}} + \mathbb{E}[\operatorname{tr}(\Sigma_e)] / \mathbb{E}[\|h\|_2^2] = 1$.
+    \item \textbf{Total Covariance Within-Expert Bound}: By the Law of Total Covariance,
     \begin{equation}
-    \begin{aligned}
-        \| c_\perp \|_2^2 &= \| (I - Q_L Q_L^T) c_e \|_2^2 \\
-        &\le \| c_e \|_2^2 \left( 1 - \frac{\sum_{j=1}^r \sigma_j^2(G)}{\sum_{j=1}^{\min(m, n)} \sigma_j^2(G)} \right) + \mathcal{O}\left( \sqrt{\mathcal{H}_0} \right)
-    \end{aligned}
+        \mathbb{E}\!\left[\operatorname{tr}(\Sigma_e)\right] = \operatorname{tr}(\Sigma_{\text{total}}) - \operatorname{tr}(\Sigma_{\text{between}}) \le \operatorname{tr}(\Sigma_{\text{total}}),
     \end{equation}
-    where $\sigma_j(G)$ are the singular values of the expert gradient $G$.
+    where $\Sigma_{\text{between}} = \mathbb{E}[(\mu_e - \bar{\mu})(\mu_e - \bar{\mu})^T] \succeq 0$, with strict inequality whenever routed expert centroids are non-identical.
+    \item \textbf{Centered Gradient Fluctuation Bound}: Decomposing an expert gradient $G = \sum_{i \in \mathcal{S}_e} \delta_i h_i^T$ into its centroid outer product $M_c = \big(\sum_{i \in \mathcal{S}_e} \delta_i\big) \mu_e^T$ and centered residual $E_\Sigma = \sum_{i \in \mathcal{S}_e} \delta_i (h_i - \mu_e)^T$, the residual Frobenius norm obeys
+    \begin{equation}
+        \|E_\Sigma\|_F^2 \le \left(\sum_{i \in \mathcal{S}_e} \|\delta_i\|_2^2\right) \cdot \left(N_e \operatorname{tr}(\Sigma_e)\right).
+    \end{equation}
 \end{enumerate}
 \end{theorem}
 
 \begin{proof}
-For part (1), by Fano's inequality and Pinsker's inequality on the simplex $\Delta^{E-1}$, the total variation distance between the routing assignment and an expert boundary satisfies $D_{\text{TV}}(p(x), \mathbf{e}_e) \le \sqrt{\frac{1}{2} D_{\text{KL}}(p(x) \parallel \mathbf{e}_e)} \le \sqrt{\mathcal{H}(p(x)) / 2}$. For any token $x_i \in \mathcal{S}_e$, the router logit gap satisfies $(W_{\text{gate}, e} - W_{\text{gate}, j})^T x_i \ge \log(p_e / p_j)$. Integrating over $\mathcal{S}_e$, the spatial variance around centroid $c_e$ is confined within the Voronoi polytope cell of expert $e$. Applying the Poincaré inequality on the convex polytope with router boundary separation $\gamma$ yields $\operatorname{tr}(\Sigma_e) \le \frac{2 \mathcal{H}_0}{\gamma^2} \operatorname{tr}(\Sigma_{\text{total}})$.
-
-For part (2), the expert gradient outer product decomposes cleanly into a rank-1 centroid mean term $M_c$ and a zero-mean intra-cluster fluctuation residual $E_\Sigma$:
+For part (1), fix any expert cluster $\mathcal{S}_e$ and expand $h_i = \mu_e + (h_i - \mu_e)$ for $i \in \mathcal{S}_e$:
 \begin{equation}
-    G = \sum_{i \in \mathcal{S}_e} \delta_i x_i^T = \underbrace{\left(\sum_{i \in \mathcal{S}_e} \delta_i\right) c_e^T}_{M_c} + \underbrace{\sum_{i \in \mathcal{S}_e} \delta_i (x_i - c_e)^T}_{E_\Sigma}.
+    \|h_i\|_2^2 = \|\mu_e\|_2^2 + \|h_i - \mu_e\|_2^2 + 2 \mu_e^T (h_i - \mu_e).
 \end{equation}
-By the mean-covariance trace decomposition around $c_e$, let $\hat{c}_e = c_e / \|c_e\|_2$ and $\Sigma_{\delta} = \sum_{i \in \mathcal{S}_e} \|\delta_i\|_2^2 I$; Cauchy-Schwarz over token residuals yields
+Summing over $i \in \mathcal{S}_e$ and dividing by $N_e$, the cross-term vanishes identically because $\sum_{i \in \mathcal{S}_e} (h_i - \mu_e) = \mathbf{0}$, while $\frac{1}{N_e}\sum_{i \in \mathcal{S}_e}\|h_i - \mu_e\|_2^2 = \operatorname{tr}(\Sigma_e)$ by linearity of trace. Taking expectation over expert assignment weights yields $\mathbb{E}[\|h\|_2^2] = \mathbb{E}[\|\mu_e\|_2^2] + \mathbb{E}[\operatorname{tr}(\Sigma_e)]$.
+
+For part (2), the Law of Total Covariance gives $\Sigma_{\text{total}} = \operatorname{Cov}(\mathbb{E}[h \mid e]) + \mathbb{E}[\operatorname{Cov}(h \mid e)] = \Sigma_{\text{between}} + \mathbb{E}[\Sigma_e]$. Taking trace yields $\mathbb{E}[\operatorname{tr}(\Sigma_e)] = \operatorname{tr}(\Sigma_{\text{total}}) - \operatorname{tr}(\Sigma_{\text{between}})$. Because $\Sigma_{\text{between}} = \mathbb{E}[(\mu_e - \bar{\mu})(\mu_e - \bar{\mu})^T]$ is positive semidefinite, $\operatorname{tr}(\Sigma_{\text{between}}) \ge 0$, proving $\mathbb{E}[\operatorname{tr}(\Sigma_e)] \le \operatorname{tr}(\Sigma_{\text{total}})$ with equality if and only if $\mu_e = \bar{\mu}$ almost surely.
+
+For part (3), apply the triangle and Cauchy--Schwarz inequalities across the $N_e$ routed tokens in $E_\Sigma = \sum_{i \in \mathcal{S}_e} \delta_i (h_i - \mu_e)^T$:
 \begin{equation}
 \begin{aligned}
-    \|E_\Sigma\|_F^2 &= \operatorname{tr}(E_\Sigma^T E_\Sigma) \le \left(\sum_{i \in \mathcal{S}_e} \|\delta_i\|_2^2\right) \sum_{i \in \mathcal{S}_e} \|x_i - c_e\|_2^2 \\
-    &= |\mathcal{S}_e| \|\delta\|_2^2 \operatorname{tr}(\Sigma_e) \le \frac{2 |\mathcal{S}_e| \|\delta\|_2^2 \operatorname{tr}(\Sigma_{\text{total}})}{\gamma^2} \mathcal{H}_0,
+    \|E_\Sigma\|_F &\le \sum_{i \in \mathcal{S}_e} \left\| \delta_i (h_i - \mu_e)^T \right\|_F = \sum_{i \in \mathcal{S}_e} \|\delta_i\|_2 \|h_i - \mu_e\|_2 \\
+    &\le \sqrt{\left(\sum_{i \in \mathcal{S}_e} \|\delta_i\|_2^2\right) \left(\sum_{i \in \mathcal{S}_e} \|h_i - \mu_e\|_2^2\right)},
 \end{aligned}
 \end{equation}
-where the last step substitutes part~(1). The left basis $Q_L$ obtained via alternating Krylov iteration on $G = M_c + E_\Sigma$ spans the dominant $r$ left singular directions. Expressing the orthogonal projection via trace identity gives $\|c_\perp\|_2^2 = \|c_e\|_2^2 \operatorname{tr}\!\left((I - Q_L Q_L^T)\hat{c}_e \hat{c}_e^T\right)$. Applying Wedin's $\sin\Theta$ perturbation theorem between the clean centroid rank-1 factor $M_c$ and $G = M_c + E_\Sigma$ bounds the residual centroid energy by the neglected gradient spectral tail plus the linear perturbation term $\mathcal{O}(\|E_\Sigma\|_F) = \mathcal{O}(\sqrt{\operatorname{tr}(\Sigma_e)}) = \mathcal{O}(\sqrt{\mathcal{H}_0})$.
+and squaring while substituting $\sum_{i \in \mathcal{S}_e} \|h_i - \mu_e\|_2^2 = N_e \operatorname{tr}(\Sigma_e)$ yields $\|E_\Sigma\|_F^2 \le \big(\sum_{i \in \mathcal{S}_e}\|\delta_i\|_2^2\big) \cdot (N_e \operatorname{tr}(\Sigma_e))$.
+
+Empirically, across $N=8$ training runs on the 90.79M MoE model ($d=384$), live activation telemetry under \texttt{Triune MoE} confirms Theorem~\ref{thm:anova_concentration} to numerical precision: $\mathbb{E}[\|\mu_e\|_2^2] = 270.9937$ and $\mathbb{E}[\operatorname{tr}(\Sigma_e)] = 113.0062$, summing to $383.9999 \approx d=384$ ($\eta_{\text{cent}} = 0.7057$), while $\mathbb{E}[\operatorname{tr}(\Sigma_e)] / \operatorname{tr}(\Sigma_{\text{total}}) = 0.5314$ (a $46.86\%$ reduction in within-expert dispersion relative to unpartitioned tokens) at mean router entropy $0.8756$. Whether steering explicitly along $\mu_\perp = (I - Q_L Q_L^T)\mu_e$ yields lower loss beyond gradient-only subspace updates depends on horizon length and is tested directly in Section~\ref{sec:steering_ablation}.
 \end{proof}
 
 \begin{theorem}[Orthogonal Stability \& Convergence of Two-Pass Shifted Cholesky-QR]
@@ -419,8 +423,8 @@ Theorem~\ref{thm:augmented_triu} establishes the structural upper-triangular ide
     \item \textbf{Production Optimizer Multi-Seed Trajectory \& Equivalence Analysis}: Scale-invariant coordinate optimizers (AdamW) amplify subdiagonal floating-point noise ($|S_{ij}| \sim 10^{-7}$) into spurious steps. Computing $R = \operatorname{triu}(\bar{S})$ functions as a regularized projection filter that zeroes subdiagonal noise before variance normalization. We evaluate 200-step continuation trajectories ($102,400$ tokens/seed) starting from our 75.8M 6-layer Studio checkpoint (\texttt{step\_36500.pt}, initial validation loss $4.1800$) on genuine FineWeb-Edu text across $N=12$ random seeds (degrees of freedom $df = 11$, Student-$t$ critical values $t_{0.975, 11} = 2.2010$ and $t_{0.95, 11} = 1.7959$). Each seed deterministically samples 200 micro-batches without replacement from a $1,000$-batch ($512,000$-token) FineWeb-Edu training pool, and optimizer execution order follows 4 complete $3 \times 3$ Latin squares so every optimizer executes exactly 4 times in 1st, 2nd, and 3rd position. Generalization is evaluated in full FP32 reduction precision on a strictly disjoint 64-batch ($32,768$-token) held-out validation set.
     Averaged over all 200 steps per seed, mean training loss is $4.4099 \pm 0.0196$ ($95\%$ CI $[4.3975, 4.4224]$) for Triangular CentroidSteer vs.\ $4.4073 \pm 0.0186$ ($95\%$ CI $[4.3955, 4.4192]$) for Standard 2D AdamW, with a paired mean-training difference of $+0.0026 \pm 0.0033$ nats ($95\%$ CI $[+0.0005, +0.0047]$, two-tailed $t = 2.7172, p = 0.0200$, passing Schuirmann TOST at $\pm 0.01$ nats with $p_{\text{TOST}} = 5.05 \times 10^{-6}$).
     On the 64-batch held-out validation set, Triangular CentroidSteer reaches $4.1697 \pm 0.0025$ ($95\%$ CI $[4.1682, 4.1713]$) vs.\ $4.1661 \pm 0.0023$ ($95\%$ CI $[4.1646, 4.1676]$) for Standard 2D AdamW. The paired validation loss difference across 12 seeds is $+0.0037 \pm 0.0020$ nats ($\text{SEM} = 0.0006$, $95\%$ CI $[+0.0024, +0.0049]$).
-    Thus, full-rank AdamW ($8.00$\,B/p) achieves a small $+0.0037$-nat ($0.37\%$ perplexity) validation advantage over rank-$16$ CentroidSteer ($0.128$\,B/p; two-tailed paired $t = 6.3326, p = 5.58 \times 10^{-5}$), directly quantifying the approximation cost of compressing $384 \times 1024$ expert moment states into a rank-$16$ triangular core. Simultaneously, the empirical minimum equivalence margin is $\Delta_{\min}(\alpha=0.05) = \pm 0.0047$ nats, passing Schuirmann TOST across all tested margins: $\Delta_{\text{eq}} = \pm 0.01$ nats ($p_{\text{TOST}} = 1.52 \times 10^{-7}$), $\Delta_{\text{eq}} = \pm 0.02$ nats ($p_{\text{TOST}} = 6.57 \times 10^{-12}$), and $\Delta_{\text{eq}} = \pm 0.05$ nats ($p_{\text{TOST}} = 7.29 \times 10^{-17}$).
-    In separate-OS-subprocess verification (36 fresh child processes spanning 4 complete Latin squares from an unallocated $0.00$\,MB PyTorch baseline), Triangular CentroidSteer consumes $937.9 \pm 11.2$\,MB peak PyTorch-allocated tensor memory vs.\ $1,064.7 \pm 7.0$\,MB for Standard 2D AdamW, confirming a $126.8$\,MB ($11.9\%$) reduction in peak tensor allocation at matched full-step latency ($89.54 \pm 6.67$\,ms vs.\ $89.67 \pm 3.74$\,ms).
+    Thus, full-rank 2D AdamW achieves a small $+0.0037$-nat ($0.37\%$ perplexity) validation advantage over rank-$16$ CentroidSteer (two-tailed paired $t = 6.3326, p = 5.58 \times 10^{-5}$), directly quantifying the approximation cost of compressing $384 \times 1024$ expert moment states into a rank-$16$ triangular core. Simultaneously, the empirical minimum equivalence margin is $\Delta_{\min}(\alpha=0.05) = \pm 0.0047$ nats, passing Schuirmann TOST across all tested margins: $\Delta_{\text{eq}} = \pm 0.01$ nats ($p_{\text{TOST}} = 1.52 \times 10^{-7}$), $\Delta_{\text{eq}} = \pm 0.02$ nats ($p_{\text{TOST}} = 6.57 \times 10^{-12}$), and $\Delta_{\text{eq}} = \pm 0.05$ nats ($p_{\text{TOST}} = 7.29 \times 10^{-17}$).
+    In separate-OS-subprocess verification (36 fresh child processes spanning 4 complete Latin squares from an unallocated $0.00$\,MB PyTorch baseline), Triangular CentroidSteer consumes $942.09 \pm 7.81$\,MB peak PyTorch-allocated tensor memory vs.\ $1,064.49 \pm 6.83$\,MB for Standard 2D AdamW, confirming a $122.40$\,MB ($11.5\%$) reduction in peak tensor allocation at comparable full-step latency ($114.36 \pm 37.69$\,ms vs.\ $117.67 \pm 37.37$\,ms; and $90.94 \pm 3.94$\,ms vs.\ $93.61 \pm 3.76$\,ms in-process).
 \end{enumerate}
 
 A fused Triton kernel applies triangular AdamW updates to $R$, yielding preconditioned update direction $\Delta_R$. To enforce subspace moment consistency across adaptive steps, \texttt{CentroidSteerOptimizer} enforces a \textbf{non-refresh steering moment-zeroing invariant}: whenever an updated router centroid rotates the orthogonal steering column/row ($\tilde{c}_\perp, \tilde{v}_\perp$) between full Krylov refreshes (\texttt{needs\_steer\_refresh}), the optimizer unconditionally zeroes the $(r+1)$-th column and row of both the first and second triangular core moments ($M_{:, r+1}, M_{r+1, :}, V_{:, r+1}, V_{r+1, :} \leftarrow \mathbf{0}$) prior to accumulation. This prevents stale exponential moving averages computed along a discarded orthogonal basis vector from corrupting second-moment normalization along the newly orthogonalized steering direction. To apply steering acceleration, the $(r+1)$-th column of $\Delta_R$ is scaled by $(1 + \alpha)$, where $\alpha \ge 0$ is the steering scale. The full weight update is reconstructed via:
@@ -455,34 +459,34 @@ We explicitly distinguish between persistent optimizer moment states, projection
     \item \textbf{Persistent Moments} ($M, V$): CentroidSteer tracks moments only for the upper-triangular core $R \in \mathbb{R}^{(r+1) \times (r+1)}$, consuming $2(r+1)^2 \times 4$ bytes in FP32 ($2,312$ bytes for $r=16$).
     \item \textbf{Projection Bases} ($Q_L, Q_R$): Retained between subspace update intervals in BF16, consuming $(m + n)(r+1) \times 2$ bytes ($47,872$ bytes for $m=384, n=1024, r=16$).
     \item \textbf{Total Persistent Expert Footprint}: As summarized in Table~\ref{tab:memory_breakdown}, CentroidSteer requires $50,184$ bytes, or \textbf{0.128} bytes/param ($98.4\%$ reduction vs.\ AdamW's $8.0$ B/param).
-    \item \textbf{Model-Wide Footprint}: In our 90.79M MoE model, parameter tiers comprise Tier 1 (6.5\%), Tier 2 (39.0\%), and Tier 3 (54.5\%, dominated by vocabulary embeddings). If Tier 3 uses standard FP32 AdamW ($8.0$ B/p), the model-wide persistent optimizer footprint is $0.065 \times 2.0 + 0.390 \times 0.128 + 0.545 \times 8.0 = \mathbf{4.54}$ \textbf{bytes/param} ($43.3\%$ overall state reduction). If Tier 3 employs 8-bit AdamW ($2.0$ B/p), the model-wide footprint drops to $\mathbf{1.27}$ \textbf{bytes/param} ($84.1\%$ reduction). As expert count scales in larger models ($E \ge 64$), Tier 2 comprises $>85\%$ of total parameters, asymptotically driving model-wide state memory toward the Tier 2 bound of $0.128$ B/p (Figure~\ref{fig:optimizer_memory}).
+    \item \textbf{Analytical Single-Matrix vs.\ Measured 90.79M Footprint}: Analytically on a $384 \times 1024$ matrix ($r=16$), Table~\ref{tab:memory_breakdown} shows $50,184$ bytes ($0.128$\,B/p, $-98.4\%$ vs.\ FP32 AdamW $8.0$\,B/p). Empirically across all $35.39\text{M}$ Tier-2 expert parameters of the 90.79M MoE model (Figure~\ref{fig:optimizer_memory}), measured persistent expert state drops from $135.21\text{ MB}$ ($4.0000$\,B/p in BF16 AdamW) to \textbf{$3.78\text{ MB}$ ($0.1118$\,B/p)} under \texttt{Triune MoE}—a \textbf{$97.2\%$ reduction vs.\ BF16 AdamW} ($98.6\%$ vs.\ FP32 $8.0$\,B/p) and $43.4\%$ lower expert memory than GaLore ($6.68\text{ MB}$, $0.1976$\,B/p)—cutting model-wide optimizer state from $251.96\text{ MB}$ ($2.910$\,B/p) to $109.28\text{ MB}$ ($1.262$\,B/p with 8-bit Tier-3 embeddings; $99.12\text{ MB}$ without Tier-1 Muon). As expert count scales ($E \ge 64$), Tier 2 dominates parameters and drives model-wide state asymptotically toward the Tier-2 bound ($\sim 0.11$--$0.13$\,B/p).
 \end{itemize}
 
 \begin{figure}[t]
     \centering
     \includegraphics[width=\linewidth]{figures/dense_convergence.pdf}
-    \caption{\textbf{Multi-Seed Convergence on Dense Transformer (43.5M Parameters).} Validation loss and perplexity across 5 optimizer regimes ($N=3$ seeds: 42, 1337, 2026). Bands show $\pm 1$ std.}
+    \caption{\textbf{Multi-Seed Convergence on Dense Transformer (43.46M Parameters).} Validation loss and perplexity across 5 optimizer regimes ($N=3$ seeds: 42, 1337, 2026). Bands show $\pm 1$ std.}
     \label{fig:dense_conv}
 \end{figure}
 
 \begin{figure}[t]
     \centering
     \includegraphics[width=\linewidth]{figures/moe_convergence.pdf}
-    \caption{\textbf{Multi-Seed Convergence on Mixture-of-Experts (90.8M Parameters).} Evaluation of 3-tier dynamic steering synergy on 8-layer, 4-expert MoE Transformer over held-out FineWeb-Edu text.}
+    \caption{\textbf{Multi-Seed Convergence on Mixture-of-Experts (90.79M Parameters, $N=8$).} Held-out FineWeb-Edu validation loss and perplexity across 6 optimizer regimes (Standard AdamW, Muon+AdamW, BAdam, GaLore $r=16$, CentroidSteer No-Muon, and 3-tier Triune MoE) over 8 random seeds.}
     \label{fig:moe_conv}
 \end{figure}
 
 \begin{figure}[t]
     \centering
     \includegraphics[width=\linewidth]{figures/optimizer_memory.pdf}
-    \caption{\textbf{Optimizer State Memory Footprint.} (a) Per-matrix memory on Tier 2 expert weights ($384 \times 1024, r=16$): CentroidSteer achieves a $98.4\%$ HBM state reduction vs.\ AdamW. (b) Model-wide memory across tiers in 90.8M MoE: reducing footprint from $8.00$ B/p down to $4.54$ B/p (FP32 Tier 3) and $1.27$ B/p (8-bit Tier 3), with asymptotic scaling toward $0.128$ B/p as expert count $E \ge 64$.}
+    \caption{\textbf{Measured 90.79M MoE Optimizer State Footprint ($N=8$).} (a) Tier 2 expert state in bytes/param: Triune MoE consumes $0.1118$\,B/p ($3.78\text{ MB}$), reducing expert state by $97.2\%$ vs.\ BF16 AdamW ($4.00$\,B/p, $135.21\text{ MB}$) and $43.4\%$ vs.\ GaLore ($0.1976$\,B/p, $6.68\text{ MB}$). (b) Model-wide total persistent state in MB across the full 90.79M architecture.}
     \label{fig:optimizer_memory}
 \end{figure}
 
 \begin{figure}[t]
     \centering
     \includegraphics[width=\linewidth]{figures/moe_steering_ablation.pdf}
-    \caption{\textbf{Controlled Routing Steering Ablation on MoE Model.} Comparing Dynamic Router Centroid Steering ($\alpha=0.20$), Random Orthogonal Steering, and Unsteered Subspace ($\alpha=0$) across 3 seeds on FineWeb-Edu.}
+    \caption{\textbf{Controlled Routing Steering Ablation \& ANOVA Conservation ($N=8$ Seeds).} (a) Post-warmup validation trajectories overlap closely across Centroid Steering, Random Orthogonal Steering, and Unsteered Subspace ($p = 0.12$). (b) Empirical verification of Theorem~\ref{thm:anova_concentration}: between-expert and within-expert variance sum identically to the RMSNorm energy $d=384$.}
     \label{fig:moe_ablation}
 \end{figure}
 
@@ -490,10 +494,10 @@ We explicitly distinguish between persistent optimizer moment states, projection
 
 \subsection{Experimental Setup}
 
-Experiments are conducted on NVIDIA Ada Lovelace / Blackwell architecture hardware (RTX 5070, CC 12.0) with BF16 Tensor Cores, PyTorch 2.14, and CUDA 13.2. We train on genuine educational text from \texttt{HuggingFaceFW/fineweb-edu} (sample-10BT).
+Experiments are conducted on an NVIDIA RTX 5070 Laptop GPU (CC 12.0, $7.93\text{ GB}$ VRAM) with BF16 Tensor Cores, PyTorch 2.14.1+cu132, and CUDA 13.2, training on genuine educational text from \texttt{HuggingFaceFW/fineweb-edu} (sample-10BT).
 \begin{itemize}
-    \item \textbf{Rigorous Protocol}: Step-0 initial weights are sampled once per seed ($S \in \{42, 1337, 2026\}$) and cloned bit-for-bit across all compared regimes.
-    \item \textbf{Symmetric Validation}: Multi-batch held-out validation sets (2,560 tokens) are evaluated every 20 steps under identical cross-entropy loss to strictly isolate optimizer behavior.
+    \item \textbf{Rigorous Multi-Seed Protocol}: Step-0 initial weights are sampled once per seed and cloned bit-for-bit across all compared regimes ($N=3$ seeds $\{42, 1337, 2026\}$ on dense transformers; expanded to $N=8$ seeds $\{42, 1337, 2026, 7, 99, 314, 777, 1024\}$ on 90.79M MoE and steering ablations).
+    \item \textbf{Symmetric Validation}: Multi-batch held-out validation splits are evaluated every 20 steps under identical cross-entropy loss to strictly isolate optimizer behavior.
 \end{itemize}
 
 \subsection{Convergence on Dense Transformers}
@@ -524,17 +528,19 @@ CentroidSteer (No Muon) & \textbf{7.4967} $\pm$ \textbf{0.0111} & \textbf{3.0485
 \begin{table*}[t]
 \centering
 \small
-\caption{\textbf{Multi-Seed Convergence on Mixture-of-Experts (90.79M Parameters)} with 4 routed experts per layer across 3 random seeds. Active Tier 2 parameters: $35,389,440$ ($39.0\%$).}
+\caption{\textbf{Multi-Seed ($N=8$) Convergence \& State Memory on Mixture-of-Experts (90.79M Parameters)} with 4 routed experts per layer across 8 random seeds (Mean $\pm$ Std). \texttt{Exp State} and \texttt{Tot State} measure actual persistent GPU optimizer buffers.}
 \label{tab:moe_convergence}
 \resizebox{\textwidth}{!}{%
-\begin{tabular}{lcccccc}
+\begin{tabular}{lccccccc}
 \toprule
-\textbf{MoE Optimizer Regime} & \textbf{Final Val Loss} & \textbf{Val Loss Drop} & \textbf{Final Val PPL} & \textbf{Step Time} & \textbf{Peak VRAM} & \textbf{Convergence Efficiency} \\
+\textbf{MoE Optimizer Regime} & \textbf{Final Val Loss} & \textbf{Final Val PPL} & \textbf{Steady Step Time} & \textbf{Throughput} & \textbf{Expert State} & \textbf{Total State} & \textbf{Peak Alloc VRAM} \\
 \midrule
-Standard AdamW & $7.9216 \pm 0.0667$ & $2.5290 \pm 0.0623$ & $2760.4 \pm 187.6$ & $137.25 \text{ ms}$ & \textbf{1356.6 MB} & $0.1801 \text{ loss/s}$ \\
-Muon + AdamW Baseline & \textbf{7.8246} $\pm$ \textbf{0.0041} & \textbf{2.6260} $\pm$ \textbf{0.0022} & \textbf{2501.5} $\pm$ \textbf{10.4} & $133.23 \text{ ms}$ & 1364.2 MB & $0.1811 \text{ loss/s}$ \\
-CentroidSteer (No Muon) & $7.8860 \pm 0.0369$ & $2.5647 \pm 0.0413$ & $2660.9 \pm 97.8$ & $136.15 \text{ ms}$ & 1659.7 MB & $0.1761 \text{ loss/s}$ \\
-\textbf{Triune MoE Stack (3-Tier)} & $7.8268 \pm 0.0558$ & $2.6238 \pm 0.0517$ & $2509.5 \pm 139.7$ & \textbf{131.71 ms} & 1602.0 MB & \textbf{0.1916 loss/s} \\
+BAdam (Blockwise) & $8.4076 \pm 0.0408$ & $4484.3 \pm 185.0$ & $\mathbf{60.56\text{ ms}}$ & $\mathbf{8,419\text{ tok/s}}$ & $27.04\text{ MB}$ ($0.8000\text{ B/p}$) & $\mathbf{46.88\text{ MB}}$ ($0.541\text{ B/p}$) & $4074.2\text{ MB}$ \\
+Standard AdamW (BF16) & $7.8035 \pm 0.1301$ & $2467.7 \pm 332.7$ & $90.82\text{ ms}$ & $5,637\text{ tok/s}$ & $135.21\text{ MB}$ ($4.0000\text{ B/p}$) & $251.96\text{ MB}$ ($2.910\text{ B/p}$) & $4383.4\text{ MB}$ \\
+Muon + AdamW Baseline & $7.6799 \pm 0.0547$ & $2167.4 \pm 122.8$ & $90.42\text{ ms}$ & $5,667\text{ tok/s}$ & $135.21\text{ MB}$ ($4.0000\text{ B/p}$) & $240.71\text{ MB}$ ($2.780\text{ B/p}$) & $4376.1\text{ MB}$ \\
+GaLore ($r=16, \tau=20$) & $7.6561 \pm 0.0584$ & $2116.7 \pm 129.4$ & $98.79\text{ ms}$ & $5,171\text{ tok/s}$ & $6.68\text{ MB}$ ($0.1976\text{ B/p}$) & $102.43\text{ MB}$ ($1.183\text{ B/p}$) & $4122.2\text{ MB}$ \\
+CentroidSteer (No Muon) & $\mathbf{7.6459} \pm \mathbf{0.0625}$ & $\mathbf{2095.8} \pm \mathbf{138.7}$ & $90.95\text{ ms}$ & $5,630\text{ tok/s}$ & $3.87\text{ MB}$ ($0.1144\text{ B/p}$) & $99.12\text{ MB}$ ($1.145\text{ B/p}$) & $4158.2\text{ MB}$ \\
+\textbf{Triune MoE Stack (3-Tier)} & $7.6521 \pm 0.0654$ & $2109.0 \pm 144.6$ & $91.49\text{ ms}$ & $5,596\text{ tok/s}$ & $\mathbf{3.78\text{ MB}}$ ($\mathbf{0.1118\text{ B/p}}$) & $109.28\text{ MB}$ ($1.262\text{ B/p}$) & $4338.4\text{ MB}$ \\
 \bottomrule
 \end{tabular}%
 }
@@ -542,37 +548,37 @@ CentroidSteer (No Muon) & $7.8860 \pm 0.0369$ & $2.5647 \pm 0.0413$ & $2660.9 \p
 
 \subsection{Convergence on Mixture-of-Experts}
 
-In Table~\ref{tab:moe_convergence} and Figure~\ref{fig:moe_conv}, we evaluate \texttt{UniversalMoETransformer} (90.79M total parameters, 8 layers, 4 routed experts per layer, top-1 routing). Here, all three tiers are actively populated: Tier 1 contains $5.90\text{M}$ parameters ($6.5\%$), Tier 2 contains $35.39\text{M}$ parameters ($39.0\%$), and Tier 3 contains $49.50\text{M}$ parameters ($54.5\%$). The Full Triune MoE stack achieves a final validation loss of $7.8268 \pm 0.0558$, significantly improving upon Standard AdamW ($7.9216 \pm 0.0667$) and matching the Muon+AdamW baseline ($7.8246 \pm 0.0041$) while reducing optimizer state memory on expert weights by $98.4\%$.
+In Table~\ref{tab:moe_convergence} and Figure~\ref{fig:moe_conv}, we evaluate \texttt{UniversalMoETransformer} ($90.79\text{M}$ total parameters, 8 layers, 4 routed experts per layer, top-1 routing) across $N=8$ random seeds over FineWeb-Edu, including direct comparisons against GaLore ($r=16, \tau_{\text{gap}}=20$) and BAdam. All three parameter tiers are populated, with Tier 2 consuming only $\mathbf{3.78\text{ MB}}$ ($0.1118\text{ B/p}$) vs.\ $135.21\text{ MB}$ ($4.0000\text{ B/p}$) for BF16 AdamW and $6.68\text{ MB}$ ($0.1976\text{ B/p}$) for GaLore. The \texttt{Triune MoE} stack achieves a final validation loss of $7.6521 \pm 0.0654$, delivering a statistically significant improvement over Standard AdamW ($7.8035 \pm 0.1301$; paired $\Delta = -0.1514$, paired $p = 0.0082$, Welch $p = 0.0143$) and BAdam ($8.4076 \pm 0.0408$, $p < 10^{-6}$), while matching GaLore ($7.6561 \pm 0.0584$, paired $\Delta = -0.0040, p = 0.7316$) with $43.4\%$ less expert state and faster steady-state steps ($91.49\text{ ms}$ vs.\ $98.79\text{ ms}$). Pairing CentroidSteer without Tier-1 Muon (\texttt{CentroidSteer No-Muon}) reaches the lowest mean loss ($7.6459 \pm 0.0625$, paired $p = 0.5690$ vs.\ \texttt{Triune MoE}).
 
 \subsection{Router Centroid Steering Ablation \& Statistical Analysis}
+\label{sec:steering_ablation}
 
 \begin{table*}[t]
 \centering
 \small
-\caption{\textbf{Controlled Routing Steering Ablation on MoE Model (3 Seeds)} under identical initial weights and sequence ordering. Per-seed trajectories and paired statistical tests.}
+\caption{\textbf{Controlled Routing Steering Ablation on MoE Model ($N=8$ Seeds)} under identical initial weights and sequence ordering, reporting held-out validation performance alongside empirical ANOVA routing geometry from Theorem~\ref{thm:anova_concentration}.}
 \label{tab:steering_ablation}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{lcccccc}
 \toprule
-\textbf{Steering Regime} & \textbf{Seed 42} & \textbf{Seed 1337} & \textbf{Seed 2026} & \textbf{Mean $\pm$ Std} & \textbf{Val Loss Drop} & \textbf{Paired $\Delta$ vs.\ Unsteered} \\
+\textbf{Steering Regime} & \textbf{Final Val Loss} & \textbf{Final Val PPL} & \textbf{Paired $\Delta$ vs.\ Triune MoE} & \textbf{Centroid Frac $\eta_{\text{cent}}$} & \textbf{Within/Global Var} & \textbf{Router Entropy} \\
 \midrule
-Unsteered Subspace ($\alpha=0$) & 7.7835 & 7.8767 & 7.7660 & $7.8087 \pm 0.0595$ & $2.6419 \pm 0.0621$ & --- \\
-Random Orthogonal Direction & 7.7817 & 7.7751 & 7.8616 & $7.8061 \pm 0.0481$ & $2.6445 \pm 0.0437$ & $-0.0026 \pm 0.098$ ($p=0.96$) \\
-\textbf{Router Centroid Steering} & \textbf{7.7043} & 7.8768 & 7.8145 & \textbf{7.7985} $\pm$ \textbf{0.0874} & \textbf{2.6521} $\pm$ \textbf{0.0863} & $\mathbf{-0.0102 \pm 0.064}$ ($p=0.81$) \\
+Unsteered Subspace ($\alpha=0$) & $\mathbf{7.6499} \pm \mathbf{0.0656}$ & $\mathbf{2104.4} \pm \mathbf{144.3}$ & $+0.0022$ ($p=0.1188$) & $0.6990$ & $0.5452$ & $0.8817$ \\
+Random Orthogonal Direction & $7.6505 \pm 0.0658$ & $2105.8 \pm 144.8$ & $+0.0016$ ($p=0.1439$) & $0.6782$ & $0.5906$ & $0.8973$ \\
+\textbf{Router Centroid Steering} & $7.6521 \pm 0.0654$ & $2109.0 \pm 144.6$ & --- & $\mathbf{0.7057}$ & $\mathbf{0.5314}$ & $\mathbf{0.8756}$ \\
 \bottomrule
 \end{tabular}%
 }
 \end{table*}
 
-To isolate whether router-derived activation geometry provides an effective inductive bias, Table~\ref{tab:steering_ablation} and Figure~\ref{fig:moe_ablation} evaluate three controlled configurations across three identical random seeds:
+To isolate whether router-derived activation geometry improves short-horizon optimization beyond low-rank Stiefel projection itself, Table~\ref{tab:steering_ablation} and Figure~\ref{fig:moe_ablation} evaluate three controlled configurations across all $N=8$ seeds:
 \begin{enumerate}
     \item \textbf{Unsteered Subspace} ($\alpha=0$): Expert parameters are optimized purely within the rank-16 gradient Krylov subspace $Q_L, Q_R$.
     \item \textbf{Random Orthogonal Steering}: Subspaces are augmented by an isotropic Gaussian vector $\eta \sim \mathcal{N}(0, I)$ orthogonalized against $Q_L$ and $Q_R$.
-    \item \textbf{Router Centroid Steering}: Subspaces are augmented by the true empirical router activation centroid $c_\perp$.
+    \item \textbf{Router Centroid Steering}: Subspaces are augmented by the true empirical router activation centroid $\mu_\perp$.
 \end{enumerate}
 
-Dynamic router centroid steering achieves the lowest mean validation loss ($7.7985 \pm 0.0874$) and largest loss reduction ($2.6521 \pm 0.0863$), outperforming both the unsteered baseline ($7.8087$) and random directional augmentation ($7.8061$).
-Statistical inspection reveals that on Seed 42, router centroid steering exhibits a noticeable advantage ($-0.0792$ loss drop over unsteered), whereas on Seed 2026 the unsteered configuration achieves lower loss. A two-tailed paired $t$-test across $N=3$ seeds yields $t = -0.275$ ($p = 0.81$), with a $95\%$ confidence interval of $[-0.169, +0.149]$. Consequently, while the directional trend is encouraging and aligns with our theoretical motivation in Theorem~\ref{thm:routing_entropy}, these 100-step, 3-seed empirical results do not permit rejecting the null hypothesis at $\alpha=0.05$. We treat router steering as a promising inductive prior that warrants verification over extended pre-training horizons ($> 10^4$ steps) and larger cohorts ($N \ge 10$).
+Expanding from an earlier 3-seed pilot to $N=8$ seeds resolves an important scientific distinction. Geometrically, dynamic centroid steering visibly increases centroid energy concentration ($\eta_{\text{cent}} = 0.7057$ vs.\ $0.6782$ random), lowers relative intra-expert variance ($\mathbb{E}[\operatorname{tr}(\Sigma_e)] / \operatorname{tr}(\Sigma_{\text{total}}) = 0.5314$ vs.\ $0.5906$), and lowers router entropy ($0.8756$ vs.\ $0.8973$), consistent with Theorem~\ref{thm:anova_concentration}. However, over 100 from-scratch training steps, final validation losses across all three subspace variants are statistically indistinguishable: Unsteered ($7.6499 \pm 0.0656$), Random ($7.6505 \pm 0.0658$), and Router Centroid Steering ($7.6521 \pm 0.0654$), with paired $p$-values $p = 0.1188$ (vs.\ Unsteered) and $p = 0.1439$ (vs.\ Random). Therefore, our $N=8$ evidence demonstrates that \textbf{the statistically significant accuracy gain over AdamW ($p=0.0082$) and $97.2\%$ state compression are driven primarily by the two-sided Stiefel triangular subspace optimizer itself}, while explicit centroid steering does not yet confer an isolated short-horizon perplexity advantage within 100 steps. Evaluating whether centroid augmentation differentiates after routing patterns stabilize over multi-thousand-step training remains open future work.
 
 \section{Related Work}
 
@@ -586,20 +592,20 @@ Statistical inspection reveals that on Seed 42, router centroid steering exhibit
 
 \section{Limitations \& Future Work}
 
-While CentroidSteer achieves substantial memory savings and solid convergence, several limitations warrant note. First, computing Cholesky-QR basis updates every $\tau_{\text{gap}}$ steps incurs a modest periodic refresh cost ($27.57$\,ms vs.\ $8.44$\,ms on non-refresh steps, or $0.957$\,ms/step amortized at $\tau_{\text{gap}}=20$ and $\le 0.096$\,ms/step at $\tau_{\text{gap}}=200$), with small boolean host-device readbacks on eager refresh steps to filter unrouted experts and dispatch sliced Householder fallbacks. Second, evaluations in this work comprise 100-step from-scratch ablations ($N=3$ seeds at 43.5M–90.8M scale) and 200-step checkpoint-continuation runs across two pre-training checkpoint stages ($N=12$ seeds, $df=11$, 4 complete $3 \times 3$ Latin squares at primary checkpoint step $36,500$ [$222.7\text{M}$ tokens] plus supplementary stage-consistency verification across $N=3$ seeds at step $35,500$ [$157.2\text{M}$ tokens] over a $32,768$-token validation set), accompanied by extended-horizon continuation up to 600 steps/seed ($N=3$, tracking intermediate validation curves at steps 0, 200, 400, and 600, where the paired validation difference narrows from $+0.0051$ to $+0.0031$ nats), where full-rank 2D AdamW retains a $+0.0037$-nat validation advantage ($p = 5.58 \times 10^{-5}$) while remaining equivalent within $\pm 0.01$ nats ($\Delta_{\min} = \pm 0.0047$ nats, $p_{\text{TOST}} = 1.52 \times 10^{-7}$) conditional on the evaluated checkpoints and FineWeb-Edu pool. Multi-thousand-step continuation and from-scratch pre-training over billions of tokens will be required to characterize long-horizon scaling laws. Future work will investigate dynamic rank scheduling and distributed tensor-parallel basis synchronization.
+While CentroidSteer achieves substantial memory savings and statistically significant convergence gains over AdamW and BAdam on 90.79M MoE, several limitations warrant note. First, computing Cholesky-QR basis updates every $\tau_{\text{gap}}$ steps incurs a modest periodic refresh cost ($27.57$\,ms vs.\ $8.44$\,ms on non-refresh steps, or $0.957$\,ms/step amortized at $\tau_{\text{gap}}=20$ and $\le 0.096$\,ms/step at $\tau_{\text{gap}}=200$), with small boolean host-device readbacks on eager refresh steps to filter unrouted experts and dispatch sliced Householder fallbacks. Second, although we expanded the MoE benchmark to $N=8$ seeds against GaLore and BAdam, from-scratch runs remain limited to $100$ steps; within this short cold-start window, explicit centroid steering shows measurable geometric shift ($\eta_{\text{cent}}=0.7057$) without yet outperforming unsteered or random subspace augmentation on loss ($p=0.12$--$0.14$). Third, checkpoint-continuation runs span $200$ steps ($N=12$ seeds, $df=11$, 4 complete $3 \times 3$ Latin squares at \texttt{step\_36500.pt} [$222.7\text{M}$ tokens] plus supplementary verification at \texttt{step\_35500.pt} [$157.2\text{M}$ tokens] over $32,768$ validation tokens) and $600$-step extended trajectories ($N=3$), where full-rank 2D AdamW retains a $+0.0037$-nat validation advantage ($p = 5.58 \times 10^{-5}$) while remaining equivalent within $\pm 0.01$ nats ($\Delta_{\min} = \pm 0.0047$ nats, $p_{\text{TOST}} = 1.52 \times 10^{-7}$). Multi-thousand-step from-scratch pre-training over billions of tokens will be required to test long-horizon separation of centroid steering and scaling laws. Future work will investigate dynamic rank scheduling and distributed tensor-parallel basis synchronization.
 
 \section{Reproducibility \& Artifact Provenance}
 
 To guarantee transparent verification of every quantitative and mathematical claim in this paper, all source implementations, benchmark generators, raw machine-readable JSON outputs, and automated validity checks are maintained in the Triune repository:
 \begin{itemize}\raggedright\setlength{\itemsep}{2pt}
     \item \textbf{Core Optimizer Implementation}: \texttt{triune/optim/centroid.py} (\texttt{CentroidSteerOptimizer}, non-refresh moment-zeroing invariant, \texttt{get\_telemetry()}) and \texttt{triune/ops/centroid\_steer.py} (\texttt{sCholQR2} \texttt{batched\_qr}, Kahan-Parlett centroid projection, Triangular Core kernel).
-    \item \textbf{Convergence \& Competitive Scripts}: \texttt{scripts/benchmark\_convergence\_100\_steps.py} (dense sweep), \texttt{scripts/benchmark\_moe\_convergence\_100\_steps.py} (MoE sweep \& steering ablation), and \texttt{scripts/benchmark\_full\_matrix\_comparison.py} ($3\times 2\times 2$ Latin-square baselines).
-    \item \textbf{Machine-Readable Artifacts \& Verification}: Outputs serialized in \texttt{benchmarks/optimizer\_benchmark\_results.json}, \texttt{benchmarks/convergence\_100\_steps\_results.json}, and \texttt{benchmarks/master\_matrix\_results.json}, validated via \texttt{pytest tests/test\_triangular\_core\_integrity.py tests/test\_benchmark\_validity.py} (PyTorch 2.14.1+cu132, CUDA 13.2).
+    \item \textbf{Convergence \& Competitive Scripts}: \texttt{scripts/benchmark\_convergence\_100\_steps.py} (dense sweep, $N=3$), \texttt{scripts/benchmark\_moe\_convergence\_100\_steps.py} (MoE sweep including GaLore, BAdam, and steering ablation, $N=8$), and \texttt{scripts/benchmark\_full\_matrix\_comparison.py} ($3\times 2\times 2$ baselines).
+    \item \textbf{Machine-Readable Artifacts \& Verification}: Outputs serialized in \texttt{benchmarks/optimizer\_benchmark\_results.json}, \texttt{benchmarks/convergence\_100\_steps\_results.json}, \texttt{benchmarks/moe\_convergence\_100\_steps\_results.json}, \texttt{benchmarks/triangular\_qr\_residual\_results.json}, and \texttt{benchmarks/master\_matrix\_results.json}, validated via \texttt{pytest tests/test\_triangular\_core\_integrity.py tests/test\_benchmark\_validity.py} (PyTorch 2.14.1+cu132, CUDA 13.2).
 \end{itemize}
 
 \section{Conclusion}
 
-CentroidSteer demonstrates that low-rank gradient projection and polar orthogonalization can be unified into a cohesive, mathematically grounded optimizer architecture operating on the compact Stiefel manifold. By guiding expert parameter updates along dynamic router activation manifolds and preserving sensitive embeddings, CentroidSteer reduces persistent expert optimizer memory by $98.4\%$ while providing empirical convergence improvements on modern sparse Mixture-of-Experts models.
+CentroidSteer unifies two-sided low-rank Stiefel subspace optimization, polar orthogonalization, and embedded adaptive coordinate updates into a tri-tier architecture for sparse Mixture-of-Experts models. Across $N=8$ random seeds, CentroidSteer cuts persistent Tier-2 expert optimizer memory by $97.2\%$ vs.\ BF16 AdamW ($98.6\%$ vs.\ FP32) to $0.1118$\,B/p ($3.78\text{ MB}$, $43.4\%$ below GaLore), outperforms Standard AdamW ($p=0.0082$) and BAdam ($p<10^{-6}$), matches GaLore accuracy ($p=0.73$) at lower latency, and preserves checkpoint continuation within $\pm 0.01$ nats ($p_{\text{TOST}} = 1.52 \times 10^{-7}$). Our repaired ANOVA and Total Covariance analysis clarifies the empirical mechanism: Stiefel-constrained two-sided triangular projection drives the observed short-horizon optimization and memory gains, while longer pre-training horizons remain necessary to evaluate long-term centroid steering separation.
 
 \bibliographystyle{IEEEtran}
 \begin{thebibliography}{10}

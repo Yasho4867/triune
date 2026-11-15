@@ -1,0 +1,1122 @@
+{
+  "checkpoint": "checkpoints/triune_studio_step_36500_rescued.pt",
+  "model": {
+    "step": 40555,
+    "hidden_dim": 384,
+    "num_layers": 8,
+    "reflex_exit_layer": 2,
+    "limbic_exit_layer": 5
+  },
+  "source": "local",
+  "source_description": "local `data/fineweb_edu_large.jsonl`, disjoint held-out suffix documents 7500 to 7899.",
+  "seq_len": 512,
+  "min_positions": 500,
+  "splits": {
+    "calibration": {
+      "documents": 200,
+      "positions": 87141,
+      "first_id": "local:7500",
+      "last_id": "local:7699",
+      "id_sha256_16": "f26ebb16446fdfb9"
+    },
+    "evaluation": {
+      "documents": 200,
+      "positions": 85503,
+      "first_id": "local:7700",
+      "last_id": "local:7899",
+      "id_sha256_16": "100002c54e817dcb"
+    }
+  },
+  "exits": {
+    "reflex": {
+      "unconditional_agreement_pct": {
+        "calibration_split": 73.67,
+        "evaluation_split": 73.17
+      },
+      "margin_auroc": 0.8159,
+      "confidence_reliability": {
+        "ece": 0.4479,
+        "mce": 0.5684,
+        "brier_score": 0.3767,
+        "bins": [
+          {
+            "bin": "[0.0, 0.1)",
+            "count": 19398,
+            "mean_score": 0.0598,
+            "empirical_agreement": 0.4398,
+            "wilson95_lower": 0.4328,
+            "gap": 0.38
+          },
+          {
+            "bin": "[0.1, 0.2)",
+            "count": 22133,
+            "mean_score": 0.1479,
+            "empirical_agreement": 0.6694,
+            "wilson95_lower": 0.6631,
+            "gap": 0.5215
+          },
+          {
+            "bin": "[0.2, 0.3)",
+            "count": 15028,
+            "mean_score": 0.246,
+            "empirical_agreement": 0.8144,
+            "wilson95_lower": 0.8081,
+            "gap": 0.5684
+          },
+          {
+            "bin": "[0.3, 0.4)",
+            "count": 9129,
+            "mean_score": 0.3458,
+            "empirical_agreement": 0.8853,
+            "wilson95_lower": 0.8786,
+            "gap": 0.5395
+          },
+          {
+            "bin": "[0.4, 0.5)",
+            "count": 5704,
+            "mean_score": 0.4462,
+            "empirical_agreement": 0.9148,
+            "wilson95_lower": 0.9073,
+            "gap": 0.4686
+          },
+          {
+            "bin": "[0.5, 0.6)",
+            "count": 3811,
+            "mean_score": 0.5472,
+            "empirical_agreement": 0.9417,
+            "wilson95_lower": 0.9339,
+            "gap": 0.3946
+          },
+          {
+            "bin": "[0.6, 0.7)",
+            "count": 2807,
+            "mean_score": 0.6473,
+            "empirical_agreement": 0.9587,
+            "wilson95_lower": 0.9507,
+            "gap": 0.3114
+          },
+          {
+            "bin": "[0.7, 0.8)",
+            "count": 2211,
+            "mean_score": 0.7489,
+            "empirical_agreement": 0.9738,
+            "wilson95_lower": 0.9662,
+            "gap": 0.2249
+          },
+          {
+            "bin": "[0.8, 0.9)",
+            "count": 1967,
+            "mean_score": 0.8491,
+            "empirical_agreement": 0.9858,
+            "wilson95_lower": 0.9795,
+            "gap": 0.1367
+          },
+          {
+            "bin": "[0.9, 1.0]",
+            "count": 3315,
+            "mean_score": 0.9679,
+            "empirical_agreement": 0.997,
+            "wilson95_lower": 0.9945,
+            "gap": 0.0291
+          }
+        ]
+      },
+      "margin_reliability": {
+        "ece": 0.5358,
+        "mce": 0.7227,
+        "brier_score": 0.4662,
+        "bins": [
+          {
+            "bin": "[0.0, 0.1)",
+            "count": 44553,
+            "mean_score": 0.035,
+            "empirical_agreement": 0.5529,
+            "wilson95_lower": 0.5483,
+            "gap": 0.5179
+          },
+          {
+            "bin": "[0.1, 0.2)",
+            "count": 14155,
+            "mean_score": 0.1448,
+            "empirical_agreement": 0.8675,
+            "wilson95_lower": 0.8618,
+            "gap": 0.7227
+          },
+          {
+            "bin": "[0.2, 0.3)",
+            "count": 7908,
+            "mean_score": 0.2458,
+            "empirical_agreement": 0.9245,
+            "wilson95_lower": 0.9185,
+            "gap": 0.6787
+          },
+          {
+            "bin": "[0.3, 0.4)",
+            "count": 5058,
+            "mean_score": 0.3463,
+            "empirical_agreement": 0.949,
+            "wilson95_lower": 0.9426,
+            "gap": 0.6027
+          },
+          {
+            "bin": "[0.4, 0.5)",
+            "count": 3410,
+            "mean_score": 0.4474,
+            "empirical_agreement": 0.9616,
+            "wilson95_lower": 0.9546,
+            "gap": 0.5142
+          },
+          {
+            "bin": "[0.5, 0.6)",
+            "count": 2428,
+            "mean_score": 0.5482,
+            "empirical_agreement": 0.9712,
+            "wilson95_lower": 0.9637,
+            "gap": 0.423
+          },
+          {
+            "bin": "[0.6, 0.7)",
+            "count": 1902,
+            "mean_score": 0.6484,
+            "empirical_agreement": 0.9774,
+            "wilson95_lower": 0.9697,
+            "gap": 0.329
+          },
+          {
+            "bin": "[0.7, 0.8)",
+            "count": 1613,
+            "mean_score": 0.7496,
+            "empirical_agreement": 0.9845,
+            "wilson95_lower": 0.9772,
+            "gap": 0.2349
+          },
+          {
+            "bin": "[0.8, 0.9)",
+            "count": 1562,
+            "mean_score": 0.8491,
+            "empirical_agreement": 0.9904,
+            "wilson95_lower": 0.9842,
+            "gap": 0.1413
+          },
+          {
+            "bin": "[0.9, 1.0]",
+            "count": 2914,
+            "mean_score": 0.9686,
+            "empirical_agreement": 0.9979,
+            "wilson95_lower": 0.9955,
+            "gap": 0.0294
+          }
+        ]
+      },
+      "evaluation_curve": [
+        {
+          "threshold": 0.05,
+          "coverage_pct": 63.24,
+          "agreement_pct": 88.15,
+          "agreement_wilson95_lower_pct": 87.88,
+          "positions": 54068
+        },
+        {
+          "threshold": 0.1,
+          "coverage_pct": 47.89,
+          "agreement_pct": 92.62,
+          "agreement_wilson95_lower_pct": 92.37,
+          "positions": 40950
+        },
+        {
+          "threshold": 0.15,
+          "coverage_pct": 38.34,
+          "agreement_pct": 94.71,
+          "agreement_wilson95_lower_pct": 94.46,
+          "positions": 32786
+        },
+        {
+          "threshold": 0.2,
+          "coverage_pct": 31.34,
+          "agreement_pct": 95.73,
+          "agreement_wilson95_lower_pct": 95.48,
+          "positions": 26795
+        },
+        {
+          "threshold": 0.25,
+          "coverage_pct": 26.15,
+          "agreement_pct": 96.56,
+          "agreement_wilson95_lower_pct": 96.31,
+          "positions": 22360
+        },
+        {
+          "threshold": 0.3,
+          "coverage_pct": 22.09,
+          "agreement_pct": 97.1,
+          "agreement_wilson95_lower_pct": 96.85,
+          "positions": 18887
+        },
+        {
+          "threshold": 0.35,
+          "coverage_pct": 18.79,
+          "agreement_pct": 97.62,
+          "agreement_wilson95_lower_pct": 97.37,
+          "positions": 16062
+        },
+        {
+          "threshold": 0.4,
+          "coverage_pct": 16.17,
+          "agreement_pct": 97.9,
+          "agreement_wilson95_lower_pct": 97.65,
+          "positions": 13829
+        },
+        {
+          "threshold": 0.45,
+          "coverage_pct": 14.03,
+          "agreement_pct": 98.26,
+          "agreement_wilson95_lower_pct": 98.01,
+          "positions": 11996
+        },
+        {
+          "threshold": 0.5,
+          "coverage_pct": 12.19,
+          "agreement_pct": 98.47,
+          "agreement_wilson95_lower_pct": 98.22,
+          "positions": 10419
+        },
+        {
+          "threshold": 0.55,
+          "coverage_pct": 10.69,
+          "agreement_pct": 98.67,
+          "agreement_wilson95_lower_pct": 98.41,
+          "positions": 9139
+        },
+        {
+          "threshold": 0.6,
+          "coverage_pct": 9.35,
+          "agreement_pct": 98.89,
+          "agreement_wilson95_lower_pct": 98.63,
+          "positions": 7991
+        },
+        {
+          "threshold": 0.65,
+          "coverage_pct": 8.19,
+          "agreement_pct": 99.03,
+          "agreement_wilson95_lower_pct": 98.77,
+          "positions": 7004
+        },
+        {
+          "threshold": 0.7,
+          "coverage_pct": 7.12,
+          "agreement_pct": 99.24,
+          "agreement_wilson95_lower_pct": 98.99,
+          "positions": 6089
+        },
+        {
+          "threshold": 0.75,
+          "coverage_pct": 6.17,
+          "agreement_pct": 99.41,
+          "agreement_wilson95_lower_pct": 99.17,
+          "positions": 5278
+        },
+        {
+          "threshold": 0.8,
+          "coverage_pct": 5.23,
+          "agreement_pct": 99.53,
+          "agreement_wilson95_lower_pct": 99.28,
+          "positions": 4476
+        },
+        {
+          "threshold": 0.85,
+          "coverage_pct": 4.29,
+          "agreement_pct": 99.73,
+          "agreement_wilson95_lower_pct": 99.5,
+          "positions": 3671
+        },
+        {
+          "threshold": 0.9,
+          "coverage_pct": 3.41,
+          "agreement_pct": 99.79,
+          "agreement_wilson95_lower_pct": 99.55,
+          "positions": 2914
+        },
+        {
+          "threshold": 0.95,
+          "coverage_pct": 2.45,
+          "agreement_pct": 99.86,
+          "agreement_wilson95_lower_pct": 99.58,
+          "positions": 2093
+        }
+      ],
+      "calibrated": {
+        "90": {
+          "target_agreement_pct": 90.0,
+          "threshold": 0.1,
+          "evaluation_positions": 40950,
+          "evaluation_coverage_pct": 47.89,
+          "evaluation_agreement_pct": 92.62,
+          "evaluation_agreement_wilson95_lower_pct": 92.37,
+          "target_met_on_evaluation": true
+        },
+        "95": {
+          "target_agreement_pct": 95.0,
+          "threshold": 0.2,
+          "evaluation_positions": 26795,
+          "evaluation_coverage_pct": 31.34,
+          "evaluation_agreement_pct": 95.73,
+          "evaluation_agreement_wilson95_lower_pct": 95.48,
+          "target_met_on_evaluation": true
+        }
+      }
+    },
+    "limbic": {
+      "unconditional_agreement_pct": {
+        "calibration_split": 75.8,
+        "evaluation_split": 75.25
+      },
+      "margin_auroc": 0.8319,
+      "confidence_reliability": {
+        "ece": 0.4802,
+        "mce": 0.6063,
+        "brier_score": 0.3987,
+        "bins": [
+          {
+            "bin": "[0.0, 0.1)",
+            "count": 21548,
+            "mean_score": 0.0577,
+            "empirical_agreement": 0.4661,
+            "wilson95_lower": 0.4594,
+            "gap": 0.4083
+          },
+          {
+            "bin": "[0.1, 0.2)",
+            "count": 21705,
+            "mean_score": 0.148,
+            "empirical_agreement": 0.7184,
+            "wilson95_lower": 0.7123,
+            "gap": 0.5703
+          },
+          {
+            "bin": "[0.2, 0.3)",
+            "count": 14805,
+            "mean_score": 0.2457,
+            "empirical_agreement": 0.852,
+            "wilson95_lower": 0.8462,
+            "gap": 0.6063
+          },
+          {
+            "bin": "[0.3, 0.4)",
+            "count": 8860,
+            "mean_score": 0.3461,
+            "empirical_agreement": 0.9159,
+            "wilson95_lower": 0.91,
+            "gap": 0.5698
+          },
+          {
+            "bin": "[0.4, 0.5)",
+            "count": 5512,
+            "mean_score": 0.4462,
+            "empirical_agreement": 0.9399,
+            "wilson95_lower": 0.9334,
+            "gap": 0.4938
+          },
+          {
+            "bin": "[0.5, 0.6)",
+            "count": 3574,
+            "mean_score": 0.5473,
+            "empirical_agreement": 0.9572,
+            "wilson95_lower": 0.95,
+            "gap": 0.4099
+          },
+          {
+            "bin": "[0.6, 0.7)",
+            "count": 2563,
+            "mean_score": 0.6471,
+            "empirical_agreement": 0.9723,
+            "wilson95_lower": 0.9652,
+            "gap": 0.3252
+          },
+          {
+            "bin": "[0.7, 0.8)",
+            "count": 2100,
+            "mean_score": 0.7478,
+            "empirical_agreement": 0.9857,
+            "wilson95_lower": 0.9797,
+            "gap": 0.238
+          },
+          {
+            "bin": "[0.8, 0.9)",
+            "count": 1735,
+            "mean_score": 0.8481,
+            "empirical_agreement": 0.9885,
+            "wilson95_lower": 0.9823,
+            "gap": 0.1403
+          },
+          {
+            "bin": "[0.9, 1.0]",
+            "count": 3101,
+            "mean_score": 0.9684,
+            "empirical_agreement": 0.9981,
+            "wilson95_lower": 0.9958,
+            "gap": 0.0296
+          }
+        ]
+      },
+      "margin_reliability": {
+        "ece": 0.5643,
+        "mce": 0.7607,
+        "brier_score": 0.4903,
+        "bins": [
+          {
+            "bin": "[0.0, 0.1)",
+            "count": 45619,
+            "mean_score": 0.034,
+            "empirical_agreement": 0.5808,
+            "wilson95_lower": 0.5763,
+            "gap": 0.5468
+          },
+          {
+            "bin": "[0.1, 0.2)",
+            "count": 14058,
+            "mean_score": 0.1444,
+            "empirical_agreement": 0.9051,
+            "wilson95_lower": 0.9002,
+            "gap": 0.7607
+          },
+          {
+            "bin": "[0.2, 0.3)",
+            "count": 7875,
+            "mean_score": 0.2455,
+            "empirical_agreement": 0.9533,
+            "wilson95_lower": 0.9484,
+            "gap": 0.7078
+          },
+          {
+            "bin": "[0.3, 0.4)",
+            "count": 4972,
+            "mean_score": 0.3462,
+            "empirical_agreement": 0.9692,
+            "wilson95_lower": 0.9641,
+            "gap": 0.623
+          },
+          {
+            "bin": "[0.4, 0.5)",
+            "count": 3213,
+            "mean_score": 0.4468,
+            "empirical_agreement": 0.9729,
+            "wilson95_lower": 0.9667,
+            "gap": 0.5261
+          },
+          {
+            "bin": "[0.5, 0.6)",
+            "count": 2312,
+            "mean_score": 0.5479,
+            "empirical_agreement": 0.9766,
+            "wilson95_lower": 0.9697,
+            "gap": 0.4287
+          },
+          {
+            "bin": "[0.6, 0.7)",
+            "count": 1776,
+            "mean_score": 0.648,
+            "empirical_agreement": 0.9904,
+            "wilson95_lower": 0.9847,
+            "gap": 0.3424
+          },
+          {
+            "bin": "[0.7, 0.8)",
+            "count": 1571,
+            "mean_score": 0.7497,
+            "empirical_agreement": 0.9917,
+            "wilson95_lower": 0.9859,
+            "gap": 0.2421
+          },
+          {
+            "bin": "[0.8, 0.9)",
+            "count": 1352,
+            "mean_score": 0.8495,
+            "empirical_agreement": 0.9889,
+            "wilson95_lower": 0.9818,
+            "gap": 0.1394
+          },
+          {
+            "bin": "[0.9, 1.0]",
+            "count": 2755,
+            "mean_score": 0.9688,
+            "empirical_agreement": 0.9993,
+            "wilson95_lower": 0.9974,
+            "gap": 0.0305
+          }
+        ]
+      },
+      "evaluation_curve": [
+        {
+          "threshold": 0.05,
+          "coverage_pct": 61.54,
+          "agreement_pct": 91.03,
+          "agreement_wilson95_lower_pct": 90.78,
+          "positions": 52620
+        },
+        {
+          "threshold": 0.1,
+          "coverage_pct": 46.65,
+          "agreement_pct": 94.88,
+          "agreement_wilson95_lower_pct": 94.66,
+          "positions": 39884
+        },
+        {
+          "threshold": 0.15,
+          "coverage_pct": 37.08,
+          "agreement_pct": 96.52,
+          "agreement_wilson95_lower_pct": 96.31,
+          "positions": 31706
+        },
+        {
+          "threshold": 0.2,
+          "coverage_pct": 30.2,
+          "agreement_pct": 97.25,
+          "agreement_wilson95_lower_pct": 97.05,
+          "positions": 25826
+        },
+        {
+          "threshold": 0.25,
+          "coverage_pct": 25.0,
+          "agreement_pct": 97.72,
+          "agreement_wilson95_lower_pct": 97.51,
+          "positions": 21372
+        },
+        {
+          "threshold": 0.3,
+          "coverage_pct": 20.99,
+          "agreement_pct": 98.1,
+          "agreement_wilson95_lower_pct": 97.89,
+          "positions": 17951
+        },
+        {
+          "threshold": 0.35,
+          "coverage_pct": 17.73,
+          "agreement_pct": 98.33,
+          "agreement_wilson95_lower_pct": 98.11,
+          "positions": 15160
+        },
+        {
+          "threshold": 0.4,
+          "coverage_pct": 15.18,
+          "agreement_pct": 98.55,
+          "agreement_wilson95_lower_pct": 98.33,
+          "positions": 12979
+        },
+        {
+          "threshold": 0.45,
+          "coverage_pct": 13.09,
+          "agreement_pct": 98.83,
+          "agreement_wilson95_lower_pct": 98.61,
+          "positions": 11194
+        },
+        {
+          "threshold": 0.5,
+          "coverage_pct": 11.42,
+          "agreement_pct": 98.97,
+          "agreement_wilson95_lower_pct": 98.75,
+          "positions": 9766
+        },
+        {
+          "threshold": 0.55,
+          "coverage_pct": 9.98,
+          "agreement_pct": 99.11,
+          "agreement_wilson95_lower_pct": 98.89,
+          "positions": 8529
+        },
+        {
+          "threshold": 0.6,
+          "coverage_pct": 8.72,
+          "agreement_pct": 99.37,
+          "agreement_wilson95_lower_pct": 99.16,
+          "positions": 7454
+        },
+        {
+          "threshold": 0.65,
+          "coverage_pct": 7.63,
+          "agreement_pct": 99.43,
+          "agreement_wilson95_lower_pct": 99.22,
+          "positions": 6521
+        },
+        {
+          "threshold": 0.7,
+          "coverage_pct": 6.64,
+          "agreement_pct": 99.47,
+          "agreement_wilson95_lower_pct": 99.25,
+          "positions": 5678
+        },
+        {
+          "threshold": 0.75,
+          "coverage_pct": 5.72,
+          "agreement_pct": 99.49,
+          "agreement_wilson95_lower_pct": 99.25,
+          "positions": 4887
+        },
+        {
+          "threshold": 0.8,
+          "coverage_pct": 4.8,
+          "agreement_pct": 99.59,
+          "agreement_wilson95_lower_pct": 99.34,
+          "positions": 4107
+        },
+        {
+          "threshold": 0.85,
+          "coverage_pct": 4.0,
+          "agreement_pct": 99.8,
+          "agreement_wilson95_lower_pct": 99.58,
+          "positions": 3418
+        },
+        {
+          "threshold": 0.9,
+          "coverage_pct": 3.22,
+          "agreement_pct": 99.93,
+          "agreement_wilson95_lower_pct": 99.74,
+          "positions": 2755
+        },
+        {
+          "threshold": 0.95,
+          "coverage_pct": 2.35,
+          "agreement_pct": 99.95,
+          "agreement_wilson95_lower_pct": 99.72,
+          "positions": 2008
+        }
+      ],
+      "calibrated": {
+        "90": {
+          "target_agreement_pct": 90.0,
+          "threshold": 0.05,
+          "evaluation_positions": 52620,
+          "evaluation_coverage_pct": 61.54,
+          "evaluation_agreement_pct": 91.03,
+          "evaluation_agreement_wilson95_lower_pct": 90.78,
+          "target_met_on_evaluation": true
+        },
+        "95": {
+          "target_agreement_pct": 95.0,
+          "threshold": 0.15,
+          "evaluation_positions": 31706,
+          "evaluation_coverage_pct": 37.08,
+          "evaluation_agreement_pct": 96.52,
+          "evaluation_agreement_wilson95_lower_pct": 96.31,
+          "target_met_on_evaluation": true
+        }
+      }
+    }
+  },
+  "pareto_sweep": [
+    {
+      "threshold": "0.0 (All-Reflex)",
+      "tau_value": 0.0,
+      "reflex_exit_pct": 100.0,
+      "limbic_exit_pct": 0.0,
+      "cortex_exit_pct": 0.0,
+      "layer_compute_pct": 37.5,
+      "compute_saved_pct": 62.5,
+      "calm_loss": 4.5959,
+      "calm_ppl": 99.08,
+      "cortex_ppl": 97.25,
+      "ppl_delta_pct": 1.88,
+      "transitions": 85303
+    },
+    {
+      "threshold": 0.05,
+      "tau_value": 0.05,
+      "reflex_exit_pct": 63.21,
+      "limbic_exit_pct": 6.42,
+      "cortex_exit_pct": 30.37,
+      "layer_compute_pct": 58.89,
+      "compute_saved_pct": 41.11,
+      "calm_loss": 4.5856,
+      "calm_ppl": 98.06,
+      "cortex_ppl": 97.25,
+      "ppl_delta_pct": 0.84,
+      "transitions": 85303
+    },
+    {
+      "threshold": 0.1,
+      "tau_value": 0.1,
+      "reflex_exit_pct": 47.86,
+      "limbic_exit_pct": 4.86,
+      "cortex_exit_pct": 47.28,
+      "layer_compute_pct": 68.87,
+      "compute_saved_pct": 31.13,
+      "calm_loss": 4.5821,
+      "calm_ppl": 97.72,
+      "cortex_ppl": 97.25,
+      "ppl_delta_pct": 0.49,
+      "transitions": 85303
+    },
+    {
+      "threshold": 0.15,
+      "tau_value": 0.15,
+      "reflex_exit_pct": 38.31,
+      "limbic_exit_pct": 3.77,
+      "cortex_exit_pct": 57.93,
+      "layer_compute_pct": 75.12,
+      "compute_saved_pct": 24.88,
+      "calm_loss": 4.5804,
+      "calm_ppl": 97.56,
+      "cortex_ppl": 97.25,
+      "ppl_delta_pct": 0.32,
+      "transitions": 85303
+    },
+    {
+      "threshold": 0.2,
+      "tau_value": 0.2,
+      "reflex_exit_pct": 31.31,
+      "limbic_exit_pct": 3.11,
+      "cortex_exit_pct": 65.58,
+      "layer_compute_pct": 79.65,
+      "compute_saved_pct": 20.35,
+      "calm_loss": 4.5787,
+      "calm_ppl": 97.38,
+      "cortex_ppl": 97.25,
+      "ppl_delta_pct": 0.14,
+      "transitions": 85303
+    },
+    {
+      "threshold": 0.25,
+      "tau_value": 0.25,
+      "reflex_exit_pct": 26.13,
+      "limbic_exit_pct": 2.47,
+      "cortex_exit_pct": 71.4,
+      "layer_compute_pct": 83.05,
+      "compute_saved_pct": 16.95,
+      "calm_loss": 4.5788,
+      "calm_ppl": 97.4,
+      "cortex_ppl": 97.25,
+      "ppl_delta_pct": 0.15,
+      "transitions": 85303
+    },
+    {
+      "threshold": 0.3,
+      "tau_value": 0.3,
+      "reflex_exit_pct": 22.07,
+      "limbic_exit_pct": 2.06,
+      "cortex_exit_pct": 75.87,
+      "layer_compute_pct": 85.69,
+      "compute_saved_pct": 14.31,
+      "calm_loss": 4.5787,
+      "calm_ppl": 97.39,
+      "cortex_ppl": 97.25,
+      "ppl_delta_pct": 0.14,
+      "transitions": 85303
+    },
+    {
+      "threshold": 0.35,
+      "tau_value": 0.35,
+      "reflex_exit_pct": 18.76,
+      "limbic_exit_pct": 1.73,
+      "cortex_exit_pct": 79.5,
+      "layer_compute_pct": 87.84,
+      "compute_saved_pct": 12.16,
+      "calm_loss": 4.5788,
+      "calm_ppl": 97.4,
+      "cortex_ppl": 97.25,
+      "ppl_delta_pct": 0.16,
+      "transitions": 85303
+    },
+    {
+      "threshold": 0.4,
+      "tau_value": 0.4,
+      "reflex_exit_pct": 16.15,
+      "limbic_exit_pct": 1.42,
+      "cortex_exit_pct": 82.43,
+      "layer_compute_pct": 89.55,
+      "compute_saved_pct": 10.45,
+      "calm_loss": 4.5788,
+      "calm_ppl": 97.4,
+      "cortex_ppl": 97.25,
+      "ppl_delta_pct": 0.15,
+      "transitions": 85303
+    },
+    {
+      "threshold": 0.45,
+      "tau_value": 0.45,
+      "reflex_exit_pct": 14.01,
+      "limbic_exit_pct": 1.19,
+      "cortex_exit_pct": 84.8,
+      "layer_compute_pct": 90.95,
+      "compute_saved_pct": 9.05,
+      "calm_loss": 4.5793,
+      "calm_ppl": 97.45,
+      "cortex_ppl": 97.25,
+      "ppl_delta_pct": 0.21,
+      "transitions": 85303
+    },
+    {
+      "threshold": 0.5,
+      "tau_value": 0.5,
+      "reflex_exit_pct": 12.17,
+      "limbic_exit_pct": 1.03,
+      "cortex_exit_pct": 86.8,
+      "layer_compute_pct": 92.14,
+      "compute_saved_pct": 7.86,
+      "calm_loss": 4.5781,
+      "calm_ppl": 97.33,
+      "cortex_ppl": 97.25,
+      "ppl_delta_pct": 0.09,
+      "transitions": 85303
+    },
+    {
+      "threshold": 0.55,
+      "tau_value": 0.55,
+      "reflex_exit_pct": 10.68,
+      "limbic_exit_pct": 0.91,
+      "cortex_exit_pct": 88.41,
+      "layer_compute_pct": 93.1,
+      "compute_saved_pct": 6.9,
+      "calm_loss": 4.5778,
+      "calm_ppl": 97.3,
+      "cortex_ppl": 97.25,
+      "ppl_delta_pct": 0.05,
+      "transitions": 85303
+    },
+    {
+      "threshold": 0.6,
+      "tau_value": 0.6,
+      "reflex_exit_pct": 9.33,
+      "limbic_exit_pct": 0.79,
+      "cortex_exit_pct": 89.87,
+      "layer_compute_pct": 93.97,
+      "compute_saved_pct": 6.03,
+      "calm_loss": 4.578,
+      "calm_ppl": 97.32,
+      "cortex_ppl": 97.25,
+      "ppl_delta_pct": 0.08,
+      "transitions": 85303
+    },
+    {
+      "threshold": 0.65,
+      "tau_value": 0.65,
+      "reflex_exit_pct": 8.18,
+      "limbic_exit_pct": 0.68,
+      "cortex_exit_pct": 91.14,
+      "layer_compute_pct": 94.72,
+      "compute_saved_pct": 5.28,
+      "calm_loss": 4.5777,
+      "calm_ppl": 97.29,
+      "cortex_ppl": 97.25,
+      "ppl_delta_pct": 0.05,
+      "transitions": 85303
+    },
+    {
+      "threshold": 0.7,
+      "tau_value": 0.7,
+      "reflex_exit_pct": 7.11,
+      "limbic_exit_pct": 0.6,
+      "cortex_exit_pct": 92.29,
+      "layer_compute_pct": 95.4,
+      "compute_saved_pct": 4.6,
+      "calm_loss": 4.5781,
+      "calm_ppl": 97.33,
+      "cortex_ppl": 97.25,
+      "ppl_delta_pct": 0.08,
+      "transitions": 85303
+    },
+    {
+      "threshold": 0.75,
+      "tau_value": 0.75,
+      "reflex_exit_pct": 6.17,
+      "limbic_exit_pct": 0.53,
+      "cortex_exit_pct": 93.3,
+      "layer_compute_pct": 96.01,
+      "compute_saved_pct": 3.99,
+      "calm_loss": 4.5777,
+      "calm_ppl": 97.3,
+      "cortex_ppl": 97.25,
+      "ppl_delta_pct": 0.05,
+      "transitions": 85303
+    },
+    {
+      "threshold": 0.8,
+      "tau_value": 0.8,
+      "reflex_exit_pct": 5.23,
+      "limbic_exit_pct": 0.43,
+      "cortex_exit_pct": 94.34,
+      "layer_compute_pct": 96.62,
+      "compute_saved_pct": 3.38,
+      "calm_loss": 4.5775,
+      "calm_ppl": 97.27,
+      "cortex_ppl": 97.25,
+      "ppl_delta_pct": 0.02,
+      "transitions": 85303
+    },
+    {
+      "threshold": 0.85,
+      "tau_value": 0.85,
+      "reflex_exit_pct": 4.29,
+      "limbic_exit_pct": 0.39,
+      "cortex_exit_pct": 95.32,
+      "layer_compute_pct": 97.22,
+      "compute_saved_pct": 2.78,
+      "calm_loss": 4.5776,
+      "calm_ppl": 97.28,
+      "cortex_ppl": 97.25,
+      "ppl_delta_pct": 0.03,
+      "transitions": 85303
+    },
+    {
+      "threshold": 0.9,
+      "tau_value": 0.9,
+      "reflex_exit_pct": 3.41,
+      "limbic_exit_pct": 0.31,
+      "cortex_exit_pct": 96.28,
+      "layer_compute_pct": 97.79,
+      "compute_saved_pct": 2.21,
+      "calm_loss": 4.5775,
+      "calm_ppl": 97.27,
+      "cortex_ppl": 97.25,
+      "ppl_delta_pct": 0.03,
+      "transitions": 85303
+    },
+    {
+      "threshold": 0.95,
+      "tau_value": 0.95,
+      "reflex_exit_pct": 2.45,
+      "limbic_exit_pct": 0.23,
+      "cortex_exit_pct": 97.32,
+      "layer_compute_pct": 98.41,
+      "compute_saved_pct": 1.59,
+      "calm_loss": 4.5775,
+      "calm_ppl": 97.27,
+      "cortex_ppl": 97.25,
+      "ppl_delta_pct": 0.02,
+      "transitions": 85303
+    },
+    {
+      "threshold": "1.01 (Dense-Cortex)",
+      "tau_value": 1.01,
+      "reflex_exit_pct": 0.0,
+      "limbic_exit_pct": 0.0,
+      "cortex_exit_pct": 100.0,
+      "layer_compute_pct": 100.0,
+      "compute_saved_pct": 0.0,
+      "calm_loss": 4.5773,
+      "calm_ppl": 97.25,
+      "cortex_ppl": 97.25,
+      "ppl_delta_pct": 0.0,
+      "transitions": 85303
+    }
+  ],
+  "speedup_benchmark": {
+    "batch_size": 8,
+    "seq_len": 182,
+    "tokens_per_forward": 1456,
+    "dense_cortex_median_ms": 51.39,
+    "dense_cortex_tokens_per_sec": 28330.9,
+    "runs": [
+      {
+        "threshold": 0.05,
+        "median_ms": 78.96,
+        "tokens_per_sec": 18440.2,
+        "speedup_vs_dense": 0.651,
+        "compaction_stats": {
+          "total_tokens": 1456,
+          "reflex_tokens": 1456,
+          "limbic_tokens": 539,
+          "cortex_tokens": 410,
+          "limbic_rows": 8,
+          "cortex_rows": 8,
+          "limbic_seq_len": 182,
+          "cortex_seq_len": 182
+        }
+      },
+      {
+        "threshold": 0.1,
+        "median_ms": 78.37,
+        "tokens_per_sec": 18577.4,
+        "speedup_vs_dense": 0.656,
+        "compaction_stats": {
+          "total_tokens": 1456,
+          "reflex_tokens": 1456,
+          "limbic_tokens": 785,
+          "cortex_tokens": 652,
+          "limbic_rows": 8,
+          "cortex_rows": 8,
+          "limbic_seq_len": 182,
+          "cortex_seq_len": 182
+        }
+      },
+      {
+        "threshold": 0.15,
+        "median_ms": 72.12,
+        "tokens_per_sec": 20188.4,
+        "speedup_vs_dense": 0.713,
+        "compaction_stats": {
+          "total_tokens": 1456,
+          "reflex_tokens": 1456,
+          "limbic_tokens": 922,
+          "cortex_tokens": 819,
+          "limbic_rows": 8,
+          "cortex_rows": 8,
+          "limbic_seq_len": 182,
+          "cortex_seq_len": 182
+        }
+      },
+      {
+        "threshold": 0.2,
+        "median_ms": 72.99,
+        "tokens_per_sec": 19946.7,
+        "speedup_vs_dense": 0.704,
+        "compaction_stats": {
+          "total_tokens": 1456,
+          "reflex_tokens": 1456,
+          "limbic_tokens": 1024,
+          "cortex_tokens": 939,
+          "limbic_rows": 8,
+          "cortex_rows": 8,
+          "limbic_seq_len": 182,
+          "cortex_seq_len": 182
+        }
+      },
+      {
+        "threshold": 0.4,
+        "median_ms": 74.83,
+        "tokens_per_sec": 19458.6,
+        "speedup_vs_dense": 0.687,
+        "compaction_stats": {
+          "total_tokens": 1456,
+          "reflex_tokens": 1456,
+          "limbic_tokens": 1258,
+          "cortex_tokens": 1205,
+          "limbic_rows": 8,
+          "cortex_rows": 8,
+          "limbic_seq_len": 182,
+          "cortex_seq_len": 182
+        }
+      },
+      {
+        "threshold": 0.6,
+        "median_ms": 71.12,
+        "tokens_per_sec": 20471.6,
+        "speedup_vs_dense": 0.723,
+        "compaction_stats": {
+          "total_tokens": 1456,
+          "reflex_tokens": 1456,
+          "limbic_tokens": 1353,
+          "cortex_tokens": 1322,
+          "limbic_rows": 8,
+          "cortex_rows": 8,
+          "limbic_seq_len": 182,
+          "cortex_seq_len": 182
+        }
+      },
+      {
+        "threshold": 0.8,
+        "median_ms": 78.18,
+        "tokens_per_sec": 18623.2,
+        "speedup_vs_dense": 0.657,
+        "compaction_stats": {
+          "total_tokens": 1456,
+          "reflex_tokens": 1456,
+          "limbic_tokens": 1395,
+          "cortex_tokens": 1376,
+          "limbic_rows": 8,
+          "cortex_rows": 8,
+          "limbic_seq_len": 182,
+          "cortex_seq_len": 182
+        }
+      }
+    ]
+  },
+  "verdict": "Held-out agreement target reached on N=85,503 evaluation positions for: reflex, limbic (see reliability tables, Pareto sweep, and live token-compacted speedup benchmark)."
+}

@@ -528,6 +528,69 @@ class TestKernelSuite(unittest.TestCase):
         out = nv_linear(x)
         self.assertEqual(out.shape, (2, 4, 32))
 
+    def test_nvfp4_fused_gemv_gemm_fwht_and_model_protection(self):
+        from triune.kernels import NVFP4Linear, fwht_16, nvfp4_dequantize, nvfp4_linear
+        from triune.model.fp4 import convert_to_nvfp4
+        from triune.model.transformer import TriuneTransformer
+
+        # 1. FWHT-16 orthogonal involution check
+        x_h = torch.randn(3, 7, 48, dtype=torch.float32)
+        torch.testing.assert_close(fwht_16(fwht_16(x_h)), x_h, atol=1e-5, rtol=1e-5)
+
+        # 2. Fused W4A16 parity on non-power-of-two N and non-64-aligned K across GEMV & GEMM sizes
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
+        for m_tok, k_in, n_out in [(1, 48, 7), (4, 64, 32), (19, 48, 37), (64, 128, 96)]:
+            lin = nn.Linear(k_in, n_out, bias=True, device=device, dtype=dtype)
+            nv = NVFP4Linear.from_linear(lin, hadamard=True).to(device=device)
+            x = torch.randn(m_tok, k_in, device=device, dtype=dtype)
+            out_fused = nv(x)
+            ref_w = fwht_16(nvfp4_dequantize(nv.packed_weight, nv.scale, dtype=dtype))
+            out_ref = torch.nn.functional.linear(x, ref_w, nv.bias.to(dtype=dtype))
+            tol = 5e-2 if dtype == torch.bfloat16 else 1e-4
+            torch.testing.assert_close(out_fused, out_ref, atol=tol, rtol=tol)
+
+            # Direct nvfp4_linear without Hadamard matches dequant+linear closely
+            nv_plain = NVFP4Linear.from_linear(lin, hadamard=False).to(device=device)
+            out_plain = nvfp4_linear(x, nv_plain.packed_weight, nv_plain.scale, bias=nv_plain.bias, hadamard=False)
+            out_plain_ref = torch.nn.functional.linear(
+                x, nvfp4_dequantize(nv_plain.packed_weight, nv_plain.scale, dtype=dtype), nv_plain.bias.to(dtype=dtype)
+            )
+            torch.testing.assert_close(out_plain, out_plain_ref, atol=tol, rtol=tol)
+
+        # 3. convert_to_nvfp4 skips sensitive router/exit/final heads and MoE runs without .weight crash
+        m = (
+            TriuneTransformer(
+                vocab_size=64,
+                hidden_dim=64,
+                num_layers=6,
+                num_heads=2,
+                head_dim=32,
+                num_experts=2,
+                router_prefix_layers=1,
+                reflex_exit_layer=2,
+                limbic_exit_layer=4,
+            )
+            .to(device=device, dtype=dtype)
+            .eval()
+        )
+        convert_to_nvfp4(m, hadamard=True, protect_sensitive=True)
+        self.assertIsInstance(m.final_head, nn.Linear)
+        self.assertIsInstance(m.layers[m.reflex_exit_layer].exit_head, nn.Linear)
+        from triune.model.moe import MoE_FFN
+
+        moe_ffns = [blk.ffn for blk in m.layers if isinstance(blk.ffn, MoE_FFN)]
+        self.assertGreater(len(moe_ffns), 0)
+        self.assertIsInstance(moe_ffns[0].router, nn.Linear)
+        self.assertIsInstance(moe_ffns[0].experts[0][0], NVFP4Linear)
+        self.assertTrue(moe_ffns[0].experts[0][0].hadamard)
+
+        ids = torch.randint(0, 64, (2, 5), device=device)
+        with torch.no_grad():
+            logits, _ = m(ids, force_depth=2)
+        self.assertEqual(logits.shape, (2, 5, 64))
+        self.assertTrue(torch.isfinite(logits).all())
+
 
 if __name__ == "__main__":
     unittest.main()

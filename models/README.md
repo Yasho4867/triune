@@ -24,7 +24,7 @@ Triune AI models combine:
 
 JSON configurations are located in `models/configs/`.
 
-> **Evaluated 90.79M Checkpoint**: The end-to-end benchmark suite evaluates `checkpoints_full/triune_step_24501.pt` (**90,789,271** total / **64,206,871** active parameters per token). Production inference uses `MoE_FFN(..., use_sparse_eval=True)` by default (`7.58x` speedup vs. dense at `d=384, N=4096`), compacted per-token CALM exits (`exit_policy="calm"`), and explicit dynamic tokenizer `compress_mode="expand"` (`0.0` max logit diff vs. base) vs. `compress_mode="mean_pool"`.
+> **Evaluated 90.79M Checkpoint**: The end-to-end benchmark suite evaluates `checkpoints/triune_studio_step_36500_rescued.pt` (`step_40555`, **90,789,271** total / **64,206,871** active parameters per token). Production inference uses `MoE_FFN(..., use_sparse_eval=True)` by default (`7.518x` speedup vs. dense at `d=384, N=4096`), CALM confidence gating (`exit_policy="calm"`, per-token exit confidence/logits with sample-level deeper row compaction), explicit dynamic tokenizer `compress_mode="expand"` (`0.0` max logit diff vs. base), `compress_mode="order_pool"` (RoPE-phase within-span ordering), and `compress_mode="mean_pool"`. Open-weights models can be loaded via `triune.load_model(...)` fallback or wrapped with `TriuneForCausalLM` (`triune.export.hf_compat`) and `WeightTiedExitProjection` (`triune.model.adapters`).
 
 ## Loading Models
 

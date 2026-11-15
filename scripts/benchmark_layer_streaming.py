@@ -25,6 +25,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from triune.model.transformer import TriuneTransformer
+from triune.optim.centroid import CentroidSteerOptimizer
 from triune.runtime.streaming import LayerStreamingEngine, StreamingConfig
 
 
@@ -40,9 +41,13 @@ def get_hardware_info() -> Dict[str, Any]:
     }
 
 
-def create_model_variant(scale: str, vocab_size: int = 4096) -> Tuple[nn.Module, Dict[str, Any]]:
+def create_model_variant(
+    scale: str,
+    vocab_size: int = 4096,
+    dtype: Optional[torch.dtype] = None,
+) -> Tuple[nn.Module, Dict[str, Any]]:
     """Generates models of varying parameter scale."""
-    if scale == "76M":
+    if scale in ("76M", "102M"):
         cfg = dict(
             vocab_size=vocab_size,
             hidden_dim=512,
@@ -56,7 +61,7 @@ def create_model_variant(scale: str, vocab_size: int = 4096) -> Tuple[nn.Module,
             use_fp4=False,
             use_fp8=False,
         )
-    elif scale == "150M":
+    elif scale in ("150M", "271M"):
         cfg = dict(
             vocab_size=vocab_size,
             hidden_dim=768,
@@ -70,7 +75,7 @@ def create_model_variant(scale: str, vocab_size: int = 4096) -> Tuple[nn.Module,
             use_fp4=False,
             use_fp8=False,
         )
-    elif scale == "350M":
+    elif scale in ("350M", "695M"):
         cfg = dict(
             vocab_size=vocab_size,
             hidden_dim=1024,
@@ -87,21 +92,29 @@ def create_model_variant(scale: str, vocab_size: int = 4096) -> Tuple[nn.Module,
     elif scale == "1.5B":
         cfg = dict(
             vocab_size=vocab_size,
-            hidden_dim=2048,
-            num_layers=24,
-            num_heads=32,
+            hidden_dim=1536,
+            num_layers=13,
+            num_heads=24,
             head_dim=64,
-            num_experts=8,
-            router_prefix_layers=4,
-            reflex_exit_layer=6,
-            limbic_exit_layer=14,
+            num_experts=4,
+            router_prefix_layers=2,
+            reflex_exit_layer=3,
+            limbic_exit_layer=8,
             use_fp4=False,
             use_fp8=False,
         )
     else:
         raise ValueError(f"Unknown scale: {scale}")
 
-    model = TriuneTransformer(**cfg)
+    prev_dtype = torch.get_default_dtype()
+    if dtype is not None:
+        torch.set_default_dtype(dtype)
+    try:
+        model = TriuneTransformer(**cfg)
+    finally:
+        if dtype is not None:
+            torch.set_default_dtype(prev_dtype)
+
     total_params = sum(p.numel() for p in model.parameters())
     active_params = total_params  # Approximate for MoE
     metadata = {
@@ -217,21 +230,22 @@ def run_layer_streaming_suite() -> Dict[str, Any]:
         "comparisons": [],
     }
 
-    # Test scales: 76M, 250M, and 750M (1.5B with streaming)
-    scales = ["76M", "150M", "350M"]
+    scales = ["102M", "271M", "695M", "1.5B"]
 
     for scale in scales:
         print(f"--- Evaluating Model Scale: {scale} ---")
 
         # 1. Standard GPU Resident Model (if fits VRAM)
         gpu_resident_result = None
+        model_gpu = None
+        optimizer = None
         torch.cuda.empty_cache()
         gc.collect()
 
         try:
             torch.manual_seed(42)
-            model_gpu, meta = create_model_variant(scale, vocab_size=vocab_size)
-            model_gpu = model_gpu.to(device).to(torch.bfloat16)
+            model_gpu, meta = create_model_variant(scale, vocab_size=vocab_size, dtype=torch.bfloat16)
+            model_gpu = model_gpu.to(device)
 
             inputs = torch.randint(0, vocab_size, (batch_size, seq_len), device=device)
             targets = torch.randint(0, vocab_size, (batch_size, seq_len), device=device)
@@ -249,11 +263,11 @@ def run_layer_streaming_suite() -> Dict[str, Any]:
         except torch.cuda.OutOfMemoryError as e:
             print(f"    [Standard GPU-Resident] OOM: Exceeded GPU VRAM limit on {scale} model.")
             gpu_resident_result = {"oom": True, "error": str(e)}
-            torch.cuda.empty_cache()
-            gc.collect()
         finally:
-            del model_gpu
-            del optimizer
+            if optimizer is not None:
+                del optimizer
+            if model_gpu is not None:
+                del model_gpu
             torch.cuda.empty_cache()
             gc.collect()
 
@@ -263,8 +277,7 @@ def run_layer_streaming_suite() -> Dict[str, Any]:
         gc.collect()
 
         torch.manual_seed(42)
-        model_stream, meta = create_model_variant(scale, vocab_size=vocab_size)
-        model_stream = model_stream.to(torch.bfloat16)
+        model_stream, meta = create_model_variant(scale, vocab_size=vocab_size, dtype=torch.bfloat16)
 
         engine = LayerStreamingEngine(
             model_stream,
@@ -281,16 +294,29 @@ def run_layer_streaming_suite() -> Dict[str, Any]:
         inputs = torch.randint(0, vocab_size, (batch_size, seq_len), device=device)
         targets = torch.randint(0, vocab_size, (batch_size, seq_len), device=device)
 
-        optimizer_stream = torch.optim.AdamW(
-            model_stream.parameters(),
-            lr=1e-4,
-        )
+        if scale == "1.5B":
+            opt_label = "CentroidSteerOptimizer (r=16, 8-bit base)"
+            optimizer_stream = CentroidSteerOptimizer(
+                model_stream,
+                lr=1e-4,
+                rank=16,
+                update_gap=20,
+                core_mask_mode="full",
+                use_muon=True,
+                use_8bit_base=True,
+            )
+        else:
+            opt_label = "AdamW (BF16)"
+            optimizer_stream = torch.optim.AdamW(
+                model_stream.parameters(),
+                lr=1e-4,
+            )
 
         stream_metrics = benchmark_step(
             model_stream, optimizer_stream, inputs, targets, engine=engine, warmup=2, steps=3
         )
         print(
-            f"    Peak VRAM: {stream_metrics['peak_allocated_mb']} MB (Reserved: {stream_metrics['peak_reserved_mb']} MB)"
+            f"    Optimizer: {opt_label} | Peak VRAM: {stream_metrics['peak_allocated_mb']} MB (Reserved: {stream_metrics['peak_reserved_mb']} MB)"
         )
         print(
             f"    Latency: {stream_metrics['median_latency_ms']} ms | Throughput: {stream_metrics['tokens_per_sec']} tok/s"
@@ -300,6 +326,7 @@ def run_layer_streaming_suite() -> Dict[str, Any]:
         comparison_entry = {
             "scale": scale,
             "params_m": meta["total_params_m"],
+            "streaming_optimizer": opt_label,
             "gpu_resident": gpu_resident_result,
             "layer_streaming": stream_metrics,
         }
@@ -361,13 +388,14 @@ def generate_markdown_report(results: Dict[str, Any], output_path: str) -> None:
         "",
         "## 2. Empirical Benchmark Results",
         "",
-        "| Model Scale | Total Parameters | Standard GPU Peak VRAM | LayerStreaming Peak VRAM | VRAM Reduction | Standard Latency | Streaming Latency | Throughput (tok/s) |",
-        "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |",
+        "| Model Scale | Total Parameters | Streaming Optimizer | Standard GPU Peak VRAM | LayerStreaming Peak VRAM | VRAM Reduction | Standard Latency | Streaming Latency | Throughput (tok/s) |",
+        "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |",
     ]
 
     for c in results["comparisons"]:
         scale = c["scale"]
         params = f"{c['params_m']}M"
+        opt_lbl = c.get("streaming_optimizer", "AdamW (BF16)")
         stream = c["layer_streaming"]
         gpu = c["gpu_resident"]
 
@@ -385,7 +413,7 @@ def generate_markdown_report(results: Dict[str, Any], output_path: str) -> None:
         tok_s = f"{stream['tokens_per_sec']} tok/s"
 
         lines.append(
-            f"| **{scale}** | {params} | {gpu_vram} | {str_vram} | {vram_red} | {gpu_lat} | {str_lat} | {tok_s} |"
+            f"| **{scale}** | {params} | {opt_lbl} | {gpu_vram} | {str_vram} | {vram_red} | {gpu_lat} | {str_lat} | {tok_s} |"
         )
 
     lines.extend(
@@ -394,11 +422,11 @@ def generate_markdown_report(results: Dict[str, Any], output_path: str) -> None:
             "## 3. Analysis: Memory Footprint vs. PCIe Bandwidth Trade-off",
             "",
             "1. **Peak Memory Floor**:",
-            "   - The LayerStreamingEngine keeps active layer parameter VRAM bounded by the size of the largest individual layer chunk rather than the aggregate model depth.",
-            "   - For large models (250M+), layer streaming enables stable training within consumer VRAM envelopes (8 GB) where standard GPU-resident models experience severe memory pressure or OOM.",
+            "   - The `LayerStreamingEngine` keeps active layer parameter VRAM bounded by the size of the largest individual layer chunk rather than the aggregate model depth.",
+            "   - For large models (695M–1.5B+), layer streaming enables stable training within consumer VRAM envelopes (8 GB) where standard GPU-resident models experience severe memory pressure or OOM, and pairing with `CentroidSteerOptimizer` keeps host-side optimizer memory bounded within a 16 GB RAM budget.",
             "2. **Throughput & PCIe Transfer Overhead**:",
             "   - Because layer weights must traverse the PCIe bus twice per step (forward pass H2D and backward pass H2D + gradient D2H), step latency increases proportionally to PCIe bandwidth limits.",
-            "   - Asynchronous prefetching via secondary CUDA streams successfully conceals a substantial portion of this transfer overhead when compute intensity per layer is sufficient.",
+            "   - Asynchronous prefetching via secondary CUDA streams overlaps transfer with compute when compute intensity per layer is sufficient.",
             "",
         ]
     )

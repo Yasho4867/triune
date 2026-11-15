@@ -158,6 +158,41 @@ class TestDynamicTokenizerModelCompat(unittest.TestCase):
             settled_mask = depths == 0
             torch.testing.assert_close(out_calm[settled_mask], logits_r[settled_mask], atol=1e-5, rtol=1e-5)
 
+        # Verify physical token-level FFN compaction & suffix trimming when trailing tokens settle
+        seq_trail = torch.tensor([[11, 10, 10, 10], [10, 10, 10, 10]])
+        ffn_tok_counts = []
+        hook = m.layers[m.reflex_exit_layer + 1].ffn.register_forward_pre_hook(
+            lambda mod, args: ffn_tok_counts.append(args[0].shape[0] * args[0].shape[1])
+        )
+        try:
+            with torch.no_grad():
+                out_trail, _ = m(seq_trail, force_depth=None, exit_policy="calm", confidence_threshold=thresh)
+        finally:
+            hook.remove()
+        stats = m.last_calm_compaction_stats
+        self.assertEqual(stats["total_tokens"], 8)
+        self.assertLess(stats["limbic_seq_len"], 4)
+        self.assertLess(stats["limbic_tokens"], stats["total_tokens"])
+        self.assertEqual(sum(ffn_tok_counts), stats["limbic_tokens"])
+
+    def test_order_pool_preserves_intra_span_order_and_singleton_identity(self):
+        # Singleton base tokens must equal raw token_embed bit-for-bit under order_pool
+        base_ids = torch.tensor([[10, 20, 30]], dtype=torch.long)
+        emb_order_single = self.model.embed_compressed(base_ids, self.tok, compress_mode="order_pool")
+        torch.testing.assert_close(emb_order_single, self.model.token_embed(base_ids), atol=0.0, rtol=0.0)
+
+        # Reversed constituent multi-token spans ("ab" vs "ba") must collide under mean_pool but diverge under order_pool
+        class OrderTestTok:
+            def decompress_tokens(self, ids):
+                mapping = {100: [65, 66], 101: [66, 65]}
+                return mapping[int(ids[0])]
+
+        pair_ids = torch.tensor([[100, 101]], dtype=torch.long)
+        emb_mean = self.model.embed_compressed(pair_ids, OrderTestTok(), compress_mode="mean_pool")
+        emb_order = self.model.embed_compressed(pair_ids, OrderTestTok(), compress_mode="order_pool")
+        self.assertLess(float((emb_mean[0, 0] - emb_mean[0, 1]).detach().abs().max()), 1e-6)
+        self.assertGreater(float((emb_order[0, 0] - emb_order[0, 1]).detach().norm()), 1e-2)
+
     def test_multi_step_cached_decode_gumbel_and_calm(self):
         for policy in ("gumbel", "calm"):
             m = tiny_model()

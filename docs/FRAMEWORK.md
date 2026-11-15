@@ -53,8 +53,8 @@ triune/
 
 - **`TriuneTransformer`**: Core architecture combining Gated Linear Attention (GLA), Mixture-of-Experts (MoE) with a shared expert, and three variance-matched exit heads (`Reflex`, `Limbic`, `Cortex`).
 - **`distill_exit_heads(...)` & `exit_distill_coef`**: Cortex-preserving KL self-distillation aligns intermediate `Reflex` and `Limbic` exit heads toward frozen `Cortex` distributions (`torch.equal` Cortex output invariance), integrated both as an inference calibration pass and in `TrainingEngine` `depth_mode="joint"`.
-- **`convert_to_fp8(...)` & `convert_to_nvfp4(...)`**: Drop-in post-training weight compression supporting E4M3 `FP8Linear` (`2.0x` compression, `%16`-aligned `torch._scaled_mm`) and packed 4-bit E2M1 + 16-element E4M3 block-scaled `NVFP4Linear` (`5.0 b/w = 3.2x` compression; `46.65 MB` across 103 linear layers on the `90.79M` checkpoint).
-- **`load_model(name_or_path, **kwargs)`**: Instantiates model presets (`triune-nano`, `triune-small`, `triune-2.5b`, `triune-7b`), loads from JSON architecture configs in `models/configs/`, or loads checkpoint weights.
+- **`convert_to_fp8(...)`, `convert_to_nvfp4(...)`, & Hadamard W4A16**: Drop-in post-training weight compression supporting E4M3 `FP8Linear` (`2.0x` compression, `%16`-aligned `torch._scaled_mm`), packed 4-bit E2M1 + 16-element E4M3 block-scaled `NVFP4Linear` (`5.0 b/w = 3.20x` compression; `46.65 MB` across `96` quantized blocks / `78.26M` params on the `90.79M` checkpoint), and Hadamard-rotated W4A16 + protected blocks (`78.88 MB`, `119.106` vs. `126.887` unrotated PPL).
+- **`load_model(name_or_path, **kwargs)` & HuggingFace Bridge (`triune.export.hf_compat`, `triune.model.adapters`)**: Instantiates model presets (`triune-nano`, `triune-small`, `triune-2.5b`, `triune-7b`), loads JSON/checkpoint paths, falls back transparently to `transformers.AutoModelForCausalLM.from_pretrained`, exports standard `TriuneForCausalLM` bundles (`export_to_huggingface`), and attaches `WeightTiedExitProjection` / `EarlyExitManager` early exits to pretrained models.
 - **`register_model(name)`**: Decorator to register custom model architectures.
 
 ```python
@@ -79,11 +79,11 @@ optimizer = build_optimizer(model, config)
 
 ### 3. Layer Streaming Engine (`triune.runtime.streaming`)
 
-Enables training models that exceed physical GPU memory capacity:
+Enables training models that exceed physical GPU memory capacity across both custom Triune backbones and generic HuggingFace architectures (`_resolve_layers` / `layers_path`):
 
-- **Host Weight Compression**: Stores layer parameters in CPU host RAM compressed to `torch.float8_e4m3fn` or packed 4-bit NVFP4 via `ParameterStager(use_fp4=True)` (`NVFP4StagingBuffer` asynchronous transfers).
-- **On-Demand Micro-Transfers**: Uses a CUDA prefetch stream to transfer layer blocks immediately prior to forward and backward passes.
-- **Optimizer State Migration**: Optimizer states (`exp_avg`, `exp_avg_sq`, `momentum`) migrate to GPU memory during each layer's step and are evicted back to host RAM immediately after, maintaining peak VRAM under 350 MB.
+- **Host Weight & Activation Compression**: Stores layer parameters in pinned/host CPU RAM (`float8_e4m3fn` or packed 4-bit NVFP4 via `ParameterStager(use_fp4=True)`), with `activation_checkpointing=True` releasing saved intermediate activation graphs across blocks.
+- **On-Demand Micro-Transfers & Reentry Guards**: Uses a high-priority CUDA prefetch stream to overlap transfers with compute and `_is_bwd_staged` reentry guards alongside non-parameter buffer copy-back (`is_buffer=True`).
+- **Optimizer State Migration**: Optimizer states (`exp_avg`, `exp_avg_sq`, `CentroidSteer` triangular buffers) migrate to GPU memory during each layer's step and evict immediately after, cutting `102M`–`271M` VRAM by `76.4%`–`83.8%` (outperforming Windows WDDM spill by `1.97x` at `271M`) and fitting `695M` (`2.12 GB`) and `1.52B + CentroidSteer` (`3.13 GB`) inside `8 GB` consumer VRAM.
 
 ```python
 from triune.runtime import LayerStreamingEngine, StreamingConfig
@@ -121,6 +121,7 @@ Plugins become composable operators by declaring typed ports and returning those
 
 ```python
 from triune.plugins.registry import global_registry
+
 
 @global_registry.register(
     name="ScaleTensor",

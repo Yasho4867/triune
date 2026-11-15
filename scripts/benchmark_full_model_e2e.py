@@ -126,7 +126,8 @@ def load_trained_model(
     else:
         logger.info(f"Loading trained checkpoint: {checkpoint_path}")
         ckpt = torch.load(str(ckpt_p), map_location="cpu", weights_only=False)
-        spec = ckpt.get("config", {}).get("model_spec", {})
+        raw_cfg = ckpt.get("config", {}) or {}
+        spec = raw_cfg.get("model_spec") or raw_cfg
         vocab_size = spec.get("vocab_size", 32000)
         hidden_dim = spec.get("hidden_dim", 384)
         num_layers = spec.get("num_layers", 8)
@@ -463,28 +464,51 @@ def benchmark_calm_confidence_gating(
     sample_text: str,
     threshold: float = 0.80,
 ) -> Dict[str, Any]:
-    """Measures CALM (Google Research NeurIPS) per-token / per-sample Softmax Margin dynamic early-exit routing."""
+    """Measures CALM (Google Research NeurIPS) per-token Softmax Margin dynamic early-exit routing & live speedup."""
     enc = tokenizer.encode(sample_text, compress=False)
-    seq_a = enc.ids[:128]
-    seq_b = enc.ids[128:256] if len(enc.ids) >= 256 else list(reversed(enc.ids[:128]))
-    pad_len = min(len(seq_a), len(seq_b))
-    input_ids = torch.tensor([seq_a[:pad_len]], device=device, dtype=torch.long)
-    batch_ids = torch.tensor([seq_a[:pad_len], seq_b[:pad_len]], device=device, dtype=torch.long)
+    chunk_len = 128
+    chunks = [enc.ids[i : i + chunk_len] for i in range(0, len(enc.ids) - chunk_len + 1, chunk_len)][:16]
+    if not chunks:
+        pad = enc.ids[:chunk_len]
+        chunks = [pad, list(reversed(pad))]
+    elif len(chunks) == 1:
+        chunks.append(list(reversed(chunks[0])))
+    batch_ids = torch.tensor(chunks, device=device, dtype=torch.long)
 
     with torch.no_grad():
-        logits_r, _ = model(input_ids, force_depth=0)
-        logits_c, _ = model(input_ids, force_depth=2)
+        logits_r, _ = model(batch_ids, force_depth=0)
+        logits_c, _ = model(batch_ids, force_depth=2)
         _ = model(batch_ids, force_depth=None, exit_policy="calm", confidence_threshold=threshold)
         calm_depths = model.last_calm_exit_depths
+        calm_stats = getattr(model, "last_calm_compaction_stats", None)
 
-    probs_r = F.softmax(logits_r[0].float(), dim=-1)
+        for _ in range(2):
+            _ = model(batch_ids, force_depth=2)
+            _ = model(batch_ids, force_depth=None, exit_policy="calm", confidence_threshold=threshold)
+        if device.type == "cuda":
+            torch.cuda.synchronize(device)
+        t0 = time.perf_counter()
+        for _ in range(8):
+            _ = model(batch_ids, force_depth=2)
+        if device.type == "cuda":
+            torch.cuda.synchronize(device)
+        dense_ms = (time.perf_counter() - t0) / 8.0 * 1000.0
+
+        t0 = time.perf_counter()
+        for _ in range(8):
+            _ = model(batch_ids, force_depth=None, exit_policy="calm", confidence_threshold=threshold)
+        if device.type == "cuda":
+            torch.cuda.synchronize(device)
+        calm_ms = (time.perf_counter() - t0) / 8.0 * 1000.0
+
+    probs_r = F.softmax(logits_r.float(), dim=-1)
     top2_r = torch.topk(probs_r, 2, dim=-1).values
-    margins = (top2_r[:, 0] - top2_r[:, 1]).cpu()
+    margins = (top2_r[..., 0] - top2_r[..., 1]).reshape(-1).cpu()
 
-    r_preds = logits_r[0].argmax(dim=-1).cpu()
-    c_preds = logits_c[0].argmax(dim=-1).cpu()
+    r_preds = logits_r.argmax(dim=-1).reshape(-1).cpu()
+    c_preds = logits_c.argmax(dim=-1).reshape(-1).cpu()
 
-    total_tokens = margins.size(0)
+    total_tokens = int(margins.size(0))
     high_conf_mask = margins >= threshold
     high_conf_count = int(high_conf_mask.sum().item())
     high_conf_pct = round((high_conf_count / max(1, total_tokens)) * 100.0, 1)
@@ -514,6 +538,10 @@ def benchmark_calm_confidence_gating(
         "overall_reflex_cortex_agreement_pct": agreement_total,
         "high_confidence_agreement_pct": agreement_high_conf,
         "per_token_calm_routing": depth_counts,
+        "dense_latency_ms": round(dense_ms, 2),
+        "calm_latency_ms": round(calm_ms, 2),
+        "speedup_vs_dense": round(dense_ms / max(calm_ms, 1e-6), 3),
+        "compaction_stats": calm_stats,
         "checkpoint_calibrated": False,
     }
 
@@ -835,8 +863,12 @@ def benchmark_moe_sparse_vs_dense(
     }
 
 
-def benchmark_quantization_tiers(model: torch.nn.Module, device: torch.device) -> Dict[str, Any]:
-    """Compare BF16, FP8 (E4M3), and NVFP4 (4-bit E2M1) weights + ParameterStager(use_fp4=True)."""
+def benchmark_quantization_tiers(
+    model: torch.nn.Module,
+    device: torch.device,
+    ppl_ids: Optional[torch.Tensor] = None,
+) -> Dict[str, Any]:
+    """Compare BF16, FP8 (E4M3), Unrotated NVFP4, and Fused Hadamard NVFP4 + ParameterStager(use_fp4=True)."""
     import torch.nn as nn
     import torch.nn.functional as F
 
@@ -847,11 +879,27 @@ def benchmark_quantization_tiers(model: torch.nn.Module, device: torch.device) -
 
     torch.manual_seed(123)
     input_ids = torch.randint(0, model.vocab_size, (2, 128), device=device)
+    decode_prompt = torch.randint(0, model.vocab_size, (1, 16), device=device)
+    next_tok = torch.randint(0, model.vocab_size, (1, 1), device=device)
 
     def _clone_fresh():
-        m_fresh, _ = load_trained_model(device=device, require_checkpoint=False)
+        attn0 = model.layers[0].attn
+        n_heads = getattr(attn0, "num_heads", getattr(attn0, "heads", 8))
+        h_dim = getattr(attn0, "head_dim", model.hidden_dim // max(1, n_heads))
+        m_fresh = TriuneTransformer(
+            vocab_size=model.vocab_size,
+            hidden_dim=model.hidden_dim,
+            num_layers=len(model.layers),
+            num_heads=n_heads,
+            head_dim=h_dim,
+            num_experts=getattr(model, "num_experts", 4),
+            router_prefix_layers=model.router_prefix_layers,
+            reflex_exit_layer=model.reflex_exit_layer,
+            limbic_exit_layer=model.limbic_exit_layer,
+            use_reflex_sdpa=getattr(model, "use_reflex_sdpa", False),
+        )
         m_fresh.load_state_dict(model.state_dict(), strict=False)
-        return m_fresh.to(dtype=next(model.parameters()).dtype).eval()
+        return m_fresh.to(device=device, dtype=next(model.parameters()).dtype).eval()
 
     def _time_fwd(m, x=input_ids):
         with torch.no_grad():
@@ -867,7 +915,58 @@ def benchmark_quantization_tiers(model: torch.nn.Module, device: torch.device) -
             ms = (time.perf_counter() - t0) / 10.0 * 1000.0
         return ms, out
 
+    def _time_decode_step(m):
+        with torch.no_grad():
+            cache = m.init_cache(batch_size=1)
+            _, cache = m(decode_prompt, cache=cache, force_depth=2)
+            for _ in range(3):
+                _, cache = m(next_tok, cache=cache, force_depth=2)
+            if device.type == "cuda":
+                torch.cuda.synchronize(device)
+            t0 = time.perf_counter()
+            for _ in range(16):
+                _, cache = m(next_tok, cache=cache, force_depth=2)
+            if device.type == "cuda":
+                torch.cuda.synchronize(device)
+        return (time.perf_counter() - t0) / 16.0 * 1000.0
+
+    def _eval_ppl(m) -> Optional[float]:
+        if ppl_ids is None or ppl_ids.numel() == 0:
+            return None
+        with torch.no_grad():
+            total_nll = 0.0
+            total_toks = 0
+            for chunk in ppl_ids.split(4):
+                logits, _ = m(chunk, force_depth=2)
+                shift_logits = logits[:, :-1, :].float()
+                shift_targets = chunk[:, 1:]
+                loss_sum = F.cross_entropy(
+                    shift_logits.reshape(-1, shift_logits.size(-1)),
+                    shift_targets.reshape(-1),
+                    reduction="sum",
+                )
+                total_nll += float(loss_sum.item())
+                total_toks += int(shift_targets.numel())
+            mean_nll = total_nll / max(1, total_toks)
+            return round(math.exp(min(mean_nll, 20.0)), 3)
+
+    def _count_nvfp4_bytes(layers_mod) -> tuple[int, int]:
+        nbytes = 0
+        count = 0
+        for name, mod in layers_mod.named_modules():
+            if isinstance(mod, NVFP4Linear):
+                count += 1
+                nbytes += (
+                    mod.packed_weight.numel() * mod.packed_weight.element_size()
+                    + mod.scale.numel() * mod.scale.element_size()
+                )
+            elif isinstance(mod, nn.Linear) and not name.endswith(".linear"):
+                nbytes += mod.weight.numel() * mod.weight.element_size()
+        return nbytes, count
+
     bf16_ms, ref_logits = _time_fwd(model)
+    bf16_dec_ms = _time_decode_step(model)
+    bf16_ppl = _eval_ppl(model)
     bf16_bytes = sum(
         m.weight.numel() * m.weight.element_size() for m in model.layers.modules() if isinstance(m, nn.Linear)
     )
@@ -877,6 +976,8 @@ def benchmark_quantization_tiers(model: torch.nn.Module, device: torch.device) -
     m_fp8 = _clone_fresh()
     convert_to_fp8(m_fp8.layers)
     fp8_ms, fp8_logits = _time_fwd(m_fp8)
+    fp8_dec_ms = _time_decode_step(m_fp8)
+    fp8_ppl = _eval_ppl(m_fp8)
     fp8_cos = float(F.cosine_similarity(ref_logits.float().flatten(), fp8_logits.float().flatten(), dim=0).item())
     fp8_bytes = 0
     for mod in m_fp8.layers.modules():
@@ -888,7 +989,21 @@ def benchmark_quantization_tiers(model: torch.nn.Module, device: torch.device) -
     if device.type == "cuda":
         torch.cuda.empty_cache()
 
-    # Tier 3: NVFP4 (4-bit E2M1 + E4M3 Block Scales) + ParameterStager(use_fp4=True)
+    # Tier 3: Unrotated NVFP4 (4-bit E2M1, no Hadamard, no sensitive-layer protection)
+    m_fp4_raw = _clone_fresh()
+    convert_to_nvfp4(m_fp4_raw.layers, hadamard=False, protect_sensitive=False)
+    fp4_raw_bytes, _ = _count_nvfp4_bytes(m_fp4_raw.layers)
+    fp4_raw_ms, fp4_raw_logits = _time_fwd(m_fp4_raw)
+    fp4_raw_dec_ms = _time_decode_step(m_fp4_raw)
+    fp4_raw_ppl = _eval_ppl(m_fp4_raw)
+    fp4_raw_cos = float(
+        F.cosine_similarity(ref_logits.float().flatten(), fp4_raw_logits.float().flatten(), dim=0).item()
+    )
+    del m_fp4_raw, fp4_raw_logits
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+
+    # Tier 4: Fused Hadamard NVFP4 (4-bit W4A16 FWHT-16 + Protected Heads/Gates) + ParameterStager(use_fp4=True)
     m_fp4 = _clone_fresh()
     for mod in m_fp4.layers[0].modules():
         if isinstance(mod, nn.Linear):
@@ -902,20 +1017,12 @@ def benchmark_quantization_tiers(model: torch.nn.Module, device: torch.device) -
     staging_summary = stager.get_memory_summary()
     stager.cleanup_all()
 
-    convert_to_nvfp4(m_fp4.layers)
-    fp4_bytes = 0
-    fp4_layers_converted = 0
-    for name, mod in m_fp4.layers.named_modules():
-        if isinstance(mod, NVFP4Linear):
-            fp4_layers_converted += 1
-            fp4_bytes += (
-                mod.packed_weight.numel() * mod.packed_weight.element_size()
-                + mod.scale.numel() * mod.scale.element_size()
-            )
-        elif isinstance(mod, nn.Linear) and not name.endswith(".linear"):
-            fp4_bytes += mod.weight.numel() * mod.weight.element_size()
+    convert_to_nvfp4(m_fp4.layers, hadamard=True, protect_sensitive=True)
+    fp4_bytes, fp4_layers_converted = _count_nvfp4_bytes(m_fp4.layers)
 
     fp4_ms, fp4_logits = _time_fwd(m_fp4)
+    fp4_dec_ms = _time_decode_step(m_fp4)
+    fp4_ppl = _eval_ppl(m_fp4)
     fp4_cos = float(F.cosine_similarity(ref_logits.float().flatten(), fp4_logits.float().flatten(), dim=0).item())
     del m_fp4, fp4_logits, ref_logits, input_ids, stager
     if device.type == "cuda":
@@ -928,7 +1035,9 @@ def benchmark_quantization_tiers(model: torch.nn.Module, device: torch.device) -
             "layer_linear_mb": round(bf16_bytes / (1024 * 1024), 2),
             "compression_ratio": 1.0,
             "fwd_latency_ms": round(bf16_ms, 2),
+            "decode_step_ms": round(bf16_dec_ms, 2),
             "logit_cosine_similarity": 1.0,
+            "fineweb_ppl": bf16_ppl,
         },
         {
             "tier": "FP8 (8-bit E4M3)",
@@ -936,15 +1045,29 @@ def benchmark_quantization_tiers(model: torch.nn.Module, device: torch.device) -
             "layer_linear_mb": round(fp8_bytes / (1024 * 1024), 2),
             "compression_ratio": round(bf16_bytes / max(fp8_bytes, 1), 2),
             "fwd_latency_ms": round(fp8_ms, 2),
+            "decode_step_ms": round(fp8_dec_ms, 2),
             "logit_cosine_similarity": round(fp8_cos, 5),
+            "fineweb_ppl": fp8_ppl,
         },
         {
-            "tier": "NVFP4 (4-bit E2M1 + E4M3 Scales)",
+            "tier": "NVFP4 Unrotated (4-bit E2M1 raw)",
+            "bits_per_weight": round((fp4_raw_bytes * 8.0) / max(bf16_params, 1), 2),
+            "layer_linear_mb": round(fp4_raw_bytes / (1024 * 1024), 2),
+            "compression_ratio": round(bf16_bytes / max(fp4_raw_bytes, 1), 2),
+            "fwd_latency_ms": round(fp4_raw_ms, 2),
+            "decode_step_ms": round(fp4_raw_dec_ms, 2),
+            "logit_cosine_similarity": round(fp4_raw_cos, 5),
+            "fineweb_ppl": fp4_raw_ppl,
+        },
+        {
+            "tier": "NVFP4 Hadamard Fused (W4A16 + Protected)",
             "bits_per_weight": round((fp4_bytes * 8.0) / max(bf16_params, 1), 2),
             "layer_linear_mb": round(fp4_bytes / (1024 * 1024), 2),
             "compression_ratio": round(bf16_bytes / max(fp4_bytes, 1), 2),
             "fwd_latency_ms": round(fp4_ms, 2),
+            "decode_step_ms": round(fp4_dec_ms, 2),
             "logit_cosine_similarity": round(fp4_cos, 5),
+            "fineweb_ppl": fp4_ppl,
         },
     ]
     return {
@@ -1083,8 +1206,9 @@ def generate_markdown_report(data: Dict[str, Any], output_path: str = "benchmark
             f"- **Held-Out Python Code (`sample_text`, $N={calm.get('total_evaluated_tokens')}$)**: "
             f"Overall Agreement=`{calm.get('overall_reflex_cortex_agreement_pct')}%`, "
             f"High-Confidence Eligible=`{calm.get('reflex_exit_eligible_tokens')}` ({calm.get('reflex_exit_rate_pct')}%), "
-            f"High-Confidence Agreement=**`{calm.get('high_confidence_agreement_pct')}%`** "
-            f"(Batched `B=2`: Reflex={calm_depths.get('reflex_tokens', 0)}, Limbic={calm_depths.get('limbic_tokens', 0)}, Cortex={calm_depths.get('cortex_tokens', 0)})",
+            f"High-Confidence Agreement=**`{calm.get('high_confidence_agreement_pct')}%`**, "
+            f"Compacted Throughput Speedup=`{calm.get('speedup_vs_dense', 'N/A')}x` (`{calm.get('calm_latency_ms', 'N/A')} ms` vs `{calm.get('dense_latency_ms', 'N/A')} ms`) "
+            f"(Batched Tokens: Reflex={calm_depths.get('reflex_tokens', 0)}, Limbic={calm_depths.get('limbic_tokens', 0)}, Cortex={calm_depths.get('cortex_tokens', 0)})",
         ]
     )
     if calm_fw:
@@ -1092,8 +1216,9 @@ def generate_markdown_report(data: Dict[str, Any], output_path: str = "benchmark
             f"- **Held-Out FineWeb-Edu ($N={calm_fw.get('total_evaluated_tokens')}$)**: "
             f"Overall Agreement=`{calm_fw.get('overall_reflex_cortex_agreement_pct')}%`, "
             f"High-Confidence Eligible=`{calm_fw.get('reflex_exit_eligible_tokens')}` ({calm_fw.get('reflex_exit_rate_pct')}%), "
-            f"High-Confidence Agreement=**`{calm_fw.get('high_confidence_agreement_pct')}%`** "
-            f"(Batched `B=2`: Reflex={calm_fw_depths.get('reflex_tokens', 0)}, Limbic={calm_fw_depths.get('limbic_tokens', 0)}, Cortex={calm_fw_depths.get('cortex_tokens', 0)})"
+            f"High-Confidence Agreement=**`{calm_fw.get('high_confidence_agreement_pct')}%`**, "
+            f"Compacted Throughput Speedup=`{calm_fw.get('speedup_vs_dense', 'N/A')}x` (`{calm_fw.get('calm_latency_ms', 'N/A')} ms` vs `{calm_fw.get('dense_latency_ms', 'N/A')} ms`) "
+            f"(Full 10k+ token conformal evaluation, 10-bin ECE, AUROC, and PPL-vs-FLOPs Pareto curves are reported in [`benchmarks/calm_calibration.md`](calm_calibration.md))"
         )
     if calm_raw:
         lines.append(
@@ -1177,14 +1302,16 @@ def generate_markdown_report(data: Dict[str, Any], output_path: str = "benchmark
             "",
             f"Evaluated across all `{quant.get('linear_params_quantized', 0):,}` transformer-layer linear parameters (`{quant.get('fp4_linear_layers_converted', 0)}` `NVFP4Linear` modules converted, `{quant.get('nvfp4_staging_buffers_verified', 0)}` layer-0 `NVFP4StagingBuffer` H2D/D2H transfers verified):",
             "",
-            "| Precision Tier | Effective Bits/Weight | Layer Weight Footprint | Compression | E2E Forward (`B=2,T=128`) | Output Logit Cosine Sim |",
-            "|:---|:---:|:---:|:---:|:---:|:---:|",
+            "| Precision Tier | Effective Bits/Weight | Layer Weight Footprint | Compression | Prefill (`B=2,T=128`) | Decode Step (`B=1,T=1`) | Output Logit Cosine Sim | FineWeb PPL |",
+            "|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|",
         ]
     )
     for qt in quant.get("tiers", []):
+        dec_s = f"{qt['decode_step_ms']} ms" if qt.get("decode_step_ms") is not None else "N/A"
+        ppl_s = f"{qt['fineweb_ppl']}" if qt.get("fineweb_ppl") is not None else "N/A"
         lines.append(
             f"| **{qt['tier']}** | {qt['bits_per_weight']} | {qt['layer_linear_mb']} MB | "
-            f"**{qt['compression_ratio']}x** | {qt['fwd_latency_ms']} ms | `{qt['logit_cosine_similarity']}` |"
+            f"**{qt['compression_ratio']}x** | {qt['fwd_latency_ms']} ms | {dec_s} | `{qt['logit_cosine_similarity']}` | `{ppl_s}` |"
         )
     lines.extend(
         [
@@ -1225,7 +1352,7 @@ def main():
 
     # 3. Full Model Prefill Throughput
     batch_sizes = [1, 4, 16, 32] if device.type == "cuda" else [1, 2, 4]
-    seq_lengths = [128, 512, 1024, 2048] if device.type == "cuda" else [64, 128, 256]
+    seq_lengths = [128, 512, 1024, 2048, 4096, 8192, 16384] if device.type == "cuda" else [64, 128, 256]
     logger.info("Executing Full Model Prefill Benchmarks...")
     prefill_results = benchmark_full_model_prefill(model, device, batch_sizes, seq_lengths)
 
@@ -1260,19 +1387,32 @@ def main():
     logger.info("Measuring uncalibrated raw checkpoint CALM agreement baseline...")
     uncalibrated_calm = benchmark_calm_confidence_gating(model, device, tokenizer, sample_text, threshold=0.40)
 
-    fw_path = REPO_ROOT / "data" / "fineweb_sample.jsonl"
+    fw_large_path = REPO_ROOT / "data" / "fineweb_edu_large.jsonl"
+    fw_sample_path = REPO_ROOT / "data" / "fineweb_sample.jsonl"
     fw_rows: list[str] = []
-    if fw_path.is_file():
-        with open(fw_path, "r", encoding="utf-8") as f:
+    if fw_large_path.is_file():
+        with open(fw_large_path, "r", encoding="utf-8") as f:
+            for idx, line in enumerate(f):
+                if idx >= 7500:
+                    fw_rows.append(json.loads(line)["text"])
+                    if len(fw_rows) >= 120:
+                        break
+    elif fw_sample_path.is_file():
+        with open(fw_sample_path, "r", encoding="utf-8") as f:
             for line in f:
                 fw_rows.append(json.loads(line)["text"])
-                if len(fw_rows) >= 80:
+                if len(fw_rows) >= 120:
                     break
-    cal_fw_seqs = [
-        tokenizer.encode(r, compress=False).ids[:128]
-        for r in fw_rows[:40]
-        if len(tokenizer.encode(r, compress=False).ids) >= 128
-    ][:24]
+
+    fw_seqs_all = [
+        tokenizer.encode(r, compress=False).ids[:256]
+        for r in fw_rows
+        if len(tokenizer.encode(r, compress=False).ids) >= 256
+    ]
+    cal_fw_seqs = [s[:128] for s in fw_seqs_all[:24]]
+    held_fw_seqs = fw_seqs_all[24:40]
+    ppl_ids = torch.tensor(held_fw_seqs, device=device, dtype=torch.long) if held_fw_seqs else None
+
     code_cal_seq = tokenizer.encode(
         (
             "def train_step(batch, optimizer):\n"
@@ -1286,8 +1426,8 @@ def main():
     ).ids[:128]
     cal_list = cal_fw_seqs + [code_cal_seq] * 4
     cal_ids = torch.tensor(cal_list, device=device, dtype=torch.long)
-    held_fw_texts = [r for r in fw_rows[40:] if len(tokenizer.encode(r, compress=False).ids) >= 128][:8]
-    held_fw_text = " ".join(held_fw_texts) if held_fw_texts else sample_text
+    held_fw_texts = [r for r in fw_rows[40:] if len(tokenizer.encode(r, compress=False).ids) >= 128][:32]
+    held_fw_text = " ".join(held_fw_texts) if held_fw_texts else (sample_text * 4)
 
     logger.info(
         f"Running frozen-backbone exit-head KL self-distillation ({len(cal_list)} disjoint calibration sequences)..."
@@ -1305,7 +1445,7 @@ def main():
     )
 
     logger.info("Benchmarking CALM Softmax Margin Confidence Gating on held-out Python & FineWeb splits...")
-    calm_result = benchmark_calm_confidence_gating(model, device, tokenizer, sample_text, threshold=0.20)
+    calm_result = benchmark_calm_confidence_gating(model, device, tokenizer, sample_text * 6, threshold=0.20)
     calm_fw = benchmark_calm_confidence_gating(model, device, tokenizer, held_fw_text, threshold=0.20)
     calm_result["checkpoint_calibrated"] = True
     calm_result["distillation_telemetry"] = distill_info
@@ -1326,8 +1466,8 @@ def main():
     moe_result = benchmark_moe_sparse_vs_dense(dim=model.hidden_dim, num_experts=8, top_k=2, device=device)
 
     # 11. Full-Model BF16 vs FP8 vs NVFP4 Quantization Tiers + Staging
-    logger.info("Evaluating Full-Model Quantization Tiers (BF16 vs FP8 vs NVFP4 4-bit)...")
-    quant_result = benchmark_quantization_tiers(model, device)
+    logger.info("Evaluating Full-Model Quantization Tiers (BF16 vs FP8 vs NVFP4 Raw vs Hadamard Fused NVFP4)...")
+    quant_result = benchmark_quantization_tiers(model, device, ppl_ids=ppl_ids)
 
     all_data = {
         "system_telemetry": sys_telemetry,

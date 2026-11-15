@@ -45,8 +45,9 @@ if HAS_TRITON:
         stride_dk,
         DR: tl.constexpr,
         BLOCK_SIZE: tl.constexpr,
+        IS_TRIU: tl.constexpr,
     ):
-        """Triton kernel for fused upper-triangular AdamW with exact in-register bias correction."""
+        """Triton kernel for fused core AdamW (upper-triangular or full (r+1)x(r+1)) with in-register bias correction."""
         pid = tl.program_id(0)
         b_c1 = tl.load(Bias1_ptr + pid)
         b_c2 = tl.load(Bias2_ptr + pid)
@@ -55,7 +56,10 @@ if HAS_TRITON:
         row_idx = tl.arange(0, BLOCK_SIZE)[:, None]
         col_idx = tl.arange(0, BLOCK_SIZE)[None, :]
         mask = (row_idx < DR) & (col_idx < DR)
-        triu_mask = mask & (row_idx <= col_idx)
+        if IS_TRIU:
+            triu_mask = mask & (row_idx <= col_idx)
+        else:
+            triu_mask = mask
 
         # Memory pointer offsets
         r_ptrs = R_ptr + pid * stride_rn + row_idx * stride_rm + col_idx * stride_rk
@@ -93,11 +97,12 @@ def fast_triangular_adamw(
     beta1: float,
     beta2: float,
     eps: float = 1e-8,
+    mask_mode: str = "triu",
 ) -> torch.Tensor:
-    """Executes fused upper-triangular Adam update on batched (N, rank+1, rank+1) matrices.
+    """Executes fused AdamW update on batched (N, rank+1, rank+1) core matrices.
 
     Args:
-        R_batch: Projected upper-triangular gradient batch [N, DR, DR]
+        R_batch: Projected gradient core batch [N, DR, DR]
         batch_mom: Persistent first moments [N, DR, DR]
         batch_var: Persistent second moments [N, DR, DR]
         batch_delta: Pre-allocated output tensor for update direction [N, DR, DR]
@@ -105,10 +110,14 @@ def fast_triangular_adamw(
         beta1: Exponential decay rate for first moment
         beta2: Exponential decay rate for second moment
         eps: Small constant for numerical stability
+        mask_mode: ``"triu"`` for upper-triangular masking or ``"full"`` for dense (DR, DR) core
 
     Returns:
-        batch_delta updated in-place with upper-triangular preconditioned directions
+        batch_delta updated in-place with preconditioned directions
     """
+    if mask_mode not in ("triu", "full"):
+        raise ValueError(f"Unknown mask_mode={mask_mode!r}; expected 'triu' or 'full'")
+
     N, DR, _ = R_batch.shape
     if not HAS_TRITON or not R_batch.is_cuda:
         # High-performance PyTorch vectorized fallback in exact FP32
@@ -121,7 +130,9 @@ def fast_triangular_adamw(
         bias_c1 = 1.0 - (beta1**step_view)
         bias_c2 = (1.0 - (beta2**step_view)).clamp_min(1e-7)
         denom = (batch_var / bias_c2).sqrt_().add_(eps)
-        delta_f32 = (batch_mom / bias_c1).div_(denom).triu_()
+        delta_f32 = (batch_mom / bias_c1).div_(denom)
+        if mask_mode == "triu":
+            delta_f32 = delta_f32.triu_()
         batch_delta.copy_(delta_f32)
         return batch_delta
 
@@ -156,6 +167,7 @@ def fast_triangular_adamw(
         batch_delta.stride(2),
         DR=DR,
         BLOCK_SIZE=block_size,
+        IS_TRIU=(mask_mode == "triu"),
     )
 
     return batch_delta

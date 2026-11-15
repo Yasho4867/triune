@@ -1,6 +1,6 @@
 # Triune Category C: Memory-Constrained Training & Layer Streaming Report
 
-**Date**: November 03, 2026
+**Date**: November 15, 2026
 **Hardware**: NVIDIA GeForce RTX 5070 Laptop GPU (7.93 GB VRAM)
 **Software**: PyTorch 2.14.1+cu132, CUDA 13.2, Python 3.14.7
 **Workload**: Batch Size 2, Sequence Length 512, Vocab Size 4096, Precision BFloat16
@@ -14,18 +14,19 @@ The Triune `LayerStreamingEngine` decouples model parameter capacity from physic
 
 ## 2. Empirical Benchmark Results
 
-| Model Scale | Total Parameters | Standard GPU Peak VRAM | LayerStreaming Peak VRAM | VRAM Reduction | Standard Latency | Streaming Latency | Throughput (tok/s) |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **76M** | 101.97M | 1315.9 MB | 877.78 MB | 33.29% | 87.52 ms | 657.17 ms | 1558.2 tok/s |
-| **150M** | 270.56M | 3022.64 MB | 1780.13 MB | 41.11% | 149.24 ms | 1576.66 ms | 649.5 tok/s |
-| **350M** | 694.85M | 6795.0 MB | 3585.74 MB | 47.23% | 2938.85 ms | 4012.4 ms | 255.2 tok/s |
+| Model Scale | Total Parameters | Streaming Optimizer | Standard GPU Peak VRAM | LayerStreaming Peak VRAM | VRAM Reduction | Standard Latency | Streaming Latency | Throughput (tok/s) |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **102M** | 101.97M | AdamW (BF16) | 4384.9 MB | 1033.64 MB | 76.43% | 151.55 ms | 773.61 ms | 1323.7 tok/s |
+| **271M** | 270.56M | AdamW (BF16) | 9224.72 MB | 1498.12 MB | 83.76% | 3111.6 ms | 1576.49 ms | 649.5 tok/s |
+| **695M** | 694.85M | AdamW (BF16) | OOM (>8 GB) | 2115.73 MB | **OOM Prevented** | N/A | 4026.89 ms | 254.3 tok/s |
+| **1.5B** | 1522.76M | CentroidSteerOptimizer (r=16, 8-bit base) | OOM (>8 GB) | 3132.62 MB | **OOM Prevented** | N/A | 5033.42 ms | 203.4 tok/s |
 
 ## 3. Analysis: Memory Footprint vs. PCIe Bandwidth Trade-off
 
 1. **Peak Memory Floor**:
-   - The LayerStreamingEngine keeps active layer parameter VRAM bounded by the size of the largest individual layer chunk rather than the aggregate model depth.
-   - For large models (250M+), layer streaming enables stable training within consumer VRAM envelopes (8 GB) where standard GPU-resident models experience severe memory pressure or OOM.
+   - The `LayerStreamingEngine` keeps active layer parameter VRAM bounded by the size of the largest individual layer chunk rather than the aggregate model depth.
+   - For large models (695M–1.5B+), layer streaming enables stable training within consumer VRAM envelopes (8 GB) where standard GPU-resident models experience severe memory pressure or OOM, and pairing with `CentroidSteerOptimizer` keeps host-side optimizer memory bounded within a 16 GB RAM budget.
 2. **Throughput & PCIe Transfer Overhead**:
    - Because layer weights must traverse the PCIe bus twice per step (forward pass H2D and backward pass H2D + gradient D2H), step latency increases proportionally to PCIe bandwidth limits.
-   - Asynchronous prefetching via secondary CUDA streams successfully conceals a substantial portion of this transfer overhead when compute intensity per layer is sufficient.
+   - Asynchronous prefetching via secondary CUDA streams overlaps transfer with compute when compute intensity per layer is sufficient.
 

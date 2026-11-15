@@ -10,14 +10,14 @@
     "compute_capability": "12.0",
     "cuda_version": "13.2",
     "driver_version": "621.14",
-    "gpu_temp_c": 57.81,
-    "gpu_power_watts": 14.51,
-    "gpu_sm_clock_mhz": 960.0
+    "gpu_temp_c": 61.5,
+    "gpu_power_watts": 14.15,
+    "gpu_sm_clock_mhz": 885.0
   },
   "model_metadata": {
-    "checkpoint": "checkpoints/triune_step_24501.pt",
-    "step": 24501,
-    "tokens_trained": 83722400,
+    "checkpoint": "checkpoints/triune_studio_step_36500_rescued.pt",
+    "step": 40555,
+    "tokens_trained": 239357120,
     "vocab_size": 32000,
     "hidden_dim": 384,
     "num_layers": 8,
@@ -36,168 +36,249 @@
       "batch_size": 1,
       "seq_len": 128,
       "total_tokens": 128,
-      "mean_latency_ms": 2.223,
-      "p50_latency_ms": 2.201,
-      "tokens_per_sec": 57585,
-      "vram_allocated_mb": 228.53
+      "mean_latency_ms": 12.769,
+      "p50_latency_ms": 12.625,
+      "tokens_per_sec": 10025,
+      "vram_allocated_mb": 236.19
     },
     {
       "batch_size": 1,
       "seq_len": 512,
       "total_tokens": 512,
-      "mean_latency_ms": 2.225,
-      "p50_latency_ms": 2.234,
-      "tokens_per_sec": 230153,
-      "vram_allocated_mb": 232.59
+      "mean_latency_ms": 16.812,
+      "p50_latency_ms": 16.863,
+      "tokens_per_sec": 30454,
+      "vram_allocated_mb": 242.67
     },
     {
       "batch_size": 1,
       "seq_len": 1024,
       "total_tokens": 1024,
-      "mean_latency_ms": 2.999,
-      "p50_latency_ms": 2.95,
-      "tokens_per_sec": 341415,
-      "vram_allocated_mb": 237.85
+      "mean_latency_ms": 12.419,
+      "p50_latency_ms": 12.43,
+      "tokens_per_sec": 82452,
+      "vram_allocated_mb": 251.32
     },
     {
       "batch_size": 1,
       "seq_len": 2048,
       "total_tokens": 2048,
-      "mean_latency_ms": 4.607,
-      "p50_latency_ms": 4.696,
-      "tokens_per_sec": 444530,
-      "vram_allocated_mb": 248.85
+      "mean_latency_ms": 10.216,
+      "p50_latency_ms": 10.31,
+      "tokens_per_sec": 200463,
+      "vram_allocated_mb": 268.95
+    },
+    {
+      "batch_size": 1,
+      "seq_len": 4096,
+      "total_tokens": 4096,
+      "mean_latency_ms": 19.062,
+      "p50_latency_ms": 19.02,
+      "tokens_per_sec": 214875,
+      "vram_allocated_mb": 303.39
+    },
+    {
+      "batch_size": 1,
+      "seq_len": 8192,
+      "total_tokens": 8192,
+      "mean_latency_ms": 33.847,
+      "p50_latency_ms": 34.022,
+      "tokens_per_sec": 242029,
+      "vram_allocated_mb": 372.59
+    },
+    {
+      "batch_size": 1,
+      "seq_len": 16384,
+      "total_tokens": 16384,
+      "mean_latency_ms": 90.444,
+      "p50_latency_ms": 90.362,
+      "tokens_per_sec": 181150,
+      "vram_allocated_mb": 527.44
     },
     {
       "batch_size": 4,
       "seq_len": 128,
       "total_tokens": 512,
-      "mean_latency_ms": 2.299,
-      "p50_latency_ms": 2.288,
-      "tokens_per_sec": 222747,
-      "vram_allocated_mb": 232.59
+      "mean_latency_ms": 8.938,
+      "p50_latency_ms": 8.943,
+      "tokens_per_sec": 57282,
+      "vram_allocated_mb": 258.67
     },
     {
       "batch_size": 4,
       "seq_len": 512,
       "total_tokens": 2048,
-      "mean_latency_ms": 2.526,
-      "p50_latency_ms": 2.62,
-      "tokens_per_sec": 810774,
-      "vram_allocated_mb": 248.85
+      "mean_latency_ms": 10.003,
+      "p50_latency_ms": 9.819,
+      "tokens_per_sec": 204745,
+      "vram_allocated_mb": 287.44
     },
     {
       "batch_size": 4,
       "seq_len": 1024,
       "total_tokens": 4096,
-      "mean_latency_ms": 3.8,
-      "p50_latency_ms": 3.727,
-      "tokens_per_sec": 1078008,
-      "vram_allocated_mb": 269.37
+      "mean_latency_ms": 17.106,
+      "p50_latency_ms": 17.16,
+      "tokens_per_sec": 239448,
+      "vram_allocated_mb": 290.81
     },
     {
       "batch_size": 4,
       "seq_len": 2048,
       "total_tokens": 8192,
-      "mean_latency_ms": 7.603,
-      "p50_latency_ms": 7.561,
-      "tokens_per_sec": 1077481,
-      "vram_allocated_mb": 311.28
+      "mean_latency_ms": 27.144,
+      "p50_latency_ms": 27.262,
+      "tokens_per_sec": 301792,
+      "vram_allocated_mb": 389.22
+    },
+    {
+      "batch_size": 4,
+      "seq_len": 4096,
+      "total_tokens": 16384,
+      "mean_latency_ms": 58.732,
+      "p50_latency_ms": 58.664,
+      "tokens_per_sec": 278964,
+      "vram_allocated_mb": 464.22
+    },
+    {
+      "batch_size": 4,
+      "seq_len": 8192,
+      "total_tokens": 32768,
+      "mean_latency_ms": 115.226,
+      "p50_latency_ms": 113.66,
+      "tokens_per_sec": 284380,
+      "vram_allocated_mb": 678.53
+    },
+    {
+      "batch_size": 4,
+      "seq_len": 16384,
+      "total_tokens": 65536,
+      "mean_latency_ms": 220.102,
+      "p50_latency_ms": 218.968,
+      "tokens_per_sec": 297753,
+      "vram_allocated_mb": 853.14
     },
     {
       "batch_size": 16,
       "seq_len": 128,
       "total_tokens": 2048,
-      "mean_latency_ms": 2.232,
-      "p50_latency_ms": 2.191,
-      "tokens_per_sec": 917394,
-      "vram_allocated_mb": 248.85
+      "mean_latency_ms": 13.849,
+      "p50_latency_ms": 13.871,
+      "tokens_per_sec": 147879,
+      "vram_allocated_mb": 281.2
     },
     {
       "batch_size": 16,
       "seq_len": 512,
       "total_tokens": 8192,
-      "mean_latency_ms": 14.074,
-      "p50_latency_ms": 13.995,
-      "tokens_per_sec": 582055,
-      "vram_allocated_mb": 313.59
+      "mean_latency_ms": 32.706,
+      "p50_latency_ms": 32.792,
+      "tokens_per_sec": 250476,
+      "vram_allocated_mb": 384.22
     },
     {
       "batch_size": 16,
       "seq_len": 1024,
       "total_tokens": 16384,
-      "mean_latency_ms": 19.571,
-      "p50_latency_ms": 19.571,
-      "tokens_per_sec": 837138,
-      "vram_allocated_mb": 394.65
+      "mean_latency_ms": 51.815,
+      "p50_latency_ms": 52.747,
+      "tokens_per_sec": 316200,
+      "vram_allocated_mb": 513.97
     },
     {
       "batch_size": 16,
       "seq_len": 2048,
       "total_tokens": 32768,
-      "mean_latency_ms": 24.714,
-      "p50_latency_ms": 24.719,
-      "tokens_per_sec": 1325868,
-      "vram_allocated_mb": 570.28
+      "mean_latency_ms": 99.044,
+      "p50_latency_ms": 98.26,
+      "tokens_per_sec": 330842,
+      "vram_allocated_mb": 803.89
+    },
+    {
+      "batch_size": 16,
+      "seq_len": 4096,
+      "total_tokens": 65536,
+      "mean_latency_ms": 179.938,
+      "p50_latency_ms": 179.201,
+      "tokens_per_sec": 364214,
+      "vram_allocated_mb": 1106.38
+    },
+    {
+      "batch_size": 16,
+      "seq_len": 8192,
+      "total_tokens": 131072,
+      "mean_latency_ms": 359.247,
+      "p50_latency_ms": 361.471,
+      "tokens_per_sec": 364852,
+      "vram_allocated_mb": 1834.07
     },
     {
       "batch_size": 32,
       "seq_len": 128,
       "total_tokens": 4096,
-      "mean_latency_ms": 3.107,
-      "p50_latency_ms": 3.143,
-      "tokens_per_sec": 1318207,
-      "vram_allocated_mb": 276.81
+      "mean_latency_ms": 17.008,
+      "p50_latency_ms": 17.203,
+      "tokens_per_sec": 240824,
+      "vram_allocated_mb": 315.17
     },
     {
       "batch_size": 32,
       "seq_len": 512,
       "total_tokens": 16384,
-      "mean_latency_ms": 10.593,
-      "p50_latency_ms": 10.588,
-      "tokens_per_sec": 1546622,
-      "vram_allocated_mb": 402.15
+      "mean_latency_ms": 45.281,
+      "p50_latency_ms": 45.346,
+      "tokens_per_sec": 361827,
+      "vram_allocated_mb": 507.8
     },
     {
       "batch_size": 32,
       "seq_len": 1024,
       "total_tokens": 32768,
-      "mean_latency_ms": 29.872,
-      "p50_latency_ms": 30.05,
-      "tokens_per_sec": 1096963,
-      "vram_allocated_mb": 543.28
+      "mean_latency_ms": 85.526,
+      "p50_latency_ms": 85.613,
+      "tokens_per_sec": 383135,
+      "vram_allocated_mb": 696.66
     },
     {
       "batch_size": 32,
       "seq_len": 2048,
       "total_tokens": 65536,
-      "mean_latency_ms": 66.455,
-      "p50_latency_ms": 66.457,
-      "tokens_per_sec": 986164,
-      "vram_allocated_mb": 852.53
+      "mean_latency_ms": 194.513,
+      "p50_latency_ms": 196.06,
+      "tokens_per_sec": 336924,
+      "vram_allocated_mb": 1233.54
+    },
+    {
+      "batch_size": 32,
+      "seq_len": 4096,
+      "total_tokens": 131072,
+      "mean_latency_ms": 372.299,
+      "p50_latency_ms": 370.247,
+      "tokens_per_sec": 352061,
+      "vram_allocated_mb": 1961.31
     }
   ],
   "decode_benchmark": {
     "prompt_len": 64,
     "generated_tokens": 64,
-    "avg_step_latency_ms": 7.723,
-    "decode_tokens_per_sec": 129,
-    "total_gen_time_ms": 494.32
+    "avg_step_latency_ms": 6.363,
+    "decode_tokens_per_sec": 157,
+    "total_gen_time_ms": 407.3
   },
   "exit_latency_benchmarks": {
     "Reflex (L2)": {
-      "mean_latency_ms": 2.442,
-      "throughput_tok_s": 838522,
-      "speedup_vs_cortex": 3.69
+      "mean_latency_ms": 2.764,
+      "throughput_tok_s": 741070,
+      "speedup_vs_cortex": 4.31
     },
     "Limbic (L5)": {
-      "mean_latency_ms": 5.967,
-      "throughput_tok_s": 343217,
-      "speedup_vs_cortex": 1.51
+      "mean_latency_ms": 8.247,
+      "throughput_tok_s": 248337,
+      "speedup_vs_cortex": 1.44
     },
     "Cortex (L8 / Full)": {
-      "mean_latency_ms": 9.001,
-      "throughput_tok_s": 227521,
+      "mean_latency_ms": 11.9,
+      "throughput_tok_s": 172099,
       "speedup_vs_cortex": 1.0
     }
   },
@@ -206,12 +287,12 @@
     "sampling_mode": "greedy_exact_parity",
     "k_draft": 3,
     "tokens_generated": 32,
-    "wall_time_seconds": 0.4152,
-    "tokens_per_second": 77.07,
-    "draft_tokens_proposed": 33,
-    "draft_tokens_accepted": 21,
-    "acceptance_rate": 0.6364,
-    "verification_passes": 11,
+    "wall_time_seconds": 0.3493,
+    "tokens_per_second": 91.62,
+    "draft_tokens_proposed": 39,
+    "draft_tokens_accepted": 20,
+    "acceptance_rate": 0.5128,
+    "verification_passes": 13,
     "lossless_parity": true,
     "greedy_parity_verified": true,
     "greedy": {
@@ -219,12 +300,12 @@
       "sampling_mode": "greedy_exact_parity",
       "k_draft": 3,
       "tokens_generated": 32,
-      "wall_time_seconds": 0.4152,
-      "tokens_per_second": 77.07,
-      "draft_tokens_proposed": 33,
-      "draft_tokens_accepted": 21,
-      "acceptance_rate": 0.6364,
-      "verification_passes": 11,
+      "wall_time_seconds": 0.3493,
+      "tokens_per_second": 91.62,
+      "draft_tokens_proposed": 39,
+      "draft_tokens_accepted": 20,
+      "acceptance_rate": 0.5128,
+      "verification_passes": 13,
       "lossless_parity": true,
       "greedy_parity_verified": true
     },
@@ -233,71 +314,110 @@
       "sampling_mode": "rejection_sampling_exact",
       "k_draft": 3,
       "tokens_generated": 32,
-      "wall_time_seconds": 0.5162,
-      "tokens_per_second": 61.99,
-      "draft_tokens_proposed": 39,
-      "draft_tokens_accepted": 20,
-      "acceptance_rate": 0.5128,
-      "verification_passes": 13,
+      "wall_time_seconds": 0.3527,
+      "tokens_per_second": 90.74,
+      "draft_tokens_proposed": 33,
+      "draft_tokens_accepted": 21,
+      "acceptance_rate": 0.6364,
+      "verification_passes": 11,
       "lossless_parity": "exact_distribution_rejection_sampling",
       "greedy_parity_verified": false
     }
   },
   "calm_confidence_gating": {
     "confidence_threshold": 0.2,
-    "total_evaluated_tokens": 128,
-    "reflex_exit_eligible_tokens": 10,
-    "reflex_exit_rate_pct": 7.8,
-    "overall_reflex_cortex_agreement_pct": 67.2,
-    "high_confidence_agreement_pct": 100.0,
+    "total_evaluated_tokens": 2048,
+    "reflex_exit_eligible_tokens": 711,
+    "reflex_exit_rate_pct": 34.7,
+    "overall_reflex_cortex_agreement_pct": 71.4,
+    "high_confidence_agreement_pct": 95.5,
     "per_token_calm_routing": {
-      "reflex_tokens": 19,
-      "limbic_tokens": 5,
-      "cortex_tokens": 232,
+      "reflex_tokens": 711,
+      "limbic_tokens": 127,
+      "cortex_tokens": 1210,
       "depths_shape": [
-        2,
+        16,
         128
       ]
+    },
+    "dense_latency_ms": 13.5,
+    "calm_latency_ms": 36.5,
+    "speedup_vs_dense": 0.37,
+    "compaction_stats": {
+      "total_tokens": 2048,
+      "reflex_tokens": 2048,
+      "limbic_tokens": 1337,
+      "cortex_tokens": 1210,
+      "limbic_rows": 16,
+      "cortex_rows": 16,
+      "limbic_seq_len": 128,
+      "cortex_seq_len": 128
     },
     "checkpoint_calibrated": true,
     "distillation_telemetry": {
       "steps": 50,
-      "initial_kl_loss": 236.975,
-      "final_kl_loss": 46.5053
+      "initial_kl_loss": 0.6854,
+      "final_kl_loss": 0.1919
     },
     "held_out_fineweb": {
       "confidence_threshold": 0.2,
-      "total_evaluated_tokens": 128,
-      "reflex_exit_eligible_tokens": 24,
-      "reflex_exit_rate_pct": 18.8,
-      "overall_reflex_cortex_agreement_pct": 79.7,
-      "high_confidence_agreement_pct": 100.0,
+      "total_evaluated_tokens": 2048,
+      "reflex_exit_eligible_tokens": 614,
+      "reflex_exit_rate_pct": 30.0,
+      "overall_reflex_cortex_agreement_pct": 73.0,
+      "high_confidence_agreement_pct": 97.1,
       "per_token_calm_routing": {
-        "reflex_tokens": 40,
-        "limbic_tokens": 5,
-        "cortex_tokens": 211,
+        "reflex_tokens": 614,
+        "limbic_tokens": 113,
+        "cortex_tokens": 1321,
         "depths_shape": [
-          2,
+          16,
           128
         ]
+      },
+      "dense_latency_ms": 12.07,
+      "calm_latency_ms": 41.01,
+      "speedup_vs_dense": 0.294,
+      "compaction_stats": {
+        "total_tokens": 2048,
+        "reflex_tokens": 2048,
+        "limbic_tokens": 1434,
+        "cortex_tokens": 1321,
+        "limbic_rows": 16,
+        "cortex_rows": 16,
+        "limbic_seq_len": 128,
+        "cortex_seq_len": 128
       },
       "checkpoint_calibrated": false
     },
     "uncalibrated_raw": {
       "confidence_threshold": 0.4,
-      "total_evaluated_tokens": 128,
-      "reflex_exit_eligible_tokens": 34,
-      "reflex_exit_rate_pct": 26.6,
-      "overall_reflex_cortex_agreement_pct": 23.4,
-      "high_confidence_agreement_pct": 8.8,
+      "total_evaluated_tokens": 512,
+      "reflex_exit_eligible_tokens": 138,
+      "reflex_exit_rate_pct": 27.0,
+      "overall_reflex_cortex_agreement_pct": 68.2,
+      "high_confidence_agreement_pct": 95.7,
       "per_token_calm_routing": {
-        "reflex_tokens": 68,
-        "limbic_tokens": 20,
-        "cortex_tokens": 168,
+        "reflex_tokens": 138,
+        "limbic_tokens": 6,
+        "cortex_tokens": 368,
         "depths_shape": [
-          2,
+          4,
           128
         ]
+      },
+      "dense_latency_ms": 10.19,
+      "calm_latency_ms": 18.04,
+      "speedup_vs_dense": 0.565,
+      "compaction_stats": {
+        "total_tokens": 512,
+        "reflex_tokens": 512,
+        "limbic_tokens": 374,
+        "cortex_tokens": 368,
+        "limbic_rows": 4,
+        "cortex_rows": 4,
+        "limbic_seq_len": 128,
+        "cortex_seq_len": 128
       },
       "checkpoint_calibrated": false
     }
@@ -306,9 +426,9 @@
     "source_exit": "Reflex (Layer 2)",
     "target_exit": "Cortex (Layer 8)",
     "latent_dim": 384,
-    "cosine_similarity": 0.7541,
-    "geodesic_distance_rad": 0.6697,
-    "geodesic_angle_deg": 38.37,
+    "cosine_similarity": 0.8202,
+    "geodesic_distance_rad": 0.5746,
+    "geodesic_angle_deg": 32.92,
     "verified_manifold_alignment": false
   },
   "tokenizer_generalization": {
@@ -319,15 +439,15 @@
         "uncompressed_tokens": 679,
         "compressed_tokens": 259,
         "compression_ratio": 2.62,
-        "encode_time_ms": 58.71,
-        "decode_time_ms": 0.24,
+        "encode_time_ms": 5.77,
+        "decode_time_ms": 0.19,
         "lossless_parity": true
       },
       "Mathematical Prose (Held-Out)": {
         "uncompressed_tokens": 219,
         "compressed_tokens": 83,
         "compression_ratio": 2.64,
-        "encode_time_ms": 1.8,
+        "encode_time_ms": 1.66,
         "decode_time_ms": 0.06,
         "lossless_parity": true
       },
@@ -335,16 +455,16 @@
         "uncompressed_tokens": 662,
         "compressed_tokens": 248,
         "compression_ratio": 2.67,
-        "encode_time_ms": 1.77,
-        "decode_time_ms": 0.11,
+        "encode_time_ms": 2.09,
+        "decode_time_ms": 0.12,
         "lossless_parity": true
       },
       "Repetitive Log & Delimiters (Held-Out)": {
         "uncompressed_tokens": 1360,
         "compressed_tokens": 512,
         "compression_ratio": 2.66,
-        "encode_time_ms": 6.21,
-        "decode_time_ms": 0.22,
+        "encode_time_ms": 6.63,
+        "decode_time_ms": 0.25,
         "lossless_parity": true
       }
     },
@@ -379,35 +499,35 @@
       "sweeps": [
         {
           "num_tokens": 1,
-          "sparse_ms": 0.647,
-          "dense_ms": 0.878,
-          "speedup": 1.358,
+          "sparse_ms": 0.719,
+          "dense_ms": 1.185,
+          "speedup": 1.648,
           "max_diff": 0.0
         },
         {
           "num_tokens": 256,
-          "sparse_ms": 1.656,
-          "dense_ms": 1.735,
-          "speedup": 1.047,
+          "sparse_ms": 1.85,
+          "dense_ms": 1.873,
+          "speedup": 1.012,
           "max_diff": 0.007812
         },
         {
           "num_tokens": 4096,
-          "sparse_ms": 1.967,
-          "dense_ms": 14.668,
-          "speedup": 7.458,
+          "sparse_ms": 1.99,
+          "dense_ms": 14.957,
+          "speedup": 7.518,
           "max_diff": 0.007812
         }
       ]
     },
     "legacy_routing_block": {
-      "sparse_scatter_gather_ms": 9.56,
-      "dense_bmm_ms": 9.428,
-      "numerical_parity_max_diff": 0.000157
+      "sparse_scatter_gather_ms": 13.916,
+      "dense_bmm_ms": 9.244,
+      "numerical_parity_max_diff": 0.000169
     },
-    "sparse_scatter_gather_ms": 1.967,
-    "dense_bmm_ms": 14.668,
-    "speedup_4096_tokens": 7.458,
+    "sparse_scatter_gather_ms": 1.99,
+    "dense_bmm_ms": 14.957,
+    "speedup_4096_tokens": 7.518,
     "sparse_theoretical_flops": 9663676416,
     "dense_theoretical_flops": 38654705664,
     "theoretical_flop_reduction_pct": 75.0,
@@ -415,7 +535,7 @@
   },
   "quantization_tiers": {
     "linear_params_quantized": 78257664,
-    "fp4_linear_layers_converted": 103,
+    "fp4_linear_layers_converted": 96,
     "nvfp4_staging_buffers_verified": 7,
     "staging_telemetry": {
       "h2d_sync_transfers": 14,
@@ -431,24 +551,40 @@
         "bits_per_weight": 16.0,
         "layer_linear_mb": 149.26,
         "compression_ratio": 1.0,
-        "fwd_latency_ms": 10.04,
-        "logit_cosine_similarity": 1.0
+        "fwd_latency_ms": 11.5,
+        "decode_step_ms": 11.21,
+        "logit_cosine_similarity": 1.0,
+        "fineweb_ppl": 97.504
       },
       {
         "tier": "FP8 (8-bit E4M3)",
         "bits_per_weight": 8.0,
         "layer_linear_mb": 74.63,
         "compression_ratio": 2.0,
-        "fwd_latency_ms": 63.67,
-        "logit_cosine_similarity": 0.97377
+        "fwd_latency_ms": 70.47,
+        "decode_step_ms": 24.51,
+        "logit_cosine_similarity": 0.91666,
+        "fineweb_ppl": 101.56
       },
       {
-        "tier": "NVFP4 (4-bit E2M1 + E4M3 Scales)",
+        "tier": "NVFP4 Unrotated (4-bit E2M1 raw)",
         "bits_per_weight": 5.0,
         "layer_linear_mb": 46.65,
         "compression_ratio": 3.2,
-        "fwd_latency_ms": 17.33,
-        "logit_cosine_similarity": 0.92187
+        "fwd_latency_ms": 13.64,
+        "decode_step_ms": 15.01,
+        "logit_cosine_similarity": 0.80252,
+        "fineweb_ppl": 126.887
+      },
+      {
+        "tier": "NVFP4 Hadamard Fused (W4A16 + Protected)",
+        "bits_per_weight": 8.46,
+        "layer_linear_mb": 78.88,
+        "compression_ratio": 1.89,
+        "fwd_latency_ms": 21.56,
+        "decode_step_ms": 28.59,
+        "logit_cosine_similarity": 0.81629,
+        "fineweb_ppl": 119.106
       }
     ]
   }

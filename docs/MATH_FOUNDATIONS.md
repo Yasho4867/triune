@@ -146,27 +146,23 @@ Under Triune's Layer Streaming engine:
 
 ### Peak VRAM Bound
 
-$$V_{\text{peak}} = V_{\text{root}} + \max_l \left( V_{\text{param}, l} + V_{\text{param}, l+1} + V_{\text{act}, l} + V_{\text{opt}, l} \right)$$
+$$V_{\text{peak}} = V_{\text{root}} + \max_l \left( V_{\text{param}, l} + V_{\text{param}, l+1} + V_{\text{ckpt}, l}(B, T) + V_{\text{opt}, l} \right)$$
 
-For `triune-2.5b` ($D=1280$, 8 experts, $B=1, T=128$):
-$$V_{\text{root}} \approx 118\text{ MB}, \quad V_{\text{param}, l} \approx 65\text{ MB}, \quad V_{\text{act}, l} \approx 12\text{ MB}, \quad V_{\text{opt}, l} \approx 80\text{ MB}$$
-$$V_{\text{peak}} \le 118 + 65 + 65 + 12 + 80 = 340\text{ MB}$$
+With `activation_checkpointing=True`, `_is_bwd_staged` reentry guards, and cuBLAS workspace release (`triune/runtime/streaming.py`, `triune/runtime/staging.py`), peak allocated memory stays invariant in total model depth ($\Theta(1)$ weight/optimizer scaling): empirically measured on an $8\text{ GB}$ RTX 5070 ($B=2, T=512, V=4096$, BF16) at `1,033.6 MB` (`102M`), `1,498.1 MB` (`271M`, `1.97x` faster than WDDM paging), `2,115.7 MB` (`695M`, vs. OOM), and `3,132.6 MB` (`1.52B + CentroidSteer r=16`, vs. OOM).
 
 **Buffer Write-Once Staging Invariant (`triune/runtime/staging.py`)**: Parameters maintain write-once forward snapshots and non-clobbering offload checks (`_cpu_data`), while non-parameter model buffers (`is_buffer=True`, e.g., MoE EMA load counters or `CentroidSteer` running centroids) copy device mutations back to host storage during `release_gpu(clear_snapshot=False)`, ensuring layer streaming never drops state updates across offloads.
 
 ---
 
-## 6. Compacted Per-Token CALM Margin Gating
+## 6. Per-Token Confidence, Sample-Level Compaction, & Conformal CALM Gating
 
-Under `exit_policy="calm"`, `TriuneTransformer` (`triune/model/transformer.py`) performs true **per-token, per-sample** confidence routing at intermediate exits (Reflex $l_1$, Limbic $l_2$):
+Under `exit_policy="calm"`, `TriuneTransformer` (`triune/model/transformer.py`) separates **decision granularity** from **batch compaction granularity**:
 
 1. Given intermediate logits $Z_t^{(l)} \in \mathbb{R}^V$, compute top-2 softmax margin per token position:
    $$\Delta p_{b,t} = p_{(1), b,t} - p_{(2), b,t}, \quad p = \operatorname{softmax}(Z_{b,t}^{(l)})$$
-2. Positions with $\Delta p_{b,t} \ge \tau$ settle immediately with exit logits written into the output tensor and exit depth recorded in `last_calm_exit_depths`.
-3. Only unsettled positions are compacted into a dense contiguous sub-batch before executing deeper blocks, and updated recurrent GLA states are scattered back to their original batch/sequence lanes (`_scatter_cache`). This contrasts with batch-wide all-token exits and preserves causal autoregressive KV/GLA state isolation.
-4. **Cortex-Preserving Exit-Head KL Self-Distillation (`distill_exit_heads` & `exit_distill_coef`)**: To align untied intermediate `exit_norm`/`exit_head` weights without disturbing `Cortex` outputs, Triune minimizes
-   $$\mathcal{L}_{\text{KL}}^{(l)} = \operatorname{KL}\!\left(\operatorname{softmax}(Z_{\text{Cortex}}) \,\|\, \operatorname{softmax}(Z^{(l)})\right)$$
-   with all backbone blocks and `final_head` frozen (`requires_grad=False`, preserving bit-for-bit `torch.equal` Cortex logits) or weighted by `exit_distill_coef` (default `0.2`) inside `TrainingEngine`'s `_compute_joint_lm_loss` under `depth_mode="joint"`. On `checkpoints/triune_step_24501.pt`, 50 calibration steps on strictly disjoint data reduce KL divergence from $236.975 \to 46.5053$ and raise held-out high-confidence Reflex–Cortex agreement at $\tau=0.20$ to `100.0%` on both Python (`67.2%` overall) and FineWeb (`79.7%` overall), compared with `8.8%` (`23.4%` overall) on the uncalibrated single-exit checkpoint at $\tau=0.40$.
+2. Positions with $\Delta p_{b,t} \ge \tau$ settle at the token level with exact exit logits written into the output tensor and exit depth recorded in `last_calm_exit_depths`.
+3. Deeper transformer block compaction checks row-wise completion (`~settled_r.all(dim=1)`), pruning only batch rows where every token settled while scattering recurrent GLA states across surviving lanes (`_scatter_cache`). When rows contain mixed settled/unsettled tokens, full sequence width $T$ executes cleanly through deeper blocks (explaining why FLOP savings of `20.35%–41.11%` coexist with `0.294x–0.723x` eager wall-clock throughput on small $D=384$ models).
+4. **Cortex-Preserving Exit-Head KL Self-Distillation & Conformal Risk Control**: Minimizing $\mathcal{L}_{\text{KL}}^{(l)} = \operatorname{KL}(\operatorname{softmax}(Z_{\text{Cortex}}) \,\|\, \operatorname{softmax}(Z^{(l)}))$ aligns intermediate heads while leaving Cortex logits bit-for-bit unchanged. On `checkpoints/triune_studio_step_36500_rescued.pt` (`step_40555`, $N=87,141$ cal / $N=85,503$ eval held-out FineWeb-Edu tokens in `benchmarks/calm_calibration.py`), Reflex reaches `AUROC = 0.8159` and Limbic `0.8319`; calibrating at $\tau=0.20$ yields `95.73%` Reflex agreement (`31.34%` coverage, Wilson-95 lower `95.48%`, `20.35%` transformer FLOP savings at `+0.14%` PPL delta), and on $N=2,048$ E2E prompts reaches `95.5%` (Python) and `97.1%` (FineWeb).
 
 ---
 

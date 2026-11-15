@@ -141,6 +141,8 @@ class MoE_FFN(nn.Module):
             and all(
                 not hasattr(e[0], "lora_A")
                 and not hasattr(e[2], "lora_A")
+                and not hasattr(e[0], "packed_weight")
+                and not hasattr(e[2], "packed_weight")
                 and getattr(e[0], "weight", None) is not None
                 and getattr(e[2], "weight", None) is not None
                 for e in self.experts
@@ -246,6 +248,7 @@ class MoE_FFN(nn.Module):
         can_batch_bmm = (
             not self.use_fp4
             and not self.use_fp8
+            and not any(hasattr(m, "packed_weight") for m in self.experts.modules())
             and not mixed_biases
             and (has_lora_e0 or no_lora_e0)
             and (has_lora_e2 or no_lora_e2)
@@ -272,7 +275,11 @@ class MoE_FFN(nn.Module):
 
         # Fast path for single-token autoregressive decoding: evaluate only the selected top-k
         # experts directly on GPU without .tolist() or nonzero() CUDA stream syncs.
-        if not self.training and N_tok == 1 and not any(isinstance(m, FP4Linear) for m in self.experts.modules()):
+        if (
+            not self.training
+            and N_tok == 1
+            and not any(isinstance(m, FP4Linear) or hasattr(m, "packed_weight") for m in self.experts.modules())
+        ):
             out = torch.zeros_like(flat_x)
             if can_batch_bmm:
                 W1_stack = torch.stack([_get_submod_weight_bias(e[0])[0] for e in self.experts], dim=0)

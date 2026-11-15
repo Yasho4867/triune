@@ -13,70 +13,86 @@
   },
   "comparisons": [
     {
-      "scale": "76M",
+      "scale": "102M",
       "params_m": 101.97,
+      "streaming_optimizer": "AdamW (BF16)",
       "gpu_resident": {
-        "median_latency_ms": 87.52,
-        "mean_latency_ms": 95.7,
-        "peak_allocated_mb": 1315.9,
-        "peak_reserved_mb": 1404.0,
-        "tokens_per_sec": 11700.6,
+        "median_latency_ms": 151.55,
+        "mean_latency_ms": 160.46,
+        "peak_allocated_mb": 4384.9,
+        "peak_reserved_mb": 5320.0,
+        "tokens_per_sec": 6756.8,
         "last_loss": 7.5938
       },
       "layer_streaming": {
-        "median_latency_ms": 657.17,
-        "mean_latency_ms": 716.12,
-        "peak_allocated_mb": 877.78,
-        "peak_reserved_mb": 1016.0,
-        "tokens_per_sec": 1558.2,
+        "median_latency_ms": 773.61,
+        "mean_latency_ms": 814.17,
+        "peak_allocated_mb": 1033.64,
+        "peak_reserved_mb": 1746.0,
+        "tokens_per_sec": 1323.7,
         "last_loss": 7.5938
       },
-      "vram_reduction_pct": 33.29,
-      "pcie_latency_overhead_pct": 650.88
+      "vram_reduction_pct": 76.43,
+      "pcie_latency_overhead_pct": 410.47
     },
     {
-      "scale": "150M",
+      "scale": "271M",
       "params_m": 270.56,
+      "streaming_optimizer": "AdamW (BF16)",
       "gpu_resident": {
-        "median_latency_ms": 149.24,
-        "mean_latency_ms": 141.67,
-        "peak_allocated_mb": 3022.64,
-        "peak_reserved_mb": 3754.0,
-        "tokens_per_sec": 6861.3,
+        "median_latency_ms": 3111.6,
+        "mean_latency_ms": 3602.25,
+        "peak_allocated_mb": 9224.72,
+        "peak_reserved_mb": 12982.0,
+        "tokens_per_sec": 329.1,
         "last_loss": 7.0
       },
       "layer_streaming": {
-        "median_latency_ms": 1576.66,
-        "mean_latency_ms": 1680.87,
-        "peak_allocated_mb": 1780.13,
-        "peak_reserved_mb": 2310.0,
+        "median_latency_ms": 1576.49,
+        "mean_latency_ms": 1595.12,
+        "peak_allocated_mb": 1498.12,
+        "peak_reserved_mb": 2756.0,
         "tokens_per_sec": 649.5,
         "last_loss": 7.0
       },
-      "vram_reduction_pct": 41.11,
-      "pcie_latency_overhead_pct": 956.46
+      "vram_reduction_pct": 83.76,
+      "pcie_latency_overhead_pct": -49.34
     },
     {
-      "scale": "350M",
+      "scale": "695M",
       "params_m": 694.85,
+      "streaming_optimizer": "AdamW (BF16)",
       "gpu_resident": {
-        "median_latency_ms": 2938.85,
-        "mean_latency_ms": 2633.79,
-        "peak_allocated_mb": 6795.0,
-        "peak_reserved_mb": 8224.0,
-        "tokens_per_sec": 348.4,
-        "last_loss": 6.0938
+        "oom": true,
+        "error": "CUDA out of memory. Tried to allocate 18.00 MiB. GPU 0 has a total capacity of 7.93 GiB of which 0 bytes is free. Process 15568 has 17179869184.00 GiB memory in use. Process 27132 has 17179869184.00 GiB memory in use. Process 32856 has 17179869184.00 GiB memory in use. Process 13180 has 17179869184.00 GiB memory in use. Process 26216 has 17179869184.00 GiB memory in use. Process 19216 has 17179869184.00 GiB memory in use. Process 16108 has 17179869184.00 GiB memory in use. Process 29852 has 17179869184.00 GiB memory in use. Process 23988 has 17179869184.00 GiB memory in use. Process 28484 has 17179869184.00 GiB memory in use. Process 18440 has 17179869184.00 GiB memory in use. Process 28016 has 17179869184.00 GiB memory in use. Process 7196 has 17179869184.00 GiB memory in use. Process 31768 has 17179869184.00 GiB memory in use. Process 23532 has 17179869184.00 GiB memory in use. Process 14456 has 17179869184.00 GiB memory in use. Process 8612 has 17179869184.00 GiB memory in use. Process 30320 has 17179869184.00 GiB memory in use. Process 14924 has 17179869184.00 GiB memory in use. Process 36264 has 17179869184.00 GiB memory in use. Process 23832 has 17179869184.00 GiB memory in use. Process 31392 has 17179869184.00 GiB memory in use. Process 6764 has 17179869184.00 GiB memory in use. Process 32844 has 17179869184.00 GiB memory in use. Process 40600 has 17179869184.00 GiB memory in use. Including non-PyTorch memory, this process has 17179869184.00 GiB memory in use. Of the allocated memory 13.93 GiB is allocated by PyTorch, and 153.12 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)"
       },
       "layer_streaming": {
-        "median_latency_ms": 4012.4,
-        "mean_latency_ms": 3888.53,
-        "peak_allocated_mb": 3585.74,
-        "peak_reserved_mb": 4154.0,
-        "tokens_per_sec": 255.2,
-        "last_loss": 6.0938
+        "median_latency_ms": 4026.89,
+        "mean_latency_ms": 3889.38,
+        "peak_allocated_mb": 2115.73,
+        "peak_reserved_mb": 4076.0,
+        "tokens_per_sec": 254.3,
+        "last_loss": 6.125
       },
-      "vram_reduction_pct": 47.23,
-      "pcie_latency_overhead_pct": 36.53
+      "vram_reduction_pct": "OOM Prevented"
+    },
+    {
+      "scale": "1.5B",
+      "params_m": 1522.76,
+      "streaming_optimizer": "CentroidSteerOptimizer (r=16, 8-bit base)",
+      "gpu_resident": {
+        "oom": true,
+        "error": "CUDA out of memory. Tried to allocate 108.00 MiB. GPU 0 has a total capacity of 7.93 GiB of which 0 bytes is free. Process 15568 has 17179869184.00 GiB memory in use. Process 27132 has 17179869184.00 GiB memory in use. Process 32856 has 17179869184.00 GiB memory in use. Process 13180 has 17179869184.00 GiB memory in use. Process 26216 has 17179869184.00 GiB memory in use. Process 19216 has 17179869184.00 GiB memory in use. Process 16108 has 17179869184.00 GiB memory in use. Process 29852 has 17179869184.00 GiB memory in use. Process 23988 has 17179869184.00 GiB memory in use. Process 28484 has 17179869184.00 GiB memory in use. Process 18440 has 17179869184.00 GiB memory in use. Process 28016 has 17179869184.00 GiB memory in use. Process 7196 has 17179869184.00 GiB memory in use. Process 31768 has 17179869184.00 GiB memory in use. Process 23532 has 17179869184.00 GiB memory in use. Process 14456 has 17179869184.00 GiB memory in use. Process 8612 has 17179869184.00 GiB memory in use. Process 30320 has 17179869184.00 GiB memory in use. Process 14924 has 17179869184.00 GiB memory in use. Process 36264 has 17179869184.00 GiB memory in use. Process 23832 has 17179869184.00 GiB memory in use. Process 31392 has 17179869184.00 GiB memory in use. Process 6764 has 17179869184.00 GiB memory in use. Process 32844 has 17179869184.00 GiB memory in use. Process 40600 has 17179869184.00 GiB memory in use. Including non-PyTorch memory, this process has 17179869184.00 GiB memory in use. Of the allocated memory 13.32 GiB is allocated by PyTorch, and 733.75 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)"
+      },
+      "layer_streaming": {
+        "median_latency_ms": 5033.42,
+        "mean_latency_ms": 5860.17,
+        "peak_allocated_mb": 3132.62,
+        "peak_reserved_mb": 6248.0,
+        "tokens_per_sec": 203.4,
+        "last_loss": 5.5938
+      },
+      "vram_reduction_pct": "OOM Prevented"
     }
   ]
 }

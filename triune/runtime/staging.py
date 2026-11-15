@@ -464,6 +464,8 @@ class ParameterStager:
     ) -> None:
         """Stages a layer's parameters and buffers to GPU."""
         is_backward = _from_backward or getattr(layer, "_in_backward", False)
+        if is_backward and stream is None and getattr(layer, "_is_bwd_staged", False):
+            return
         for p in list(layer.parameters()) + list(layer.buffers()):
             buf = self.buffers.get(id(p))
             if buf is not None:

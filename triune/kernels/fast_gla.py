@@ -590,14 +590,15 @@ def _run_gla_chunks(
 
     # Bounded-memory intra-chunk causal attention:
     # Uses micro-chunked slices (at most 4 chunks at a time) to ensure peak memory is bounded.
-    # For normal decay ranges (g_cumsum.min() > -20.0), uses factored Tensor Core matmul with
-    # midpoint exponential shift for exact mathematical equivalence in O(C*HD + C^2) FLOPs;
-    # for extreme synthetic decays (e.g. g=-20.0 per step), falls back to pairwise clamped delta_g.
+    # For decay spans < 55 nats across a chunk (normal init spans ~44 nats over C=64), uses factored
+    # Tensor Core matmul with chunk min/max midpoint shift in O(C*HD + C^2) memory (128x smaller than 6D);
+    # for extreme synthetic decays (e.g. g=-20.0 per step), falls back to single-chunk pairwise delta_g.
     is_capturing = device.type == "cuda" and torch.cuda.is_current_stream_capturing()
-    use_factored_intra = (not is_capturing) and (dtype != torch.float64) and bool((g_cumsum.min() > -20.0).item())
+    chunk_span = g_cumsum[:, :, :, :1, :] - g_cumsum[:, :, :, -1:, :]
+    use_factored_intra = (not is_capturing) and (dtype != torch.float64) and bool((chunk_span.max() < 55.0).item())
 
     if use_factored_intra:
-        g_mid = g_cumsum.float()[:, :, :, C // 2 : C // 2 + 1, :]
+        g_mid = 0.5 * (g_cumsum.float()[:, :, :, :1, :] + g_cumsum.float()[:, :, :, -1:, :])
         q_intra = q_c.float() * torch.exp(g_cumsum.float() - g_mid)
         k_intra = k_c.float() * torch.exp(g_mid - g_cumsum.float())
         if num_chunks > 4:
@@ -615,11 +616,11 @@ def _run_gla_chunks(
         else:
             attn_all = torch.matmul(q_intra, k_intra.transpose(-1, -2)).masked_fill_(causal_mask_inv, 0.0).to(dtype)
             out_intra = torch.matmul(attn_all, v_c)
-    elif num_chunks > 4:
+    else:
+        # Pairwise fallback processed strictly 1 chunk at a time so [B, H, 1, C, C, HD] never multiplies across chunks.
         out_intra_list = []
-        micro = 4
-        for c_start in range(0, num_chunks, micro):
-            c_end = min(c_start + micro, num_chunks)
+        for c_start in range(num_chunks):
+            c_end = c_start + 1
             q_sub = q_c[:, :, c_start:c_end]
             k_sub = k_c[:, :, c_start:c_end]
             v_sub = v_c[:, :, c_start:c_end]
@@ -637,21 +638,7 @@ def _run_gla_chunks(
                 qk_sub = (q_sub.float().unsqueeze(-2) * k_sub.float().unsqueeze(-3)) * d_exp_sub
                 attn_sub = qk_sub.sum(dim=-1).masked_fill_(causal_mask_inv, 0.0).to(dtype)
             out_intra_list.append(torch.matmul(attn_sub, v_sub))
-        out_intra = torch.cat(out_intra_list, dim=2)
-    else:
-        if dtype == torch.float64:
-            delta_g = torch.clamp(g_cumsum.unsqueeze(-2) - g_cumsum.unsqueeze(-3), max=0.0)
-            attn_all = (
-                ((q_c.unsqueeze(-2) * k_c.unsqueeze(-3)) * torch.exp(delta_g))
-                .sum(dim=-1)
-                .masked_fill_(causal_mask_inv, 0.0)
-            )
-        else:
-            delta_g = torch.clamp(g_cumsum.float().unsqueeze(-2) - g_cumsum.float().unsqueeze(-3), max=0.0)
-            d_exp = torch.exp(delta_g)
-            qk_elem = (q_c.float().unsqueeze(-2) * k_c.float().unsqueeze(-3)) * d_exp
-            attn_all = qk_elem.sum(dim=-1).masked_fill_(causal_mask_inv, 0.0).to(dtype)
-        out_intra = torch.matmul(attn_all, v_c)
+        out_intra = torch.cat(out_intra_list, dim=2) if num_chunks > 1 else out_intra_list[0]
 
     # Inter-chunk recurrent state propagation
     g_last = g_cumsum[:, :, :, -1:, :]

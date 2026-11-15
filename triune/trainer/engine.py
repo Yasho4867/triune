@@ -12,6 +12,7 @@ from triune.kernels.fast_cross_entropy import fast_cross_entropy
 from triune.model import MoE_FFN
 from triune.runtime.cuda_graph import CUDAGraphEngine
 from triune.runtime.resource_manager import LiveVRAMMonitor
+from triune.trainer.evaluation import forward_causal_lm
 
 
 class TrainingEngine:
@@ -81,9 +82,17 @@ class TrainingEngine:
             lm_loss = 0.25 * loss_ref + 0.30 * loss_limb + 0.45 * loss_cort
         exit_distill_coef = float(self.config.get("exit_distill_coef", 0.2))
         if exit_distill_coef > 0.0:
-            p_cort_det = F.softmax(cortex_logits.detach().float(), dim=-1)
-            kl_ref = F.kl_div(F.log_softmax(reflex_logits.float(), dim=-1), p_cort_det, reduction="batchmean")
-            kl_limb = F.kl_div(F.log_softmax(limbic_logits.float(), dim=-1), p_cort_det, reduction="batchmean")
+            p_cort_det = F.softmax(cortex_logits.detach().float().reshape(-1, vocab_size), dim=-1)
+            kl_ref = F.kl_div(
+                F.log_softmax(reflex_logits.float().reshape(-1, vocab_size), dim=-1),
+                p_cort_det,
+                reduction="batchmean",
+            )
+            kl_limb = F.kl_div(
+                F.log_softmax(limbic_logits.float().reshape(-1, vocab_size), dim=-1),
+                p_cort_det,
+                reduction="batchmean",
+            )
             lm_loss = lm_loss + exit_distill_coef * (kl_ref + kl_limb)
         return lm_loss
 
@@ -212,6 +221,8 @@ class TrainingEngine:
         last_labels = last_route_logits = None
         exploration_rate = self._exploration_rate()
         depth_mode = self.config.get("depth_mode", "dynamic")
+        if depth_mode in ("joint", "dynamic") and not hasattr(self.model, "forward_all_exits"):
+            depth_mode = "cortex"
         grad_accum = int(getattr(self.trainer, "grad_accum", self.config.get("grad_accum_steps", 1)))
         vocab_size = int(getattr(self.trainer, "vocab_size", getattr(self.model, "vocab_size", 32000)))
         z_loss_coef = float(getattr(self.trainer, "z_loss_coef", 1e-3))
@@ -240,10 +251,8 @@ class TrainingEngine:
                     for sub_x, sub_y in zip(sub_xs, sub_ys):
                         sub_y_flat = sub_y.reshape(-1)
                         with self.trainer.model_autocast():
-                            res = self.model(sub_x, force_depth=2)
-                            sub_logits = res[0] if isinstance(res, tuple) else res
+                            sub_logits, sub_route_logits = forward_causal_lm(self.model, sub_x, force_depth=2)
                             sub_lm_loss = self._compute_lm_loss(sub_logits, sub_y_flat, vocab_size)
-                            sub_route_logits = res[1] if isinstance(res, tuple) and len(res) > 1 else None
                         (sub_lm_loss / (grad_accum * num_sub)).backward()
                         lm_sum += sub_lm_loss.detach().float()
                         if sub_route_logits is not None:
@@ -260,11 +269,10 @@ class TrainingEngine:
                     micro_loss = lm_loss
                 else:
                     with self.trainer.model_autocast():
-                        res = self.model(x, force_depth=2)
-                        logits = res[0] if isinstance(res, tuple) else res
+                        logits, parsed_route = forward_causal_lm(self.model, x, force_depth=2)
                         route_logits = (
-                            res[1]
-                            if isinstance(res, tuple) and len(res) > 1
+                            parsed_route
+                            if parsed_route is not None
                             else torch.zeros((x.size(0), 3), device=self.trainer.device)
                         )
                     lm_loss = self._compute_lm_loss(logits, y_flat, vocab_size)
@@ -347,7 +355,11 @@ class TrainingEngine:
                     for sub_x, sub_y, sub_lbl in zip(sub_xs, sub_ys, sub_lbls):
                         sub_y_flat = sub_y.reshape(-1)
                         with self.trainer.model_autocast():
-                            sub_logits, sub_route_logits = self.model(sub_x, force_depth=chosen_depth)
+                            sub_logits, sub_route_logits = forward_causal_lm(
+                                self.model, sub_x, force_depth=chosen_depth
+                            )
+                            if sub_route_logits is None:
+                                sub_route_logits = torch.zeros((sub_x.size(0), 3), device=self.trainer.device)
                         sub_lm_loss = self._compute_lm_loss(sub_logits, sub_y_flat, vocab_size)
                         sub_route_f = sub_route_logits.float()
                         sub_r_loss = self.trainer.router_loss_fn(sub_route_f, sub_lbl)
@@ -369,7 +381,9 @@ class TrainingEngine:
                     route_logits = torch.cat(route_chunks, dim=0)
                 else:
                     with self.trainer.model_autocast():
-                        logits, route_logits = self.model(x, force_depth=chosen_depth)
+                        logits, route_logits = forward_causal_lm(self.model, x, force_depth=chosen_depth)
+                        if route_logits is None:
+                            route_logits = torch.zeros((x.size(0), 3), device=self.trainer.device)
                         last_choice = getattr(self.model, "last_depth_choice", None)
                         saved_balance = getattr(self.model, "last_balance_loss", None)
                         cortex_anchor_loss = None
@@ -379,7 +393,7 @@ class TrainingEngine:
                             and last_choice is not None
                             and not (last_choice == 2).any()
                         ):
-                            c_logits, _ = self.model(x[:1], force_depth=2)
+                            c_logits, _ = forward_causal_lm(self.model, x[:1], force_depth=2)
                             self.model.last_route_logits = route_logits
                             self.model.last_depth_choice = last_choice
                             self.model.last_balance_loss = saved_balance

@@ -182,6 +182,38 @@ def _request_hf_token() -> None:
         print("⚠️ No HF token provided; dataset rate limits may apply")
 
 
+class _HFTokenizerAdapter:
+    """Adapts a Hugging Face tokenizer to Triune's [PAD]/[SEP] + .encode().ids interface."""
+
+    def __init__(self, hf_tokenizer, model_vocab_size: int | None = None):
+        self._tok = hf_tokenizer
+        eos = getattr(hf_tokenizer, "eos_token_id", None)
+        pad = getattr(hf_tokenizer, "pad_token_id", None)
+        self.pad_token_id = int(pad if pad is not None else (eos if eos is not None else 0))
+        self.sep_token_id = int(eos if eos is not None else self.pad_token_id)
+        tok_len = int(len(hf_tokenizer))
+        self._vocab_size = max(tok_len, int(model_vocab_size)) if model_vocab_size else tok_len
+
+    def encode(self, text: str):
+        ids = self._tok.encode(text, add_special_tokens=False)
+        return type("HFEncoded", (), {"ids": ids})()
+
+    def decode(self, ids, skip_special_tokens: bool = True) -> str:
+        return self._tok.decode(ids, skip_special_tokens=skip_special_tokens)
+
+    def token_to_id(self, token: str):
+        if token == "[PAD]":
+            return self.pad_token_id
+        if token == "[SEP]":
+            return self.sep_token_id
+        tid = self._tok.convert_tokens_to_ids(token)
+        unk = getattr(self._tok, "unk_token_id", None)
+        return None if (tid is None or (unk is not None and tid == unk)) else int(tid)
+
+    def get_vocab_size(self) -> int:
+        return self._vocab_size
+
+
 def _checkpoint_run_id(path: Path | None) -> str | None:
     if path is None or not path.is_file():
         return None
@@ -297,11 +329,41 @@ def main(argv: list[str] | None = None) -> dict:
     from triune.runtime.resource_manager import DynamicResourceManager
 
     try:
-        tokenizer = load_tokenizer(args.tokenizer_path)
+        is_hf_candidate = bool(
+            not is_canonical_preset
+            and args.model_name
+            and (
+                "/" in args.model_name
+                or (Path(args.model_name).is_dir() and (Path(args.model_name) / "config.json").exists())
+            )
+        )
+        hf_cfg = None
+        tokenizer = None
+        if is_hf_candidate:
+            try:
+                from transformers import AutoConfig, AutoTokenizer
+
+                hf_cfg = AutoConfig.from_pretrained(args.model_name)
+                config["hidden_dim"] = int(getattr(hf_cfg, "hidden_size", config["hidden_dim"]))
+                config["num_layers"] = int(getattr(hf_cfg, "num_hidden_layers", config["num_layers"]))
+                config["num_heads"] = int(getattr(hf_cfg, "num_attention_heads", config["num_heads"]))
+                if args.depth_mode is None:
+                    config["depth_mode"] = "cortex"
+                if args.tokenizer_path == Path("triune_tokenizer.json"):
+                    hf_tok = AutoTokenizer.from_pretrained(args.model_name)
+                    tokenizer = _HFTokenizerAdapter(hf_tok, model_vocab_size=getattr(hf_cfg, "vocab_size", None))
+            except Exception as exc:
+                print(f"⚠️ Hugging Face metadata/tokenizer load skipped ({exc}); using local defaults.", flush=True)
+
+        if tokenizer is None:
+            tokenizer = load_tokenizer(args.tokenizer_path)
+
         config["vocab_size"] = tokenizer.get_vocab_size()
         sep_token_id = tokenizer.token_to_id("[SEP]")
         if sep_token_id is None:
-            raise ValueError("Tokenizer must define a [SEP] special token")
+            sep_token_id = getattr(tokenizer, "eos_token_id", None)
+        if sep_token_id is None:
+            raise ValueError("Tokenizer must define a [SEP] or EOS special token")
 
         # Run feasibility assessment and display transparent breakdown
         assessment = DynamicResourceManager.assess_feasibility(
@@ -363,6 +425,12 @@ def main(argv: list[str] | None = None) -> dict:
         if args.streaming:
             from triune.runtime.streaming import enable_layer_streaming
 
+            stream_layers_path = None
+            if hasattr(raw_model, "model") and hasattr(raw_model.model, "layers"):
+                stream_layers_path = "model.layers"
+            elif hasattr(raw_model, "transformer") and hasattr(raw_model.transformer, "h"):
+                stream_layers_path = "transformer.h"
+
             enable_layer_streaming(
                 raw_model,
                 device=device,
@@ -370,6 +438,7 @@ def main(argv: list[str] | None = None) -> dict:
                 pin_memory=args.streaming_pin_memory,
                 async_prefetch=args.streaming_prefetch,
                 fp8_weights=args.streaming_fp8_weights,
+                layers_path=stream_layers_path,
             )
             model = raw_model
         else:
