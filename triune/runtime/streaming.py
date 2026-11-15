@@ -546,7 +546,8 @@ class LayerStreamingEngine:
             def make_bwd_post_hook(l: nn.Module):
                 def bwd_post_hook(module, grad_input, grad_output):
                     l._in_backward = False
-                    self.stager.release_layer(l)
+                    l._pending_bwd_count = max(0, getattr(l, "_pending_bwd_count", 1) - 1)
+                    self.stager.release_layer(l, clear_snapshot=(l._pending_bwd_count == 0))
 
                 return bwd_post_hook
 
@@ -573,6 +574,8 @@ class LayerStreamingEngine:
                             exit_last_token_only=exit_last_token_only,
                         )
                     in_bwd = getattr(layer, "_in_backward", False)
+                    if torch.is_grad_enabled() and not in_bwd:
+                        layer._pending_bwd_count = getattr(layer, "_pending_bwd_count", 0) + 1
 
                     if (
                         torch.is_grad_enabled()
@@ -634,6 +637,8 @@ class LayerStreamingEngine:
                     def make_fwd_pre_hook(l: nn.Module, i: int):
                         def fwd_pre_hook(module, args, kwargs):
                             in_bwd = getattr(l, "_in_backward", False)
+                            if torch.is_grad_enabled() and not in_bwd:
+                                l._pending_bwd_count = getattr(l, "_pending_bwd_count", 0) + 1
                             if getattr(l, "_is_prefetched", False) and not in_bwd:
                                 if prefetch_stream is not None and dev.type == "cuda":
                                     torch.cuda.current_stream().wait_stream(prefetch_stream)
@@ -737,6 +742,7 @@ class LayerStreamingEngine:
         if self.stager is not None:
             self.stager.cleanup_all()
         for layer in self.layers:
+            layer._pending_bwd_count = 0
             if hasattr(layer, "_is_prefetched"):
                 layer._is_prefetched = False
             if hasattr(layer, "_is_bwd_prefetched"):
@@ -806,6 +812,8 @@ class LayerStreamingEngine:
                     delattr(t, "_grad_norm_sq")
 
         for layer in self.layers:
+            if hasattr(layer, "_pending_bwd_count"):
+                delattr(layer, "_pending_bwd_count")
             if hasattr(layer, "_is_prefetched"):
                 delattr(layer, "_is_prefetched")
             if hasattr(layer, "_is_bwd_prefetched"):
@@ -856,7 +864,7 @@ class LayerStreamingEngine:
         self.flush_d2h_transfers()
         for layer in self.layers:
             if getattr(layer, "_is_prefetched", False) or getattr(layer, "_is_bwd_prefetched", False):
-                self.stager.release_layer(layer)
+                self.stager.release_layer(layer, clear_snapshot=True)
                 layer._is_prefetched = False
                 layer._is_bwd_prefetched = False
 
@@ -894,41 +902,41 @@ class LayerStreamingEngine:
                 if p.grad is not None:
                     p.grad.mul_(clip_coef)
 
-        _move_param_states_to_device(opt, root_params, dev)
         try:
-            _step_optimizer_parameters(
-                opt, root_params, is_global_step_end=(len(resident_layers) == 0 and len(self.layers) == 0)
-            )
-        finally:
-            _move_param_states_to_cpu(opt, root_params)
-
-        for p in root_params:
-            p.grad = None
-
-        # 2b. Step GPU-resident transformer layers one by one (gradients & optimizer states offloaded on CPU)
-        total_res = len(resident_layers)
-        total_stream = len(self.layers)
-        for res_idx, layer in enumerate(resident_layers):
-            layer_params = list(layer.parameters())
-            for p in layer_params:
-                if hasattr(p, "_cpu_grad") and p._cpu_grad is not None:
-                    g = p._cpu_grad.to(dev, non_blocking=True).to(p.dtype)
-                    if clip_coef < 1.0:
-                        g.mul_(clip_coef)
-                    p.grad = g
-                    p._cpu_grad = None
-                    p._grad_norm_sq = None
-            _move_param_states_to_device(opt, layer_params, dev)
+            _move_param_states_to_device(opt, root_params, dev)
             try:
-                is_last = total_stream == 0 and res_idx == total_res - 1
-                _step_optimizer_parameters(opt, layer_params, is_global_step_end=is_last)
+                _step_optimizer_parameters(
+                    opt, root_params, is_global_step_end=(len(resident_layers) == 0 and len(self.layers) == 0)
+                )
             finally:
-                _move_param_states_to_cpu(opt, layer_params)
-            for p in layer_params:
+                _move_param_states_to_cpu(opt, root_params)
+
+            for p in root_params:
                 p.grad = None
 
-        # 3. Step each streamed transformer layer one by one on GPU Tensor Cores
-        try:
+            # 2b. Step GPU-resident transformer layers one by one (gradients & optimizer states offloaded on CPU)
+            total_res = len(resident_layers)
+            total_stream = len(self.layers)
+            for res_idx, layer in enumerate(resident_layers):
+                layer_params = list(layer.parameters())
+                for p in layer_params:
+                    if hasattr(p, "_cpu_grad") and p._cpu_grad is not None:
+                        g = p._cpu_grad.to(dev, non_blocking=True).to(p.dtype)
+                        if clip_coef < 1.0:
+                            g.mul_(clip_coef)
+                        p.grad = g
+                        p._cpu_grad = None
+                        p._grad_norm_sq = None
+                _move_param_states_to_device(opt, layer_params, dev)
+                try:
+                    is_last = total_stream == 0 and res_idx == total_res - 1
+                    _step_optimizer_parameters(opt, layer_params, is_global_step_end=is_last)
+                finally:
+                    _move_param_states_to_cpu(opt, layer_params)
+                for p in layer_params:
+                    p.grad = None
+
+            # 3. Step each streamed transformer layer one by one on GPU Tensor Cores
             for layer_idx, layer in enumerate(self.layers):
                 layer_params = list(layer.parameters())
                 target_dtype = (

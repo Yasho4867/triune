@@ -21,9 +21,7 @@ class SessionRecurrentStateManager:
         self._lock = threading.Lock()
         self._sessions: collections.OrderedDict[str, Dict[str, Any]] = collections.OrderedDict()
 
-    def get_session_cache(
-        self, session_id: str, device: torch.device
-    ) -> Optional[Tuple[List[Any], Optional[int]]]:
+    def get_session_cache(self, session_id: str, device: torch.device) -> Optional[Tuple[List[Any], Optional[int]]]:
         if not session_id:
             return None
 
@@ -53,9 +51,7 @@ class SessionRecurrentStateManager:
 
         return staged_cache, depth
 
-    def update_session_cache(
-        self, session_id: str, cache: List[Any], depth: Optional[int] = None
-    ) -> None:
+    def update_session_cache(self, session_id: str, cache: List[Any], depth: Optional[int] = None) -> None:
         if not session_id or not cache:
             return
 
@@ -97,9 +93,7 @@ class SessionRecurrentStateManager:
     def _purge_expired_locked(self) -> None:
         now = time.time()
         expired = [
-            sid
-            for sid, entry in self._sessions.items()
-            if now - entry["last_active"] > self.session_ttl_seconds
+            sid for sid, entry in self._sessions.items() if now - entry["last_active"] > self.session_ttl_seconds
         ]
         for sid in expired:
             del self._sessions[sid]

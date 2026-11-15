@@ -115,7 +115,7 @@ class JEVObjective(nn.Module):
             cos_angle = torch.sum(p_unit * t_unit, dim=-1)
             cos_clamped = torch.clamp(cos_angle, -1.0 + 1e-7, 1.0 - 1e-7)
             geodesic_dist = torch.acos(cos_clamped)
-            return torch.relu((geodesic_dist ** 2) - (self.eps_tube ** 2)).mean()
+            return torch.relu((geodesic_dist**2) - (self.eps_tube**2)).mean()
 
         elif self.stp_mode == "stiefel":
             # Grassmannian projection metric for subspace frames:
@@ -124,12 +124,12 @@ class JEVObjective(nn.Module):
             t_unit = F.normalize(target_sg, p=2, dim=-1, eps=self.eps_sim)
             overlap = torch.sum(p_unit * t_unit, dim=-1) ** 2
             subspace_dist_sq = 1.0 - overlap
-            return torch.relu(subspace_dist_sq - (self.eps_tube ** 2)).mean()
+            return torch.relu(subspace_dist_sq - (self.eps_tube**2)).mean()
 
         else:
             # Euclidean tube distance: ||z_p - z_t||_2^2 <= eps_tube^2
             dist_sq = torch.sum((pred_f - target_sg) ** 2, dim=-1)
-            return torch.relu(dist_sq - (self.eps_tube ** 2)).mean()
+            return torch.relu(dist_sq - (self.eps_tube**2)).mean()
 
     def compute_cov_loss(self, z: torch.Tensor) -> torch.Tensor:
         z_flat = z.float().reshape(-1, z.size(-1))
@@ -140,7 +140,7 @@ class JEVObjective(nn.Module):
         z_centered = z_flat - z_flat.mean(dim=0, keepdim=True)
         cov = (z_centered.T @ z_centered) / (n_samples - 1)
         cov_off_diag = cov - torch.diag(torch.diagonal(cov))
-        return (cov_off_diag ** 2).sum() / dim
+        return (cov_off_diag**2).sum() / dim
 
     def forward(
         self,
@@ -212,7 +212,7 @@ class JEVExitRouter(nn.Module):
                 return torch.arccos(cos_sim)
             elif self.distance_metric == "stp_tube":
                 dist_sq = torch.sum((z_f - ref_f) ** 2, dim=-1)
-                return torch.relu(dist_sq - (self.eps_tube ** 2))
+                return torch.relu(dist_sq - (self.eps_tube**2))
 
         return F.softplus(self.gate(z)).squeeze(-1)
 

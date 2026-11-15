@@ -602,12 +602,12 @@ Evaluates complete framework pipelines: Triune utilizes Chunked Vocabulary-Proje
                 else 0.0
             )
             stack_label = (
-                f"**Triune Full-Stack** (Chunked CE + CentroidSteer)"
+                "**Triune Full-Stack** (Chunked CE + CentroidSteer)"
                 if r["stack"] == "triune"
                 else (
-                    f"BitsAndBytes 8-bit Stack (Fast CE + 8-bit AdamW)"
+                    "BitsAndBytes 8-bit Stack (Fast CE + 8-bit AdamW)"
                     if r["stack"] in ("bnb_8bit", "unsloth")
-                    else f"Standard PyTorch Stack (PyTorch CE + AdamW)"
+                    else "Standard PyTorch Stack (PyTorch CE + AdamW)"
                 )
             )
             model_label = "Universal Dense" if r["model_type"] == "dense" else "Triune MoE"
@@ -635,12 +635,12 @@ Evaluates complete framework pipelines: Triune utilizes Chunked Vocabulary-Proje
                 else 0.0
             )
             stack_label = (
-                f"**Triune Full-Stack** (Chunked CE + Fused LoRA)"
+                "**Triune Full-Stack** (Chunked CE + Fused LoRA)"
                 if r["stack"] == "triune"
                 else (
-                    f"BitsAndBytes 8-bit Stack (Fast CE + 8-bit AdamW)"
+                    "BitsAndBytes 8-bit Stack (Fast CE + 8-bit AdamW)"
                     if r["stack"] in ("bnb_8bit", "unsloth")
-                    else f"Standard PyTorch Stack (PyTorch CE + AdamW)"
+                    else "Standard PyTorch Stack (PyTorch CE + AdamW)"
                 )
             )
             model_label = "Universal Dense" if r["model_type"] == "dense" else "Triune MoE"

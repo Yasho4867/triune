@@ -1,7 +1,13 @@
 \documentclass[10pt,twocolumn,letterpaper]{article}
 
 \usepackage[margin=0.75in]{geometry}
-\usepackage{amsmath,amssymb,amsfonts,amsthm}
+\usepackage{amsmath,amsthm}
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage{amssymb,amsfonts}
+\else
+  \usepackage{unicode-math}
+\fi
 \usepackage{booktabs}
 \usepackage{graphicx}
 \usepackage{microtype}
@@ -32,14 +38,14 @@
     \texttt{yash@triune.ai}
 }
 
-\date{\today}
+\date{November 15, 2026}
 
 \begin{document}
 
 \maketitle
 
 \begin{abstract}
-Standard transformer architectures encounter two critical memory scaling limits: during autoregressive generation, softmax attention incurs linear $\mathcal{O}(L)$ Key-Value (KV) cache expansion, which consumes gigabytes of high-bandwidth memory (HBM) and degrades token-generation throughput at long contexts; during pre-training, transient logit materialization in standard cross-entropy loss and synchronous host-device pipeline stalls severely constrain achievable batch sizes and compute utilization. In this paper, we present \textbf{Triune}, an end-to-end accelerated transformer architecture and execution runtime engineered for memory-constrained and long-context workloads. Triune introduces: (1) \textbf{Vectorized Gated Linear Attention (GLA)} with a hardware-fused Triton recurrent scan, maintaining a strictly bounded state footprint of $M_{\text{GLA}} = H d_k d_v b$ ($48.0\text{ KiB}$ to $64.0\text{ KiB}$ per layer across sequences up to $16,384$ tokens, representing a $99.8\%$ cache memory reduction vs.\ Softmax SDPA) while delivering up to $7.94\times$ faster autoregressive generation; (2) \textbf{Hierarchical Dynamic Exits} (Reflex L2, Limbic L5, Cortex L8) trained via joint multi-task exit objectives, enabling adaptive depth truncation that reduces forward latency by up to $74.4\%$ on low-entropy tokens; (3) \textbf{Chunked Vocabulary-Projection Cross-Entropy}, which evaluates loss over bounded micro-chunks to reduce peak transient loss memory by up to $91.3\%$ on large vocabularies ($V=32,000$); and (4) \textbf{Stream-Pipelined Parallelism}, overlapping page-locked PCIe DMA transfers with GPU execution on dedicated CUDA streams ($1.28\times$ throughput speedup, $812,956\text{ tok/s}$), fusing Tensor Core linear projections ($6.14\times$ speedup), and reducing CPU host dispatch latency by $99.0\%$ via asynchronous CUDA Graph execution. Mathematically, we prove that vectorized GLA maintains constant spatial complexity $\Theta(1)$ and $\Theta(H d_k d_v)$ FLOPs per decode step, establish the exact mathematical gradient equivalence of chunked vocabulary cross-entropy, prove asymptotic communication bubble elimination under pipelined DMA streaming, and derive distributed throughput scaling limits under Roofline operational intensity. In head-to-head empirical evaluations on NVIDIA hardware, Triune delivers a $19.7\%$ throughput advantage over genuine installed Unsloth on LoRA fine-tuning while natively enabling sparse Mixture-of-Experts training.
+Standard transformer architectures encounter two critical memory scaling limits: during autoregressive generation, softmax attention incurs linear $\mathcal{O}(L)$ Key-Value (KV) cache expansion, which consumes gigabytes of high-bandwidth memory (HBM) and degrades token-generation throughput at long contexts; during pre-training, transient logit materialization in standard cross-entropy loss and synchronous host-device pipeline stalls severely constrain achievable batch sizes and compute utilization. In this paper, we present \textbf{Triune}, an end-to-end accelerated transformer architecture and execution runtime engineered for memory-constrained and long-context workloads. Triune introduces: (1) \textbf{Vectorized Gated Linear Attention (GLA)} and \textbf{Gated DeltaNet} with chunked Tensor Core Triton scans, maintaining a strictly bounded $\Theta(1)$ state footprint ($48.0\text{ KiB}$ in single-layer microbenchmarks at $H=6$ and $64.0\text{ KiB}$ across multi-layer long-context sweeps up to $16,384$ tokens—a $99.8\%$ cache reduction vs.\ Softmax SDPA) while reaching $4.40\text{M tok/s}$ prefill ($4.02\times$ vs.\ SDPA) and $4.13\times$ decode speedup at $L=16,384$ plus $100.0\%$ standard and $100.0\%$ key-overwrite associative recall with Gated DeltaNet; (2) \textbf{Compacted Per-Token Hierarchical Exits, Self-Speculative Decoding, \& Multi-Tier Quantization} (Reflex L2, Limbic L5, Cortex L8), supporting per-token CALM margin gating ($100.0\%$ high-confidence Reflex--Cortex agreement after $50$-step Cortex-preserving KL self-distillation), $T=0.0$ greedy exact-match self-speculative decoding ($77.07\text{ tok/s}$ at $63.6\%$ acceptance), Leviathan et~al.\ rejection sampling at $T=0.7$ ($61.99\text{ tok/s}$ at $51.3\%$ acceptance), $3.69\times$ Reflex vs.\ Cortex end-to-end speedup, and packed 4-bit \textbf{NVFP4} ($3.2\times$ compression, $46.65\text{ MB}$ across $103$ quantized linear layers) alongside 8-bit FP8 ($2.0\times$); (3) \textbf{Default Sparse Scatter-Gather MoE (\texttt{MoE\_FFN})}, achieving $5.45\times$ speedup at $d=1536, k=2, N=4096$ ($4.77\times$ at $k=1$, $7.46\times$ at checkpoint width $d=384$ with $75.0\%$ fewer FLOPs); and (4) \textbf{Chunked Vocabulary-Projection Cross-Entropy \& Stream-Pipelined Parallelism}, reducing peak loss memory by $98.5\%$ vs.\ PyTorch ($94.1\%$ vs.\ genuine \texttt{unsloth 2026.10.10} at $V=32,000$), accelerating SwiGLU by $1.95\times$, overlapping PCIe DMA transfers ($812,956\text{ tok/s}$), and cutting CPU host dispatch latency via CUDA Graphs. On the complete $90.79\text{M}$-parameter ($64.21\text{M}$ active/token) checkpoint, Triune sustains $444,530\text{ tok/s}$ prefill ($B=1, T=2048$; $1.55\text{M tok/s}$ peak at $B=32, T=512$) and $129\text{ tok/s}$ sequential decode, while delivering $6.7\%$ higher LoRA fine-tuning throughput than genuine installed Unsloth ($25,973$ vs.\ $24,344\text{ tok/s}$) and natively supporting sparse MoE training.
 \end{abstract}
 
 \section{Introduction}
@@ -50,9 +56,9 @@ In autoregressive decoding, standard scaled dot-product attention (SDPA) require
 \begin{equation}
     M_{\text{SDPA}}(L) = 2 \cdot H_{\text{kv}} \cdot L \cdot d_{\text{head}} \cdot b \quad \text{bytes/layer}
 \end{equation}
-where $b$ is the bytes per element. For an 8-layer model with 2 KV heads, $d_{\text{head}}=64$, and BF16 precision ($b=2$), the KV-cache expands from $768\text{ KB}$ at $L=512$ to $24.6\text{ MB}$ per layer at $L=16,384$ tokens. This rapid growth forces batch sizes to contract and causes severe memory bandwidth bottlenecks that throttle decoding speed.
+where $b$ is the bytes per element. For an 8-layer model with $H_{\text{kv}}=6$ KV heads, $d_{\text{head}}=64$, and BF16 precision ($b=2$), the KV-cache expands from $768\text{ KiB}$ at $L=512$ to $24,576\text{ KiB}$ ($24.0\text{ MiB}$) per layer at $L=16,384$ tokens. This rapid growth forces batch sizes to contract and causes severe memory bandwidth bottlenecks that throttle decoding speed.
 
-Concurrently, during model pre-training, standard implementations suffer from severe transient memory spikes. In particular, computing cross-entropy loss over a vocabulary of size $V$ requires projecting hidden representations $H \in \mathbb{R}^{N \times d}$ into full logit matrices $\mathcal{Z} \in \mathbb{R}^{N \times V}$. At $N = B \times T = 8,192$ and $V = 32,000$, materializing $\mathcal{Z}$ in FP32 consumes $4.18\text{ GB}$ of transient VRAM for a single loss evaluation, frequently causing out-of-memory (OOM) faults or requiring artificial micro-batch truncation.
+Concurrently, during model pre-training, standard implementations suffer from severe transient memory spikes. In particular, computing cross-entropy loss over a vocabulary of size $V$ requires projecting hidden representations $H \in \mathbb{R}^{N \times d}$ into full logit matrices $\mathcal{Z} \in \mathbb{R}^{N \times V}$. At $N = B \times T = 8,192$ and $V = 32,000$, materializing and holding $\mathcal{Z}$ alongside backward intermediates consumes $4,000.0\text{ MB}$ of transient PyTorch VRAM for a single loss evaluation ($1,029.4\text{ MB}$ under chunked Unsloth), frequently causing out-of-memory (OOM) faults or requiring artificial micro-batch truncation.
 
 Furthermore, standard execution frameworks exhibit persistent hardware underutilization: synchronous host-to-device transfers stall GPU streaming multiprocessors (SMs) while batches traverse the PCIe bus, sequential linear projection kernels incur launch latency, and CPU host dispatch overhead dominates step latency in short-sequence workloads.
 
@@ -60,15 +66,15 @@ To systematically address these interconnected systems bottlenecks, we present \
 \begin{enumerate}
     \item \textbf{Constant-Memory Long-Context Generation}: A hardware-fused Gated Linear Attention kernel maintaining an $\mathcal{O}(1)$ recurrent state memory footprint.
     \item \textbf{Adaptive Computation Depth}: Multi-exit entropy gating allocating compute proportionally to token complexity.
-    \item \textbf{Chunked Vocabulary-Projection Cross-Entropy}: Online log-sum-exp accumulation eliminating $91.3\%$ of transient loss allocation with exact mathematical gradient parity.
-    \item \textbf{Stream-Pipelined Asynchronous Execution}: High-priority CUDA stream DMA prefetching and fused Tensor Core projections eliminating PCIe bubbles and launch overheads.
+    \item \textbf{Chunked Vocabulary-Projection Cross-Entropy}: Online log-sum-exp accumulation eliminating $98.5\%$ of transient PyTorch loss allocation ($94.1\%$ vs.\ Unsloth) with exact mathematical gradient parity.
+    \item \textbf{Stream-Pipelined Execution \& Packed Quantization}: High-priority CUDA stream DMA prefetching, fused Tensor Core projections, and native FP8 ($2.0\times$) / 4-bit NVFP4 ($3.2\times$) linear modules with asynchronous staging.
     \item \textbf{Rigorously Proven Theoretical Scaling}: Formal proofs establishing constant spatial decode complexity, streaming gradient equivalence, asymptotic DMA bubble elimination, and distributed throughput scaling under Roofline bounds.
 \end{enumerate}
 
 \begin{figure*}[t]
     \centering
     \includegraphics[width=\textwidth]{figures/long_context_scaling.pdf}
-    \caption{\textbf{Gated Linear Attention (GLA) vs.\ Softmax SDPA Long-Context Scaling.} (a) Autoregressive KV-cache memory per layer across sequence lengths up to 16,384 tokens: Softmax exhibits linear $\mathcal{O}(L)$ expansion ($24.6\text{ MB}$), while GLA maintains a bounded $\mathcal{O}(1)$ footprint ($48.0\text{ KiB}$ to $64.0\text{ KiB}$, $99.8\%$ reduction). (b) Prefill latency scaling: GLA demonstrates linear $\mathcal{O}(T)$ scaling, outperforming SDPA at $L \ge 8,192$.}
+    \caption{\textbf{Gated Linear Attention (GLA) vs.\ Softmax SDPA Long-Context Scaling.} (a) Autoregressive KV-cache memory per layer across sequence lengths up to 16,384 tokens: Softmax exhibits linear $\mathcal{O}(L)$ expansion ($24,576\text{ KiB}$ / $24.0\text{ MiB}$ at $H_{\text{kv}}=6$, and $32,768\text{ KiB}$ at $H=8$), while GLA maintains a bounded $\mathcal{O}(1)$ footprint ($48.0\text{ KiB}$ to $64.0\text{ KiB}$, $99.8\%$ reduction). (b) Prefill latency scaling: GLA demonstrates linear $\mathcal{O}(T)$ scaling, outperforming SDPA at $L \ge 4,096$ and reaching $4.02\times$ prefill / $4.13\times$ decode speedup at $L=16,384$.}
     \label{fig:long_context}
 \end{figure*}
 
@@ -142,23 +148,25 @@ For part (1), from Eq.~\eqref{eq:decode_step}, generating token $t$ requires onl
 For part (2), the rank-1 update $\operatorname{diag}(\exp(g_t)) S_{t-1} + k_t^T v_t$ requires $H d_k$ exponentiations, $H d_k d_v$ elementwise multiplications, and $H d_k d_v$ additions. The projection $q_t S_t$ requires $2 H d_k d_v$ FLOPs. Total decode operations per step is $4 H d_k d_v + \mathcal{O}(H d_k) = \Theta(H d_k d_v)$. In Softmax SDPA, computing $q_t K^T$ requires $2 H d_{\text{head}} L$ FLOPs, softmax requires $3 H L$ FLOPs, and attention-value multiplication requires $2 H d_{\text{head}} L$ FLOPs, totaling $4 H d_{\text{head}} L + \mathcal{O}(H L) = \Theta(H d_{\text{head}} L)$ FLOPs. The memory traffic per step for SDPA is $2 H_{\text{kv}} d_{\text{head}} L b$ bytes. For $L > \frac{d_k d_v}{2 d_{\text{head}}}$, both the FLOP count and memory access of Softmax SDPA exceed those of GLA. At $d_k=d_v=64, d_{\text{head}}=64$, the crossover point is $L^* = 32$ tokens, beyond which GLA requires strictly less memory traffic and compute per token.
 \end{proof}
 
-\subsection{Hierarchical Dynamic Exits}
+\subsection{Hierarchical Dynamic Exits, Speculative Decoding, \& Sparse MoE}
 
 \begin{table}[t]
 \centering
 \small
-\caption{\textbf{Hierarchical Dynamic Exits Quality-vs-Compute Pareto Frontier} on batch size 4, sequence length 512, evaluated on FineWeb-Edu.}
+\caption{\textbf{Hierarchical Dynamic Exits Quality-vs-Compute Pareto Frontier} ($B=4, T=512, V=4096$, \texttt{dynamic\_exits\_results.json}); on the $90.79\text{M}$ \texttt{step\_24501} checkpoint ($B=16, T=512$), Reflex/Limbic/Cortex reach $2.44 / 5.97 / 9.00\text{ ms}$ ($3.69\times$ Reflex speedup).}
 \label{tab:dynamic_exits}
+\resizebox{\columnwidth}{!}{%
 \begin{tabular}{lccccc}
 \toprule
 \textbf{Exit Tier} & \textbf{Fwd Latency} & \textbf{Decode Latency} & \textbf{Fwd Tok/s} & \textbf{Loss} & \textbf{Perplexity} \\
 \midrule
-Reflex (Layer 2) & \textbf{5.64 ms} & \textbf{4.87 ms/tok} & \textbf{22,709} & 8.4313 & 4588.2 \\
-Limbic (Layer 5) & 11.58 ms & 8.95 ms/tok & 11,057 & 8.4250 & 4559.6 \\
-Cortex (Layer 8) & 16.32 ms & 9.32 ms/tok & 7,844 & 8.4250 & 4559.6 \\
-\textbf{Dynamic Routing} & \textbf{10.47 ms} & \textbf{6.24 ms/tok} & \textbf{12,226} & \textbf{8.4278} & \textbf{4567.8} \\
+Reflex (Layer 2) & $7.29\text{ ms}$ & $\mathbf{4.87\text{ ms/tok}}$ & $280,941$ & 8.4313 & 4588.2 \\
+Limbic (Layer 5) & $17.88\text{ ms}$ & $8.95\text{ ms/tok}$ & $114,528$ & \textbf{8.4250} & \textbf{4559.6} \\
+Cortex (Layer 8) & $26.76\text{ ms}$ & $9.32\text{ ms/tok}$ & $76,543$ & \textbf{8.4250} & \textbf{4559.6} \\
+\textbf{Dynamic Routing} & $\mathbf{6.84\text{ ms}}$ & $6.24\text{ ms/tok}$ & $\mathbf{299,506}$ & 8.4313 & 4588.2 \\
 \bottomrule
-\end{tabular}
+\end{tabular}%
+}
 \end{table}
 
 To eliminate redundant computation on low-entropy tokens (e.g., syntax boilerplate, punctuation), Triune integrates three hierarchical execution exit points:
@@ -174,11 +182,13 @@ To eliminate redundant computation on low-entropy tokens (e.g., syntax boilerpla
 \end{equation}
 with exit weights $w_2 = 0.2, w_5 = 0.3, w_8 = 0.5$.
 
-\paragraph{Entropy-Gated Inference Routing} During autoregressive inference, the normalized predictive entropy is evaluated at each exit $l$:
-\begin{equation}
-    \mathcal{H}(p^{(l)}) = -\frac{1}{\log V} \sum_{v=1}^V p_v^{(l)} \log p_v^{(l)} \in [0, 1]
-\end{equation}
-If $\mathcal{H}(p^{(l)}) < \tau_l$ (calibrated empirically to $\tau = 0.35$ on validation distributions), execution halts early and emits token $y = \arg\max p^{(l)}$, bypassing all subsequent transformer blocks. Across validation text, the empirical routing distribution selects Reflex for $64.2\%$ of tokens, Limbic for $23.1\%$, and Cortex for $12.7\%$. Based on these routing proportions, the theoretical expected execution depth decreases from $8.0$ to $3.46$ layers ($0.642 \times 2 + 0.231 \times 5 + 0.127 \times 8$), representing a $56.8\%$ reduction in executed transformer depth. As demonstrated in Table~\ref{tab:dynamic_exits}, dynamic routing achieves $10.47\text{ ms}$ forward latency ($1.56\times$ speedup, $35.8\%$ forward latency reduction) and $6.24\text{ ms/tok}$ in autoregressive decoding ($1.49\times$ decode speedup vs.\ full Cortex), with negligible loss impact ($8.4278$ vs.\ $8.4250$).
+\paragraph{Per-Token Compacted CALM Margin Gating} Under \texttt{exit\_policy="calm"}, Triune evaluates per-token softmax confidence margins $\Delta p_{b,t} = p_{(1)} - p_{(2)}$ at each intermediate exit rather than forcing a coarse batch-wide decision. Tokens exceeding $\tau$ settle immediately with exact exit logits retained, while remaining unsettled sample/sequence paths are compacted into a contiguous sub-batch before deeper layers run, recording per-position exit depths (\texttt{last\_calm\_exit\_depths}) and scattering recurrent GLA states back across sample lanes. Because single-exit checkpoints trained solely with Cortex loss leave untied intermediate \texttt{exit\_head} weights uncorrelated ($8.8\%$ high-confidence and $23.4\%$ overall raw agreement at $\tau=0.40$ on \texttt{step\_24501}), Triune provides joint-mode KL self-distillation (\texttt{exit\_distill\_coef}) during training and a Cortex-preserving \texttt{distill\_exit\_heads} calibration pass that freezes all backbone and Cortex weights. After $50$ calibration steps on strictly disjoint data (KL loss $236.975 \to 46.505$), high-confidence Reflex--Cortex agreement reaches \textbf{$100.0\%$} at $\tau=0.20$ on both held-out Python ($67.2\%$ overall, $10/128$ confident exits) and held-out FineWeb ($79.7\%$ overall, $24/128$ confident exits) while preserving bit-for-bit Cortex logits.
+
+\paragraph{Self-Speculative Decoding (LayerSkip) \& Rejection Sampling} When exact target equivalence is required on any checkpoint without auxiliary draft networks, Reflex (L2) drafts $K$ tokens and Cortex (L8) verifies all $K$ positions in a single parallel pass. Triune strictly distinguishes two operating regimes: (i) \textbf{Greedy decoding} ($T=0.0$), which enforces exact token-for-token Cortex parity; and (ii) \textbf{Stochastic sampling} ($T>0$), which implements Leviathan et~al.\ rejection sampling—accepting draft token $x_i$ with probability $\min(1, p_i(x_i) / q_i(x_i))$ and resampling from normalized residual $\max(0, p_i - q_i) / Z$ on rejection—preserving the exact Cortex sampling distribution.
+
+\paragraph{Default Sparse Scatter-Gather MoE} In production \texttt{MoE\_FFN} modules, \texttt{use\_sparse\_eval=True} is enabled by default: single-token autoregressive steps ($N_{\text{tok}}=1$) dispatch through a zero-synchronization stacked-BMM path over active top-$k$ weights ($0.0$ max diff vs.\ dense), while multi-token prefill steps ($N_{\text{tok}}>1$) sort tokens by routed expert ID and evaluate sparse per-expert slices.
+
+\paragraph{Multi-Tier Weight Quantization (FP8 \& 4-Bit NVFP4)} For memory-constrained inference and streaming, Triune natively supports drop-in weight compression via \texttt{convert\_to\_fp8} (\texttt{FP8Linear} in E4M3 format, $2.0\times$ weight compression with zero-overhead eval buffer caching and $\% 16$-aligned native \texttt{torch.\_scaled\_mm} acceleration) and \texttt{convert\_to\_nvfp4} (\texttt{NVFP4Linear}, packing pairs of 4-bit E2M1 weights into nibbles with fine-grained 16-element E4M3 block scales at an effective $5.0\text{ bits/weight}$, or $3.2\times$ compression, alongside \texttt{ParameterStager(use\_fp4=True)} for compressed host-to-device \texttt{NVFP4StagingBuffer} streaming).
 
 \subsection{Chunked Vocabulary-Projection Cross-Entropy}
 
@@ -200,7 +210,10 @@ Let $N_{\text{valid}} = \sum_{i=1}^N \mathbb{I}(y_i \neq \text{ignore\_index})$ 
     \end{equation}
     \item \textbf{In-Place Softmax Gradient}: Evaluates unscaled softmax residual $g_c \in \mathbb{R}^{B_c \times V}$ in-place on $\mathcal{Z}_c$:
     \begin{equation}
-        (g_c)_{i, j} = \left( \exp(\mathcal{Z}_{c, i, j} - m_{c, i}) - \mathbb{I}(j = y_{c, i}) \right) \cdot \mathbb{I}(y_{c, i} \neq -100)
+    \begin{aligned}
+        (g_c)_{i, j} &= \left( \exp(\mathcal{Z}_{c, i, j} - m_{c, i}) - \mathbb{I}(j = y_{c, i}) \right) \\
+        &\qquad \cdot \mathbb{I}(y_{c, i} \neq -100)
+    \end{aligned}
     \end{equation}
     and scales by the global batch normalization: $\tilde{g}_c = \frac{1}{N_{\text{valid}}} g_c$.
     \item \textbf{Hidden-State Gradient}: Computes chunk activation gradients:
@@ -221,10 +234,13 @@ Let $H \in \mathbb{R}^{N \times d}$ be input activations, $W_{\text{head}} \in \
     \item The total loss $\mathcal{L} = \frac{1}{N_{\text{valid}}} \sum_{c} \mathcal{L}_c$ and parameter gradient $\nabla_{W_{\text{head}}} \mathcal{L}$ evaluated by streaming chunked cross-entropy are algebraically identical to the unchunked loss $\mathcal{L}_{\text{full}} = \frac{1}{N_{\text{valid}}} \sum_{i=1}^N \left( \operatorname{lse}((H W_{\text{head}}^T)_i) - (H W_{\text{head}}^T)_{i, y_i} \right)$.
     \item Under finite precision with machine epsilon $\epsilon_{\text{mach}}$, the backward numerical error is bounded by:
     \begin{equation}
-        \left\| \nabla_{W_{\text{head}}} \mathcal{L}_{\text{chunked}} - \nabla_{W_{\text{head}}} \mathcal{L}_{\text{full}} \right\|_F \le C_2 \left\lceil \frac{N}{B_c} \right\rceil \epsilon_{\text{mach}} \|H\|_F \|W_{\text{head}}\|_F
+    \begin{aligned}
+        &\left\| \nabla_{W_{\text{head}}} \mathcal{L}_{\text{chunked}} - \nabla_{W_{\text{head}}} \mathcal{L}_{\text{full}} \right\|_F \\
+        &\qquad \le C_2 \left\lceil \frac{N}{B_c} \right\rceil \epsilon_{\text{mach}} \|H\|_F \|W_{\text{head}}\|_F
+    \end{aligned}
     \end{equation}
-    where $C_2 = \mathcal{O}(d)$, maintaining empirical relative error $< 4.5 \times 10^{-8}$.
-    \item Transient HBM allocation is reduced from $\Theta(N V)$ bytes to $\Theta(B_c V)$ bytes, achieving a $91.3\%$ peak loss memory reduction at $N=8,192, V=32,000$.
+    where $C_2 = \mathcal{O}(d)$, maintaining empirical relative error $\le 4.47 \times 10^{-8}$.
+    \item Transient HBM allocation is reduced from $\Theta(N V)$ bytes to $\Theta(B_c V)$ bytes, achieving a $98.5\%$ peak loss memory reduction vs.\ PyTorch ($4,000.0\text{ MB} \to 60.7\text{ MB}$) and $94.1\%$ vs.\ genuine \texttt{unsloth 2026.10.10} ($1,029.4\text{ MB}$) at $N=8,192, V=32,000$.
 \end{enumerate}
 \end{proposition}
 
@@ -235,11 +251,14 @@ For part (1), cross-entropy loss decomposes additively across sequence tokens: $
 \end{equation}
 By the linearity of differentiation:
 \begin{equation}
-    \nabla_{W_{\text{head}}} \mathcal{L}_{\text{full}} = \frac{1}{N_{\text{valid}}} \sum_{i=1}^N \nabla_{W_{\text{head}}} \ell_i = \sum_{k=1}^K \left( \frac{1}{N_{\text{valid}}} \sum_{i \in \mathcal{C}_k} g_i^T H_i \right)
+\begin{aligned}
+    \nabla_{W_{\text{head}}} \mathcal{L}_{\text{full}} &= \frac{1}{N_{\text{valid}}} \sum_{i=1}^N \nabla_{W_{\text{head}}} \ell_i \\
+    &= \sum_{k=1}^K \left( \frac{1}{N_{\text{valid}}} \sum_{i \in \mathcal{C}_k} g_i^T H_i \right)
+\end{aligned}
 \end{equation}
 which is exactly the accumulated outer product $\sum_k \tilde{g}_k^T H_k$.
 For part (2), the only difference arises from the summation order in accumulating the rank-$B_c$ outer products into the gradient buffer. By standard floating-point error bounds for recursive matrix summation~\cite{golub2013matrix}, the accumulation error across $K = \lceil N / B_c \rceil$ chunks satisfies the stated bound.
-For part (3), unchunked cross-entropy materializes the full logit matrix $\mathcal{Z} \in \mathbb{R}^{N \times V}$ and its softmax gradient tensor, requiring $2 \times N \times V \times 4$ bytes. Chunked cross-entropy materializes only a single micro-chunk $\mathcal{Z}_c \in \mathbb{R}^{B_c \times V}$ in HBM at any given time, requiring $2 \times B_c \times V \times 4$ bytes. For $N=8,192, B_c=1,024, V=32,000$, transient memory drops from $4,182.3\text{ MB}$ to $365.8\text{ MB}$ ($91.3\%$ reduction).
+For part (3), unchunked cross-entropy retains the full logit matrix $\mathcal{Z} \in \mathbb{R}^{N \times V}$ and FP32/BF16 softmax intermediates simultaneously across autograd forward and backward graphs ($\Theta(NV)$ bytes), whereas Triune's \texttt{\_FusedLinearCrossEntropy} executes an in-place Triton CE kernel (\texttt{\_ce\_inplace\_chunk\_kernel}) over a single active micro-chunk $\mathcal{Z}_c \in \mathbb{R}^{B_c \times V}$ and frees $\mathcal{Z}_c$ immediately after accumulating $\partial \mathcal{L} / \partial H_c$ and $\partial \mathcal{L} / \partial W_{\text{head}}$. At $N=8,192, B_c=1,024, V=32,000$, live profiled peak allocation drops from $4,000.0\text{ MB}$ (PyTorch) and $1,029.4\text{ MB}$ (Unsloth) to $60.7\text{ MB}$ ($98.5\%$ and $94.1\%$ reductions, respectively).
 \end{proof}
 
 \subsection{Hardware Zero-Copy Memory Hierarchy \& Stream Parallelism}
@@ -253,7 +272,10 @@ For part (3), unchunked cross-entropy materializes the full logit matrix $\mathc
 
 The physical memory hierarchy of modern GPU systems spans multiple disjoint bandwidth domains:
 \begin{equation}
-    \text{Host DRAM} \xrightarrow[\text{PCIe x16}]{\text{DMA}} \text{Device HBM} \xrightarrow[\text{Crossbar}]{\text{L2 Cache}} \text{SM Shared Memory (SRAM) / Registers}
+\begin{aligned}
+    \text{Host DRAM} &\xrightarrow[\text{PCIe x16}]{\text{DMA}} \text{Device HBM} \\
+    &\xrightarrow[\text{Crossbar}]{\text{L2 Cache}} \text{SRAM / Registers}
+\end{aligned}
 \end{equation}
 Standard dataloaders transfer batches synchronously across the PCIe bus on the default compute stream, forcing GPU streaming multiprocessors (SMs) to idle. Triune implements an asynchronous double-buffering prefetcher (\texttt{AsyncDevicePrefetcher}) on a dedicated high-priority CUDA transfer stream. Batch $N+1$ is transferred from page-locked pinned host memory concurrently with Batch $N$'s forward pass, backward pass, and optimizer update on the compute stream:
 \begin{equation}
@@ -266,12 +288,18 @@ Let $T_{\text{DMA}} = \frac{B \cdot T \cdot d \cdot b_{\text{in}}}{\text{BW}_{\t
 \begin{enumerate}
     \item If $T_{\text{Compute}} \ge T_{\text{DMA}}$, the total elapsed execution time for $K$ training iterations under dual-stream double-buffering satisfies:
     \begin{equation}
-        T_{\text{total}}(K) = T_{\text{DMA}} + K \cdot T_{\text{Compute}} + T_{\text{flush}} \le (K+1) T_{\text{Compute}}
+    \begin{aligned}
+        T_{\text{total}}(K) &= T_{\text{DMA}} + K \cdot T_{\text{Compute}} + T_{\text{flush}} \\
+        &\le (K+1) T_{\text{Compute}}
+    \end{aligned}
     \end{equation}
     where $T_{\text{flush}}$ is the pipeline drain latency.
     \item The effective communication bubble fraction $\beta(K) = \frac{T_{\text{total}}(K) - K T_{\text{Compute}}}{T_{\text{total}}(K)}$ satisfies:
     \begin{equation}
-        \beta(K) = \frac{T_{\text{DMA}} + T_{\text{flush}}}{T_{\text{DMA}} + K T_{\text{Compute}} + T_{\text{flush}}} \le \frac{2}{K+1} \xrightarrow{K \to \infty} 0
+    \begin{aligned}
+        \beta(K) &= \frac{T_{\text{DMA}} + T_{\text{flush}}}{T_{\text{DMA}} + K T_{\text{Compute}} + T_{\text{flush}}} \\
+        &\le \frac{2}{K+1} \xrightarrow{K \to \infty} 0
+    \end{aligned}
     \end{equation}
     proving that host-to-device PCIe latency is asymptotically eliminated with zero compute stalls.
 \end{enumerate}
@@ -290,7 +318,10 @@ Let $\mathcal{P}_{\text{peak}}$ denote GPU peak Tensor Core compute throughput (
 \begin{enumerate}
     \item \textbf{Operational Intensity of Chunked GLA}: The arithmetic operational intensity of chunked GLA with chunk size $C$ and hidden dimension $d$ is:
     \begin{equation}
-        I_{\text{GLA}} = \frac{4 C d (3 d_k + d_v) + 4 C d_k d_v + 2 C^2 (d_k + d_v)}{2 C d b + 4 C (d_k + d_v) b + 2 d_k d_v b} \approx \frac{2 d}{b}
+    \begin{aligned}
+        I_{\text{GLA}} &= \frac{4 C d (3 d_k + d_v) + 4 C d_k d_v + 2 C^2 (d_k + d_v)}{2 C d b + 4 C (d_k + d_v) b + 2 d_k d_v b} \\
+        &\approx \frac{2 d}{b}
+    \end{aligned}
     \end{equation}
     For $d=384, b=2$, $I_{\text{GLA}} \approx 384\text{ FLOP/byte} \gg I^* \approx 120\text{ FLOP/byte}$, proving that chunked GLA operates strictly in the compute-bound regime of the Roofline model.
     \item \textbf{Distributed Scaling with Dynamic Exits}: In a distributed cluster with $P$ workers under hybrid tensor/expert parallelism, let $\bar{\tau}_{\text{depth}} = \sum_{l \in \{2, 5, 8\}} \pi_l \cdot \frac{l}{L_{\text{total}}} \in (0, 1]$ be the expected relative execution depth under dynamic exits ($\bar{\tau}_{\text{depth}} \approx 0.432$). Then aggregate distributed throughput scales as:
@@ -313,47 +344,71 @@ For part (2), dynamic exits bypass deeper layers for a fraction $\pi_l$ of token
 \begin{table*}[t]
 \centering
 \small
-\caption{\textbf{Head-to-Head Competitive Evaluation: Triune vs.\ Genuine Unsloth (2026.10.10) and PyTorch Baselines} on NVIDIA GeForce RTX 5070 (8 GB VRAM) using real causal FineWeb text batches.}
+\caption{\textbf{Head-to-Head Competitive Evaluation: Triune vs.\ Genuine Unsloth (2026.10.10) and PyTorch Baselines} on NVIDIA GeForce RTX 5070 Laptop GPU (8 GB VRAM) using real causal FineWeb text batches (\texttt{genuine\_unsloth\_vs\_triune\_results.json}).}
 \label{tab:unsloth_matrix}
+\resizebox{\textwidth}{!}{%
 \begin{tabular}{lcccc}
 \toprule
 \textbf{Workload \& Framework} & \textbf{Step Latency (ms)} & \textbf{Throughput (tok/s)} & \textbf{Peak VRAM (MB)} & \textbf{Speedup vs.\ PyTorch} \\
 \midrule
 \multicolumn{5}{l}{\textbf{LoRA Fine-Tuning} (38.03M Total / 868.4K Trainable Parameters, Rank 16, Batch Size 2, Seq Len 256)} \\
-Standard PyTorch PEFT & $56.94 \pm 12.65$ & $17,985$ & $599.1$ & $1.00\times$ (Baseline) \\
-Genuine Unsloth (2026.10.10) & $47.75 \pm 8.53$ & $21,445$ & $340.6$ & $1.19\times$ \\
-\textbf{Triune AI (Fused LoRA + Chunked CE)} & $\mathbf{38.32} \pm \mathbf{5.02}$ & $\mathbf{26,720}$ & $\mathbf{338.7}$ & $\mathbf{1.49\times}$ ($+19.7\%$ vs.\ Unsloth) \\
+Standard PyTorch PEFT (\texttt{AdamW}) & $55.76 \pm 7.98$ & $18,364$ & $599.1$ & $1.00\times$ (Baseline) \\
+Genuine Unsloth (\texttt{2026.10.10}, \texttt{AdamW8bit}) & $42.06 \pm 4.62$ & $24,344$ & $\mathbf{340.6}$ & $1.33\times$ ($-43.1\%$ VRAM) \\
+\textbf{Triune AI (Fused LoRA + Chunked CE, \texttt{AdamW8bit})} & $\mathbf{39.43} \pm \mathbf{2.95}$ & $\mathbf{25,973}$ & $396.4$ & $\mathbf{1.41\times}$ ($+6.7\%$ vs.\ Unsloth) \\
 \midrule
 \multicolumn{5}{l}{\textbf{Pre-Training from Scratch} (37.17M Parameters, Batch Size 4, Seq Len 256)} \\
-Standard PyTorch (AdamW) & $22.74 \pm 1.93$ & $45,036$ & $661.6$ & $1.00\times$ (Baseline) \\
-Genuine Unsloth (Fused 8-bit) & $\mathbf{25.92} \pm \mathbf{3.32}$ & $\mathbf{39,503}$ & $464.8$ & $0.88\times$ \\
-\textbf{Triune AI (CentroidSteer 3-Tier)} & $31.65 \pm 1.91$ & $32,349$ & $\mathbf{398.2}$ & $-39.8\%$ VRAM vs.\ PyTorch \\
+Standard PyTorch (\texttt{AdamW}) & $36.12 \pm 3.32$ & $28,348$ & $661.6$ & $1.00\times$ (Baseline) \\
+Genuine Unsloth (\texttt{2026.10.10}, \texttt{AdamW8bit}) & $\mathbf{27.70} \pm \mathbf{3.65}$ & $\mathbf{36,967}$ & $464.8$ & $\mathbf{1.30\times}$ ($-29.7\%$ VRAM) \\
+\textbf{Triune AI (\texttt{CentroidSteerOptimizer})} & $28.96 \pm 2.84$ & $35,361$ & $\mathbf{423.9}$ & $1.25\times$ ($-35.9\%$ VRAM vs.\ PT) \\
 \midrule
-\multicolumn{5}{l}{\textbf{Mixture-of-Experts Pre-Training} (90.79M Parameters, 8 Layers, 4 Experts, Top-1 Routing)} \\
-Standard PyTorch MoE & $137.25 \pm 10.56$ & $7,460$ & $1,474.2$ & $1.00\times$ (Baseline) \\
-Genuine Unsloth & \multicolumn{4}{c}{\textit{Unsupported (Specialized exclusively for dense autoregressive models)}} \\
-\textbf{Triune AI (Multi-Exit MoE Stack)} & $\mathbf{97.32} \pm \mathbf{12.66}$ & $\mathbf{10,522}$ & $\mathbf{1,150.4}$ & $\mathbf{1.41\times}$ ($-22.0\%$ VRAM) \\
+\multicolumn{5}{l}{\textbf{Mixture-of-Experts Pre-Training} (90.79M Parameters, 8 Layers, 4 Routed + 1 Shared Expert)} \\
+Genuine Unsloth (\texttt{2026.10.10}) & \multicolumn{4}{c}{\textit{Unsupported (Specialized exclusively for dense autoregressive models)}} \\
+\textbf{Triune AI (Multi-Exit MoE Stack + \texttt{CentroidSteer})} & $\mathbf{107.11} \pm \mathbf{11.56}$ & $\mathbf{9,560}$ & $\mathbf{928.9}$ & Native Sparse MoE \\
 \bottomrule
-\end{tabular}
+\end{tabular}%
+}
+\end{table*}
+
+\begin{table*}[t]
+\centering
+\small
+\caption{\textbf{Kernel Primitives \& Weight Quantization Tiers} (\texttt{benchmark\_results.json}, \texttt{full\_model\_e2e.json}). \texttt{unsloth 2026.10.10} and \texttt{bitsandbytes 0.50.2} executed directly on hardware (\texttt{liger\_kernel} unavailable on Windows).}
+\label{tab:kernel_quant}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Primitive / Precision Tier} & \textbf{PyTorch / BF16} & \textbf{Genuine Unsloth / FP8} & \textbf{Triune AI / NVFP4} & \textbf{Key Measured Advantage} \\
+\midrule
+Cross-Entropy ($N=8,192, V=32,000$) & $59.04\text{ ms} / 4,000.0\text{ MB}$ & $24.67\text{ ms} / 1,029.4\text{ MB}$ & $\mathbf{22.97\text{ ms}} / \mathbf{60.7\text{ MB}}$ & $-98.5\%$ vs.\ PT, $-94.1\%$ vs.\ Unsloth \\
+RMSNorm ($4 \times 1024, d=2048$) & $4.185\text{ ms}$ (Naive) / $0.353\text{ ms}$ & $\mathbf{0.280\text{ ms}} / 33.13\text{ MB}$ & $0.349\text{ ms} / \mathbf{33.03\text{ MB}}$ & $11.99\times$ vs.\ Naive ($-84.1\%$ VRAM) \\
+SwiGLU ($4 \times 1024, h=4096$) & $2.190\text{ ms} / 128.00\text{ MB}$ & $2.221\text{ ms} / 96.00\text{ MB}$ & $\mathbf{1.123\text{ ms}} / \mathbf{96.00\text{ MB}}$ & $1.95\times$ vs.\ PT, $1.98\times$ vs.\ Unsloth \\
+\midrule
+Linear $[4096 \times 4096]$ Quantization & $32.00\text{ MB}$ ($1.0\times$, $0.855\text{ ms}$) & $16.00\text{ MB}$ ($2.0\times$, $1.915\text{ ms}$) & $\mathbf{10.00\text{ MB}}$ ($\mathbf{3.2\times}$, $0.990\text{ ms}$) & $3.2\times$ compact, $\cos = 0.99503$ \\
+Full $90.79\text{M}$ Model ($103$ Linear Layers) & $149.26\text{ MB}$ ($1.0\times$, $10.04\text{ ms}$) & $74.63\text{ MB}$ ($2.0\times$, $63.67\text{ ms}$) & $\mathbf{46.65\text{ MB}}$ ($\mathbf{3.2\times}$, $17.33\text{ ms}$) & $-68.7\%$ weights, $\cos = 0.92187$ \\
+\bottomrule
+\end{tabular}%
+}
 \end{table*}
 
 \section{Empirical Evaluation}
 
-\subsection{Head-to-Head Competitive Benchmark}
+\subsection{Head-to-Head Competitive Benchmark \& Kernel Primitives}
 
-Table~\ref{tab:unsloth_matrix} summarizes head-to-head empirical benchmarks comparing Triune against genuine installed Unsloth (version 2026.10.10) and standard PyTorch baselines under identical model architectures and datasets.
+Tables~\ref{tab:unsloth_matrix} and~\ref{tab:kernel_quant} summarize head-to-head empirical benchmarks comparing Triune against genuine installed Unsloth (version \texttt{2026.10.10}), \texttt{bitsandbytes 0.50.2}, and standard PyTorch baselines under identical model architectures and datasets (\texttt{liger\_kernel} is unavailable on Windows in our environment and is explicitly omitted rather than approximated).
 \begin{itemize}
-    \item \textbf{LoRA Fine-Tuning}: On an 8-layer transformer ($38.03\text{M}$ total, $868.4\text{K}$ trainable LoRA parameters / $2.28\%$), Triune executes at $38.32 \pm 5.02\text{ ms/step}$ ($26,720\text{ tok/s}$), delivering a \textbf{$19.7\%$ speedup over Unsloth} ($47.75\text{ ms/step}$, $21,445\text{ tok/s}$) and a \textbf{$1.49\times$ speedup over PyTorch PEFT} ($56.94\text{ ms/step}$), while achieving the lowest memory footprint ($338.7\text{ MB}$).
-    \item \textbf{Sparse Mixture-of-Experts}: While specialized dense-model frameworks (such as Unsloth) do not support sparse MoE topologies, Triune natively trains 90.79M-parameter Multi-Exit MoE models at $97.32\text{ ms/step}$ ($10,522\text{ tok/s}$) with $22.0\%$ lower memory footprint than standard PyTorch.
+    \item \textbf{LoRA Fine-Tuning}: On an 8-layer transformer ($38.03\text{M}$ total, $868.4\text{K}$ trainable LoRA parameters / $2.28\%$), Triune executes at $39.43 \pm 2.95\text{ ms/step}$ ($25,973\text{ tok/s}$), delivering a \textbf{$6.7\%$ throughput advantage over Unsloth} ($42.06\text{ ms/step}$, $24,344\text{ tok/s}$) and a \textbf{$1.41\times$ speedup over PyTorch PEFT} ($55.76\text{ ms/step}$) with $33.8\%$ lower memory ($396.4\text{ MB}$ vs.\ $599.1\text{ MB}$).
+    \item \textbf{Dense \& MoE Pre-Training}: On 37.17M dense pre-training, \texttt{CentroidSteerOptimizer} achieves $28.96\text{ ms/step}$ ($35,361\text{ tok/s}$) with the \textbf{lowest peak VRAM ($423.9\text{ MB}$)}, saving $35.9\%$ vs.\ PyTorch ($661.6\text{ MB}$) and $8.8\%$ vs.\ Unsloth ($464.8\text{ MB}$). Unlike dense-only Unsloth, Triune natively trains $90.79\text{M}$-parameter Multi-Exit MoE models at $107.11\text{ ms/step}$ ($9,560\text{ tok/s}$, $928.9\text{ MB}$).
+    \item \textbf{Fused Kernel Primitives \& 4-Bit NVFP4}: Triune's chunked cross-entropy ($N=8,192, V=32,000$) cuts peak loss allocation to $60.7\text{ MB}$ ($98.5\%$ vs.\ PyTorch's $4,000.0\text{ MB}$, $94.1\%$ vs.\ Unsloth's $1,029.4\text{ MB}$) with exact loss parity ($0.00$) and $4.47 \times 10^{-8}$ gradient diff. Fused SwiGLU achieves $1.123\text{ ms}$ ($1.95\times$ vs.\ PyTorch, $1.98\times$ vs.\ Unsloth), while \texttt{convert\_to\_nvfp4} converts $103$ linear modules ($78.26\text{M}$ parameters) in the $90.79\text{M}$ checkpoint from $149.26\text{ MB}$ (BF16) to $46.65\text{ MB}$ ($3.2\times$ compression, plus $7$ verified layer-0 \texttt{NVFP4StagingBuffer} host-to-device transfers).
 \end{itemize}
 
-\subsection{Long-Context Autoregressive Generation}
+\subsection{Long-Context Generation, Sparse MoE, \& MQAR}
 
-As shown in Figure~\ref{fig:long_context}, Triune GLA fundamentally decouples generation memory and decode latency from prompt context length:
+We report both isolated kernel-level microbenchmarks and end-to-end 90.79M full-model benchmarks to avoid conflating kernel throughput with whole-stack latency:
 \begin{itemize}
-    \item \textbf{Evaluation Protocol}: Evaluated on single-token generation ($T=1$, batch size 1, $H=6$ heads, $d=384, d_k=64$ in BF16) across context lengths $L \in [512, 16384]$ following 50 synchronized CUDA warmup steps and 100 timed steps.
-    \item \textbf{Constant Cache Footprint}: At $L=16,384$ tokens, standard Softmax SDPA KV-cache expands to $24.0\text{ MiB}$ per layer ($24,576\text{ KiB}$), whereas Triune retains a strictly flat $48.0\text{ KiB}$ recurrent matrix—a \textbf{$99.8\%$ memory compression}.
-    \item \textbf{Decode Latency Scaling}: In Softmax SDPA, step decode time scales linearly from $0.0382\text{ ms}$ ($L=512$) to $0.7925\text{ ms}$ ($L=16,384$) as attention dot-products become memory-bandwidth bound over the expanding KV cache. In contrast, Triune GLA decode latency is strictly constant at $\approx 0.100\text{ ms}$ ($0.1048\text{ ms}$ at 512, $0.0999\text{ ms}$ at 16k), achieving a \textbf{$7.94\times$ decode speedup} at $16\text{k}$ context.
+    \item \textbf{Constant-Memory Long-Context Sweeps}: In isolated single-layer kernel profiling ($H=6, d_k=64$, BF16, \texttt{benchmark\_results.json}), Triune GLA sustains a flat $48.0\text{ KiB}$ state footprint vs.\ $24,576\text{ KiB}$ SDPA KV-cache at $L=16,384$ ($99.8\%$ reduction), reaching $0.1399\text{ ms/tok}$ decode vs.\ $1.0226\text{ ms/tok}$ SDPA ($7.31\times$ speedup) and $0.60\text{ ms}$ ($27.17\text{M tok/s}$, $10.07\times$ vs.\ SDPA) at $T=8,192$ prefill. In full multi-head \texttt{VectorisedGLA} sweeps ($H=8, d=512$, \texttt{long\_context\_results.json}; Figure~\ref{fig:long_context}), GLA crosses over SDPA at $L \ge 4,096$ ($1.02\text{ ms}$ vs.\ $1.33\text{ ms}$) and reaches $3.72\text{ ms}$ ($4.40\text{M tok/s}$, $94.69\text{ MB}$) vs.\ SDPA $14.97\text{ ms}$ ($1.09\text{M tok/s}$, $152.50\text{ MB}$) at $L=16,384$ (\textbf{$4.02\times$ prefill speedup, $37.9\%$ lower VRAM}), while decode retains a strictly flat $64.0\text{ KiB}$ state ($99.8\%$ cache reduction vs.\ $32,768\text{ KiB}$ SDPA) and beats SDPA across every context length ($0.151 \to 0.275\text{ ms/tok}$ vs.\ $0.166 \to 1.137\text{ ms/tok}$, delivering \textbf{$4.13\times$ decode speedup at $L=16,384$}).
+    \item \textbf{End-to-End 90.79M Checkpoint Evaluation}: Across full 8-layer inference with 32k projection head (\texttt{full\_model\_e2e.json}), Triune achieves $444,530\text{ tok/s}$ prefill ($B=1, T=2048$, $4.61\text{ ms}$) and $1,546,622\text{ tok/s}$ peak throughput ($B=32, T=512$, $10.59\text{ ms}$; $1,325,868\text{ tok/s}$ at $B=16, T=2048$), $129\text{ tok/s}$ sequential autoregressive decode ($7.723\text{ ms/tok}$), $3.69\times$ Reflex (L2) vs.\ Cortex speedup ($2.44\text{ ms}$ vs.\ $9.00\text{ ms}$), $77.07\text{ tok/s}$ greedy self-speculative decode ($T=0.0$, $63.6\%$ acceptance, exact Cortex parity), $61.99\text{ tok/s}$ rejection-sampled decode ($T=0.7$, $51.3\%$ acceptance), $100.0\%$ high-confidence CALM agreement post-distillation ($\tau=0.20$; $67.2\%$ Python / $79.7\%$ FineWeb overall vs.\ $8.8\%$ / $23.4\%$ uncalibrated raw baseline), and $2.65\times$ lossless text compression across held-out domains (separately tracking \texttt{mean\_pool} vs.\ exact-logit \texttt{expand} forward semantics, $0.0$ max diff).
+    \item \textbf{Production Sparse \texttt{MoE\_FFN} vs.\ Dense}: On checkpoint width ($d=384, E=8, k=2$), \texttt{MoE\_FFN.sparse\_forward} executes $N=4096$ tokens in $1.967\text{ ms}$ vs.\ $14.668\text{ ms}$ dense BMM (\textbf{$7.458\times$ speedup}, $75.0\%$ FLOP reduction) and $N=1$ in $0.647\text{ ms}$ vs.\ $0.878\text{ ms}$ ($1.358\times$, $0.0$ max diff). In broader isolated sweeps (\texttt{moe\_ffn\_sparse\_vs\_dense.json}), $d=1536, E=8$ reaches \textbf{$4.774\times$} ($k=1$) and \textbf{$5.450\times$} ($k=2$) at $N=4096$, while legacy Python-loop \texttt{MoERoutingBlock} is reported separately ($9.56\text{ ms}$ vs.\ $9.428\text{ ms}$).
+    \item \textbf{Warmed-Up MQAR Associative Recall}: On causal bigram induction key-value retrieval with 3-iteration per-length warmup (\texttt{mqar\_associative\_recall\_results.json}, $T \in \{256..2048\}$), Softmax, GLA, and Gated DeltaNet all achieve $100.0\%$ standard recall (GLA scaling cleanly from $0.31 \to 0.37\text{ ms}$ vs.\ Softmax $0.17 \to 0.97\text{ ms}$ at $T=2048$). Under $50\%$ key-overwrite MQAR, Gated DeltaNet maintains \textbf{$100.0\%$} overwrite recall across every length ($0.27 \to 1.80\text{ ms}$) vs.\ GLA ($62.5\%$–$87.5\%$) and Softmax ($37.5\%$–$62.5\%$).
 \end{itemize}
 
 \section{Related Work}
@@ -367,6 +422,15 @@ As shown in Figure~\ref{fig:long_context}, Triune GLA fundamentally decouples ge
 \section{Limitations}
 
 While GLA achieves constant decoding memory, linear attention architectures can exhibit reduced associative recall capacity on complex multi-query retrieval benchmarks (MQAR) relative to full softmax attention. Additionally, dynamic early exits introduce non-uniform batch execution lengths that require careful padding management during batched inference.
+
+\section{Reproducibility \& Artifact Provenance}
+
+All systems, model kernels, benchmark drivers, raw telemetry JSONs, and automated regression checks are versioned in the repository:
+\begin{itemize}\raggedright\setlength{\itemsep}{2pt}
+    \item \textbf{Architecture \& Kernels}: \texttt{triune/model/transformer.py} (per-token compacted CALM exits, \texttt{compress\_mode}), \texttt{triune/model/moe.py} (default sparse \texttt{MoE\_FFN} with zero-sync $N_{\text{tok}}=1$ BMM), \texttt{triune/model/speculative.py} ($T=0$ greedy exact match and Leviathan et~al.\ rejection sampling), \texttt{triune/model/fp8.py} \& \texttt{triune/kernels/fast\_nvfp4.py} (FP8 E4M3 and packed 4-bit NVFP4 modules), and \texttt{triune/kernels/fast\_gla.py} (GLA \& Gated DeltaNet Triton/PyTorch paths).
+    \item \textbf{Benchmark Drivers \& Artifacts}: \texttt{scripts/benchmark\_full\_model\_e2e.py} $\to$ \texttt{benchmarks/full\_model\_e2e.json}; \texttt{scripts/benchmark\_competitors.py} $\to$ \texttt{benchmarks/benchmark\_results.json}; \texttt{benchmarks/moe\_ffn\_sparse\_vs\_dense.py} $\to$ \texttt{benchmarks/moe\_ffn\_sparse\_vs\_dense.json}; \texttt{scripts/benchmark\_long\_context.py} $\to$ \texttt{benchmarks/long\_context\_results.json}; \texttt{scripts/benchmark\_associative\_recall.py} $\to$ \texttt{benchmarks/mqar\_associative\_recall\_results.json}.
+    \item \textbf{Automated Verification}: Validated via \texttt{pytest tests/test\_pipeline\_integration.py tests/test\_self\_speculative\_decoding.py tests/test\_benchmark\_validity.py} on PyTorch 2.14.1+cu132, CUDA 13.2 (RTX 5070 Laptop GPU).
+\end{itemize}
 
 \section{Conclusion}
 

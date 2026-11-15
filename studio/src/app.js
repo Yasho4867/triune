@@ -6876,13 +6876,13 @@
           kernel: 'triune/kernels/fast_muon.py'
         },
         tier2_centroid: {
-          name: 'Adaptive SVD CentroidSteer',
+          name: 'Steered Triangular Subspace (sCholQR2)',
           param_count: 0,
           param_pct: 0,
           target: 'MoE Routed Experts (Feed-Forward Blocks)',
           vram_saving: 'Not measured',
-          basis_transport: 'Active (T = P_old^T @ P_new)',
-          steer_invariant: 'P^T c_orth = 0 (sin θ scaling)'
+          basis_transport: 'Active (St(r+1, d) Retraction)',
+          steer_invariant: 'Q_L^T c_perp = 0 (Kahan-Parlett)'
         },
         tier3_adamw: {
           name: 'Decoupled AdamW / 8-bit AdamW',
@@ -6916,11 +6916,11 @@
                 'Fused fast_muon.py'
               ),
               e('span', { className: 'badge-ckpt-active', style: { background: 'rgba(217, 119, 6, 0.15)', color: 'var(--accent-gold, #d97706)', border: 'none' } },
-                'P^T c_orth = 0'
+                'Q_L^T c_perp = 0'
               )
             ),
             e('p', { style: { color: 'var(--text-muted)', fontSize: '12.5px', margin: '4px 0 0 0' } },
-              'Dynamic Parameter Partitioning: 5th-Order Newton-Schulz Muon (Attention) + Adaptive SVD CentroidSteer (MoE Experts) + Decoupled AdamW (1D Norms & Router)'
+              'Dynamic Parameter Partitioning: 5th-Order Newton-Schulz Muon (Attention) + Steered Triangular Subspace sCholQR2 (MoE Experts) + Decoupled AdamW (1D Norms & Router)'
             )
           )
         ),

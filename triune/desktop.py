@@ -129,9 +129,7 @@ def launch_desktop_app(
     server_already_running = False
     if _is_port_in_use(port):
         if native_host:
-            raise RuntimeError(
-                f"Studio port {port} is already in use. Choose another port, then retry."
-            )
+            raise RuntimeError(f"Studio port {port} is already in use. Choose another port, then retry.")
         if _is_triune_server_alive(port):
             print(f"[Studio] Connected to existing Triune Studio backend on http://127.0.0.1:{port}/")
             server_already_running = True

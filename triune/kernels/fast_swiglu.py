@@ -71,9 +71,9 @@ class _FusedSwiGLUFunction(torch.autograd.Function):
             ctx.save_for_backward(g, u)
             n_elements = g.numel()
             out = torch.empty_like(g)
-            BLOCK_SIZE = 1024
+            BLOCK_SIZE = 2048
             grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
-            _triton_swiglu_fwd_kernel[grid](g, u, out, n_elements, BLOCK_SIZE=BLOCK_SIZE)
+            _triton_swiglu_fwd_kernel[grid](g, u, out, n_elements, BLOCK_SIZE=BLOCK_SIZE, num_warps=8)
             return out
         ctx.save_for_backward(gate, up)
         return _fused_swiglu_fwd(gate, up)
@@ -88,15 +88,29 @@ class _FusedSwiGLUFunction(torch.autograd.Function):
             n_elements = g.numel()
             grad_gate = torch.empty_like(g)
             grad_up = torch.empty_like(u)
-            BLOCK_SIZE = 1024
+            BLOCK_SIZE = 2048
             grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
-            _triton_swiglu_bwd_kernel[grid](go, g, u, grad_gate, grad_up, n_elements, BLOCK_SIZE=BLOCK_SIZE)
+            _triton_swiglu_bwd_kernel[grid](
+                go, g, u, grad_gate, grad_up, n_elements, BLOCK_SIZE=BLOCK_SIZE, num_warps=8
+            )
             return grad_gate, grad_up
         return _fused_swiglu_bwd(grad_output, gate, up)
 
 
 def fast_swiglu(gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
-    """Compute fused SwiGLU activation with analytical backward pass."""
+    """Compute fused SwiGLU activation with zero-overhead CUDA dispatch."""
+    needs_grad = torch.is_grad_enabled() and (gate.requires_grad or up.requires_grad)
+    if not needs_grad and is_turbo_mode_enabled() and is_triton_available() and gate.is_cuda:
+        g = gate.contiguous() if not gate.is_contiguous() else gate
+        u = up.contiguous() if not up.is_contiguous() else up
+        n_elements = g.numel()
+        out = torch.empty_like(g)
+        BLOCK_SIZE = 2048
+        grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+        _triton_swiglu_fwd_kernel[grid](g, u, out, n_elements, BLOCK_SIZE=BLOCK_SIZE, num_warps=8)
+        return out
+    if needs_grad and gate.is_cuda and gate.numel() < 65536:
+        return F.silu(gate) * up
     return _FusedSwiGLUFunction.apply(gate, up)
 
 

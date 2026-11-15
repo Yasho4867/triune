@@ -1,10 +1,7 @@
-import math
 import torch
-import torch.nn.functional as F
-import pytest
 
 from triune.model.manifold_embedding import UniversalAdaptiveEmbedding
-from triune.optim.manifold import UnitaryManifoldOptimizer, LowSpaceWeightProjector
+from triune.optim.manifold import LowSpaceWeightProjector, UnitaryManifoldOptimizer
 
 
 def test_adaptive_embedding_forward_and_logits():

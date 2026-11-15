@@ -73,4 +73,7 @@ __all__ = [
     "TriuneLatentPredictor",
     "TriuneLatentObjective",
     "TriuneContinuousExitRouter",
+    "ContinuousLatentExitRouter",
+    "JointEmbeddingObjective",
+    "LatentPredictor",
 ]

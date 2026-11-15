@@ -1,94 +1,45 @@
-# Contributing to Triune Transformer
+# Contributing & Empirical Verification Policy
 
-Thank you for your interest in contributing to Triune Transformer! We welcome contributions ranging from bug fixes, architecture optimizations, documentation, and DAG plugins to new research recipes.
-
----
-
-## 1. Architecture Overview
-
-Triune Transformer is a hierarchical multi-exit neural architecture with gated linear attention and consumer-GPU layer streaming:
-
-- **Core Hierarchy**:
-  - **Reflex Tier** (Exits at early layer, e.g., Layer 6): Fast low-latency generation for routine tokens.
-  - **Limbic Tier** (Exits at intermediate layer, e.g., Layer 16): Contextual reasoning.
-  - **Cortex Tier** (Final exit, Layer 24): Full multi-head capacity and deep MoE representation.
-- **Attention & FFN**:
-  - Gated Linear Attention (`VectorisedGLA`) with recurrent $O(1)$ state stepping during inference.
-  - Sparse Mixture of Experts (`MoE_FFN`) with top-$k$ routing, centroid steering, and auxiliary load balancing.
-- **Runtime & Execution**:
-  - `LayerStreamingEngine`: CPU master parameter storage with GPU prefetching and D2H gradient transfer, allowing 7B models to train on 8GB VRAM consumer GPUs.
-  - `DAGParser` & `ExecutionEngine`: Strongly typed port DAG execution graph connecting tokenizer, dataloader, model blocks, losses, optimizers, and exporters.
+Thank you for contributing to **Triune AI**. To maintain scientific rigor across model code, custom kernels, benchmarks, papers, and CI, every change must satisfy the engineering, taxonomy, and verification standards below.
 
 ---
 
-## 2. Setting Up Your Development Environment
+## 1. Benchmark Taxonomy & Scientific Claims
 
-Triune Transformer is developed primarily on Linux / WSL2 (Ubuntu 22.04 / 24.04) with Python 3.10 or 3.11.
+Always classify and label performance numbers using clear categories so isolated microkernels are never conflated with end-to-end model throughput:
 
-### Prerequisites
-- Python 3.10+
-- PyTorch 2.2+ (CUDA 12.1+ recommended for GPU training)
-- Node.js 18+ (for Studio UI development)
-
-### Clone and Install
-```bash
-git clone https://github.com/Yasho4867/TriuneTransformer.git
-cd TriuneTransformer
-
-# Create virtual environment
-python3 -m venv venv
-source venv/bin/activate
-
-# Install dependencies in editable mode
-pip install -e .
-```
+1. **Isolated Kernel Microbenchmarks**: Single-operator or single-layer sweeps (e.g., `scripts/benchmark_competitors.py`, `benchmarks/moe_ffn_sparse_vs_dense.py`). Always specify tensor dimensions, batch/sequence shape, precision (`bf16`/`fp32`), and warmup count.
+2. **End-to-End Model Throughput (`90.79M` / `64.21M` active)**: Complete checkpoint forward/decode benchmarks including embeddings, MoE routing, exits, and vocabulary projection (`scripts/benchmark_full_model_e2e.py` -> `benchmarks/FULL_MODEL_E2E_REPORT.md`).
+3. **Multi-Layer Wrapper vs. Legacy Block Diagnostics**: Distinguish multi-layer eager Python sweeps (`scripts/benchmark_long_context.py`) and legacy diagnostic modules (e.g., `MoERoutingBlock`) from production fast paths (`MoE_FFN` with `use_sparse_eval=True`).
+4. **Tokenizer Compression vs. Model Computation**: Report held-out text compression ratios (`compress_mode` / lossless reconstruction) separately from compute-equivalent logit verification (`compress_mode="expand"`, `0.0` max logit diff vs. base tokenization).
+5. **Speculative & Early-Exit Clarity**:
+   - Explicitly restrict 100% token-for-token Cortex parity claims to **greedy decoding (`T=0.0`)**.
+   - Stochastic speculative decoding (`T > 0.0`) uses Leviathan et al. rejection sampling (`exact_distribution`).
+   - Disclose checkpoint calibration state when reporting CALM agreement (e.g., uncalibrated single-exit checkpoint `triune_step_24501.pt` vs. jointly calibrated multi-exit runs).
 
 ---
 
-## 3. Running the Test Suite
+## 2. Mathematical Invariants & Architecture Guards
 
-We maintain a comprehensive suite of unit, integration, numerical parity, and streaming lifecycle tests:
+Changes to core subsystems must preserve and test:
+- **CentroidSteer (`triune/optim/centroid.py`, `triune/ops/centroid_steer.py`)**: `sCholQR2` orthogonality (`||Q^T Q - I||_F`), sliced Householder fallback under rank deficiency, upper-triangular projection core (`R = triu(S_bar)`), and the non-refresh steering moment-zeroing invariant (`M/V` column & row `r+1` zeroed whenever `needs_steer_refresh` rotates steering axes).
+- **Layer Streaming (`triune/runtime/staging.py`, `triune/runtime/streaming.py`)**: Write-once parameter forward snapshots and `is_buffer=True` device-mutation copy-back across `release_gpu(clear_snapshot=False)`.
+- **Compacted Per-Token Exits (`triune/model/transformer.py`)**: True per-token / per-sample CALM margin gating (`last_calm_exit_depths`) and GLA state scatter (`_scatter_cache`) across cached autoregressive steps.
+- **Production Sparse MoE (`triune/model/moe.py`)**: `use_sparse_eval=True` by default, zero-sync `N_tok == 1` GPU path, and parity against dense evaluation.
+
+---
+
+## 3. Mandatory Pre-Push Verification & CI Checks
+
+Before committing or pushing to `main`:
 
 ```bash
-# Run all unit tests
+python -m ruff check --select=E9,F63,F7,F82 .
+python -m compileall -q triune
+pytest -q
 python -m unittest discover tests
-
-# Run specific test modules
-python -m unittest tests/test_ecosystem.py
-python -m unittest tests/test_model_semantics_and_checkpoint.py
-python -m unittest tests/test_streaming_training_parity.py
+python -m unittest tests.test_pipeline_integration tests.test_self_speculative_decoding tests.test_staging_invariants tests.test_triangular_core_integrity tests.test_benchmark_validity
+python -m build --wheel
 ```
 
-Before submitting a PR, make sure:
-1. All unit tests pass cleanly without errors or regressions.
-2. No mock or simulated values are returned from active computation nodes in the DAG engine.
-3. Memory safety invariants are preserved (e.g. pinned memory buffers, autograd graph continuity).
-
----
-
-## 4. Coding Standards
-
-- **Python Style**: Follow PEP 8 guidelines. Type hints are encouraged across all core modules (`from __future__ import annotations`).
-- **Autograd Integrity**: Avoid in-place modifications (`.index_copy_()`, `.copy_()`) on tensors that are tracked in the computation graph. Always verify backward gradient flow.
-- **Device & Precision Safety**:
-  - Always stage weights to CPU before saving checkpoints or during initial hydration (`map_location="cpu"`).
-  - Explicitly verify hardware capabilities before invoking vendor-specific operations (e.g., `cublas_scaled_mm` requires Ada Lovelace / Compute Capability 8.9+).
-- **DAG Ports & Contracts**:
-  - Nodes must declare explicit input/output port types (`PortType`) and execution contracts (`NodeExecutionType`: `execution` vs `specification`).
-  - Do NOT hardcode fake throughput, synthetic delay loops, or fabricated loss values in the UI or DAG handlers.
-
----
-
-## 5. Pull Request Guidelines
-
-1. **Branch Naming**: Use descriptive branch names: `feature/gla-chunking`, `fix/streaming-prefetch`, `docs/byok-setup`.
-2. **Commit Messages**: Write concise, informative commit messages explaining *why* a change was made.
-3. **Tests**: Include unit tests covering new features or reproducing any bugs being fixed.
-4. **Documentation**: Update relevant docs or docstrings when modifying public APIs or configuration schemas.
-
----
-
-## 6. Questions & Community
-
-- Open an issue on GitHub for bug reports or feature proposals.
-- For architectural discussions, refer to `audit_report_final.md` and related design documents in the repository.
+All checks and every GitHub Actions matrix job (`Python 3.10`, `3.11`, `3.12`, `3.13`) must pass completely (`conclusion == "success"`). Never weaken assertions, skip real failures, or check in untracked private scratch/agent directives (keep `WORKSPACE_RULES.md` untracked and gitignored).

@@ -15,9 +15,8 @@ import platform
 import shutil
 import subprocess
 import sys
-import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 # Reconfigure stdout/stderr for Unicode support on Windows cp1252 consoles
 if sys.platform == "win32":
@@ -130,7 +129,9 @@ class HardwareProfile:
         try:
             smi = subprocess.run(
                 ["nvidia-smi", "--query-gpu=name,memory.total,driver_version", "--format=csv,noheader,nounits"],
-                capture_output=True, text=True, timeout=4.0
+                capture_output=True,
+                text=True,
+                timeout=4.0,
             )
             if smi.returncode == 0 and smi.stdout.strip():
                 parts = [p.strip() for p in smi.stdout.strip().split("\n")[0].split(",")]
@@ -166,7 +167,9 @@ class HardwareProfile:
                     # Check if WSL has nvidia-smi
                     wsl_smi = subprocess.run(
                         ["wsl.exe", "nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
-                        capture_output=True, text=True, timeout=8.0
+                        capture_output=True,
+                        text=True,
+                        timeout=8.0,
                     )
                     if wsl_smi.returncode == 0 and wsl_smi.stdout.strip():
                         self.wsl_has_gpu = True
@@ -239,7 +242,9 @@ def setup_venv(venv_path: Path, python_base: str = sys.executable) -> Tuple[Path
 
     # Upgrade pip and packaging tools
     log_info("Ensuring packaging tools (pip, setuptools, wheel) are latest...")
-    run_command([str(py_bin), "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel", "--quiet"], show_output=False)
+    run_command(
+        [str(py_bin), "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel", "--quiet"], show_output=False
+    )
     log_success("Packaging tools up to date.")
 
     return py_bin, pip_bin
@@ -268,7 +273,9 @@ def install_pytorch(py_bin: Path, hw: HardwareProfile, cuda_choice: str = "auto"
         try:
             target_version = subprocess.run(
                 [str(py_bin), "-c", "import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}')"],
-                capture_output=True, text=True, timeout=5.0,
+                capture_output=True,
+                text=True,
+                timeout=5.0,
             )
             py_major, py_minor = (int(part) for part in target_version.stdout.strip().split(".", 1))
         except (OSError, subprocess.SubprocessError, ValueError):
@@ -312,8 +319,14 @@ def install_pytorch(py_bin: Path, hw: HardwareProfile, cuda_choice: str = "auto"
         # wheel from a fallback index, leaving Studio online but inference on
         # CPU. Verify the actual runtime before calling GPU setup successful.
         probe = subprocess.run(
-            [str(py_bin), "-c", "import torch; print('CUDA_OK' if torch.cuda.is_available() else 'CUDA_UNAVAILABLE', torch.__version__, torch.version.cuda)"],
-            capture_output=True, text=True, timeout=30.0,
+            [
+                str(py_bin),
+                "-c",
+                "import torch; print('CUDA_OK' if torch.cuda.is_available() else 'CUDA_UNAVAILABLE', torch.__version__, torch.version.cuda)",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30.0,
         )
         if "CUDA_OK" not in probe.stdout:
             log_error(
@@ -391,19 +404,41 @@ def create_desktop_shortcut(hw: HardwareProfile, create_shortcuts: bool = True) 
     native_studio_candidates = (
         WORKSPACE_ROOT / "TriuneStudio.exe",
         WORKSPACE_ROOT / "studio" / "windows" / "publish" / "TriuneStudio.exe",
-        WORKSPACE_ROOT / "studio" / "windows" / "TriuneStudio.Windows" / "bin" / "Release" / "net10.0-windows" / "TriuneStudio.exe",
-        WORKSPACE_ROOT / "studio" / "windows" / "TriuneStudio.Windows" / "bin" / "Release" / "net10.0-windows" / "win-x64" / "TriuneStudio.exe",
+        WORKSPACE_ROOT
+        / "studio"
+        / "windows"
+        / "TriuneStudio.Windows"
+        / "bin"
+        / "Release"
+        / "net10.0-windows"
+        / "TriuneStudio.exe",
+        WORKSPACE_ROOT
+        / "studio"
+        / "windows"
+        / "TriuneStudio.Windows"
+        / "bin"
+        / "Release"
+        / "net10.0-windows"
+        / "win-x64"
+        / "TriuneStudio.exe",
     )
     native_studio_exe = next((path for path in native_studio_candidates if path.is_file()), studio_bat)
     native_setup_candidates = (
         WORKSPACE_ROOT / "TriuneStudioSetup.exe",
         WORKSPACE_ROOT / "studio" / "windows" / "publish" / "TriuneStudioSetup.exe",
-        WORKSPACE_ROOT / "studio" / "windows" / "TriuneStudio.Installer" / "bin" / "Release" / "net10.0-windows" / "TriuneStudioSetup.exe",
+        WORKSPACE_ROOT
+        / "studio"
+        / "windows"
+        / "TriuneStudio.Installer"
+        / "bin"
+        / "Release"
+        / "net10.0-windows"
+        / "TriuneStudioSetup.exe",
     )
     native_setup_exe = next((path for path in native_setup_candidates if path.is_file()), None)
 
     # Create studio/TriuneStudio.sh for Linux/macOS
-    sh_content = f"""#!/usr/bin/env bash
+    sh_content = """#!/usr/bin/env bash
 cd "$(dirname "$0")/.."
 if [ -f "studio/studio_env/bin/python" ]; then
     studio/studio_env/bin/python scripts/launch_studio.py "$@"
@@ -513,6 +548,7 @@ def register_cli_on_path(py_bin: Path, hw: HardwareProfile, enable_path: bool = 
     if hw.is_windows:
         try:
             import winreg
+
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment", 0, winreg.KEY_READ | winreg.KEY_WRITE) as key:
                 try:
                     current_path, reg_type = winreg.QueryValueEx(key, "Path")
@@ -557,7 +593,9 @@ def verify_installation(py_bin: Path, hw: HardwareProfile, allow_cpu: bool = Fal
     try:
         target_python = subprocess.run(
             [str(py_bin), "-c", "import platform,sys; print(sys.version.split()[0], platform.architecture()[0])"],
-            capture_output=True, text=True, timeout=5.0,
+            capture_output=True,
+            text=True,
+            timeout=5.0,
         )
         runtime_description = target_python.stdout.strip() if target_python.returncode == 0 else "unavailable"
     except (OSError, subprocess.SubprocessError):
@@ -610,8 +648,15 @@ def verify_installation(py_bin: Path, hw: HardwareProfile, allow_cpu: bool = Fal
 # ---------------------------------------------------------------------------
 def main() -> None:
     parser = argparse.ArgumentParser(description="Triune Studio Comprehensive Automated Installer")
-    parser.add_argument("--venv", default="studio/studio_env", help="Target virtual environment directory (default: studio/studio_env)")
-    parser.add_argument("--cuda", default="auto", choices=["auto", "13.2", "13.0", "12.6", "12.4", "12.1", "11.8", "cpu"], help="Target CUDA version")
+    parser.add_argument(
+        "--venv", default="studio/studio_env", help="Target virtual environment directory (default: studio/studio_env)"
+    )
+    parser.add_argument(
+        "--cuda",
+        default="auto",
+        choices=["auto", "13.2", "13.0", "12.6", "12.4", "12.1", "11.8", "cpu"],
+        help="Target CUDA version",
+    )
     parser.add_argument("--skip-torch", action="store_true", help="Skip PyTorch installation")
     parser.add_argument("--no-shortcuts", action="store_true", help="Skip Desktop and Start Menu shortcut creation")
     parser.add_argument("--no-path", action="store_true", help="Skip registering triune CLI on User PATH")
@@ -690,7 +735,7 @@ def main() -> None:
     if not healthy:
         raise SystemExit(1)
 
-    print(f"Launch commands:")
+    print("Launch commands:")
     print(f"  • Windows: Double-click {BOLD}studio\\TriuneStudio.bat{RESET} or desktop icon 'Triune Studio'")
     print(f"  • Linux/macOS: Run {BOLD}studio/TriuneStudio.sh{RESET}")
     print(f"  • CLI / Custom Port: {BOLD}python scripts/launch_studio.py --port 8000{RESET}\n")

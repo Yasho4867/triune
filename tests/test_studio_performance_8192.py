@@ -9,10 +9,8 @@ Verifies:
 6. CSS containment (content-visibility: auto) and compositor layer promotion in style.css.
 """
 
-from pathlib import Path
-import pytest
-import re
 import time
+from pathlib import Path
 
 
 def test_canvas_pulse_throttling_and_particle_capping():
@@ -144,9 +142,9 @@ def test_8192_token_text_parsing_benchmark():
         "> Scaled benchmark of the 3-Tier Reflex-Limbic-Cortex execution path.",
     ]
     for i in range(120):
-        long_markdown.append(f"## Section {i+1}: Manifold Convergence & Stiefel Retraction")
+        long_markdown.append(f"## Section {i + 1}: Manifold Convergence & Stiefel Retraction")
         long_markdown.append(
-            f"Step {i+1}: Invariant test verify that the orthogonal projection step preserves Riemannian distance. "
+            f"Step {i + 1}: Invariant test verify that the orthogonal projection step preserves Riemannian distance. "
             f"Entropy bound is estimated at {0.04 + i * 0.001:.3f} bits with high confidence."
         )
         long_markdown.append("- Deductive observation: Early reflex bypass cuts prefill latency by 68%.")
@@ -221,4 +219,6 @@ def test_8192_token_text_parsing_benchmark():
 
     # Fast block parsing time should be under 5ms
     assert elapsed_ms < 20.0, f"Block parsing took too long: {elapsed_ms:.2f}ms"
-    print(f"\n[8192-Token Virtualization Benchmark]: {approx_tokens} tokens parsed into {len(blocks)} blocks in {elapsed_ms:.2f}ms. Mounted DOM window: {visible_mounted} blocks (120 FPS).")
+    print(
+        f"\n[8192-Token Virtualization Benchmark]: {approx_tokens} tokens parsed into {len(blocks)} blocks in {elapsed_ms:.2f}ms. Mounted DOM window: {visible_mounted} blocks (120 FPS)."
+    )

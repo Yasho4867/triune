@@ -6,12 +6,12 @@
 
 import math
 import unittest
-import torch
-import torch.nn.functional as F
 
+import torch
+
+from triune.data.dynamic_tokenizer import DynamicTokenizer
 from triune.model.jev import JEVObjective
 from triune.runtime.parallel_engine import MoERoutingBlock
-from triune.data.dynamic_tokenizer import DynamicTokenizer
 
 
 class TestMoESparseExecution(unittest.TestCase):
@@ -64,7 +64,7 @@ class TestJEVGeodesicSTP(unittest.TestCase):
         sin_05 = math.sin(0.5)
         z_outside = torch.tensor([[cos_05, sin_05, 0.0]])
         loss_outside = obj.compute_stp_loss(z_outside, z_t)
-        expected = (0.5 ** 2) - (0.2 ** 2)
+        expected = (0.5**2) - (0.2**2)
         self.assertAlmostEqual(loss_outside.item(), expected, places=4)
 
 
@@ -90,13 +90,13 @@ def train_step(model, batch, optimizer, scheduler):
         dec_code = tok.decode(enc_code.ids)
         self.assertEqual(dec_code.strip(), code_sample.strip())
 
-        prose_sample = '''
+        prose_sample = """
 The Triune Transformer architecture introduces hierarchical dynamic early exits,
 vectorized gated linear attention with constant-memory recurrent state propagation,
 and Riemannian manifold centroid steering optimization. By replacing traditional
 quadratic attention with O(N) linear-time gated recurrence, the framework achieves
 unprecedented context scaling with strict mathematical guarantees.
-'''
+"""
         enc_prose = tok.encode(prose_sample, compress=True)
         self.assertGreaterEqual(enc_prose.compression_ratio, 2.0)
         dec_prose = tok.decode(enc_prose.ids)

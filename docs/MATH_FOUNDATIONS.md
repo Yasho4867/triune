@@ -4,90 +4,66 @@ This document details the mathematical formulations, invariants, and derivations
 
 ---
 
-## 1. Symmetrical Dual-Sided Centroid-Steered GaLore
+## 1. Batched sCholQR2 Triangular Core & Centroid-Steered Stiefel Optimization
 
-### 1.1 SVD-Based Gradient Subspace Projections
+### 1.1 Alternating Krylov Subspace Iteration on the Stiefel Manifold
 
-Let $W \in \mathbb{R}^{m \times n}$ denote the parameter matrix of a linear projection layer, and $G = \nabla_W \mathcal{L} \in \mathbb{R}^{m \times n}$ denote the full-rank gradient of the loss $\mathcal{L}$ with respect to $W$.
+Let $W \in \mathbb{R}^{m \times n}$ denote a routed expert weight matrix ($m \le n$ WLOG) and $G = \nabla_W \mathcal{L} \in \mathbb{R}^{m \times n}$ denote its stochastic gradient. Rather than computing slow single-matrix SVDs, `CentroidSteerOptimizer` (`triune/optim/centroid.py`, `triune/ops/centroid_steer.py`) constructs left and right orthonormal projection bases $Q_L \in \operatorname{St}(r, m)$ and $Q_R \in \operatorname{St}(r, n)$ via three alternating Krylov subspace passes with a Gaussian sketch $\Omega \in \mathbb{R}^{n \times r}$:
 
-In low-rank gradient projection (GaLore), the gradient $G$ is projected into a lower-rank subspace to reduce optimizer state memory. The projection direction is chosen based on matrix dimensions:
+$$Y_0 = G\Omega \in \mathbb{R}^{m \times r}, \quad Q_L^{(0)} = \operatorname{sCholQR2}(Y_0)$$
+$$Z = G^T Q_L^{(0)} \in \mathbb{R}^{n \times r}, \quad Q_R = \operatorname{sCholQR2}(Z)$$
+$$Y = G Q_R \in \mathbb{R}^{m \times r}, \quad Q_L, R_L = \operatorname{qr}(Y)$$
 
-#### Case 1: Left-Side Projection ($m \ge n$)
-For layers expanding the hidden dimension ($m \ge n$), projection occurs from the left:
-$$P \in \mathbb{R}^{m \times r}, \quad P^T P = I_r \quad (r \ll \min(m, n))$$
+where $\operatorname{sCholQR2}(Y)$ performs two-pass shifted Cholesky-QR with positive shift regularization $\epsilon_{\text{shift}} = 10^{-7}$ across column-normalized iterates:
+$$\tilde{Y} = Y D^{-1}, \quad A_1 = \tilde{Y}^T \tilde{Y} + \epsilon_{\text{shift}} I_r = L_1 L_1^T, \quad Q_1 = \tilde{Y} L_1^{-T}$$
+$$\hat{Q}_1 = Q_1 D_1^{-1}, \quad A_2 = \hat{Q}_1^T \hat{Q}_1 + \epsilon_{\text{shift}} I_r = L_2 L_2^T, \quad Q = \hat{Q}_1 L_2^{-T}$$
 
-The projected gradient $\tilde{G}_L \in \mathbb{R}^{r \times n}$ is:
-$$\tilde{G}_L = P^T G$$
-
-The update step $\Delta W \in \mathbb{R}^{m \times n}$ is reconstructed via:
-$$\Delta W = P \tilde{G}_{L, \text{opt}}$$
-
-#### Case 2: Right-Side Projection ($m < n$)
-For layers contracting the hidden dimension ($m < n$), projection occurs from the right:
-$$Q \in \mathbb{R}^{n \times r}, \quad Q^T Q = I_r \quad (r \ll \min(m, n))$$
-
-The projected gradient $\tilde{G}_R \in \mathbb{R}^{m \times r}$ is:
-$$\tilde{G}_R = G Q$$
-
-The update step is reconstructed via:
-$$\Delta W = \tilde{G}_{R, \text{opt}} Q^T$$
+For rank-deficient routed experts ($k_{\text{tokens}} < r$) or conditioning failures ($\hat{\kappa}(A_2) > 10^4$, $\|Q^T Q - I_r\|_F > 10^{-4}$, or $\min_j \|Y_{:,j}\|_2 \le 10^{-12}$), `batched_qr` selectively dispatches only failing batch indices via sliced Householder QR fallback while skipping zero-gradient unrouted experts ($k_{\text{tokens}} = 0$).
 
 ---
 
-### 1.2 Centroid-Steered Subspace Augmentation
+### 1.2 Kahan-Parlett Centroid Steering & Basis Augmentation
 
-Let $\mathcal{C} = \{c_e\}_{e=1}^E$ denote activation centroids for expert $e$, where $c_e \in \mathbb{R}^d$ is the mean representation vector of tokens routed to expert $e$.
+Let $c_e = \frac{1}{|\mathcal{S}_e|} \sum_{i \in \mathcal{S}_e} x_i \in \mathbb{R}^m$ denote the empirical activation centroid of tokens routed to expert $e$. To inject active routing geometry without perturbing existing gradient principal directions, $c_e$ is projected into the orthogonal complement of $Q_L$ via twice re-orthogonalization (Kahan-Parlett):
 
-For weight matrix $W_e \in \mathbb{R}^{m \times n}$, let $c_{\text{projected}} \in \mathbb{R}^{d_{\text{proj}}}$ match the active projection dimension ($d_{\text{proj}} = m$ for left-projection, $d_{\text{proj}} = n$ for right-projection).
+$$c_\perp = (I - Q_L Q_L^T)^2 c_e, \quad \tilde{c}_\perp = \begin{cases} c_\perp / \|c_\perp\|_2 & \text{if } \|c_\perp\|_2 > \tau \\ \mathbf{0}_{m \times 1} & \text{otherwise} \end{cases}$$
 
-Let $\Phi \in \mathbb{R}^{d_{\text{proj}} \times r}$ denote the active projection basis ($P$ or $Q$). The orthogonal projection of $c_{\text{projected}}$ onto the column space of $\Phi$ is:
-$$c_{\text{proj}} = \Phi \Phi^T c_{\text{projected}}$$
+with stability threshold $\tau = 10^{-8}$. The dual right steering direction is constructed via gradient action $v = G^T \tilde{c}_\perp$:
+$$v_\perp = (I - Q_R Q_R^T)^2 v, \quad \tilde{v}_\perp = \begin{cases} v_\perp / \|v_\perp\|_2 & \text{if } \|c_\perp\|_2 > \tau \text{ and } \|v_\perp\|_2 > \tau \\ \mathbf{0}_{n \times 1} & \text{otherwise} \end{cases}$$
 
-The residual component orthogonal to $\Phi$ is:
-$$c_{\text{res}} = c_{\text{projected}} - c_{\text{proj}}$$
+When both stability thresholds pass, the orthonormal bases are augmented on $\operatorname{St}(r+1, m)$ and $\operatorname{St}(r+1, n)$:
+$$\bar{Q}_L = [Q_L, \tilde{c}_\perp] \in \mathbb{R}^{m \times (r+1)}, \quad \bar{Q}_R = [Q_R, \tilde{v}_\perp] \in \mathbb{R}^{n \times (r+1)}$$
 
-Normalizing yields an orthonormal steering vector:
-$$c_{\text{orth}} = \frac{c_{\text{res}}}{\|c_{\text{res}}\|_2}, \quad \text{where } \Phi^T c_{\text{orth}} = \mathbf{0}_r$$
-
-The projection subspace is augmented with $c_{\text{orth}}$ scaled by steering factor $\alpha \ge 0$:
-$$\Phi_{\text{aug}} = \begin{bmatrix} \Phi & \alpha c_{\text{orth}} \end{bmatrix} \in \mathbb{R}^{d_{\text{proj}} \times (r + 1)}$$
+When either threshold fails, $\tilde{c}_\perp = \mathbf{0}$ and $\tilde{v}_\perp = \mathbf{0}$, causing clean fallback to effective rank $r$ without degeneracy.
 
 ---
 
-### 1.3 Subspace Orthogonality
+### 1.3 Augmented Upper-Triangular Core & Moment-Zeroing Invariant
 
-#### Theorem 1
-Let $\Phi \in \mathbb{R}^{d_{\text{proj}} \times r}$ satisfy $\Phi^T \Phi = I_r$, and let $c_{\text{orth}} \in \mathbb{R}^{d_{\text{proj}}}$ satisfy $\|c_{\text{orth}}\|_2 = 1$ and $\Phi^T c_{\text{orth}} = \mathbf{0}_r$. Then the Gram matrix of $\Phi_{\text{aug}} = \begin{bmatrix} \Phi & \alpha c_{\text{orth}} \end{bmatrix}$ is block-diagonal:
+#### Theorem 1 (Upper-Triangular Krylov Projection Core)
+Given $\tilde{c}_\perp \perp \operatorname{col}(Q_L)$ and thin QR $G Q_R = Q_L R_L$, the projected core matrix $\bar{S} = \bar{Q}_L^T G \bar{Q}_R \in \mathbb{R}^{(r+1) \times (r+1)}$ is algebraically upper triangular:
 
-$$\Phi_{\text{aug}}^T \Phi_{\text{aug}} = \begin{bmatrix} I_r & \mathbf{0}_r \\ \mathbf{0}_r^T & \alpha^2 \end{bmatrix}$$
+$$\bar{S} = \begin{bmatrix} Q_L^T G Q_R & Q_L^T G \tilde{v}_\perp \\ \tilde{c}_\perp^T G Q_R & \tilde{c}_\perp^T G \tilde{v}_\perp \end{bmatrix} = \begin{bmatrix} R_L & Q_L^T G \tilde{v}_\perp \\ \mathbf{0}_{1 \times r} & \tilde{c}_\perp^T G \tilde{v}_\perp \end{bmatrix}$$
 
-#### Proof
-$$\Phi_{\text{aug}}^T \Phi_{\text{aug}} = \begin{bmatrix} \Phi^T \\ \alpha c_{\text{orth}}^T \end{bmatrix} \begin{bmatrix} \Phi & \alpha c_{\text{orth}} \end{bmatrix} = \begin{bmatrix} \Phi^T \Phi & \alpha \Phi^T c_{\text{orth}} \\ \alpha c_{\text{orth}}^T \Phi & \alpha^2 c_{\text{orth}}^T c_{\text{orth}} \end{bmatrix}$$
+Because $R_L$ is upper triangular and $\tilde{c}_\perp^T Q_L = \mathbf{0}_{1 \times r}$, $\bar{S}_{ij} = 0$ for all $i > j$. Computing $R = \operatorname{triu}(\bar{S})$ suppresses subdiagonal FP32 rounding noise prior to Triton-fused adaptive moment updates.
 
-Applying $\Phi^T \Phi = I_r$, $\Phi^T c_{\text{orth}} = \mathbf{0}_r$, and $c_{\text{orth}}^T c_{\text{orth}} = 1$:
-$$\Phi_{\text{aug}}^T \Phi_{\text{aug}} = \begin{bmatrix} I_r & \mathbf{0}_r \\ \mathbf{0}_r^T & \alpha^2 \end{bmatrix}$$
-$\blacksquare$
-
-The original $r$ gradient coordinate axes and the $(r+1)$-th steering coordinate axis remain mutually orthogonal, preventing cross-interference in optimizer momentum and variance updates.
+#### Non-Refresh Steering Moment-Zeroing Invariant
+Between full Krylov refreshes (non-refresh steps execute with zero QR calls and zero host-device synchronizations), if an updated activation centroid rotates $(\tilde{c}_\perp, \tilde{v}_\perp)$ (`needs_steer_refresh`), `CentroidSteerOptimizer` unconditionally zeroes both the first and second triangular core moments along the $(r+1)$-th column and row:
+$$M_{:, r+1} = M_{r+1, :} = \mathbf{0}, \quad V_{:, r+1} = V_{r+1, :} = \mathbf{0}$$
+prior to moment accumulation, preventing stale second-moment statistics from discarded directions from corrupting adaptation along the newly rotated steering axis. The steering direction is accelerated by $(1 + \alpha)$, yielding reconstruction $\Delta W = \bar{Q}_L \Delta_R \bar{Q}_R^T$.
 
 ---
 
-### 1.4 Optimizer Memory Complexity
+### 1.4 Exact Persistent Optimizer Memory Accounting
 
-For a Mixture-of-Experts down-projection layer $W \in \mathbb{R}^{D_{\text{model}} \times D_{\text{ffn}}}$ ($D_{\text{model}} = 1536$, $D_{\text{ffn}} = 9216$, rank $r = 256$):
+For a Tier 2 expert matrix $W \in \mathbb{R}^{m \times n}$ ($m = 384, n = 1024, P = 393,216$ parameters) at rank $r = 16$:
 
-- **Standard AdamW**:
-  $$2 \times (D_{\text{model}} \times D_{\text{ffn}}) = 2 \times 1536 \times 9216 = 28,311,552 \text{ states}$$
+- **Standard FP32 AdamW** ($m_t, v_t$ FP32): $2mn \times 4 = 3,145,728\text{ B}$ ($8.00\text{ B/param}$).
+- **BitsAndBytes 8-bit AdamW**: $786,432\text{ B}$ ($2.00\text{ B/param}$).
+- **CentroidSteer Tier 2** ($2(r+1)^2$ FP32 core moments $= 2,312\text{ B}$ + $(m+n)(r+1)$ BF16 bases $= 47,872\text{ B}$):
+  $$50,184\text{ B} \implies \mathbf{0.128\text{ B/param}} \quad (\mathbf{-98.4\%}\text{ vs.\ AdamW})$$
 
-- **Left-Side Projection ($P \in \mathbb{R}^{m \times r}$)**:
-  $$2 \times (r \times D_{\text{ffn}}) = 2 \times 256 \times 9216 = 4,718,592 \text{ states}$$
-
-- **Right-Side Symmetrical Projection ($Q \in \mathbb{R}^{n \times r}$)**:
-  $$2 \times (D_{\text{model}} \times r) = 2 \times 1536 \times 256 = 786,432 \text{ states}$$
-
-$$\frac{\text{States}_{\text{Left}}}{\text{States}_{\text{Right}}} = \frac{4,718,592}{786,432} = 6.0\times$$
-
-Selecting right-side projection for contracting layers reduces optimizer state memory by $6\times$ compared to left-only projection.
+Model-wide across our $90.79\text{M}$ MoE model (Tier 1 Muon $6.5\%$, Tier 2 CentroidSteer $39.0\%$, Tier 3 AdamW $54.5\%$): persistent optimizer state memory is $4.54\text{ B/param}$ with FP32 Tier 3 AdamW ($-43.3\%$), or $1.27\text{ B/param}$ with 8-bit Tier 3 AdamW ($-84.1\%$).
 
 ---
 
@@ -175,3 +151,32 @@ $$V_{\text{peak}} = V_{\text{root}} + \max_l \left( V_{\text{param}, l} + V_{\te
 For `triune-2.5b` ($D=1280$, 8 experts, $B=1, T=128$):
 $$V_{\text{root}} \approx 118\text{ MB}, \quad V_{\text{param}, l} \approx 65\text{ MB}, \quad V_{\text{act}, l} \approx 12\text{ MB}, \quad V_{\text{opt}, l} \approx 80\text{ MB}$$
 $$V_{\text{peak}} \le 118 + 65 + 65 + 12 + 80 = 340\text{ MB}$$
+
+**Buffer Write-Once Staging Invariant (`triune/runtime/staging.py`)**: Parameters maintain write-once forward snapshots and non-clobbering offload checks (`_cpu_data`), while non-parameter model buffers (`is_buffer=True`, e.g., MoE EMA load counters or `CentroidSteer` running centroids) copy device mutations back to host storage during `release_gpu(clear_snapshot=False)`, ensuring layer streaming never drops state updates across offloads.
+
+---
+
+## 6. Compacted Per-Token CALM Margin Gating
+
+Under `exit_policy="calm"`, `TriuneTransformer` (`triune/model/transformer.py`) performs true **per-token, per-sample** confidence routing at intermediate exits (Reflex $l_1$, Limbic $l_2$):
+
+1. Given intermediate logits $Z_t^{(l)} \in \mathbb{R}^V$, compute top-2 softmax margin per token position:
+   $$\Delta p_{b,t} = p_{(1), b,t} - p_{(2), b,t}, \quad p = \operatorname{softmax}(Z_{b,t}^{(l)})$$
+2. Positions with $\Delta p_{b,t} \ge \tau$ settle immediately with exit logits written into the output tensor and exit depth recorded in `last_calm_exit_depths`.
+3. Only unsettled positions are compacted into a dense contiguous sub-batch before executing deeper blocks, and updated recurrent GLA states are scattered back to their original batch/sequence lanes (`_scatter_cache`). This contrasts with batch-wide all-token exits and preserves causal autoregressive KV/GLA state isolation.
+4. **Cortex-Preserving Exit-Head KL Self-Distillation (`distill_exit_heads` & `exit_distill_coef`)**: To align untied intermediate `exit_norm`/`exit_head` weights without disturbing `Cortex` outputs, Triune minimizes
+   $$\mathcal{L}_{\text{KL}}^{(l)} = \operatorname{KL}\!\left(\operatorname{softmax}(Z_{\text{Cortex}}) \,\|\, \operatorname{softmax}(Z^{(l)})\right)$$
+   with all backbone blocks and `final_head` frozen (`requires_grad=False`, preserving bit-for-bit `torch.equal` Cortex logits) or weighted by `exit_distill_coef` (default `0.2`) inside `TrainingEngine`'s `_compute_joint_lm_loss` under `depth_mode="joint"`. On `checkpoints/triune_step_24501.pt`, 50 calibration steps on strictly disjoint data reduce KL divergence from $236.975 \to 46.5053$ and raise held-out high-confidence Reflex–Cortex agreement at $\tau=0.20$ to `100.0%` on both Python (`67.2%` overall) and FineWeb (`79.7%` overall), compared with `8.8%` (`23.4%` overall) on the uncalibrated single-exit checkpoint at $\tau=0.40$.
+
+---
+
+## 7. Exact Self-Speculative Decoding & Rejection Sampling
+
+`SelfSpeculativeGenerator` (`triune/model/speculative.py`) drafts $K$ tokens with the Reflex exit and verifies all $K$ positions in a single Cortex pass under two provably sound regimes:
+
+- **Greedy Decoding ($T = 0.0$, `sampling_mode="greedy_exact_match"`)**: Accepts the longest matching prefix where $\arg\max q_i = \arg\max p_i$, achieving 100% token-for-token parity with Cortex decoding.
+- **Stochastic Sampling ($T > 0$, `sampling_mode="rejection_sampling_exact_distribution"`, Leviathan et al., ICML 2023)**: For each draft token $x_i \sim q_i$, accept with probability
+  $$\alpha_i = \min\left(1, \frac{p_i(x_i)}{q_i(x_i)}\right)$$
+  and upon rejection at step $i$, draw from the normalized residual distribution:
+  $$x_i' \sim \frac{\max(0, p_i - q_i)}{\sum_v \max(0, p_{i,v} - q_{i,v})}$$
+  guaranteeing that the resulting sequence distribution is mathematically identical to direct ancestral sampling from the Cortex target distribution.

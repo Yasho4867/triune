@@ -6,111 +6,111 @@
     "default_1536d_8e_top1": [
       {
         "tokens": 1,
-        "dense_ms": 4.973,
-        "sparse_ms": 2.898,
-        "sparse_speedup_x": 1.716,
-        "max_abs_diff": 0.00390625
+        "dense_ms": 4.597,
+        "sparse_ms": 4.102,
+        "sparse_speedup_x": 1.121,
+        "max_abs_diff": 0.0
       },
       {
         "tokens": 16,
-        "dense_ms": 5.787,
-        "sparse_ms": 5.024,
-        "sparse_speedup_x": 1.152,
+        "dense_ms": 5.733,
+        "sparse_ms": 2.992,
+        "sparse_speedup_x": 1.916,
         "max_abs_diff": 0.0078125
       },
       {
         "tokens": 256,
-        "dense_ms": 7.366,
-        "sparse_ms": 4.07,
-        "sparse_speedup_x": 1.81,
+        "dense_ms": 7.933,
+        "sparse_ms": 4.503,
+        "sparse_speedup_x": 1.762,
         "max_abs_diff": 0.015625
       },
       {
         "tokens": 1024,
-        "dense_ms": 18.115,
-        "sparse_ms": 4.845,
-        "sparse_speedup_x": 3.739,
+        "dense_ms": 18.734,
+        "sparse_ms": 4.98,
+        "sparse_speedup_x": 3.762,
         "max_abs_diff": 0.0078125
       },
       {
         "tokens": 4096,
-        "dense_ms": 64.084,
-        "sparse_ms": 13.598,
-        "sparse_speedup_x": 4.713,
+        "dense_ms": 64.338,
+        "sparse_ms": 13.477,
+        "sparse_speedup_x": 4.774,
         "max_abs_diff": 0.009765625
       }
     ],
     "default_1536d_8e_top2": [
       {
         "tokens": 1,
-        "dense_ms": 5.974,
-        "sparse_ms": 1.611,
-        "sparse_speedup_x": 3.707,
-        "max_abs_diff": 0.00390625
+        "dense_ms": 5.073,
+        "sparse_ms": 4.719,
+        "sparse_speedup_x": 1.075,
+        "max_abs_diff": 0.0
       },
       {
         "tokens": 16,
-        "dense_ms": 7.258,
-        "sparse_ms": 2.75,
-        "sparse_speedup_x": 2.639,
+        "dense_ms": 7.036,
+        "sparse_ms": 3.097,
+        "sparse_speedup_x": 2.272,
         "max_abs_diff": 0.0078125
       },
       {
         "tokens": 256,
-        "dense_ms": 11.123,
-        "sparse_ms": 3.178,
-        "sparse_speedup_x": 3.5,
+        "dense_ms": 10.967,
+        "sparse_ms": 3.662,
+        "sparse_speedup_x": 2.995,
         "max_abs_diff": 0.01171875
       },
       {
         "tokens": 1024,
-        "dense_ms": 32.951,
-        "sparse_ms": 6.189,
-        "sparse_speedup_x": 5.324,
+        "dense_ms": 32.228,
+        "sparse_ms": 7.224,
+        "sparse_speedup_x": 4.461,
         "max_abs_diff": 0.0078125
       },
       {
         "tokens": 4096,
-        "dense_ms": 121.52,
-        "sparse_ms": 20.786,
-        "sparse_speedup_x": 5.846,
+        "dense_ms": 119.983,
+        "sparse_ms": 22.013,
+        "sparse_speedup_x": 5.45,
         "max_abs_diff": 0.01171875
       }
     ],
     "checkpoint_384d_4e_top1": [
       {
         "tokens": 1,
-        "dense_ms": 1.815,
-        "sparse_ms": 1.583,
-        "sparse_speedup_x": 1.146,
-        "max_abs_diff": 0.00390625
+        "dense_ms": 1.842,
+        "sparse_ms": 1.725,
+        "sparse_speedup_x": 1.068,
+        "max_abs_diff": 0.0
       },
       {
         "tokens": 16,
-        "dense_ms": 2.075,
-        "sparse_ms": 2.382,
-        "sparse_speedup_x": 0.871,
+        "dense_ms": 2.961,
+        "sparse_ms": 3.124,
+        "sparse_speedup_x": 0.948,
         "max_abs_diff": 0.00390625
       },
       {
         "tokens": 256,
-        "dense_ms": 2.874,
-        "sparse_ms": 3.189,
-        "sparse_speedup_x": 0.901,
+        "dense_ms": 2.769,
+        "sparse_ms": 2.482,
+        "sparse_speedup_x": 1.116,
         "max_abs_diff": 0.0078125
       },
       {
         "tokens": 1024,
-        "dense_ms": 2.237,
-        "sparse_ms": 1.996,
-        "sparse_speedup_x": 1.121,
+        "dense_ms": 2.61,
+        "sparse_ms": 2.121,
+        "sparse_speedup_x": 1.231,
         "max_abs_diff": 0.0078125
       },
       {
         "tokens": 4096,
-        "dense_ms": 5.093,
-        "sparse_ms": 2.254,
-        "sparse_speedup_x": 2.26,
+        "dense_ms": 5.45,
+        "sparse_ms": 2.92,
+        "sparse_speedup_x": 1.866,
         "max_abs_diff": 0.0078125
       }
     ]

@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / "scripts")]
 
 from benchmark_full_model_e2e import load_trained_model  # noqa: E402
+
 from triune.data.tokenizer import load_tokenizer  # noqa: E402
 
 GRID = [round(t, 2) for t in np.arange(0.05, 1.0, 0.05)]
@@ -29,9 +30,7 @@ def load_docs(source: str, count: int, skip: int) -> list[dict]:
     from datasets import load_dataset
 
     stream = load_dataset("HuggingFaceFW/fineweb-edu", name="sample-10BT", split="train", streaming=True)
-    return [
-        {"id": row["id"], "text": row["text"]} for row in stream.skip(skip).take(count)
-    ]
+    return [{"id": row["id"], "text": row["text"]} for row in stream.skip(skip).take(count)]
 
 
 def wilson_lower(hits: int, n: int, z: float = 1.96) -> float:
@@ -128,7 +127,13 @@ def evaluate(cal: dict, held: dict, exit_name: str, targets: list[float], min_po
 
 def split_info(docs: list[dict], positions: int) -> dict:
     digest = hashlib.sha256("".join(d["id"] for d in docs).encode()).hexdigest()[:16]
-    return {"documents": len(docs), "positions": positions, "first_id": docs[0]["id"], "last_id": docs[-1]["id"], "id_sha256_16": digest}
+    return {
+        "documents": len(docs),
+        "positions": positions,
+        "first_id": docs[0]["id"],
+        "last_id": docs[-1]["id"],
+        "id_sha256_16": digest,
+    }
 
 
 def render_report(result: dict) -> str:
@@ -242,7 +247,14 @@ def main() -> None:
     stem.with_suffix(".md").write_text(render_report(result), encoding="utf-8")
     print(verdict)
     for e, ev in exits.items():
-        print(e, ev["unconditional_agreement_pct"], {k: (c["threshold"], c.get("evaluation_coverage_pct"), c.get("evaluation_agreement_pct")) for k, c in ev["calibrated"].items()})
+        print(
+            e,
+            ev["unconditional_agreement_pct"],
+            {
+                k: (c["threshold"], c.get("evaluation_coverage_pct"), c.get("evaluation_agreement_pct"))
+                for k, c in ev["calibrated"].items()
+            },
+        )
 
 
 if __name__ == "__main__":

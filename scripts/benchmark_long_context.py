@@ -116,14 +116,19 @@ def run_long_context_suite() -> Dict[str, Any]:
             torch.cuda.reset_peak_memory_stats()
             with torch.no_grad():
                 for _ in range(3):
-                    _ = sdpa_module(x)
+                    out_sdpa = sdpa_module(x)
+                del out_sdpa
                 torch.cuda.synchronize()
+                torch.cuda.empty_cache()
+                torch.cuda.reset_peak_memory_stats()
                 t0 = time.perf_counter()
                 for _ in range(10):
-                    _ = sdpa_module(x)
+                    out_sdpa = sdpa_module(x)
                 torch.cuda.synchronize()
                 t_sdpa = (time.perf_counter() - t0) / 10.0 * 1000.0
                 mem_sdpa = torch.cuda.max_memory_allocated() / (1024 * 1024)
+                del out_sdpa
+                torch.cuda.empty_cache()
                 tok_s_sdpa = seq_len / (t_sdpa / 1000.0)
                 sdpa_prefill = {
                     "latency_ms": round(t_sdpa, 2),
@@ -142,14 +147,19 @@ def run_long_context_suite() -> Dict[str, Any]:
             torch.cuda.reset_peak_memory_stats()
             with torch.no_grad():
                 for _ in range(3):
-                    _ = gla_module(x)
+                    out_gla = gla_module(x)
+                del out_gla
                 torch.cuda.synchronize()
+                torch.cuda.empty_cache()
+                torch.cuda.reset_peak_memory_stats()
                 t0 = time.perf_counter()
                 for _ in range(10):
-                    _ = gla_module(x)
+                    out_gla = gla_module(x)
                 torch.cuda.synchronize()
                 t_gla = (time.perf_counter() - t0) / 10.0 * 1000.0
                 mem_gla = torch.cuda.max_memory_allocated() / (1024 * 1024)
+                del out_gla
+                torch.cuda.empty_cache()
                 tok_s_gla = seq_len / (t_gla / 1000.0)
                 gla_prefill = {
                     "latency_ms": round(t_gla, 2),
@@ -172,7 +182,7 @@ def run_long_context_suite() -> Dict[str, Any]:
         torch.cuda.empty_cache()
 
     print("\n--- 2. Autoregressive Single-Token Decode at Context Depth ---")
-    for prompt_len in [512, 2048, 8192]:
+    for prompt_len in [512, 2048, 8192, 16384]:
         print(f"\nPrompt Context Length: {prompt_len}")
         tok = torch.randn(1, 1, dim, device=device, dtype=torch.bfloat16)
 
@@ -192,6 +202,10 @@ def run_long_context_suite() -> Dict[str, Any]:
             t_sdpa_dec = (time.perf_counter() - t0) / 50.0 * 1000.0
 
         print(f"  SDPA Decode: {t_sdpa_dec:6.2f} ms/token | KV-Cache: {sdpa_kv_size_kb:8.1f} KB")
+
+        del k_cache
+        del v_cache
+        torch.cuda.empty_cache()
 
         # 2. GLA Constant Recurrent State decode
         # Recurrent state is fixed d_head x d_head
@@ -221,9 +235,8 @@ def run_long_context_suite() -> Dict[str, Any]:
             }
         )
 
-        del k_cache
-        del v_cache
         del gla_state
+        del tok
         torch.cuda.empty_cache()
 
     # Save JSON results
@@ -295,10 +308,16 @@ def generate_markdown_report(results: Dict[str, Any], output_path: str) -> None:
     )
 
     for d in results["decode_benchmarks"]:
+        spd = d["decode_speedup"]
+        adv_str = f"**{spd}x faster**" if spd >= 1.0 else f"{spd}x (slower; eager per-step launch overhead)"
         lines.append(
             f"| **{d['prompt_len']}** | {d['sdpa_kv_cache_kb']} KB | **{d['gla_state_kb']} KB (Fixed)** | "
-            f"{d['sdpa_decode_ms']} ms/tok | **{d['gla_decode_ms']} ms/tok** | **{d['decode_speedup']}x faster** |"
+            f"{d['sdpa_decode_ms']} ms/tok | **{d['gla_decode_ms']} ms/tok** | {adv_str} |"
         )
+
+    gla_dec_vals = [d["gla_decode_ms"] for d in results["decode_benchmarks"]]
+    min_gla_dec = min(gla_dec_vals) if gla_dec_vals else 0.0
+    max_gla_dec = max(gla_dec_vals) if gla_dec_vals else 0.0
 
     lines.extend(
         [
@@ -307,9 +326,9 @@ def generate_markdown_report(results: Dict[str, Any], output_path: str) -> None:
             "",
             "1. **Constant Memory Footprint**:",
             "   - Standard Softmax KV-cache grows linearly with sequence length. At $L=8,192$, the KV-cache consumes megabytes per layer.",
-            "   - GLA maintains a fixed recurrent matrix of shape $(H, d_k, d_v)$ (64 KB total) regardless of whether sequence length is 512 or 16,384.",
-            "2. **Decode Latency Invariance**:",
-            "   - While SDPA decode latency increases as context expands due to growing attention dot-products over previous keys, GLA decode latency remains completely flat ($0.27 - 0.29$ ms/token).",
+            f"   - GLA maintains a fixed recurrent matrix of shape $(H, d_k, d_v)$ ({results['decode_benchmarks'][0]['gla_state_kb']} KB total) regardless of context length.",
+            "2. **Decode Latency & Scaling**:",
+            f"   - With fused Triton single-token recurrent state kernels, GLA decode latency stays bounded ({min_gla_dec:.3f} - {max_gla_dec:.3f} ms/token across $L=512..16384$) with constant {results['decode_benchmarks'][0]['gla_state_kb']} KB state, eliminating $O(L)$ KV-cache memory growth.",
             "",
         ]
     )

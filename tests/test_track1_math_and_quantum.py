@@ -1,10 +1,10 @@
 import torch
 import torch.nn.functional as F
-from triune.kernels.fast_muon import fast_zeropower_via_newtonschulz5, fast_zeropower_via_newtonschulz5_batched
-from triune.ops.centroid_steer import polar_stiefel_retraction, subspace_projection, batched_subspace_projection
+
 from triune.kernels.fast_gla import _run_gla_chunks
-from triune.model.adapters import generate_adaptive
-from triune.optim.manifold import LowSpaceWeightProjector, UnitaryManifoldOptimizer, QuantumUnitaryOptimizer
+from triune.kernels.fast_muon import fast_zeropower_via_newtonschulz5, fast_zeropower_via_newtonschulz5_batched
+from triune.ops.centroid_steer import batched_subspace_projection, polar_stiefel_retraction, subspace_projection
+from triune.optim.manifold import LowSpaceWeightProjector, QuantumUnitaryOptimizer
 
 
 def test_muon_remez_superlinear():

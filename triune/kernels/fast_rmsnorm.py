@@ -56,32 +56,36 @@ if is_triton_available():
         W,
         R,
         dX,
+        dW_part,
         stride_dy,
         stride_x,
         stride_dx,
+        stride_dwp,
+        M,
         N,
         BLOCK_SIZE: tl.constexpr,
     ):
-        row = tl.program_id(0)
+        pid = tl.program_id(0)
+        num_pids = tl.num_programs(0)
         cols = tl.arange(0, BLOCK_SIZE)
         mask = cols < N
 
-        dy_ptrs = dY + row * stride_dy + cols
-        x_ptrs = X + row * stride_x + cols
-        dx_ptrs = dX + row * stride_dx + cols
-        w_ptrs = W + cols
+        w = tl.load(W + cols, mask=mask, other=0.0).to(tl.float32)
+        dw_acc = tl.zeros((BLOCK_SIZE,), dtype=tl.float32)
 
-        dy = tl.load(dy_ptrs, mask=mask, other=0.0).to(tl.float32)
-        x = tl.load(x_ptrs, mask=mask, other=0.0).to(tl.float32)
-        w = tl.load(w_ptrs, mask=mask, other=0.0).to(tl.float32)
-        rsqrt = tl.load(R + row).to(tl.float32)
+        for row in range(pid, M, num_pids):
+            dy = tl.load(dY + row * stride_dy + cols, mask=mask, other=0.0).to(tl.float32)
+            x = tl.load(X + row * stride_x + cols, mask=mask, other=0.0).to(tl.float32)
+            rsqrt = tl.load(R + row).to(tl.float32)
 
-        # dX = rsqrt * (dy * w - (x * rsqrt^2 / N) * sum(dy * w * x))
-        dy_w = dy * w
-        dy_w_x = tl.sum(dy_w * x, axis=0)
-        dx = rsqrt * (dy_w - (x * (rsqrt * rsqrt) / N) * dy_w_x)
+            norm_x = x * rsqrt
+            dw_acc += dy * norm_x
+            dy_w = dy * w
+            c1 = tl.sum(dy_w * norm_x, axis=0) / N
+            dx = rsqrt * (dy_w - norm_x * c1)
+            tl.store(dX + row * stride_dx + cols, dx.to(X.dtype.element_ty), mask=mask)
 
-        tl.store(dx_ptrs, dx.to(X.dtype.element_ty), mask=mask)
+        tl.store(dW_part + pid * stride_dwp + cols, dw_acc, mask=mask)
 
     @triton.jit
     def _fused_add_rms_norm_fwd_kernel(
@@ -185,6 +189,7 @@ if is_triton_available():
             rsqrt = torch.empty(M, device=x.device, dtype=torch.float32)
 
             BLOCK_SIZE = triton.next_power_of_2(N)
+            num_warps = 4 if BLOCK_SIZE <= 1024 else 8
             _rms_norm_fwd_kernel[(M,)](
                 x_2d,
                 y,
@@ -195,11 +200,13 @@ if is_triton_available():
                 N,
                 eps,
                 BLOCK_SIZE=BLOCK_SIZE,
+                num_warps=num_warps,
             )
 
             ctx.save_for_backward(x_2d, weight, rsqrt)
             ctx.orig_shape = orig_shape
             ctx.BLOCK_SIZE = BLOCK_SIZE
+            ctx.num_warps = num_warps
             ctx.N = N
             return y.reshape(orig_shape)
 
@@ -207,26 +214,32 @@ if is_triton_available():
         def backward(ctx, dy: torch.Tensor):
             x_2d, weight, rsqrt = ctx.saved_tensors
             orig_shape = ctx.orig_shape
-            dy_2d = dy.reshape(-1, orig_shape[-1]).contiguous()
+            dy_2d = dy.reshape(-1, orig_shape[-1])
+            if not dy_2d.is_contiguous():
+                dy_2d = dy_2d.contiguous()
             M, N = x_2d.shape
 
             dx = torch.empty_like(x_2d)
-            _rms_norm_bwd_kernel[(M,)](
+            G = min(M, 128)
+            dw_part = torch.empty((G, N), device=x_2d.device, dtype=torch.float32)
+            _rms_norm_bwd_kernel[(G,)](
                 dy_2d,
                 x_2d,
                 weight,
                 rsqrt,
                 dx,
+                dw_part,
                 dy_2d.stride(0),
                 x_2d.stride(0),
                 dx.stride(0),
+                dw_part.stride(0),
+                M,
                 N,
                 BLOCK_SIZE=ctx.BLOCK_SIZE,
+                num_warps=ctx.num_warps,
             )
 
-            # Weight gradient: sum over M of (dy * x * rsqrt)
-            normed_x = x_2d * rsqrt.unsqueeze(1)
-            dw = (dy_2d * normed_x).sum(dim=0).to(weight.dtype)
+            dw = dw_part.sum(dim=0).to(weight.dtype)
             return dx.reshape(orig_shape), dw, None
 
     class _FusedAddRMSNormFunction(torch.autograd.Function):
@@ -315,21 +328,27 @@ if is_triton_available():
                 BLOCK_SIZE=ctx.BLOCK_SIZE,
             )
 
-            normed_h = h_2d * rsqrt.unsqueeze(1)
-            dw = (dy_2d * normed_h).sum(dim=0).to(weight.dtype)
+            normed_h = h_2d * rsqrt.unsqueeze(1).to(h_2d.dtype)
+            dw = (dy_2d * normed_h).sum(dim=0, dtype=torch.float32).to(weight.dtype)
 
             d_residual = dr_in.reshape(orig_shape) if ctx.has_residual else None
             return dx.reshape(orig_shape), d_residual, dw, None
 
 
 def fast_rmsnorm(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-    """Dispatches to native C++ PyTorch 2.4+ kernel, fused Triton, or high-performance fallback."""
+    """Dispatches to fused persistent Triton kernel for wide hidden autograd, native PyTorch 2.4+, or fallback."""
     w = weight.to(x.dtype) if weight.dtype != x.dtype else weight
+    needs_grad = torch.is_grad_enabled() and (x.requires_grad or w.requires_grad)
+    if needs_grad and is_turbo_mode_enabled() and is_triton_available() and x.is_cuda and x.size(-1) >= 1024:
+        try:
+            return _FastRMSNormFunction.apply(x, w, eps)
+        except Exception:
+            pass
     if hasattr(torch.nn.functional, "rms_norm"):
         return torch.nn.functional.rms_norm(x, (x.size(-1),), weight=w, eps=eps)
     if is_turbo_mode_enabled() and is_triton_available() and x.is_cuda:
         try:
-            return _FastRMSNormFunction.apply(x, weight, eps)
+            return _FastRMSNormFunction.apply(x, w, eps)
         except Exception:
             pass
 

@@ -45,6 +45,7 @@ class MoE_FFN(nn.Module):
         use_fp8: bool = False,
         shared_expert: bool = SHARED_EXPERT,
         shared_scale: float = SHARED_EXPERT_SCALE,
+        use_sparse_eval: bool = True,
     ):
         super().__init__()
         self.dim = dim
@@ -54,7 +55,7 @@ class MoE_FFN(nn.Module):
         self.use_fp8 = use_fp8
         self.shared_expert = shared_expert
         self.shared_scale = shared_scale
-        self.use_sparse_eval = False
+        self.use_sparse_eval = use_sparse_eval
 
         Linear = FP8Linear if use_fp8 else (FP4Linear if use_fp4 else nn.Linear)
         hidden_dim = dim * EXPERT_HIDDEN_MULTIPLIER
@@ -126,14 +127,46 @@ class MoE_FFN(nn.Module):
         """True Top-k sparse scatter-gather forward pass grouped by selected expert."""
         B, T, D = x.shape
         flat_x = x.reshape(-1, D)
+        N_tok = flat_x.size(0)
         logits = self.router(flat_x)
         _, top_idx = torch.topk(logits + self.expert_bias, self.top_k, dim=-1)
         weights = torch.gather(F.softmax(logits, dim=-1), 1, top_idx)
         if self.top_k > 1:
             weights = weights / (weights.sum(dim=-1, keepdim=True) + 1e-20)
+
+        if (
+            N_tok == 1
+            and not self.use_fp4
+            and not self.use_fp8
+            and all(
+                not hasattr(e[0], "lora_A")
+                and not hasattr(e[2], "lora_A")
+                and getattr(e[0], "weight", None) is not None
+                and getattr(e[2], "weight", None) is not None
+                for e in self.experts
+            )
+        ):
+            sel_idx = top_idx[0]
+            w1_sel = torch.stack([e[0].weight for e in self.experts], dim=0)[sel_idx]
+            w2_sel = torch.stack([e[2].weight for e in self.experts], dim=0)[sel_idx]
+            x_sel = flat_x.unsqueeze(0).expand(self.top_k, 1, D)
+            h_pre = torch.bmm(x_sel, w1_sel.transpose(1, 2))
+            if self.experts[0][0].bias is not None and all(e[0].bias is not None for e in self.experts):
+                b1_sel = torch.stack([e[0].bias for e in self.experts], dim=0)[sel_idx].unsqueeze(1)
+                h_pre = h_pre + b1_sel
+            h = self.experts[0][1](h_pre)
+            y_sel = torch.bmm(h, w2_sel.transpose(1, 2))
+            if self.experts[0][2].bias is not None and all(e[2].bias is not None for e in self.experts):
+                b2_sel = torch.stack([e[2].bias for e in self.experts], dim=0)[sel_idx].unsqueeze(1)
+                y_sel = y_sel + b2_sel
+            out = (y_sel * weights[0].view(self.top_k, 1, 1).to(y_sel.dtype)).sum(dim=0).to(flat_x.dtype)
+            if self.shared_expert:
+                out = out + (self.shared_scale * self.shared(flat_x)).to(out.dtype)
+            return out.reshape(B, T, D)
+
         expert_ids = top_idx.reshape(-1)
         order = expert_ids.argsort(stable=True)
-        token_ids = torch.arange(flat_x.size(0), device=x.device).repeat_interleave(self.top_k)[order]
+        token_ids = torch.arange(N_tok, device=x.device).repeat_interleave(self.top_k)[order]
         counts = torch.bincount(expert_ids, minlength=self.num_experts).tolist()
         chunks = flat_x[token_ids].split(counts)
         ys = [self.experts[e](c) for e, c in enumerate(chunks) if c.numel()]
@@ -148,7 +181,13 @@ class MoE_FFN(nn.Module):
 
     def forward(self, x, update_stats=True):
         """If update_stats=False, skip bias/centroid updates (used during label generation)."""
-        if not self.training and getattr(self, "use_sparse_eval", False):
+        is_capturing = bool(x.is_cuda and torch.cuda.is_current_stream_capturing())
+        if (
+            not self.training
+            and not is_capturing
+            and getattr(self, "use_sparse_eval", True)
+            and (x.shape[0] * x.shape[1] > 1)
+        ):
             return self.sparse_forward(x)
         B, T, D = x.shape
         N_tok = B * T
@@ -216,7 +255,6 @@ class MoE_FFN(nn.Module):
             )
         )
 
-        is_capturing = bool(x.is_cuda and torch.cuda.is_current_stream_capturing())
         use_shared_stream = bool(x.is_cuda and self.shared_expert and not is_capturing)
         shared_stream = None
         shared_event = None

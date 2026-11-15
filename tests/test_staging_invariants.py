@@ -295,6 +295,29 @@ class TestStagingInvariants(unittest.TestCase):
         self.assertEqual(stager.telemetry["h2d_bytes_transferred"], 0)
         stager.clear()
 
+    def test_staged_buffer_mutation_persists_across_release(self):
+        """Verify forward-mutated module buffers persist to CPU master across release_layer()."""
+
+        class BufferedLayer(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.lin = nn.Linear(8, 8)
+                self.register_buffer("ema", torch.zeros(8))
+
+            def forward(self, x):
+                self.ema.add_(1.0)
+                return self.lin(x)
+
+        layer = BufferedLayer()
+        stager = ParameterStager(device=torch.device("cpu"), use_fp8=False)
+        stager.register_module(layer)
+        stager.stage_layer(layer)
+        stager.apply_staged_tensors(layer)
+        _ = layer(torch.randn(2, 8))
+        stager.release_layer(layer)
+        self.assertTrue(torch.allclose(layer.ema, torch.ones(8)))
+        stager.clear()
+
 
 if __name__ == "__main__":
     unittest.main()

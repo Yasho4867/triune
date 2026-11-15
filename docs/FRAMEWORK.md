@@ -52,6 +52,8 @@ triune/
 ### 1. Model Architecture (`triune.model`)
 
 - **`TriuneTransformer`**: Core architecture combining Gated Linear Attention (GLA), Mixture-of-Experts (MoE) with a shared expert, and three variance-matched exit heads (`Reflex`, `Limbic`, `Cortex`).
+- **`distill_exit_heads(...)` & `exit_distill_coef`**: Cortex-preserving KL self-distillation aligns intermediate `Reflex` and `Limbic` exit heads toward frozen `Cortex` distributions (`torch.equal` Cortex output invariance), integrated both as an inference calibration pass and in `TrainingEngine` `depth_mode="joint"`.
+- **`convert_to_fp8(...)` & `convert_to_nvfp4(...)`**: Drop-in post-training weight compression supporting E4M3 `FP8Linear` (`2.0x` compression, `%16`-aligned `torch._scaled_mm`) and packed 4-bit E2M1 + 16-element E4M3 block-scaled `NVFP4Linear` (`5.0 b/w = 3.2x` compression; `46.65 MB` across 103 linear layers on the `90.79M` checkpoint).
 - **`load_model(name_or_path, **kwargs)`**: Instantiates model presets (`triune-nano`, `triune-small`, `triune-2.5b`, `triune-7b`), loads from JSON architecture configs in `models/configs/`, or loads checkpoint weights.
 - **`register_model(name)`**: Decorator to register custom model architectures.
 
@@ -66,7 +68,7 @@ model = triune.load_model("triune-2.5b")
 Parameters are partitioned into three optimization tiers:
 
 - **Tier 1 (Muon)**: 5th-order Newton-Schulz matrix orthogonalization for non-expert 2D hidden projections (attention projections, shared expert projections, intermediate heads).
-- **Tier 2 (CentroidSteer)**: Dual-sided low-rank SVD projections with semantic activation centroid steering for routed MoE experts.
+- **Tier 2 (CentroidSteer)**: Batched `sCholQR2` Upper-Triangular Krylov Core on $\operatorname{St}(r+1, d)$ with Kahan-Parlett activation centroid steering and non-refresh moment zeroing (`0.128 B/p` on routed MoE experts).
 - **Tier 3 (AdamW)**: Adaptive moment estimation for 1D vectors (normalization weights, biases, router heads, token embeddings).
 
 ```python
@@ -79,7 +81,7 @@ optimizer = build_optimizer(model, config)
 
 Enables training models that exceed physical GPU memory capacity:
 
-- **Host Weight Compression**: Stores layer parameters in CPU host RAM compressed to `torch.float8_e4m3fn`.
+- **Host Weight Compression**: Stores layer parameters in CPU host RAM compressed to `torch.float8_e4m3fn` or packed 4-bit NVFP4 via `ParameterStager(use_fp4=True)` (`NVFP4StagingBuffer` asynchronous transfers).
 - **On-Demand Micro-Transfers**: Uses a CUDA prefetch stream to transfer layer blocks immediately prior to forward and backward passes.
 - **Optimizer State Migration**: Optimizer states (`exp_avg`, `exp_avg_sq`, `momentum`) migrate to GPU memory during each layer's step and are evicted back to host RAM immediately after, maintaining peak VRAM under 350 MB.
 
@@ -165,11 +167,13 @@ triune plan-memory --vram-gb 8.0
 ## Testing
 
 ```bash
-pytest tests/
+pytest -q
+python -m unittest discover tests
 ```
 
-Individual test modules:
+Individual invariant and integration modules:
 ```bash
+pytest tests/test_pipeline_integration.py tests/test_self_speculative_decoding.py tests/test_staging_invariants.py tests/test_triangular_core_integrity.py tests/test_benchmark_validity.py
 python tests/test_framework.py
 python tests/test_streaming_engine.py
 python tests/test_muon_and_adaptive_steer.py

@@ -11,14 +11,11 @@ Extends standard BPE / WordPiece tokenization with dynamic sequence compression:
 
 from __future__ import annotations
 
-import functools
-import json
 import logging
-import re
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
 

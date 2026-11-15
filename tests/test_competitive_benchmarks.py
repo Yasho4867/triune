@@ -56,7 +56,9 @@ class TestCompetitiveBenchmarks(unittest.TestCase):
         l_std = F.cross_entropy(head(h1).float(), y)
         loss_std_val = l_std.item()
         l_std.backward()
-        std_vram = (torch.cuda.max_memory_allocated(self.device) - pre_test_mem) if self.device.type == "cuda" else 100.0
+        std_vram = (
+            (torch.cuda.max_memory_allocated(self.device) - pre_test_mem) if self.device.type == "cuda" else 100.0
+        )
 
         # Triune chunked loss
         h1_grad = h1.grad.detach().cpu()

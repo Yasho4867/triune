@@ -169,6 +169,56 @@ if is_triton_available():
 
             return dlogits.reshape(ctx.orig_shape), None, None
 
+    @triton.jit
+    def _ce_inplace_chunk_kernel(
+        LOGITS,
+        TARGETS,
+        LOSS,
+        INV_N,
+        stride_row,
+        N_ROWS,
+        VOCAB_SIZE,
+        ignore_index: tl.constexpr,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        row = tl.program_id(0)
+        if row >= N_ROWS:
+            return
+
+        target = tl.load(TARGETS + row)
+        row_ptr = LOGITS + row * stride_row
+        if target == ignore_index:
+            tl.store(LOSS + row, 0.0)
+            for off in range(0, VOCAB_SIZE, BLOCK_SIZE):
+                cols = off + tl.arange(0, BLOCK_SIZE)
+                tl.store(row_ptr + cols, 0.0, mask=cols < VOCAB_SIZE)
+            return
+
+        m = -float("inf")
+        for off in range(0, VOCAB_SIZE, BLOCK_SIZE):
+            cols = off + tl.arange(0, BLOCK_SIZE)
+            vals = tl.load(row_ptr + cols, mask=cols < VOCAB_SIZE, other=-float("inf")).to(tl.float32)
+            m = tl.maximum(m, tl.max(vals))
+
+        s = 0.0
+        for off in range(0, VOCAB_SIZE, BLOCK_SIZE):
+            cols = off + tl.arange(0, BLOCK_SIZE)
+            vals = tl.load(row_ptr + cols, mask=cols < VOCAB_SIZE, other=-float("inf")).to(tl.float32)
+            s += tl.sum(tl.exp(vals - m))
+
+        lse = m + tl.log(s)
+        t_val = tl.load(row_ptr + target).to(tl.float32)
+        tl.store(LOSS + row, lse - t_val)
+
+        inv_n = tl.load(INV_N)
+        for off in range(0, VOCAB_SIZE, BLOCK_SIZE):
+            cols = off + tl.arange(0, BLOCK_SIZE)
+            mask = cols < VOCAB_SIZE
+            vals = tl.load(row_ptr + cols, mask=mask, other=-float("inf")).to(tl.float32)
+            probs = tl.exp(vals - lse)
+            grad = tl.where(cols == target, probs - 1.0, probs) * inv_n
+            tl.store(row_ptr + cols, grad.to(LOGITS.dtype.element_ty), mask=mask)
+
 
 def _chunk_ce_grad(chunk_logits_fp32: torch.Tensor, chunk_y: torch.Tensor, ignore_index: int):
     """Returns (sum_loss, grad_logits_unscaled) for one chunk in-place on chunk_logits_fp32 (zero CPU sync)."""
@@ -207,25 +257,60 @@ class _FusedLinearCrossEntropy(torch.autograd.Function):
         grad_w = torch.zeros_like(weight) if need_w else None
         grad_b = torch.zeros(bias.shape, device=bias.device, dtype=acc) if need_b else None
 
-        total = torch.zeros((), device=hidden.device, dtype=acc)
-        for i in range(0, n_tokens, eff_chunk):
-            h = flat_h[i : i + eff_chunk]
-            y = flat_y[i : i + eff_chunk]
-            logits = F.linear(h, weight, bias).to(acc)
-            loss_sum, g = _chunk_ce_grad(logits, y, ignore_index)
-            total = total + loss_sum
-            del logits
-            g.mul_(inv_n)
-            if need_b:
-                grad_b = grad_b + g.sum(0)
-            g_w = g.to(weight.dtype)
-            del g
-            if need_h:
-                torch.matmul(g_w, weight, out=grad_h[i : i + eff_chunk])
-            if need_w:
-                grad_w.addmm_(g_w.t(), h.to(weight.dtype))
-            del g_w
-        total = total * inv_n
+        if (
+            is_turbo_mode_enabled()
+            and is_triton_available()
+            and hidden.is_cuda
+            and hidden.dtype in (torch.float16, torch.bfloat16, torch.float32)
+            and not need_b
+        ):
+            losses = torch.empty(n_tokens, device=hidden.device, dtype=torch.float32)
+            vocab_size = weight.size(0)
+            block_size = min(2048, triton.next_power_of_2(vocab_size))
+            with torch.no_grad():
+                for i in range(0, n_tokens, eff_chunk):
+                    h = flat_h[i : i + eff_chunk]
+                    y = flat_y[i : i + eff_chunk].contiguous()
+                    logits = F.linear(h, weight, bias).contiguous()
+                    _ce_inplace_chunk_kernel[(h.size(0),)](
+                        logits,
+                        y,
+                        losses[i : i + eff_chunk],
+                        inv_n,
+                        logits.stride(0),
+                        h.size(0),
+                        vocab_size,
+                        ignore_index=int(ignore_index),
+                        BLOCK_SIZE=block_size,
+                        num_warps=8,
+                    )
+                    g_w = logits if logits.dtype == weight.dtype else logits.to(weight.dtype)
+                    if need_h:
+                        torch.matmul(g_w, weight, out=grad_h[i : i + eff_chunk])
+                    if need_w:
+                        grad_w.addmm_(g_w.t(), h.to(weight.dtype))
+                    del logits, g_w
+                total = (losses.sum() * inv_n).to(acc)
+        else:
+            total = torch.zeros((), device=hidden.device, dtype=acc)
+            for i in range(0, n_tokens, eff_chunk):
+                h = flat_h[i : i + eff_chunk]
+                y = flat_y[i : i + eff_chunk]
+                logits = F.linear(h, weight, bias).to(acc)
+                loss_sum, g = _chunk_ce_grad(logits, y, ignore_index)
+                total = total + loss_sum
+                del logits
+                g.mul_(inv_n)
+                if need_b:
+                    grad_b = grad_b + g.sum(0)
+                g_w = g.to(weight.dtype)
+                del g
+                if need_h:
+                    torch.matmul(g_w, weight, out=grad_h[i : i + eff_chunk])
+                if need_w:
+                    grad_w.addmm_(g_w.t(), h.to(weight.dtype))
+                del g_w
+            total = total * inv_n
 
         ctx.save_for_backward(
             grad_h.reshape(hidden.shape) if grad_h is not None else None,

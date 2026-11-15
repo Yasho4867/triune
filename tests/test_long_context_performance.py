@@ -1,14 +1,12 @@
 """Tests for Long-Context (up to 8,192 tokens) Performance, Chunked Prefill, and RoPE Caching."""
 
-import pytest
 import torch
-import torch.nn.functional as F
 
 from triune.configs.config import build_config
-from triune.model.attention import HybridAttention, VectorisedGLA
+from triune.inference import generate_response
+from triune.model.attention import HybridAttention
 from triune.model.factory import build_model
 from triune.model.rotary import RotaryEmbedding
-from triune.inference import generate_response
 
 
 class DummyTokenizer:
@@ -22,6 +20,7 @@ class DummyTokenizer:
         class Tokens:
             def __init__(self, ids):
                 self.ids = ids
+
         # Produce repeated token sequence up to length
         words = text.split()
         return Tokens([min(i % self.vocab_size, self.vocab_size - 1) for i in range(max(1, len(words)))])
@@ -71,17 +70,19 @@ def test_factored_gla_numerical_parity_and_scaling():
 
 def test_chunked_prefill_parity_at_long_context():
     """Verify chunked prefill (1024 slices) yields identical output to full sequence prefill."""
-    cfg = build_config({
-        "vocab_size": 1000,
-        "hidden_dim": 128,
-        "num_heads": 2,
-        "head_dim": 64,
-        "num_layers": 4,
-        "num_experts": 2,
-        "router_prefix_layers": 1,
-        "reflex_exit_layer": 2,
-        "limbic_exit_layer": 3,
-    })
+    cfg = build_config(
+        {
+            "vocab_size": 1000,
+            "hidden_dim": 128,
+            "num_heads": 2,
+            "head_dim": 64,
+            "num_layers": 4,
+            "num_experts": 2,
+            "router_prefix_layers": 1,
+            "reflex_exit_layer": 2,
+            "limbic_exit_layer": 3,
+        }
+    )
     model = build_model(cfg).eval()
 
     seq_len = 2048
@@ -132,17 +133,19 @@ def test_hybrid_attention_sdpa_dispatch_with_kv_cache():
 
 def test_long_context_generation_response_with_chunked_prefill():
     """Verify generate_response handles long prompts seamlessly via chunked prefill."""
-    cfg = build_config({
-        "vocab_size": 500,
-        "hidden_dim": 128,
-        "num_heads": 2,
-        "head_dim": 64,
-        "num_layers": 4,
-        "num_experts": 2,
-        "router_prefix_layers": 1,
-        "reflex_exit_layer": 2,
-        "limbic_exit_layer": 3,
-    })
+    cfg = build_config(
+        {
+            "vocab_size": 500,
+            "hidden_dim": 128,
+            "num_heads": 2,
+            "head_dim": 64,
+            "num_layers": 4,
+            "num_experts": 2,
+            "router_prefix_layers": 1,
+            "reflex_exit_layer": 2,
+            "limbic_exit_layer": 3,
+        }
+    )
     model = build_model(cfg).eval()
     tokenizer = DummyTokenizer(vocab_size=500)
 

@@ -40,15 +40,22 @@ class _FP8MatmulFn(torch.autograd.Function):
         # Save originals for backward (in master precision)
         ctx.save_for_backward(x, weight_master, bias)
 
-        # Check if hardware native scaled_mm is available
+        orig_shape = x.shape
+        flat_x = x.reshape(-1, x.shape[-1])
+
+        # Check if hardware native scaled_mm is available and matrix dimensions meet SM89/100/120 %16 alignment
         use_native = False
-        if _HAS_SCALED_MM and x.is_cuda:
+        if (
+            _HAS_SCALED_MM
+            and x.is_cuda
+            and flat_x.shape[0] >= 16
+            and (flat_x.shape[0] % 16 == 0)
+            and (flat_x.shape[1] % 16 == 0)
+            and (weight_master.shape[0] % 16 == 0)
+        ):
             caps = PrecisionCapabilities.detect(x.device)
             if caps.native_scaled_mm:
                 use_native = True
-
-        orig_shape = x.shape
-        flat_x = x.reshape(-1, x.shape[-1])
 
         if use_native:
             # Quantize activations to FP8
@@ -149,6 +156,16 @@ class FP8Linear(nn.Module):
         weight_master = self.weight
         weight_fp8 = getattr(self.weight, "_fp8_tensor", None)
         weight_inv_scale = getattr(self.weight, "_fp8_inv_scale", None)
+        if not self.training and not torch.is_grad_enabled() and weight_fp8 is None:
+            sig = (weight_master.data_ptr(), weight_master._version)
+            if self.__dict__.get("_eval_fp8_sig") != sig or "_eval_w_fp8" not in self.__dict__:
+                with torch.no_grad():
+                    wf, sw = _quantize_to_fp8(weight_master)
+                    self.__dict__["_eval_w_fp8"] = wf
+                    self.__dict__["_eval_sw_bf16"] = sw.to(dtype=weight_master.dtype)
+                    self.__dict__["_eval_fp8_sig"] = sig
+            w_deq = self.__dict__["_eval_w_fp8"].to(dtype=x.dtype) * self.__dict__["_eval_sw_bf16"].to(dtype=x.dtype)
+            return torch.nn.functional.linear(x, w_deq, self.bias.to(dtype=x.dtype) if self.bias is not None else None)
 
         return _FP8MatmulFn.apply(x, weight_master, self.bias, weight_fp8, weight_inv_scale)
 

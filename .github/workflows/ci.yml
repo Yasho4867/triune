@@ -44,6 +44,10 @@ jobs:
       run: |
         python -m unittest discover tests
 
+    - name: Verify Mathematical Invariants & Benchmark Validity
+      run: |
+        python -m unittest tests.test_pipeline_integration tests.test_self_speculative_decoding tests.test_staging_invariants tests.test_triangular_core_integrity tests.test_benchmark_validity
+
     - name: Validate DAG Parser & Typed Port Contracts
       run: |
         python -c "from triune.plugins.node_schema import PortType, is_port_compatible; from triune.plugins.registry import global_registry; from triune.execution.dag import DAGParser, ExecutionEngine; catalog = global_registry.get_catalog(); assert len(catalog) >= 30, f'Expected at least 30 nodes, got {len(catalog)}'; print(f'Validated {len(catalog)} registered DAG nodes with typed contracts.')"
@@ -59,4 +63,4 @@ jobs:
         "$RUNNER_TEMP/triune-venv/bin/pip" install --no-deps dist/*.whl
         "$RUNNER_TEMP/triune-venv/bin/triune" --help
         cd "$RUNNER_TEMP"
-        PYTHONPATH="$RUNNER_TEMP/triune-wheel" python -c "import scripts.train, scripts.chat, scripts.gpucheck, triune.cli; print('Wheel CLI modules import from the installed artifact.')"
+        PYTHONPATH="$RUNNER_TEMP/triune-wheel" python -c "import scripts.train, scripts.chat, triune.cli; print('Wheel CLI modules import from the installed artifact.')"

@@ -14,8 +14,8 @@ Verifies:
    - scripts/train.py and scripts/chat.py argument parser parity
 """
 
-from unittest.mock import patch
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -342,6 +342,7 @@ def test_upgrade_all_seven_standard_models(app_client):
 
     # Verify studio/src/app.js exposes UPGRADEABLE_MODELS and the 7 standard models
     from pathlib import Path
+
     app_js = Path("studio/src/app.js").read_text(encoding="utf-8")
     assert "UPGRADEABLE_MODELS = [" in app_js
     for model_name, _, _ in models_to_test:
@@ -551,7 +552,10 @@ def test_realtime_active_model_simulation_and_telemetry(app_client):
     assert len(spec["layer_mapping"]) == spec["num_layers"]
 
     # 2. Verify dynamic model selection in /v1/models/preset reflects in active_model_spec
-    preset_res = app_client.post("/v1/models/preset", json={"preset_id": "triune-base", "num_layers": 8, "hidden_dim": 384, "num_heads": 6, "num_experts": 4})
+    preset_res = app_client.post(
+        "/v1/models/preset",
+        json={"preset_id": "triune-base", "num_layers": 8, "hidden_dim": 384, "num_heads": 6, "num_experts": 4},
+    )
     assert preset_res.status_code == 200
 
     neurons_res = app_client.get("/v1/playground/neurons")
@@ -569,9 +573,3 @@ def test_realtime_active_model_simulation_and_telemetry(app_client):
     assert "emitRealtimePulse" in app_js
     assert "upgradeModelName" in app_js
     assert "'active'" in app_js
-
-
-
-
-
-

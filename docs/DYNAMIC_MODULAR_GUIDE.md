@@ -102,6 +102,7 @@ python scripts/train.py \
 - `--num_experts`: Number of MoE experts per routed block.
 - `--dataset_name`: Hugging Face dataset ID or local path (`.jsonl`, `.txt`, `.parquet`).
 - `--target_depth_dist`: Comma-separated target probabilities for early exits (e.g. `0.4,0.3,0.3`).
-- `--steer_scale`: Subspace steering coefficient for centroid-augmented GaLore optimizer.
+- `--steer_scale`: Subspace steering coefficient for centroid-augmented `sCholQR2` Triangular Core optimizer.
+- `--compress_mode`: Dynamic tokenizer forward integration mode (`mean_pool` compressed representation or exact-logit `expand`).
 - `--shuffle_buffer`: Token shuffle buffer size for streaming datasets.
 - `--no_wandb`: Disables Weights & Biases logging for local training.

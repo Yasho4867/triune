@@ -16,23 +16,19 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import platform
-import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import torch
-import torch.nn.functional as F
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from triune.data.dynamic_tokenizer import DynamicTokenizer
-from triune.model.jev import JEVExitRouter, JEVLatentPredictor, JEVObjective
 from triune.runtime.parallel_engine import ParallelEngine
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -72,7 +68,9 @@ def benchmark_gla_prefill_matrix(
 
     logger.info("Executing GLA Batched Prefill Throughput Matrix...")
     print("\n" + "=" * 90)
-    print(f"{'Batch':>6} | {'SeqLen':>7} | {'Tokens':>10} | {'Latency (ms)':>13} | {'Throughput (tok/s)':>20} | {'Status':>12}")
+    print(
+        f"{'Batch':>6} | {'SeqLen':>7} | {'Tokens':>10} | {'Latency (ms)':>13} | {'Throughput (tok/s)':>20} | {'Status':>12}"
+    )
     print("=" * 90)
 
     for B in batch_sizes:
@@ -85,7 +83,9 @@ def benchmark_gla_prefill_matrix(
                 tensor_mem_bytes = total_tokens * engine.dim * elem_bytes * 8
                 free_mem, total_mem = torch.cuda.mem_get_info()
                 if tensor_mem_bytes > (free_mem * 0.85):
-                    print(f"{B:>6} | {T:>7} | {total_tokens:>10,d} | {'SKIPPED (VRAM limit)':>13} | {'N/A':>20} | {'VRAM BOUND':>12}")
+                    print(
+                        f"{B:>6} | {T:>7} | {total_tokens:>10,d} | {'SKIPPED (VRAM limit)':>13} | {'N/A':>20} | {'VRAM BOUND':>12}"
+                    )
                     continue
 
             try:
@@ -226,7 +226,9 @@ def benchmark_jev_speculative_verification(
     dim = engine.dim
 
     print("-" * 85)
-    print(f"{'Batch':>6} | {'K (Drafts)':>10} | {'Total Drafts':>14} | {'Latency (us)':>14} | {'Verify Rate (tok/s)':>22} | {'Vocab Compute':>14}")
+    print(
+        f"{'Batch':>6} | {'K (Drafts)':>10} | {'Total Drafts':>14} | {'Latency (us)':>14} | {'Verify Rate (tok/s)':>22} | {'Vocab Compute':>14}"
+    )
     print("-" * 85)
 
     for B in batch_sizes:
@@ -323,8 +325,12 @@ DeepSeek-V3 load-balanced MoE routing executes with zero auxiliary loss gradient
 
     print("-" * 75)
     print("Dynamic Tokenizer Sequence Compression:")
-    print(f"  Code Sample: {res_code.uncompressed_length} -> {res_code.compressed_length} tokens | Ratio: {res_code.compression_ratio:.2f}x | Lossless: {code_parity}")
-    print(f"  Text Sample: {res_text.uncompressed_length} -> {res_text.compressed_length} tokens | Ratio: {res_text.compression_ratio:.2f}x | Lossless: {text_parity}")
+    print(
+        f"  Code Sample: {res_code.uncompressed_length} -> {res_code.compressed_length} tokens | Ratio: {res_code.compression_ratio:.2f}x | Lossless: {code_parity}"
+    )
+    print(
+        f"  Text Sample: {res_text.uncompressed_length} -> {res_text.compressed_length} tokens | Ratio: {res_text.compression_ratio:.2f}x | Lossless: {text_parity}"
+    )
     print("-" * 75 + "\n")
 
     return {
@@ -342,7 +348,9 @@ DeepSeek-V3 load-balanced MoE routing executes with zero auxiliary loss gradient
 def main():
     parser = argparse.ArgumentParser(description="Triune Multi-Million Tok/s Benchmark Suite")
     parser.add_argument("--batch-sizes", type=str, default="1,4,16,32,64", help="Comma-separated batch sizes")
-    parser.add_argument("--seq-lengths", type=str, default="512,1024,2048,4096,8192", help="Comma-separated sequence lengths")
+    parser.add_argument(
+        "--seq-lengths", type=str, default="512,1024,2048,4096,8192", help="Comma-separated sequence lengths"
+    )
     parser.add_argument("--dim", type=int, default=256, help="Model hidden dimension")
     parser.add_argument("--heads", type=int, default=4, help="Attention heads")
     parser.add_argument("--head-dim", type=int, default=64, help="Head dimension")
@@ -350,7 +358,9 @@ def main():
     parser.add_argument("--num-streams", type=int, default=4, help="Number of parallel CUDA streams")
     parser.add_argument("--iters", type=int, default=10, help="Benchmark iterations per configuration")
     parser.add_argument("--warmup", type=int, default=3, help="Warmup iterations")
-    parser.add_argument("--output-json", type=str, default="benchmarks/million_throughput.json", help="Output JSON path")
+    parser.add_argument(
+        "--output-json", type=str, default="benchmarks/million_throughput.json", help="Output JSON path"
+    )
     args = parser.parse_args()
 
     batch_sizes = [int(b.strip()) for b in args.batch_sizes.split(",") if b.strip()]

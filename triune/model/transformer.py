@@ -1,3 +1,4 @@
+import contextlib
 import math
 from typing import Any, List, Optional
 
@@ -81,6 +82,9 @@ class TriuneTransformer(nn.Module):
         self.last_route_logits = None
         self.last_depth_choice = None
         self.last_balance_loss = None
+        self.last_calm_exit_depths = None
+        self._composite_id_map: dict[int, int] = {}
+        self._base_vocab_size = vocab_size
 
         self.token_embed = nn.Embedding(vocab_size, hidden_dim)
         exit_layers = [reflex_exit_layer, limbic_exit_layer]
@@ -124,25 +128,54 @@ class TriuneTransformer(nn.Module):
     def enable_jev_routing(self, threshold: float = 0.85, distance_metric: str = "geodesic"):
         """Enable Joint-Embedding Predictive Architecture (JEV) representation-driven exit routing."""
         from triune.model.jev import JEVExitRouter
+
         device = next(self.parameters()).device
         dtype = next(self.parameters()).dtype
-        self.jev_router = JEVExitRouter(dim=self.hidden_dim, threshold=threshold, distance_metric=distance_metric).to(device=device, dtype=dtype)
+        self.jev_router = JEVExitRouter(dim=self.hidden_dim, threshold=threshold, distance_metric=distance_metric).to(
+            device=device, dtype=dtype
+        )
         return self.jev_router
 
-    def embed_compressed(self, input_ids: torch.Tensor, tokenizer: Any, mean_pool: bool = True) -> torch.Tensor:
+    def embed_compressed(
+        self,
+        input_ids: torch.Tensor,
+        tokenizer: Any,
+        mean_pool: bool = True,
+        compress_mode: Optional[str] = None,
+    ) -> torch.Tensor:
         """Embed DynamicTokenizer ids, expanding composite ids into base-vocabulary embeddings.
 
-        mean_pool=True keeps one vector per compressed position (mean of its constituent base
-        embeddings). mean_pool=False returns the fully expanded base sequence, so the model
-        output is identical to running the uncompressed ids; it requires equal expanded length per row.
+        Args:
+            input_ids: Token tensor containing base and/or composite dynamic IDs.
+            tokenizer: DynamicTokenizer instance supporting ``decompress_tokens``.
+            mean_pool: Used when ``compress_mode`` is ``None``.
+            compress_mode: Optional explicit mode overriding ``mean_pool``:
+                - ``"mean_pool"`` (``mean_pool=True``): averages constituent base embeddings per
+                  compressed position ($T_{comp} < T_{base}$). Preserves lossless tokenizer text
+                  reconstruction, but alters sequence length and requires pooled-embedding training
+                  or ``extend_vocabulary_for_tokenizer()`` for model-output equivalence.
+                - ``"expand"`` (``mean_pool=False``): expands composite IDs to base tokens before
+                  embedding lookup, yielding bit-for-bit identical logits to uncompressed input IDs
+                  (requires equal expanded length across batch rows).
         """
+        if compress_mode is not None:
+            if compress_mode == "expand":
+                use_mean_pool = False
+            elif compress_mode == "mean_pool":
+                use_mean_pool = True
+            else:
+                raise ValueError(f"Unknown compress_mode={compress_mode!r}; expected 'mean_pool' or 'expand'")
+        else:
+            use_mean_pool = bool(mean_pool)
+
         uniq, inverse = input_ids.unique(return_inverse=True)
         expansions = [tokenizer.decompress_tokens([t]) for t in uniq.tolist()]
-        bad = [b for e in expansions for b in e if not 0 <= b < self.vocab_size]
+        base_limit = getattr(self, "_base_vocab_size", self.vocab_size)
+        bad = [b for e in expansions for b in e if not 0 <= b < base_limit]
         if bad:
             raise ValueError(f"Expanded base id {bad[0]} outside model vocab_size={self.vocab_size}")
         dev = input_ids.device
-        if mean_pool:
+        if use_mean_pool:
             lens = torch.tensor([len(e) for e in expansions], device=dev)
             emb = self.token_embed(torch.tensor([b for e in expansions for b in e], device=dev))
             seg = torch.repeat_interleave(torch.arange(uniq.numel(), device=dev), lens)
@@ -153,6 +186,109 @@ class TriuneTransformer(nn.Module):
         if len({len(r) for r in rows}) != 1:
             raise ValueError("mean_pool=False requires equal expanded length across batch rows")
         return self.token_embed(torch.tensor(rows, device=dev))
+
+    def extend_vocabulary_for_tokenizer(self, tokenizer: Any) -> dict[int, int]:
+        """Extend embeddings, final_head, and exit_heads to natively address DynamicTokenizer composite IDs.
+
+        Maps composite token IDs ``>= _base_vocab_size`` into contiguous vocabulary rows initialized
+        to the mean of their constituent base embeddings, enabling zero-pooling native forward
+        execution and fine-tuning on compressed sequences.
+        """
+        base_limit = getattr(self, "_base_vocab_size", self.vocab_size)
+        candidates = sorted(
+            tid
+            for tid in (
+                set(getattr(tokenizer, "expansion_cache", {}).keys())
+                | set(getattr(tokenizer, "decomp_rules", {}).keys())
+            )
+            if int(tid) >= base_limit and int(tid) not in self._composite_id_map
+        )
+        valid_pairs: list[tuple[int, list[int]]] = []
+        for tid in candidates:
+            base_ids = tokenizer.decompress_tokens([tid])
+            if base_ids and all(0 <= int(b) < base_limit for b in base_ids):
+                valid_pairs.append((int(tid), [int(b) for b in base_ids]))
+        if not valid_pairs:
+            return dict(self._composite_id_map)
+
+        old_vocab = self.vocab_size
+        new_vocab = old_vocab + len(valid_pairs)
+        dev = self.token_embed.weight.device
+        dtype = self.token_embed.weight.dtype
+
+        with torch.no_grad():
+            old_w = self.final_head.weight.detach()
+            new_head = nn.Linear(self.hidden_dim, new_vocab, bias=False, device=dev, dtype=dtype)
+            new_head.weight[:old_vocab].copy_(old_w)
+            for offset, (tid, base_ids) in enumerate(valid_pairs):
+                row_idx = old_vocab + offset
+                idx_t = torch.tensor(base_ids, device=dev, dtype=torch.long)
+                new_head.weight[row_idx].copy_(old_w.index_select(0, idx_t).mean(dim=0))
+                self._composite_id_map[tid] = row_idx
+
+            new_embed = nn.Embedding(new_vocab, self.hidden_dim, device=dev, dtype=dtype)
+            new_embed.weight = new_head.weight
+            self.final_head = new_head
+            self.token_embed = new_embed
+
+            for layer in self.layers:
+                if getattr(layer, "exit_head", None) is not None:
+                    old_ex = layer.exit_head
+                    has_bias = old_ex.bias is not None
+                    new_ex = nn.Linear(self.hidden_dim, new_vocab, bias=has_bias, device=dev, dtype=old_ex.weight.dtype)
+                    new_ex.weight[:old_vocab].copy_(old_ex.weight.detach())
+                    if has_bias:
+                        new_ex.bias[:old_vocab].copy_(old_ex.bias.detach())
+                    for offset, (_, base_ids) in enumerate(valid_pairs):
+                        row_idx = old_vocab + offset
+                        idx_t = torch.tensor(base_ids, device=dev, dtype=torch.long)
+                        new_ex.weight[row_idx].copy_(old_ex.weight.detach().index_select(0, idx_t).mean(dim=0))
+                        if has_bias:
+                            new_ex.bias[row_idx].copy_(old_ex.bias.detach().index_select(0, idx_t).mean(dim=0))
+                    layer.exit_head = new_ex
+
+        self.vocab_size = new_vocab
+        return dict(self._composite_id_map)
+
+    @staticmethod
+    def _slice_cache(cache: Optional[List[Any]], idx: torch.Tensor) -> Optional[List[Any]]:
+        if cache is None:
+            return None
+        sliced = []
+        for entry in cache:
+            if entry is not None and isinstance(entry, tuple) and entry[0] is not None:
+                s, off = entry
+                sliced.append((s.index_select(0, idx), off))
+            else:
+                sliced.append(entry)
+        return sliced
+
+    @staticmethod
+    def _scatter_cache(
+        dst_cache: Optional[List[Any]],
+        src_cache: Optional[List[Any]],
+        idx: torch.Tensor,
+        batch_size: int,
+        device: torch.device,
+    ) -> Optional[List[Any]]:
+        if dst_cache is None or src_cache is None:
+            return dst_cache
+        for l_idx, entry in enumerate(src_cache):
+            if entry is not None and isinstance(entry, tuple) and entry[0] is not None:
+                s_d, off = entry
+                if (
+                    dst_cache[l_idx] is not None
+                    and isinstance(dst_cache[l_idx], tuple)
+                    and dst_cache[l_idx][0] is not None
+                ):
+                    new_s, _ = dst_cache[l_idx]
+                    new_s = new_s.index_copy(0, idx, s_d.to(new_s.dtype))
+                    dst_cache[l_idx] = (new_s, off)
+                else:
+                    full_s = torch.zeros(batch_size, *s_d.shape[1:], device=device, dtype=s_d.dtype)
+                    full_s = full_s.index_copy(0, idx, s_d)
+                    dst_cache[l_idx] = (full_s, off)
+        return dst_cache
 
     def init_cache(self, batch_size: int = 1) -> list[Any]:
         """Initializes empty recurrent GLA cache states for all layers."""
@@ -250,8 +386,24 @@ class TriuneTransformer(nn.Module):
             x = inputs_embeds
         else:
             active_tok = tokenizer if tokenizer is not None else getattr(self, "tokenizer", None)
-            if active_tok is not None and input_ids.numel() > 0 and int(input_ids.max().item()) >= self.vocab_size:
-                x = self.embed_compressed(input_ids, active_tok)
+            base_v = getattr(self, "_base_vocab_size", self.vocab_size)
+            if input_ids.numel() > 0 and int(input_ids.max().item()) >= base_v:
+                comp_map = getattr(self, "_composite_id_map", None) or {}
+                if comp_map:
+                    high_ids = input_ids[input_ids >= base_v].unique().tolist()
+                    if all(int(tid) in comp_map for tid in high_ids):
+                        remapped = input_ids.clone()
+                        for tid in high_ids:
+                            remapped[input_ids == int(tid)] = int(comp_map[int(tid)])
+                        x = self.token_embed(remapped)
+                    elif active_tok is not None:
+                        x = self.embed_compressed(input_ids, active_tok)
+                    else:
+                        x = self.token_embed(input_ids)
+                elif active_tok is not None and int(input_ids.max().item()) >= self.vocab_size:
+                    x = self.embed_compressed(input_ids, active_tok)
+                else:
+                    x = self.token_embed(input_ids)
             else:
                 x = self.token_embed(input_ids)
         B, T = x.shape[:2]
@@ -279,49 +431,98 @@ class TriuneTransformer(nn.Module):
             if new_cache is not None:
                 new_cache[self.reflex_exit_layer] = new_c
 
-            probs_r = F.softmax(logits_r[:, -1, :].float(), dim=-1)
+            probs_r = F.softmax(logits_r.float(), dim=-1)
             top2_r = torch.topk(probs_r, 2, dim=-1).values
-            margin_r = top2_r[:, 0] - top2_r[:, 1]
-            if (margin_r >= confidence_threshold).all():
-                if cache is not None:
-                    return logits_r, new_cache
-                if return_balance_loss:
-                    return logits_r, route_logits, balance_loss
-                return logits_r, route_logits
+            margin_r = top2_r[..., 0] - top2_r[..., 1]  # [B, T_out]
+            settled_r = margin_r >= confidence_threshold
 
-            # Step 2: Continue forward from Reflex to Limbic Exit (L5) without recomputing early layers
-            x_limbic, new_cache = self._run_layers(
-                x_reflex, self.reflex_exit_layer + 1, self.limbic_exit_layer, cache=new_cache
+            logits_out = logits_r.clone()
+            calm_exit_depths = torch.full(settled_r.shape, 2, dtype=torch.long, device=device)
+            calm_exit_depths = torch.where(settled_r, torch.zeros_like(calm_exit_depths), calm_exit_depths)
+
+            need_limbic = (~settled_r.all(dim=1)).nonzero(as_tuple=True)[0]
+            if need_limbic.numel() == 0:
+                self.last_calm_exit_depths = calm_exit_depths.detach()
+                self.last_depth_choice = calm_exit_depths[:, -1].detach()
+                if cache is not None:
+                    return logits_out, new_cache
+                if return_balance_loss:
+                    return logits_out, route_logits, balance_loss
+                return logits_out, route_logits
+
+            # Step 2: Compact to unsettled batch items and continue from Reflex to Limbic Exit (L5)
+            x_r_act = x_reflex.index_select(0, need_limbic)
+            l_cache = self._slice_cache(new_cache, need_limbic) if cache is not None else None
+            x_limbic_act, l_cache = self._run_layers(
+                x_r_act, self.reflex_exit_layer + 1, self.limbic_exit_layer, cache=l_cache
             )
             blk_lim = self.layers[self.limbic_exit_layer]
-            layer_c = new_cache[self.limbic_exit_layer] if new_cache is not None else None
-            x_limbic, logits_l, new_c = self._forward_block(
-                blk_lim, x_limbic, True, cache=layer_c, exit_last_token_only=last_token_only
+            layer_c = l_cache[self.limbic_exit_layer] if l_cache is not None else None
+            x_limbic_act, logits_l_act, new_c = self._forward_block(
+                blk_lim, x_limbic_act, True, cache=layer_c, exit_last_token_only=last_token_only
             )
-            if new_cache is not None:
-                new_cache[self.limbic_exit_layer] = new_c
+            if l_cache is not None:
+                l_cache[self.limbic_exit_layer] = new_c
+                new_cache = self._scatter_cache(new_cache, l_cache, need_limbic, B, device)
 
-            probs_l = F.softmax(logits_l[:, -1, :].float(), dim=-1)
+            probs_l = F.softmax(logits_l_act.float(), dim=-1)
             top2_l = torch.topk(probs_l, 2, dim=-1).values
-            margin_l = top2_l[:, 0] - top2_l[:, 1]
-            if (margin_l >= confidence_threshold * 0.85).all():
-                if cache is not None:
-                    return logits_l, new_cache
-                if return_balance_loss:
-                    return logits_l, route_logits, balance_loss
-                return logits_l, route_logits
+            margin_l = top2_l[..., 0] - top2_l[..., 1]  # [B_act, T_out]
+            settled_r_act = settled_r.index_select(0, need_limbic)
+            settled_l_act = (~settled_r_act) & (margin_l >= confidence_threshold * 0.85)
 
-            # Step 3: Continue forward from Limbic to full Cortex depth (L8)
-            x_cortex, new_cache = self._run_layers(
-                x_limbic, self.limbic_exit_layer + 1, self.num_layers, cache=new_cache
+            prev_logits_act = logits_out.index_select(0, need_limbic)
+            updated_l_act = torch.where(
+                settled_r_act.unsqueeze(-1),
+                prev_logits_act,
+                logits_l_act.to(logits_out.dtype),
             )
-            x_pos_c = x_cortex[:, -1:, :] if last_token_only else x_cortex
-            logits_c = self.final_head(self.final_norm(x_pos_c))
+            logits_out = logits_out.index_copy(0, need_limbic, updated_l_act)
+
+            prev_depths_act = calm_exit_depths.index_select(0, need_limbic)
+            updated_depths_l = torch.where(settled_l_act, torch.ones_like(prev_depths_act), prev_depths_act)
+            calm_exit_depths = calm_exit_depths.index_copy(0, need_limbic, updated_depths_l)
+
+            still_unsettled_act = ~(settled_r_act | settled_l_act)
+            rel_cortex = still_unsettled_act.any(dim=1).nonzero(as_tuple=True)[0]
+            if rel_cortex.numel() == 0:
+                self.last_calm_exit_depths = calm_exit_depths.detach()
+                self.last_depth_choice = calm_exit_depths[:, -1].detach()
+                if cache is not None:
+                    return logits_out, new_cache
+                if return_balance_loss:
+                    return logits_out, route_logits, balance_loss
+                return logits_out, route_logits
+
+            # Step 3: Compact to remaining unsettled items and continue from Limbic to full Cortex depth (L8)
+            abs_cortex = need_limbic.index_select(0, rel_cortex)
+            x_l_act = x_limbic_act.index_select(0, rel_cortex)
+            c_cache = self._slice_cache(l_cache, rel_cortex) if cache is not None else None
+            x_cortex_act, c_cache = self._run_layers(
+                x_l_act, self.limbic_exit_layer + 1, self.num_layers, cache=c_cache
+            )
+            if cache is not None and c_cache is not None:
+                new_cache = self._scatter_cache(new_cache, c_cache, abs_cortex, B, device)
+
+            x_pos_c = x_cortex_act[:, -1:, :] if last_token_only else x_cortex_act
+            logits_c_act = self.final_head(self.final_norm(x_pos_c))
+
+            still_unsettled_c = still_unsettled_act.index_select(0, rel_cortex)
+            prev_logits_c = logits_out.index_select(0, abs_cortex)
+            updated_c_act = torch.where(
+                still_unsettled_c.unsqueeze(-1),
+                logits_c_act.to(logits_out.dtype),
+                prev_logits_c,
+            )
+            logits_out = logits_out.index_copy(0, abs_cortex, updated_c_act)
+
+            self.last_calm_exit_depths = calm_exit_depths.detach()
+            self.last_depth_choice = calm_exit_depths[:, -1].detach()
             if cache is not None:
-                return logits_c, new_cache
+                return logits_out, new_cache
             if return_balance_loss:
-                return logits_c, route_logits, balance_loss
-            return logits_c, route_logits
+                return logits_out, route_logits, balance_loss
+            return logits_out, route_logits
 
         if exit_policy == "jev" and self.jev_router is not None and force_depth is None:
             # Joint-Embedding Predictive Architecture (JEV) representation routing
@@ -397,15 +598,7 @@ class TriuneTransformer(nn.Module):
             if idx.numel() == 0:
                 continue
             x_d = x_prefix.index_select(0, idx)
-            d_cache = None
-            if cache is not None:
-                d_cache = []
-                for entry in new_cache:
-                    if entry is not None and isinstance(entry, tuple) and entry[0] is not None:
-                        s, off = entry
-                        d_cache.append((s.index_select(0, idx), off))
-                    else:
-                        d_cache.append(entry)
+            d_cache = self._slice_cache(new_cache, idx) if cache is not None else None
 
             if d == 0:
                 x_d, d_cache = self._run_layers(x_d, self.router_prefix_layers, self.reflex_exit_layer, cache=d_cache)
@@ -439,21 +632,7 @@ class TriuneTransformer(nn.Module):
                 final_logits = torch.empty(B, T_out, self.final_head.out_features, device=device, dtype=logits_d.dtype)
             final_logits = final_logits.index_copy(0, idx, logits_d.to(final_logits.dtype))
             if cache is not None and d_cache is not None:
-                for l_idx, entry in enumerate(d_cache):
-                    if entry is not None and isinstance(entry, tuple) and entry[0] is not None:
-                        s_d, off = entry
-                        if (
-                            new_cache[l_idx] is not None
-                            and isinstance(new_cache[l_idx], tuple)
-                            and new_cache[l_idx][0] is not None
-                        ):
-                            new_s, _ = new_cache[l_idx]
-                            new_s = new_s.index_copy(0, idx, s_d.to(new_s.dtype))
-                            new_cache[l_idx] = (new_s, off)
-                        else:
-                            full_s = torch.zeros(B, *s_d.shape[1:], device=device, dtype=s_d.dtype)
-                            full_s = full_s.index_copy(0, idx, s_d)
-                            new_cache[l_idx] = (full_s, off)
+                new_cache = self._scatter_cache(new_cache, d_cache, idx, B, device)
 
         if final_logits is None:
             final_logits = torch.empty(B, T, self.final_head.out_features, device=device, dtype=x_prefix.dtype)
@@ -495,3 +674,71 @@ class TriuneTransformer(nn.Module):
         cortex_logits = self.final_head(self.final_norm(x24))
 
         return reflex_logits, limbic_logits, cortex_logits, route_logits
+
+    def distill_exit_heads(
+        self,
+        calibration_ids: torch.Tensor,
+        steps: int = 50,
+        lr: float = 3e-3,
+        batch_size: int = 7,
+        weight_decay: float = 0.01,
+    ) -> dict[str, float | int]:
+        """Self-distill intermediate exit heads toward frozen Cortex predictions via KL divergence."""
+        was_training = self.training
+        prev_grad_flags = [(p, p.requires_grad) for p in self.parameters()]
+        exit_params: list[nn.Parameter] = []
+        for idx in (self.reflex_exit_layer, self.limbic_exit_layer):
+            layer = self.layers[idx]
+            if getattr(layer, "exit_norm", None) is not None:
+                exit_params.extend(layer.exit_norm.parameters())
+            if getattr(layer, "exit_head", None) is not None:
+                exit_params.extend(layer.exit_head.parameters())
+
+        if not exit_params or steps <= 0 or calibration_ids.numel() == 0:
+            return {"steps": 0, "initial_kl_loss": 0.0, "final_kl_loss": 0.0}
+
+        try:
+            for p in self.parameters():
+                p.requires_grad_(False)
+            for p in exit_params:
+                p.requires_grad_(True)
+
+            model_device = next(self.parameters()).device
+            cal_ids = calibration_ids.to(model_device)
+            batches = list(cal_ids.split(max(1, int(batch_size))))
+            is_cuda = model_device.type == "cuda"
+
+            self.eval()
+            torch.manual_seed(42)
+            opt = torch.optim.AdamW(exit_params, lr=lr, weight_decay=weight_decay)
+
+            init_loss: float | None = None
+            final_loss = 0.0
+            autocast_ctx = torch.amp.autocast("cuda", dtype=torch.bfloat16) if is_cuda else contextlib.nullcontext()
+            for _ in range(steps):
+                step_loss = 0.0
+                for batch in batches:
+                    opt.zero_grad()
+                    with autocast_ctx:
+                        r_logits, l_logits, c_logits, _ = self.forward_all_exits(batch, update_stats=False)
+                        p_cortex = F.softmax(c_logits.detach().float(), dim=-1)
+                        loss = F.kl_div(
+                            F.log_softmax(r_logits.float(), dim=-1), p_cortex, reduction="batchmean"
+                        ) + F.kl_div(F.log_softmax(l_logits.float(), dim=-1), p_cortex, reduction="batchmean")
+                    loss.backward()
+                    opt.step()
+                    step_loss += float(loss.detach().item())
+                avg_step_loss = step_loss / max(1, len(batches))
+                if init_loss is None:
+                    init_loss = avg_step_loss
+                final_loss = avg_step_loss
+
+            return {
+                "steps": int(steps),
+                "initial_kl_loss": round(init_loss or 0.0, 4),
+                "final_kl_loss": round(final_loss, 4),
+            }
+        finally:
+            for p, prev_req in prev_grad_flags:
+                p.requires_grad_(prev_req)
+            self.train(was_training)

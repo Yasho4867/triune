@@ -87,13 +87,15 @@ def compute_paired_and_tost(
 ) -> dict:
     """Computes two-tailed paired Student-t test and multi-margin Schuirmann TOST with unrounded IEEE-754 float64 p-values."""
     if len(vals_a) != len(vals_b) or len(vals_a) < 2:
-        raise ValueError(f"Paired test requires equal-length sequences with N >= 2, got {len(vals_a)} and {len(vals_b)}")
+        raise ValueError(
+            f"Paired test requires equal-length sequences with N >= 2, got {len(vals_a)} and {len(vals_b)}"
+        )
     n = len(vals_a)
     df = n - 1
     diffs = [float(a - b) for a, b in zip(vals_a, vals_b)]
     d_mean = float(sum(diffs) / n)
     d_std = float((sum((x - d_mean) ** 2 for x in diffs) / df) ** 0.5) if df > 0 else 0.0
-    d_sem = max(d_std / (n ** 0.5), 1e-12)
+    d_sem = max(d_std / (n**0.5), 1e-12)
     res_2tail = stats.ttest_rel(vals_a, vals_b)
     p_2tail = float(res_2tail.pvalue)
 
@@ -254,7 +256,7 @@ def calc_seed_summary_stats(vals: list[float]) -> dict:
     if n > 1:
         df = n - 1
         s = float((sum((x - m) ** 2 for x in vals) / df) ** 0.5)
-        sem = s / (n ** 0.5)
+        sem = s / (n**0.5)
         t_crit = float(stats.t.ppf(0.975, df=df))
         ci95 = t_crit * sem
     else:
@@ -438,7 +440,9 @@ def _execute_single_subprocess_worker(args: argparse.Namespace) -> None:
         out_payload["triangular_timing_breakdown_ms"] = {
             "non_refresh_mean_ms": round(non_ref_m, 2),
             "refresh_mean_ms": round(ref_m, 2),
-            "amortized_refresh_overhead_per_step_ms": round(max(0.0, ref_m - non_ref_m) / float(subspace_update_gap), 3),
+            "amortized_refresh_overhead_per_step_ms": round(
+                max(0.0, ref_m - non_ref_m) / float(subspace_update_gap), 3
+            ),
         }
 
     with open(args.output_json, "w", encoding="utf-8") as f:
@@ -881,11 +885,17 @@ def run_secondary_checkpoint_verification(
 
                 QL_bar_bf16, QR_bar_bf16 = QL_bar_f32.bfloat16(), QR_bar_f32.bfloat16()
                 orth_bf16 = max(
-                    (torch.mm(QL_bar_bf16.t().float(), QL_bar_bf16.float()) - torch.eye(k_dim, device=device)).norm().item(),
-                    (torch.mm(QR_bar_bf16.t().float(), QR_bar_bf16.float()) - torch.eye(k_dim, device=device)).norm().item(),
+                    (torch.mm(QL_bar_bf16.t().float(), QL_bar_bf16.float()) - torch.eye(k_dim, device=device))
+                    .norm()
+                    .item(),
+                    (torch.mm(QR_bar_bf16.t().float(), QR_bar_bf16.float()) - torch.eye(k_dim, device=device))
+                    .norm()
+                    .item(),
                 )
                 S_bf16 = torch.mm(QL_bar_bf16.t(), torch.mm(G, QR_bar_bf16))
-                rel_bf16 = (S_bf16[lower_mask].float().abs().max().item() if lower_mask.any() else 0.0) / G.float().norm().item()
+                rel_bf16 = (
+                    S_bf16[lower_mask].float().abs().max().item() if lower_mask.any() else 0.0
+                ) / G.float().norm().item()
 
                 max_fp32_orth = max(max_fp32_orth, orth_f32)
                 max_bf16_orth = max(max_bf16_orth, orth_bf16)
@@ -942,7 +952,9 @@ def run_secondary_checkpoint_verification(
             "active_expert_layers_evaluated": len(active_layers),
             "total_qr_operations": total_qr_calls,
             "cholesky_fast_path_survivals": total_qr_calls - total_fallbacks,
-            "cholesky_fast_path_survival_rate_pct": round((total_qr_calls - total_fallbacks) / max(1, total_qr_calls) * 100, 2),
+            "cholesky_fast_path_survival_rate_pct": round(
+                (total_qr_calls - total_fallbacks) / max(1, total_qr_calls) * 100, 2
+            ),
             "householder_fallbacks_triggered": total_fallbacks,
             "householder_fallback_rate_pct": round(total_fallbacks / max(1, total_qr_calls) * 100, 2),
             "max_fp32_orthogonality_error": max_fp32_orth,
@@ -972,7 +984,9 @@ def run_extended_horizon_continuation_verification(
     device_str: str = "cuda",
 ) -> dict:
     """Evaluates longer-horizon (e.g. 600-step) continuation trajectories in fresh OS subprocesses with intermediate validation curves."""
-    print(f"Evaluating extended-horizon ({opt_steps}-step) continuation across seeds {sub_seeds} in fresh OS subprocesses...")
+    print(
+        f"Evaluating extended-horizon ({opt_steps}-step) continuation across seeds {sub_seeds} in fresh OS subprocesses..."
+    )
     return run_subprocess_isolated_verification(
         checkpoint_path=checkpoint_path,
         train_tokens_cpu=train_tokens_cpu,
@@ -1095,7 +1109,9 @@ def run_numerical_qr_residual_verification(
 
     model = build_model(cfg).to(device=device, dtype=torch.bfloat16)
     missing, unexpected = model.load_state_dict(cpu_model_state, strict=True)
-    assert len(missing) == 0 and len(unexpected) == 0, f"Checkpoint mismatch: missing={missing}, unexpected={unexpected}"
+    assert len(missing) == 0 and len(unexpected) == 0, (
+        f"Checkpoint mismatch: missing={missing}, unexpected={unexpected}"
+    )
     model.train()
 
     B, T = batch_size, seq_len
@@ -1396,14 +1412,10 @@ def run_numerical_qr_residual_verification(
             QL_bar_bf16 = QL_bar_f32.bfloat16()
             QR_bar_bf16 = QR_bar_f32.bfloat16()
             orth_l_bf16 = (
-                (torch.mm(QL_bar_bf16.t().float(), QL_bar_bf16.float()) - torch.eye(k_dim, device=device))
-                .norm()
-                .item()
+                (torch.mm(QL_bar_bf16.t().float(), QL_bar_bf16.float()) - torch.eye(k_dim, device=device)).norm().item()
             )
             orth_r_bf16 = (
-                (torch.mm(QR_bar_bf16.t().float(), QR_bar_bf16.float()) - torch.eye(k_dim, device=device))
-                .norm()
-                .item()
+                (torch.mm(QR_bar_bf16.t().float(), QR_bar_bf16.float()) - torch.eye(k_dim, device=device)).norm().item()
             )
 
             S_bf16 = torch.mm(QL_bar_bf16.t(), torch.mm(G, QR_bar_bf16))
@@ -1499,9 +1511,7 @@ def run_numerical_qr_residual_verification(
                 inp_v, tgt_v = tt_v[:-1].view(B, T), tt_v[1:].view(B, T)
                 out_v = model_eval(inp_v)
                 logits_v = out_v[0] if isinstance(out_v, tuple) else out_v
-                v_loss = torch.nn.functional.cross_entropy(
-                    logits_v.view(-1, logits_v.size(-1)).float(), tgt_v.view(-1)
-                )
+                v_loss = torch.nn.functional.cross_entropy(logits_v.view(-1, logits_v.size(-1)).float(), tgt_v.view(-1))
                 v_losses_gpu.append(v_loss.detach().float())
                 del tt_v, inp_v, tgt_v, out_v, logits_v, v_loss
             mean_val = float(torch.stack(v_losses_gpu).float().mean().item())
@@ -1579,7 +1589,9 @@ def run_numerical_qr_residual_verification(
             model_cur.train()
 
             if is_adamw:
-                opt_cur = torch.optim.AdamW(model_cur.parameters(), lr=1e-4, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.01)
+                opt_cur = torch.optim.AdamW(
+                    model_cur.parameters(), lr=1e-4, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.01
+                )
             else:
                 opt_cur = CentroidSteerOptimizer(
                     model_cur,
@@ -1660,7 +1672,9 @@ def run_numerical_qr_residual_verification(
                 seed_result["triangular_timing_breakdown_ms"] = {
                     "non_refresh_mean_ms": round(non_ref_m, 2),
                     "refresh_mean_ms": round(ref_m, 2),
-                    "amortized_refresh_overhead_per_step_ms": round(max(0.0, ref_m - non_ref_m) / float(subspace_update_gap), 3),
+                    "amortized_refresh_overhead_per_step_ms": round(
+                        max(0.0, ref_m - non_ref_m) / float(subspace_update_gap), 3
+                    ),
                 }
 
             del model_cur, opt_cur
@@ -1672,9 +1686,7 @@ def run_numerical_qr_residual_verification(
         seed_runs.append(seed_result)
 
     is_balanced_latin = (len(eval_seeds) % len(base_optimizer_configs) == 0) and all(
-        c == len(eval_seeds) // len(base_optimizer_configs)
-        for counts in position_counts.values()
-        for c in counts
+        c == len(eval_seeds) // len(base_optimizer_configs) for counts in position_counts.values() for c in counts
     )
 
     # Statistical aggregations across seeds using exact Student-t critical values
@@ -1684,7 +1696,7 @@ def run_numerical_qr_residual_verification(
         if n > 1:
             df = n - 1
             s = float((sum((x - m) ** 2 for x in vals) / df) ** 0.5)
-            sem = s / (n ** 0.5)
+            sem = s / (n**0.5)
             t_crit = float(stats.t.ppf(0.975, df=df))
             ci95 = t_crit * sem
         else:
@@ -1700,10 +1712,7 @@ def run_numerical_qr_residual_verification(
         }
 
     agg = {
-        metric_k: {
-            opt_k: calc_stats([r[metric_k][opt_k] for r in seed_runs])
-            for opt_k, _, _ in base_optimizer_configs
-        }
+        metric_k: {opt_k: calc_stats([r[metric_k][opt_k] for r in seed_runs]) for opt_k, _, _ in base_optimizer_configs}
         for metric_k in [
             "final_train_loss",
             "mean_train_loss",
@@ -1735,9 +1744,7 @@ def run_numerical_qr_residual_verification(
         "mean_train_loss": compute_paired_and_tost(
             t_mtrain, a_mtrain, eq_margin=0.05, margin_grid=DEFAULT_VAL_TOST_MARGINS
         ),
-        "final_val_loss": compute_paired_and_tost(
-            t_val, a_val, eq_margin=0.05, margin_grid=DEFAULT_VAL_TOST_MARGINS
-        ),
+        "final_val_loss": compute_paired_and_tost(t_val, a_val, eq_margin=0.05, margin_grid=DEFAULT_VAL_TOST_MARGINS),
     }
 
     # Live Production QR Telemetry Aggregation across seeds
@@ -1746,11 +1753,21 @@ def run_numerical_qr_residual_verification(
     prod_qr_fallbacks = sum(r["triangular_qr_telemetry"]["householder_fallbacks"] for r in seed_runs)
     prod_primary_reasons = {
         k: sum(r["triangular_qr_telemetry"]["primary_fallback_reasons"][k] for r in seed_runs)
-        for k in ["degenerate_columns", "cholesky_non_positive_definite", "condition_ratio_exceeded", "orthogonality_tolerance_exceeded"]
+        for k in [
+            "degenerate_columns",
+            "cholesky_non_positive_definite",
+            "condition_ratio_exceeded",
+            "orthogonality_tolerance_exceeded",
+        ]
     }
     prod_overlapping_triggers = {
         k: sum(r["triangular_qr_telemetry"]["overlapping_triggers"][k] for r in seed_runs)
-        for k in ["degenerate_columns", "cholesky_non_positive_definite", "condition_ratio_exceeded", "orthogonality_tolerance_exceeded"]
+        for k in [
+            "degenerate_columns",
+            "cholesky_non_positive_definite",
+            "condition_ratio_exceeded",
+            "orthogonality_tolerance_exceeded",
+        ]
     }
     prod_qr_agg = {
         "total_qr_calls": prod_qr_total,
@@ -1929,14 +1946,10 @@ def run_numerical_qr_residual_verification(
             QL_bar_bf16 = QL_bar_f32.bfloat16()
             QR_bar_bf16 = QR_bar_f32.bfloat16()
             orth_l_bf16 = (
-                (torch.mm(QL_bar_bf16.t().float(), QL_bar_bf16.float()) - torch.eye(k_dim, device=device))
-                .norm()
-                .item()
+                (torch.mm(QL_bar_bf16.t().float(), QL_bar_bf16.float()) - torch.eye(k_dim, device=device)).norm().item()
             )
             orth_r_bf16 = (
-                (torch.mm(QR_bar_bf16.t().float(), QR_bar_bf16.float()) - torch.eye(k_dim, device=device))
-                .norm()
-                .item()
+                (torch.mm(QR_bar_bf16.t().float(), QR_bar_bf16.float()) - torch.eye(k_dim, device=device)).norm().item()
             )
 
             S_bf16 = torch.mm(QL_bar_bf16.t(), torch.mm(G_bf16, QR_bar_bf16))
@@ -2013,23 +2026,39 @@ def _print_verification_report(res: dict, out_path: Path) -> None:
     if summary["checkpoint_evaluated"]:
         p = summary["checkpoint_provenance"]
         print(f"Evaluated Real Model Checkpoint: {p['checkpoint_path']}")
-        print(f"Model ID: {p['model_id']} | Step: {p['training_step']} | Cumulative Tokens: {p['cumulative_tokens_trained']:,}")
+        print(
+            f"Model ID: {p['model_id']} | Step: {p['training_step']} | Cumulative Tokens: {p['cumulative_tokens_trained']:,}"
+        )
         print(f"Dataset: {p['dataset_provenance']['dataset_name']} ({p['dataset_provenance']['dataset_path']})")
-        print(f"Batches Evaluated: {summary['fineweb_batches_evaluated']} ({p['dataset_provenance']['total_tokens_evaluated']:,} tokens total)")
+        print(
+            f"Batches Evaluated: {summary['fineweb_batches_evaluated']} ({p['dataset_provenance']['total_tokens_evaluated']:,} tokens total)"
+        )
         print(f"Active Expert Layers Evaluated: {summary['checkpoint_active_layers']}")
         print(f"Total QR Operations: {summary['total_qr_operations']}")
-        print(f"Cholesky Fast Path Survivals: {summary['cholesky_fast_path_survivals']} ({summary['cholesky_fast_path_survival_rate_pct']}%)")
-        print(f"Householder Fallbacks Triggered: {summary['householder_fallbacks_triggered']} ({summary['householder_fallback_rate_pct']}%)")
+        print(
+            f"Cholesky Fast Path Survivals: {summary['cholesky_fast_path_survivals']} ({summary['cholesky_fast_path_survival_rate_pct']}%)"
+        )
+        print(
+            f"Householder Fallbacks Triggered: {summary['householder_fallbacks_triggered']} ({summary['householder_fallback_rate_pct']}%)"
+        )
         print("Primary Mutually Exclusive Fallback Breakdown (Sum = Total Fallbacks):")
         for k, v in summary["primary_fallback_reasons"].items():
             print(f"  - {k}: {v}")
         print("Overlapping Co-occurring Diagnostic Triggers:")
         for k, v in summary["overlapping_triggers"].items():
             print(f"  - {k}: {v}")
-        print(f"FineWeb FP32 Max Relative Subdiagonal Residual: {summary['fineweb_gradients_max_fp32_relative_residual']:.3e}")
-        print(f"FineWeb BF16 Max Relative Subdiagonal Residual: {summary['fineweb_gradients_max_bf16_relative_residual']:.3e}")
-        print(f"FineWeb FP32 Max Basis Orthogonality Error:     {summary['fineweb_gradients_max_fp32_orthogonality_error']:.3e}")
-        print(f"FineWeb BF16 Max Basis Orthogonality Error:     {summary['fineweb_gradients_max_bf16_orthogonality_error']:.3e}")
+        print(
+            f"FineWeb FP32 Max Relative Subdiagonal Residual: {summary['fineweb_gradients_max_fp32_relative_residual']:.3e}"
+        )
+        print(
+            f"FineWeb BF16 Max Relative Subdiagonal Residual: {summary['fineweb_gradients_max_bf16_relative_residual']:.3e}"
+        )
+        print(
+            f"FineWeb FP32 Max Basis Orthogonality Error:     {summary['fineweb_gradients_max_fp32_orthogonality_error']:.3e}"
+        )
+        print(
+            f"FineWeb BF16 Max Basis Orthogonality Error:     {summary['fineweb_gradients_max_bf16_orthogonality_error']:.3e}"
+        )
     print("----------------------------------------------------------------------")
     df_val = len(summary["production_optimizer_seeds"]) - 1
     print(
@@ -2062,7 +2091,9 @@ def _print_verification_report(res: dict, out_path: Path) -> None:
         s = agg["final_train_loss"][name]["std"]
         ci = agg["final_train_loss"][name]["ci95"]
         print(f"    - {label:<20}: {m:.4f} +/- {s:.4f} [{ci[0]:.4f}, {ci[1]:.4f}]")
-    print(f"  Final Held-out Validation Loss (64 Batches, 32,768 Tokens, Mean +/- Std, [95% Student-t CI, df={df_val}]):")
+    print(
+        f"  Final Held-out Validation Loss (64 Batches, 32,768 Tokens, Mean +/- Std, [95% Student-t CI, df={df_val}]):"
+    )
     for name, label in [
         ("triangular_centroidsteer", "Triangular Core"),
         ("unconstrained_centroidsteer", "Unconstrained Core"),
@@ -2193,13 +2224,19 @@ def _print_verification_report(res: dict, out_path: Path) -> None:
             f"(diff={sc_pt['paired_mean_diff']:+.4f}, min_eq=+/-{sc_pt['minimum_equivalence_margin_alpha_0_05_nats']}n)"
         )
     print(f"  Live Training QR Telemetry (Triangular Core across {p_qr['total_qr_calls']} calls):")
-    print(f"    - Cholesky fast-path survival: {p_qr['cholesky_fast_path_survivals']} ({p_qr['cholesky_survival_rate_pct']}%)")
-    print(f"    - Householder fallbacks:      {p_qr['householder_fallbacks']} ({p_qr['householder_fallback_rate_pct']}%)")
-    print(f"  Persistent State Memory: CentroidSteer = 0.128 B/p vs AdamW = 8.00 B/p (98.4% reduction)")
+    print(
+        f"    - Cholesky fast-path survival: {p_qr['cholesky_fast_path_survivals']} ({p_qr['cholesky_survival_rate_pct']}%)"
+    )
+    print(
+        f"    - Householder fallbacks:      {p_qr['householder_fallbacks']} ({p_qr['householder_fallback_rate_pct']}%)"
+    )
+    print("  Persistent State Memory: CentroidSteer = 0.128 B/p vs AdamW = 8.00 B/p (98.4% reduction)")
     print("----------------------------------------------------------------------")
     print(f"Stress-Test FP32 Max Basis Orthogonality Error: {summary['stress_test_max_fp32_orthogonality_error']:.3e}")
     print(f"Stress-Test BF16 Max Basis Orthogonality Error: {summary['stress_test_max_bf16_orthogonality_error']:.3e}")
-    print(f"Stress-Test Householder Fallbacks Triggered:   {summary['stress_test_householder_fallbacks']} / {summary['stress_test_active_layers']}")
+    print(
+        f"Stress-Test Householder Fallbacks Triggered:   {summary['stress_test_householder_fallbacks']} / {summary['stress_test_active_layers']}"
+    )
     print("----------------------------------------------------------------------")
     print(f"Synthetic FP32 Max Relative Subdiagonal Residual: {summary['synthetic_max_fp32_relative_residual']:.3e}")
     print(f"Synthetic BF16 Max Relative Subdiagonal Residual: {summary['synthetic_max_bf16_relative_residual']:.3e}")
@@ -2208,7 +2245,9 @@ def _print_verification_report(res: dict, out_path: Path) -> None:
     print("======================================================================")
 
 
-def _rebuild_sub_iso_from_seed_runs(sub_seed_runs: list[dict], opt_steps: int, B: int, T: int, initial_val_loss: float) -> dict:
+def _rebuild_sub_iso_from_seed_runs(
+    sub_seed_runs: list[dict], opt_steps: int, B: int, T: int, initial_val_loss: float
+) -> dict:
     base_optimizer_configs = [
         ("triangular_centroidsteer", True, False),
         ("unconstrained_centroidsteer", False, False),
@@ -2352,19 +2391,29 @@ if __name__ == "__main__":
         t_val = [r["final_val_loss"]["triangular_centroidsteer"] for r in seed_runs]
         a_val = [r["final_val_loss"]["standard_2d_adamw"] for r in seed_runs]
         paired_tests = {
-            "final_train_loss": compute_paired_and_tost(t_train, a_train, eq_margin=0.10, margin_grid=DEFAULT_TRAIN_TOST_MARGINS),
-            "mean_train_loss": compute_paired_and_tost(t_mtrain, a_mtrain, eq_margin=0.05, margin_grid=DEFAULT_VAL_TOST_MARGINS),
-            "final_val_loss": compute_paired_and_tost(t_val, a_val, eq_margin=0.05, margin_grid=DEFAULT_VAL_TOST_MARGINS),
+            "final_train_loss": compute_paired_and_tost(
+                t_train, a_train, eq_margin=0.10, margin_grid=DEFAULT_TRAIN_TOST_MARGINS
+            ),
+            "mean_train_loss": compute_paired_and_tost(
+                t_mtrain, a_mtrain, eq_margin=0.05, margin_grid=DEFAULT_VAL_TOST_MARGINS
+            ),
+            "final_val_loss": compute_paired_and_tost(
+                t_val, a_val, eq_margin=0.05, margin_grid=DEFAULT_VAL_TOST_MARGINS
+            ),
         }
         opt_eval["paired_statistical_tests"] = paired_tests
         res["summary"]["production_optimizer_paired_tests"] = paired_tests
 
         B, T = DEFAULT_BATCH_SIZE, DEFAULT_SEQ_LEN
         total_tokens_needed = (DEFAULT_TRAIN_POOL_BATCHES + DEFAULT_VAL_BATCHES + 5) * B * T + 64
-        full_tokens = load_fineweb_tokens(Path("data/fineweb_edu_real.jsonl"), Path("triune_tokenizer.json"), num_tokens=total_tokens_needed)
+        full_tokens = load_fineweb_tokens(
+            Path("data/fineweb_edu_real.jsonl"), Path("triune_tokenizer.json"), num_tokens=total_tokens_needed
+        )
         train_tokens_cpu = torch.tensor(full_tokens[: DEFAULT_TRAIN_POOL_BATCHES * B * T + 1], dtype=torch.long)
         val_tokens_cpu = torch.tensor(
-            full_tokens[DEFAULT_TRAIN_POOL_BATCHES * B * T : (DEFAULT_TRAIN_POOL_BATCHES + DEFAULT_VAL_BATCHES) * B * T + 1],
+            full_tokens[
+                DEFAULT_TRAIN_POOL_BATCHES * B * T : (DEFAULT_TRAIN_POOL_BATCHES + DEFAULT_VAL_BATCHES) * B * T + 1
+            ],
             dtype=torch.long,
         )
         init_val = float(opt_eval.get("initial_val_loss", 6.0686))
@@ -2397,11 +2446,7 @@ if __name__ == "__main__":
                 device_str=cli_args.device,
             )
             existing_sub = opt_eval.get("subprocess_isolated_verification") or {}
-            existing_map = {
-                r["seed"]: r
-                for r in existing_sub.get("seed_runs", [])
-                if "peak_pytorch_reserved_mb" in r
-            }
+            existing_map = {r["seed"]: r for r in existing_sub.get("seed_runs", []) if "peak_pytorch_reserved_mb" in r}
             for r in part_sub["seed_runs"]:
                 existing_map[r["seed"]] = r
             ordered_runs = [existing_map[s] for s in DEFAULT_SUBPROCESS_ISOLATION_SEEDS if s in existing_map]

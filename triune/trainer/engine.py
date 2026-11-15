@@ -63,6 +63,30 @@ class TrainingEngine:
             pad_id = -100
         return fast_cross_entropy(logits.reshape(-1, vocab_size), y_flat, ignore_index=int(pad_id))
 
+    def _compute_joint_lm_loss(
+        self,
+        reflex_logits: torch.Tensor,
+        limbic_logits: torch.Tensor,
+        cortex_logits: torch.Tensor,
+        y_flat: torch.Tensor,
+        vocab_size: int,
+    ) -> torch.Tensor:
+        """Combine Reflex/Limbic/Cortex CE losses with optional Cortex-to-exit KL self-distillation."""
+        loss_ref = self._compute_lm_loss(reflex_logits, y_flat, vocab_size)
+        loss_limb = self._compute_lm_loss(limbic_logits, y_flat, vocab_size)
+        loss_cort = self._compute_lm_loss(cortex_logits, y_flat, vocab_size)
+        if loss_cort.detach() > loss_limb.detach():
+            lm_loss = 0.22 * loss_ref + 0.23 * loss_limb + 0.55 * loss_cort
+        else:
+            lm_loss = 0.25 * loss_ref + 0.30 * loss_limb + 0.45 * loss_cort
+        exit_distill_coef = float(self.config.get("exit_distill_coef", 0.2))
+        if exit_distill_coef > 0.0:
+            p_cort_det = F.softmax(cortex_logits.detach().float(), dim=-1)
+            kl_ref = F.kl_div(F.log_softmax(reflex_logits.float(), dim=-1), p_cort_det, reduction="batchmean")
+            kl_limb = F.kl_div(F.log_softmax(limbic_logits.float(), dim=-1), p_cort_det, reduction="batchmean")
+            lm_loss = lm_loss + exit_distill_coef * (kl_ref + kl_limb)
+        return lm_loss
+
     def _router_labels_from_logits(self, reflex, limbic, cortex, x, y):
         with torch.no_grad():
             y_flat = y.reshape(-1)
@@ -269,14 +293,7 @@ class TrainingEngine:
                                 sub_x, update_stats=True
                             )
                         sub_lbls = self._router_labels_from_logits(reflex_l, limbic_l, cortex_l, sub_x, sub_y)
-                        l_ref = self._compute_lm_loss(reflex_l, sub_y_flat, vocab_size)
-                        l_limb = self._compute_lm_loss(limbic_l, sub_y_flat, vocab_size)
-                        l_cort = self._compute_lm_loss(cortex_l, sub_y_flat, vocab_size)
-                        sub_lm = (
-                            (0.22 * l_ref + 0.23 * l_limb + 0.55 * l_cort)
-                            if l_cort.detach() > l_limb.detach()
-                            else (0.25 * l_ref + 0.30 * l_limb + 0.45 * l_cort)
-                        )
+                        sub_lm = self._compute_joint_lm_loss(reflex_l, limbic_l, cortex_l, sub_y_flat, vocab_size)
                         rf = route_l.float()
                         sub_r_loss = self.trainer.router_loss_fn(rf, sub_lbls)
                         sub_z = torch.logsumexp(rf, dim=-1).pow(2).mean()
@@ -301,13 +318,9 @@ class TrainingEngine:
                             x, update_stats=True
                         )
                     labels = self._router_labels_from_logits(reflex_logits, limbic_logits, cortex_logits, x, y)
-                    loss_ref = self._compute_lm_loss(reflex_logits, y_flat, vocab_size)
-                    loss_limb = self._compute_lm_loss(limbic_logits, y_flat, vocab_size)
-                    loss_cort = self._compute_lm_loss(cortex_logits, y_flat, vocab_size)
-                    if loss_cort.detach() > loss_limb.detach():
-                        lm_loss = 0.22 * loss_ref + 0.23 * loss_limb + 0.55 * loss_cort
-                    else:
-                        lm_loss = 0.25 * loss_ref + 0.30 * loss_limb + 0.45 * loss_cort
+                    lm_loss = self._compute_joint_lm_loss(
+                        reflex_logits, limbic_logits, cortex_logits, y_flat, vocab_size
+                    )
                     route_f = route_logits.float()
                     router_loss = self.trainer.router_loss_fn(route_f, labels)
                     z_loss = torch.logsumexp(route_f, dim=-1).pow(2).mean()

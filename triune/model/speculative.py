@@ -98,6 +98,7 @@ class SelfSpeculativeGenerator:
 
             # 1. Draft Phase: Reflex exit (force_depth=0) proposes K tokens
             draft_ids: List[int] = []
+            draft_q_probs: List[torch.Tensor] = []
             draft_ctx = curr_ids.clone()
 
             for _ in range(self.k_draft):
@@ -108,8 +109,9 @@ class SelfSpeculativeGenerator:
                 if self.temperature == 0.0:
                     next_tok = int(torch.argmax(next_draft_logits).item())
                 else:
-                    probs = F.softmax(next_draft_logits / self.temperature, dim=-1)
-                    next_tok = int(torch.multinomial(probs, num_samples=1).item())
+                    q_probs = F.softmax(next_draft_logits / self.temperature, dim=-1)
+                    next_tok = int(torch.multinomial(q_probs, num_samples=1).item())
+                    draft_q_probs.append(q_probs)
 
                 draft_ids.append(next_tok)
                 next_tok_tensor = torch.tensor([[next_tok]], device=device, dtype=torch.long)
@@ -127,44 +129,54 @@ class SelfSpeculativeGenerator:
             res_target = self.model(draft_ctx, force_depth=2)
             logits_target = res_target[0] if isinstance(res_target, (tuple, list)) else res_target
 
-            # Verify each proposed draft token
+            # Verify each proposed draft token (greedy exact parity at T=0,
+            # Leviathan et al. 2023 rejection sampling at T>0)
             accepted_in_this_cycle = 0
             stopped = False
 
             for k_idx in range(K_actual):
                 target_pos_logits = logits_target[0, curr_len - 1 + k_idx]
-                if self.temperature == 0.0:
-                    target_tok = int(torch.argmax(target_pos_logits).item())
-                else:
-                    probs = F.softmax(target_pos_logits / self.temperature, dim=-1)
-                    target_tok = int(torch.multinomial(probs, num_samples=1).item())
-
                 draft_tok = draft_ids[k_idx]
 
-                if draft_tok == target_tok:
-                    # Accepted
+                if self.temperature == 0.0:
+                    target_tok = int(torch.argmax(target_pos_logits).item())
+                    accepted = draft_tok == target_tok
+                    emitted_tok = draft_tok if accepted else target_tok
+                else:
+                    p_probs = F.softmax(target_pos_logits / self.temperature, dim=-1)
+                    q_probs = draft_q_probs[k_idx]
+                    p_x = float(p_probs[draft_tok].item())
+                    q_x = float(q_probs[draft_tok].item())
+                    accept_prob = min(1.0, p_x / max(q_x, 1e-12))
+                    u = float(torch.rand((), device=device).item())
+                    if u < accept_prob:
+                        accepted = True
+                        emitted_tok = draft_tok
+                    else:
+                        accepted = False
+                        residual = torch.clamp(p_probs - q_probs, min=0.0)
+                        res_sum = residual.sum()
+                        if float(res_sum.item()) > 1e-12:
+                            residual = residual / res_sum
+                        else:
+                            residual = p_probs
+                        emitted_tok = int(torch.multinomial(residual, num_samples=1).item())
+
+                generated_tokens.append(emitted_tok)
+                curr_ids = torch.cat([curr_ids, torch.tensor([[emitted_tok]], device=device)], dim=1)
+                if on_token is not None:
+                    tok_str = getattr(self.tokenizer, "decode", lambda ids: "")([emitted_tok])
+                    on_token(emitted_tok, tok_str)
+
+                hit_eos = self.eos_token_id is not None and emitted_tok == self.eos_token_id
+                if accepted:
                     accepted_in_this_cycle += 1
                     self.telemetry["draft_tokens_accepted"] += 1
-                    generated_tokens.append(draft_tok)
-                    curr_ids = torch.cat([curr_ids, torch.tensor([[draft_tok]], device=device)], dim=1)
-                    if on_token is not None:
-                        tok_str = getattr(self.tokenizer, "decode", lambda ids: "")([draft_tok])
-                        on_token(draft_tok, tok_str)
-
-                    if self.eos_token_id is not None and draft_tok == self.eos_token_id:
-                        stopped = True
-                        break
-                    if len(generated_tokens) >= max_new_tokens:
+                    if hit_eos or len(generated_tokens) >= max_new_tokens:
                         stopped = True
                         break
                 else:
-                    # Mismatch: reject current draft token, emit target token, discard remaining draft
-                    generated_tokens.append(target_tok)
-                    curr_ids = torch.cat([curr_ids, torch.tensor([[target_tok]], device=device)], dim=1)
-                    if on_token is not None:
-                        tok_str = getattr(self.tokenizer, "decode", lambda ids: "")([target_tok])
-                        on_token(target_tok, tok_str)
-                    if self.eos_token_id is not None and target_tok == self.eos_token_id:
+                    if hit_eos:
                         stopped = True
                     break
 
@@ -204,5 +216,6 @@ class SelfSpeculativeGenerator:
             "tokens_per_second": round(len(generated_tokens) / t_elapsed, 2),
             "wall_time_seconds": round(t_elapsed, 4),
             "acceptance_rate": round(self.acceptance_rate, 4),
+            "sampling_mode": "greedy_exact_parity" if self.temperature == 0.0 else "rejection_sampling_exact",
             "telemetry": dict(self.telemetry),
         }

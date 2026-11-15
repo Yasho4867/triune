@@ -53,7 +53,7 @@ def batched_qr(
     L2_diag = L2.diagonal(dim1=1, dim2=2)
     L2_diag_sq = L2_diag * L2_diag
     cond_ratio = L2_diag_sq.max(dim=-1).values / L2_diag_sq.min(dim=-1).values.clamp_min(1e-12)
-    cond_fail_mask = (cond_ratio >= cond_threshold)
+    cond_fail_mask = cond_ratio >= cond_threshold
 
     # Solve triangular system L2 Q^T = Q1_norm^T
     Q = torch.linalg.solve_triangular(L2, Q1_norm.transpose(1, 2), upper=False).transpose(1, 2)
@@ -62,7 +62,7 @@ def batched_qr(
     I = torch.eye(r, device=Y_mat.device, dtype=torch.float32).unsqueeze(0).expand(K, -1, -1)
     QtQ = torch.bmm(Q.transpose(1, 2), Q)
     orth_err = torch.linalg.norm(QtQ - I, dim=(1, 2))
-    orth_fail_mask = (orth_err > orth_tol)
+    orth_fail_mask = orth_err > orth_tol
 
     fallback_mask = cond_fail_mask | degen_mask | cholesky_fail_mask | orth_fail_mask
 
@@ -132,7 +132,7 @@ def cholesky_qr(
 
 def polar_stiefel_retraction(P: torch.Tensor, eps: float = 1e-7) -> torch.Tensor:
     """Retracts matrix P back onto the Stiefel manifold St(r, d) using polar Cholesky factor.
-    
+
     Guarantees strict isometry P^T P = I_r in O(r^3) operations without Stiefel manifold drift.
     """
     orig_dtype = P.dtype
@@ -263,7 +263,7 @@ def batched_subspace_projection(
             Q_z = _qr_call(Z)
             Y = torch.bmm(grads, Q_z)
             Q = _qr_call(Y)
-        
+
         B = torch.bmm(Q.transpose(1, 2), grads)
         B_small = torch.bmm(B, B.transpose(1, 2))
         S, U_B = torch.linalg.eigh(B_small.float())
@@ -280,7 +280,7 @@ def batched_subspace_projection(
             Q_z = _qr_call(Z)
             Y = torch.bmm(grads.transpose(1, 2), Q_z)
             Q = _qr_call(Y)
-        
+
         B = torch.bmm(grads, Q)
         B_small = torch.bmm(B.transpose(1, 2), B)
         S, V_B = torch.linalg.eigh(B_small.float())

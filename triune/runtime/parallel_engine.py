@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -262,7 +262,9 @@ class ParallelEngine:
             self.device = torch.device(device)
 
         if dtype is None:
-            self.dtype = torch.bfloat16 if (self.device.type == "cuda" and torch.cuda.is_bf16_supported()) else torch.float32
+            self.dtype = (
+                torch.bfloat16 if (self.device.type == "cuda" and torch.cuda.is_bf16_supported()) else torch.float32
+            )
         else:
             self.dtype = dtype
 
@@ -366,9 +368,7 @@ class ParallelEngine:
             if sample_input is not None:
                 self.static_x = sample_input.clone().to(device=self.device, dtype=self.dtype)
             else:
-                self.static_x = torch.randn(
-                    batch_size, seq_len, self.dim, device=self.device, dtype=self.dtype
-                )
+                self.static_x = torch.randn(batch_size, seq_len, self.dim, device=self.device, dtype=self.dtype)
 
             capture_stream = torch.cuda.Stream(device=self.device)
             capture_stream.wait_stream(torch.cuda.current_stream())
@@ -477,12 +477,12 @@ class ParallelEngine:
         force_depth: Optional[int] = None,
     ) -> torch.Tensor:
         """Execute full-model forward pass partitioned across parallel CUDA streams.
-        
+
         Args:
             input_ids: Token ID tensor [B, T]
             last_token_only: If True, projects only the final position through the LM head.
             force_depth: Optional depth override (0=Reflex, 1=Limbic, 2=Cortex).
-            
+
         Returns:
             Logits tensor [B, 1, V] or [B, T, V]
         """
@@ -528,12 +528,7 @@ class ParallelEngine:
         """Unified forward pass with automatic CUDA Graph replay or multi-stream execution."""
         x_dev = x.to(device=self.device, dtype=self.dtype)
 
-        if (
-            use_graph
-            and self.is_graph_captured
-            and self.static_x is not None
-            and x_dev.shape == self.static_x.shape
-        ):
+        if use_graph and self.is_graph_captured and self.static_x is not None and x_dev.shape == self.static_x.shape:
             return self.replay_forward(x_dev)
 
         # Multi-stream prefill execution
@@ -580,7 +575,7 @@ class ParallelEngine:
         elif metric == "euclidean":
             d_sq = torch.sum((d_lat - t_lat) ** 2, dim=-1)
             dim = float(d_lat.size(-1))
-            scores = torch.clamp(1.0 - torch.sqrt(d_sq) / (dim ** 0.5), min=0.0)
+            scores = torch.clamp(1.0 - torch.sqrt(d_sq) / (dim**0.5), min=0.0)
         else:
             scores = F.cosine_similarity(d_lat, t_lat, dim=-1)
 

@@ -38,11 +38,11 @@ def _magenta(text: str) -> str:
 def _route_badge(route: str) -> str:
     r = str(route).upper()
     if "REFLEX" in r:
-        return f"\033[1;36m[REFLEX]\033[0m" if _IS_TTY else "[REFLEX]"
+        return "\033[1;36m[REFLEX]\033[0m" if _IS_TTY else "[REFLEX]"
     elif "LIMBIC" in r:
-        return f"\033[1;33m[LIMBIC]\033[0m" if _IS_TTY else "[LIMBIC]"
+        return "\033[1;33m[LIMBIC]\033[0m" if _IS_TTY else "[LIMBIC]"
     elif "CORTEX" in r:
-        return f"\033[1;35m[CORTEX]\033[0m" if _IS_TTY else "[CORTEX]"
+        return "\033[1;35m[CORTEX]\033[0m" if _IS_TTY else "[CORTEX]"
     return f"\033[1;32m[{r}]\033[0m" if _IS_TTY else f"[{r}]"
 
 
@@ -255,7 +255,9 @@ def main() -> None:
     prof_parser.add_argument("--batch-size", type=int, default=4, help="Batch size")
     prof_parser.add_argument("--seq-len", type=int, default=256, help="Sequence length")
     prof_parser.add_argument("--warmup-steps", type=int, default=5, help="Number of warmup steps (default: 5)")
-    prof_parser.add_argument("--active-steps", type=int, default=10, help="Number of active profiling steps (default: 10)")
+    prof_parser.add_argument(
+        "--active-steps", type=int, default=10, help="Number of active profiling steps (default: 10)"
+    )
 
     # 16. Tokenizer command
     tok_parser = subparsers.add_parser("tokenizer", help="Build or train a BPE tokenizer")
@@ -276,11 +278,14 @@ def main() -> None:
 
     elif args.command == "serve":
         import os
+
         from triune.api import run_server
 
         if args.api_key:
             os.environ["TRIUNE_API_TOKEN"] = args.api_key
-        print(f"[Triune] Starting Triune API Server on http://{args.host}:{args.port} (concurrency: {args.concurrency})")
+        print(
+            f"[Triune] Starting Triune API Server on http://{args.host}:{args.port} (concurrency: {args.concurrency})"
+        )
         run_server(host=args.host, port=args.port)
 
     elif args.command == "chat":
@@ -378,7 +383,7 @@ def main() -> None:
         ttft_ms = res.get("ttft_ms", 0.0)
         lat_ms = res.get("latency_ms", 0.0)
 
-        print(f"\n{'-'*70}")
+        print(f"\n{'-' * 70}")
         print(
             f"Telemetry: {_route_badge(route_used)} | "
             f"{_cyan(f'{tok_sec:.1f} tok/s')} | "
@@ -387,7 +392,7 @@ def main() -> None:
             f"VRAM: {vram_gb:.2f} GB | "
             f"Load: {load_time:.2f}s"
         )
-        print(f"{'-'*70}\n")
+        print(f"{'-' * 70}\n")
 
     elif args.command == "finetune":
         import torch

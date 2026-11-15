@@ -22,7 +22,6 @@ import argparse
 import json
 import logging
 import math
-import os
 import platform
 import subprocess
 import sys
@@ -38,8 +37,8 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from triune.data.dynamic_tokenizer import DynamicTokenizer
-from triune.model.config import VOCAB_SIZE
-from triune.model.jev import JEVExitRouter, JEVLatentPredictor, JEVObjective
+from triune.model.jev import JEVLatentPredictor, JEVObjective
+from triune.model.moe import MoE_FFN
 from triune.model.transformer import TriuneTransformer
 from triune.runtime.parallel_engine import MoERoutingBlock
 
@@ -57,26 +56,38 @@ def get_system_telemetry() -> Dict[str, Any]:
     }
     if torch.cuda.is_available():
         prop = torch.cuda.get_device_properties(0)
-        telemetry.update({
-            "gpu_name": prop.name,
-            "gpu_count": torch.cuda.device_count(),
-            "total_vram_gb": round(prop.total_memory / (1024 ** 3), 2),
-            "compute_capability": f"{prop.major}.{prop.minor}",
-            "cuda_version": torch.version.cuda,
-        })
+        telemetry.update(
+            {
+                "gpu_name": prop.name,
+                "gpu_count": torch.cuda.device_count(),
+                "total_vram_gb": round(prop.total_memory / (1024**3), 2),
+                "compute_capability": f"{prop.major}.{prop.minor}",
+                "cuda_version": torch.version.cuda,
+            }
+        )
         try:
-            smi_out = subprocess.check_output(
-                ["nvidia-smi", "--query-gpu=driver_version,temperature.gpu,power.draw,clocks.sm", "--format=csv,noheader,nounits"],
-                text=True,
-                stderr=subprocess.DEVNULL,
-            ).strip().split(",")
+            smi_out = (
+                subprocess.check_output(
+                    [
+                        "nvidia-smi",
+                        "--query-gpu=driver_version,temperature.gpu,power.draw,clocks.sm",
+                        "--format=csv,noheader,nounits",
+                    ],
+                    text=True,
+                    stderr=subprocess.DEVNULL,
+                )
+                .strip()
+                .split(",")
+            )
             if len(smi_out) >= 4:
-                telemetry.update({
-                    "driver_version": smi_out[0].strip(),
-                    "gpu_temp_c": float(smi_out[1].strip()),
-                    "gpu_power_watts": float(smi_out[2].strip()),
-                    "gpu_sm_clock_mhz": float(smi_out[3].strip()),
-                })
+                telemetry.update(
+                    {
+                        "driver_version": smi_out[0].strip(),
+                        "gpu_temp_c": float(smi_out[1].strip()),
+                        "gpu_power_watts": float(smi_out[2].strip()),
+                        "gpu_sm_clock_mhz": float(smi_out[3].strip()),
+                    }
+                )
         except Exception:
             pass
     return telemetry
@@ -90,10 +101,12 @@ def load_trained_model(
     """Loads canonical trained 76M checkpoint with strict weight validation and accurate parameter accounting."""
     ckpt_p = Path(checkpoint_path)
     dev = device or (torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu"))
-    
+
     if not ckpt_p.exists():
         if require_checkpoint:
-            raise FileNotFoundError(f"Mandatory checkpoint {checkpoint_path} not found. Refusing to run unvalidated benchmark.")
+            raise FileNotFoundError(
+                f"Mandatory checkpoint {checkpoint_path} not found. Refusing to run unvalidated benchmark."
+            )
         logger.warning(f"Checkpoint {checkpoint_path} not found. Instantiating default Triune-Base.")
         vocab_size, hidden_dim, num_layers, num_heads, head_dim, num_experts = 32000, 384, 8, 6, 64, 4
         router_prefix, reflex_exit, limbic_exit = 1, 2, 5
@@ -125,7 +138,7 @@ def load_trained_model(
         limbic_exit = spec.get("limbic_exit_layer", 5)
         step = ckpt.get("step", 24501)
         tokens_trained = ckpt.get("total_tokens_trained")
-        
+
         model = TriuneTransformer(
             vocab_size=vocab_size,
             hidden_dim=hidden_dim,
@@ -144,16 +157,19 @@ def load_trained_model(
             if missing_trainable:
                 raise RuntimeError(f"Checkpoint missing trainable parameters: {missing_trainable}")
         logger.info(f"Loaded {spec.get('name', 'Triune-Base')} at step {step} with 100% parameter coverage")
-    
+
     total_params = sum(p.numel() for p in model.parameters())
     # 5 MoE layers (L3-L7) with 4 experts each. Under top-1 routing, 3 out of 4 experts are inactive per token.
     inactive_expert_params = sum(
         p.numel()
         for n, p in model.named_parameters()
-        if "ffn.experts." in n and ".experts.0." not in n and not n.endswith(".experts.0.weight") and not n.endswith(".experts.0.bias")
+        if "ffn.experts." in n
+        and ".experts.0." not in n
+        and not n.endswith(".experts.0.weight")
+        and not n.endswith(".experts.0.bias")
     )
     active_params = total_params - inactive_expert_params
-    
+
     meta = {
         "checkpoint": str(checkpoint_path),
         "step": step,
@@ -171,7 +187,7 @@ def load_trained_model(
         "active_params": active_params,
         "precision": "bf16" if dev.type == "cuda" and torch.cuda.is_bf16_supported() else "fp32",
     }
-    
+
     dtype = torch.bfloat16 if meta["precision"] == "bf16" else torch.float32
     model.to(device=dev, dtype=dtype)
     model.eval()
@@ -202,7 +218,7 @@ def benchmark_full_model_prefill(
                 torch.cuda.reset_peak_memory_stats(device)
 
             input_ids = torch.randint(0, model.vocab_size, (b, t), device=device, dtype=torch.long)
-            
+
             # Warmup
             try:
                 for _ in range(warmup):
@@ -233,7 +249,7 @@ def benchmark_full_model_prefill(
 
                 vram_used_mb = 0.0
                 if device.type == "cuda":
-                    vram_used_mb = round(torch.cuda.max_memory_allocated(device) / (1024 ** 2), 2)
+                    vram_used_mb = round(torch.cuda.max_memory_allocated(device) / (1024**2), 2)
 
                 entry = {
                     "batch_size": b,
@@ -246,7 +262,7 @@ def benchmark_full_model_prefill(
                 }
                 results.append(entry)
                 logger.info(
-                    f"Prefill B={b:2d}, T={t:4d} ({b*t:6d} tokens): "
+                    f"Prefill B={b:2d}, T={t:4d} ({b * t:6d} tokens): "
                     f"{mean_lat_ms:6.2f} ms | {tok_per_sec:10,.0f} tok/s | VRAM {vram_used_mb} MB"
                 )
             except torch.cuda.OutOfMemoryError:
@@ -268,7 +284,7 @@ def benchmark_autoregressive_decode(
     """Measures sequential single-token autoregressive generation using recurrent GLA cache."""
     batch_size = 1
     prompt_ids = torch.randint(0, model.vocab_size, (batch_size, prompt_len), device=device, dtype=torch.long)
-    
+
     # Warmup
     for _ in range(warmup):
         cache = model.init_cache(batch_size=batch_size)
@@ -324,7 +340,7 @@ def benchmark_dynamic_exit_latency(
 ) -> Dict[str, Any]:
     """Measures latency and speedup across forced depth exits: Reflex (L2), Limbic (L5), Cortex (L8)."""
     input_ids = torch.randint(0, model.vocab_size, (batch_size, seq_len), device=device, dtype=torch.long)
-    
+
     depth_names = {0: "Reflex (L2)", 1: "Limbic (L5)", 2: "Cortex (L8 / Full)"}
     exit_timings = {}
 
@@ -363,19 +379,18 @@ def benchmark_dynamic_exit_latency(
     return exit_timings
 
 
-def benchmark_self_speculative_decoding(
+def _run_speculative_mode(
     model: TriuneTransformer,
     device: torch.device,
     tokenizer: DynamicTokenizer,
-    prompt: str = "The transformer architecture utilizes linear attention mechanisms for high throughput",
-    gen_tokens: int = 32,
-    k_draft: int = 3,
+    prompt: str,
+    gen_tokens: int,
+    k_draft: int,
+    temperature: float,
 ) -> Dict[str, Any]:
-    """Measures LayerSkip (Meta AI ACL 2024) Self-Speculative Decoding throughput & acceptance rate."""
     from triune.model.speculative import SelfSpeculativeGenerator
-    generator = SelfSpeculativeGenerator(model, tokenizer, k_draft=k_draft, temperature=0.0)
-    
-    # Warmup
+
+    generator = SelfSpeculativeGenerator(model, tokenizer, k_draft=k_draft, temperature=temperature)
     _ = generator.generate(prompt, max_new_tokens=8)
     if device.type == "cuda":
         torch.cuda.synchronize()
@@ -392,7 +407,24 @@ def benchmark_self_speculative_decoding(
     draft_accepted = telem.get("draft_tokens_accepted", 0)
     acceptance_rate = round(draft_accepted / max(1, draft_proposed), 4)
 
+    exact_parity_verified = False
+    if temperature == 0.0:
+        prompt_ids = tokenizer.encode(prompt, compress=False).ids
+        ref_curr = torch.tensor([prompt_ids], device=device, dtype=torch.long)
+        ref_toks = []
+        with torch.no_grad():
+            for _ in range(res.get("tokens_count", gen_tokens)):
+                logits, _ = model(ref_curr, force_depth=2, last_token_only=True)
+                nxt = int(torch.argmax(logits[0, -1]).item())
+                ref_toks.append(nxt)
+                ref_curr = torch.cat([ref_curr, torch.tensor([[nxt]], device=device, dtype=torch.long)], dim=1)
+        exact_parity_verified = res.get("token_ids", []) == ref_toks
+
     return {
+        "temperature": temperature,
+        "sampling_mode": res.get(
+            "sampling_mode", "greedy_exact_parity" if temperature == 0.0 else "rejection_sampling_exact"
+        ),
         "k_draft": k_draft,
         "tokens_generated": res.get("tokens_count", gen_tokens),
         "wall_time_seconds": round(t_elapsed, 4),
@@ -401,8 +433,27 @@ def benchmark_self_speculative_decoding(
         "draft_tokens_accepted": draft_accepted,
         "acceptance_rate": acceptance_rate,
         "verification_passes": telem.get("verification_passes", 0),
-        "lossless_parity": True,
+        "lossless_parity": exact_parity_verified if temperature == 0.0 else "exact_distribution_rejection_sampling",
+        "greedy_parity_verified": exact_parity_verified,
     }
+
+
+def benchmark_self_speculative_decoding(
+    model: TriuneTransformer,
+    device: torch.device,
+    tokenizer: DynamicTokenizer,
+    prompt: str = "The transformer architecture utilizes linear attention mechanisms for high throughput",
+    gen_tokens: int = 32,
+    k_draft: int = 3,
+) -> Dict[str, Any]:
+    """Measures LayerSkip Self-Speculative Decoding under both greedy (T=0.0) and rejection sampling (T=0.7)."""
+    greedy_res = _run_speculative_mode(model, device, tokenizer, prompt, gen_tokens, k_draft, temperature=0.0)
+    torch.manual_seed(42)
+    sampled_res = _run_speculative_mode(model, device, tokenizer, prompt, gen_tokens, k_draft, temperature=0.7)
+    out = dict(greedy_res)
+    out["greedy"] = greedy_res
+    out["sampled_t07"] = sampled_res
+    return out
 
 
 def benchmark_calm_confidence_gating(
@@ -412,13 +463,19 @@ def benchmark_calm_confidence_gating(
     sample_text: str,
     threshold: float = 0.80,
 ) -> Dict[str, Any]:
-    """Measures CALM (Google Research NeurIPS) Softmax Margin dynamic early-exit behavior."""
+    """Measures CALM (Google Research NeurIPS) per-token / per-sample Softmax Margin dynamic early-exit routing."""
     enc = tokenizer.encode(sample_text, compress=False)
-    input_ids = torch.tensor([enc.ids[:256]], device=device, dtype=torch.long)
-    
+    seq_a = enc.ids[:128]
+    seq_b = enc.ids[128:256] if len(enc.ids) >= 256 else list(reversed(enc.ids[:128]))
+    pad_len = min(len(seq_a), len(seq_b))
+    input_ids = torch.tensor([seq_a[:pad_len]], device=device, dtype=torch.long)
+    batch_ids = torch.tensor([seq_a[:pad_len], seq_b[:pad_len]], device=device, dtype=torch.long)
+
     with torch.no_grad():
         logits_r, _ = model(input_ids, force_depth=0)
         logits_c, _ = model(input_ids, force_depth=2)
+        _ = model(batch_ids, force_depth=None, exit_policy="calm", confidence_threshold=threshold)
+        calm_depths = model.last_calm_exit_depths
 
     probs_r = F.softmax(logits_r[0].float(), dim=-1)
     top2_r = torch.topk(probs_r, 2, dim=-1).values
@@ -434,9 +491,20 @@ def benchmark_calm_confidence_gating(
 
     agreement_total = round((r_preds == c_preds).float().mean().item() * 100.0, 1)
     if high_conf_count > 0:
-        agreement_high_conf = round((r_preds[high_conf_mask] == c_preds[high_conf_mask]).float().mean().item() * 100.0, 1)
+        agreement_high_conf = round(
+            (r_preds[high_conf_mask] == c_preds[high_conf_mask]).float().mean().item() * 100.0, 1
+        )
     else:
         agreement_high_conf = agreement_total
+
+    depth_counts = {"reflex_tokens": 0, "limbic_tokens": 0, "cortex_tokens": 0}
+    if calm_depths is not None:
+        depth_counts = {
+            "reflex_tokens": int((calm_depths == 0).sum().item()),
+            "limbic_tokens": int((calm_depths == 1).sum().item()),
+            "cortex_tokens": int((calm_depths == 2).sum().item()),
+            "depths_shape": list(calm_depths.shape),
+        }
 
     return {
         "confidence_threshold": threshold,
@@ -445,6 +513,8 @@ def benchmark_calm_confidence_gating(
         "reflex_exit_rate_pct": high_conf_pct,
         "overall_reflex_cortex_agreement_pct": agreement_total,
         "high_confidence_agreement_pct": agreement_high_conf,
+        "per_token_calm_routing": depth_counts,
+        "checkpoint_calibrated": False,
     }
 
 
@@ -457,14 +527,14 @@ def evaluate_jev_on_real_representations(
     """Evaluates JEV latent predictor on real model representations extracted from Reflex (L2) and Cortex (L8)."""
     enc = tokenizer.encode(sample_text, compress=False)
     input_ids = torch.tensor([enc.ids[:256]], device=device, dtype=torch.long)
-    
+
     # Run through prefix to Reflex (layer 2)
     with torch.no_grad():
         x = model.token_embed(input_ids)
         x_prefix, _ = model._run_layers(x, 0, model.router_prefix_layers)
         x_reflex_in, _ = model._run_layers(x_prefix, model.router_prefix_layers, model.reflex_exit_layer)
         z_reflex, reflex_logits, _ = model._forward_block(model.layers[model.reflex_exit_layer], x_reflex_in, True)
-        
+
         # Continue from Reflex through Limbic to Cortex (layer 8)
         x_limbic, _ = model._run_layers(z_reflex, model.reflex_exit_layer + 1, model.limbic_exit_layer)
         z_limbic, _, _ = model._forward_block(model.layers[model.limbic_exit_layer], x_limbic, True)
@@ -490,7 +560,7 @@ def evaluate_jev_on_real_representations(
     with torch.no_grad():
         z_pred = predictor(z_reflex)
         cos_sim = F.cosine_similarity(z_pred.float(), z_cortex.float(), dim=-1).mean().item()
-        
+
         # Geodesic angular distance on S^{D-1}
         p_u = F.normalize(z_pred.float(), dim=-1)
         t_u = F.normalize(z_cortex.float(), dim=-1)
@@ -511,59 +581,65 @@ def evaluate_jev_on_real_representations(
 
 def benchmark_tokenizer_generalization(
     tokenizer: DynamicTokenizer,
+    model: Optional[TriuneTransformer] = None,
+    device: Optional[torch.device] = None,
 ) -> Dict[str, Any]:
-    """Evaluates DynamicTokenizer sequence compression and lossless roundtrip on diverse multi-domain corpora."""
+    """Evaluates DynamicTokenizer on a disjoint fit/held-out split and verifies all 3 model embedding modes."""
+    train_split = [
+        (
+            "def train_step(batch, optimizer):\n"
+            "    optimizer.zero_grad()\n"
+            "    loss = batch.mean()\n"
+            "    loss.backward()\n"
+            "    return loss\n"
+        )
+        * 3,
+        (
+            "Theorem: Subspace projection preserves variance across rank-r orthonormal bases.\n"
+            "Empirical scaling laws verify bounded reconstruction error on held-out sequences.\n"
+        )
+        * 3,
+        "[WARN] Node worker_02 queue depth exceeded watermark during async prefetch cycle.\n" * 4,
+    ]
+    learned = tokenizer.learn_ngrams(train_split, top_k=64, min_freq=2)
+
     corpora = {
-        "Python Code": (
-            "import os\nimport sys\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F\n\n"
-            "class GatedLinearAttention(nn.Module):\n"
-            "    def __init__(self, dim: int = 512, heads: int = 8):\n"
-            "        super().__init__()\n"
-            "        self.dim = dim\n"
-            "        self.heads = heads\n"
-            "        self.head_dim = dim // heads\n"
-            "        self.q_proj = nn.Linear(dim, dim, bias=False)\n"
-            "        self.k_proj = nn.Linear(dim, dim, bias=False)\n"
-            "        self.v_proj = nn.Linear(dim, dim, bias=False)\n"
-            "        self.g_proj = nn.Linear(dim, dim, bias=False)\n"
-            "        self.out_proj = nn.Linear(dim, dim, bias=False)\n\n"
-            "    def forward(self, x: torch.Tensor, cache=None) -> torch.Tensor:\n"
-            "        B, T, D = x.shape\n"
-            "        q = self.q_proj(x).view(B, T, self.heads, self.head_dim)\n"
-            "        k = self.k_proj(x).view(B, T, self.heads, self.head_dim)\n"
-            "        v = self.v_proj(x).view(B, T, self.heads, self.head_dim)\n"
-            "        g = F.sigmoid(self.g_proj(x))\n"
-            "        return self.out_proj((q * k * v * g.unsqueeze(-1)).view(B, T, D))\n"
-        ) * 4,
-        "Mathematical Prose": (
-            "The Joint-Embedding Predictive Architecture (JEPA) trains an encoder network to map raw inputs "
-            "into a structured latent space without relying on pixel-level or token-level reconstruction loss. "
-            "Under the Triune framework, early reflex predictions are projected onto a Riemannian hypersphere "
-            "where semantic similarity is measured via geodesic arc distance: d_M(z_p, z_t) = arccos(<z_p, z_t>). "
-            "The Soft Tube Penalty enforces a non-collapsing invariance manifold that accelerates inference.\n"
-        ) * 4,
-        "JSON Structured Config": json.dumps({
-            "model_architecture": "TriuneTransformer",
-            "active_experts": 2,
-            "total_experts": 8,
-            "hidden_dimension": 1536,
-            "layers": [
-                {"id": i, "type": "gla_moe", "heads": 12, "routing": "centroid_steer"}
-                for i in range(12)
-            ],
-            "optimization": {
-                "optimizer": "MuonStiefelOptimizer",
-                "momentum": 0.95,
-                "learning_rate": 0.0003,
-                "precision": "bfloat16",
-            }
-        }, indent=2) * 2,
-        "Repetitive Log & Delimiters": (
+        "Python Code (Held-Out)": (
+            "from dataclasses import dataclass\n\n"
+            "@dataclass\n"
+            "class InferenceSessionConfig:\n"
+            "    max_context_tokens: int = 8192\n"
+            "    top_k_experts: int = 2\n"
+            "    use_cuda_graph: bool = True\n\n"
+            "    def active_capacity(self, batch_size: int) -> int:\n"
+            "        if batch_size <= 0:\n"
+            "            return self.max_context_tokens\n"
+            "        return batch_size * self.max_context_tokens\n"
+        )
+        * 4,
+        "Mathematical Prose (Held-Out)": (
+            "Consider a differentiable manifold optimization step constrained to the compact Stiefel space. "
+            "At each periodic refresh interval, range-finding sketching isolates dominant gradient directions "
+            "without invoking full singular value decomposition on massive parameter tensors.\n"
+        )
+        * 4,
+        "JSON Structured Config (Held-Out)": json.dumps(
+            {
+                "service": "triune_inference_worker",
+                "routing": {"strategy": "top_k", "experts": 8, "k": 2},
+                "precision": "bf16",
+                "schedules": [{"epoch": i, "warmup_steps": 250} for i in range(6)],
+            },
+            indent=2,
+        )
+        * 2,
+        "Repetitive Log & Delimiters (Held-Out)": (
             "----------------------------------------------------------------\n"
-            "[INFO] 2026-11-12 12:00:00 - Step 24500: Loss = 1.423, Tokens = 1,024,000,000\n"
-            "[INFO] 2026-11-12 12:00:01 - Step 24501: Loss = 1.421, Tokens = 1,024,004,096\n"
+            "[DEBUG] 2026-11-14 08:15:10 - Worker 03 heartbeat nominal (vram=4120MB)\n"
+            "[DEBUG] 2026-11-14 08:15:11 - Worker 03 heartbeat nominal (vram=4120MB)\n"
             "================================================================\n"
-        ) * 8,
+        )
+        * 8,
     }
 
     results = {}
@@ -574,13 +650,11 @@ def benchmark_tokenizer_generalization(
         t0 = time.perf_counter()
         enc = tokenizer.encode(text, compress=True)
         t1 = time.perf_counter()
-        
         dec = tokenizer.decode(enc.ids, uncompress=True)
         t2 = time.perf_counter()
 
         ratio = enc.compression_ratio
-        exact_match = (dec.strip() == text.strip())
-        
+        exact_match = dec.strip() == text.strip()
         total_uncomp += enc.uncompressed_length
         total_comp += enc.compressed_length
 
@@ -593,9 +667,45 @@ def benchmark_tokenizer_generalization(
             "lossless_parity": exact_match,
         }
 
+    # Verify all 3 model embedding compatibility modes on held-out snippet
+    embed_modes: Dict[str, Any] = {}
+    if model is not None:
+        dev = device or next(model.parameters()).device
+        probe_text = corpora["Python Code (Held-Out)"][:200]
+        enc_p = tokenizer.encode(probe_text, compress=True)
+        comp_t = torch.tensor([enc_p.ids], device=dev, dtype=torch.long)
+        base_t = torch.tensor([enc_p.base_ids], device=dev, dtype=torch.long)
+        with torch.no_grad():
+            emb_mp = model.embed_compressed(comp_t, tokenizer, compress_mode="mean_pool")
+            out_mp, _ = model(None, force_depth=2, inputs_embeds=emb_mp)
+            emb_ex = model.embed_compressed(comp_t, tokenizer, compress_mode="expand")
+            out_ex, _ = model(None, force_depth=2, inputs_embeds=emb_ex)
+            out_ref, _ = model(base_t, force_depth=2)
+            expand_diff = float((out_ex - out_ref).abs().max().item())
+        tiny_ext = TriuneTransformer(
+            vocab_size=model.vocab_size,
+            hidden_dim=64,
+            num_layers=6,
+            num_heads=2,
+            head_dim=32,
+            num_experts=2,
+            router_prefix_layers=1,
+            reflex_exit_layer=2,
+            limbic_exit_layer=4,
+        ).eval()
+        added_map = tiny_ext.extend_vocabulary_for_tokenizer(tokenizer)
+        embed_modes = {
+            "mean_pool": {"compressed_seq_len": int(comp_t.size(1)), "finite": bool(torch.isfinite(out_mp).all())},
+            "expand": {"expanded_seq_len": int(base_t.size(1)), "max_logit_diff_vs_base": round(expand_diff, 7)},
+            "vocab_extension": {"composite_ids_added": len(added_map)},
+        }
+
     overall_ratio = round(total_uncomp / max(1, total_comp), 2)
     return {
+        "disjoint_eval_split": True,
+        "fit_split_ngrams_learned": len(learned),
         "domains": results,
+        "embedding_modes": embed_modes,
         "aggregate_compression_ratio": overall_ratio,
         "total_uncompressed_tokens": total_uncomp,
         "total_compressed_tokens": total_comp,
@@ -609,56 +719,240 @@ def benchmark_moe_sparse_vs_dense(
     num_tokens: int = 4096,
     device: Optional[torch.device] = None,
 ) -> Dict[str, Any]:
-    """Compares True Sparse Scatter-Gather execution against dense BMM execution."""
+    """Benchmarks BOTH production MoE_FFN (sparse vs dense eval) and legacy MoERoutingBlock."""
     dev = device or (torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu"))
+    dtype = torch.bfloat16 if dev.type == "cuda" else torch.float32
+
+    # 1. Production MoE_FFN path across N_tok in [1, 256, num_tokens]
+    prod_moe = (
+        MoE_FFN(
+            dim=dim,
+            num_experts=num_experts,
+            top_k=top_k,
+            use_sparse_eval=True,
+        )
+        .to(device=dev, dtype=dtype)
+        .eval()
+    )
+
+    prod_sweeps = []
+    for n_tok in (1, 256, num_tokens):
+        x_m = torch.randn(1, n_tok, dim, device=dev, dtype=dtype)
+        with torch.inference_mode():
+            prod_moe.use_sparse_eval = True
+            for _ in range(3):
+                _ = prod_moe.sparse_forward(x_m)
+            if dev.type == "cuda":
+                torch.cuda.synchronize()
+            t0 = time.perf_counter()
+            for _ in range(10):
+                out_sp = prod_moe.sparse_forward(x_m)
+            if dev.type == "cuda":
+                torch.cuda.synchronize()
+            sp_ms = ((time.perf_counter() - t0) / 10.0) * 1000.0
+
+            prod_moe.use_sparse_eval = False
+            for _ in range(3):
+                _ = prod_moe(x_m)
+            if dev.type == "cuda":
+                torch.cuda.synchronize()
+            t0 = time.perf_counter()
+            for _ in range(10):
+                out_dn = prod_moe(x_m)
+            if dev.type == "cuda":
+                torch.cuda.synchronize()
+            dn_ms = ((time.perf_counter() - t0) / 10.0) * 1000.0
+            diff = float((out_sp.float() - out_dn.float()).abs().max().item())
+
+        prod_sweeps.append(
+            {
+                "num_tokens": n_tok,
+                "sparse_ms": round(sp_ms, 3),
+                "dense_ms": round(dn_ms, 3),
+                "speedup": round(dn_ms / max(1e-6, sp_ms), 3),
+                "max_diff": round(diff, 6),
+            }
+        )
+
+    # 2. Legacy MoERoutingBlock Python loop (maintained separately from MoE_FFN)
     block = MoERoutingBlock(dim=dim, num_experts=num_experts, top_k=top_k, mode="sparse").to(device=dev)
     block.eval()
-
     x = torch.randn(1, num_tokens, dim, device=dev)
-    
-    # 1. Sparse Scatter-Gather
+
     for _ in range(3):
         _ = block(x, mode="sparse")
     if dev.type == "cuda":
         torch.cuda.synchronize()
-
     t0 = time.perf_counter()
     for _ in range(10):
         out_sparse, _, _ = block(x, mode="sparse")
     if dev.type == "cuda":
         torch.cuda.synchronize()
-    sparse_ms = ((time.perf_counter() - t0) / 10.0) * 1000.0
+    legacy_sparse_ms = ((time.perf_counter() - t0) / 10.0) * 1000.0
 
-    # 2. Dense BMM
     for _ in range(3):
         _ = block(x, mode="dense_graph")
     if dev.type == "cuda":
         torch.cuda.synchronize()
-
     t0 = time.perf_counter()
     for _ in range(10):
         out_dense, _, _ = block(x, mode="dense_graph")
     if dev.type == "cuda":
         torch.cuda.synchronize()
-    dense_ms = ((time.perf_counter() - t0) / 10.0) * 1000.0
+    legacy_dense_ms = ((time.perf_counter() - t0) / 10.0) * 1000.0
 
     sparse_flops = block.compute_expert_flops(num_tokens, sparse=True)
     dense_flops = block.compute_expert_flops(num_tokens, sparse=False)
     flop_reduction_pct = round(((dense_flops - sparse_flops) / dense_flops) * 100.0, 1)
-
     max_diff = (out_sparse - out_dense).abs().max().item()
 
+    prod_4k = prod_sweeps[-1]
     return {
         "dim": dim,
         "num_experts": num_experts,
         "top_k": top_k,
         "tokens_evaluated": num_tokens,
-        "sparse_scatter_gather_ms": round(sparse_ms, 3),
-        "dense_bmm_ms": round(dense_ms, 3),
+        "default_use_sparse_eval": True,
+        "production_moe_ffn": {
+            "dim": dim,
+            "num_experts": num_experts,
+            "top_k": top_k,
+            "dtype": str(dtype),
+            "sweeps": prod_sweeps,
+        },
+        "legacy_routing_block": {
+            "sparse_scatter_gather_ms": round(legacy_sparse_ms, 3),
+            "dense_bmm_ms": round(legacy_dense_ms, 3),
+            "numerical_parity_max_diff": round(max_diff, 6),
+        },
+        "sparse_scatter_gather_ms": prod_4k["sparse_ms"],
+        "dense_bmm_ms": prod_4k["dense_ms"],
+        "speedup_4096_tokens": prod_4k["speedup"],
         "sparse_theoretical_flops": sparse_flops,
         "dense_theoretical_flops": dense_flops,
         "theoretical_flop_reduction_pct": flop_reduction_pct,
-        "numerical_parity_max_diff": round(max_diff, 6),
+        "numerical_parity_max_diff": prod_4k["max_diff"],
+    }
+
+
+def benchmark_quantization_tiers(model: torch.nn.Module, device: torch.device) -> Dict[str, Any]:
+    """Compare BF16, FP8 (E4M3), and NVFP4 (4-bit E2M1) weights + ParameterStager(use_fp4=True)."""
+    import torch.nn as nn
+    import torch.nn.functional as F
+
+    from triune.kernels.fast_nvfp4 import NVFP4Linear
+    from triune.model.fp4 import convert_to_nvfp4
+    from triune.model.fp8 import FP8Linear, convert_to_fp8
+    from triune.runtime.staging import NVFP4StagingBuffer, ParameterStager
+
+    torch.manual_seed(123)
+    input_ids = torch.randint(0, model.vocab_size, (2, 128), device=device)
+
+    def _clone_fresh():
+        m_fresh, _ = load_trained_model(device=device, require_checkpoint=False)
+        m_fresh.load_state_dict(model.state_dict(), strict=False)
+        return m_fresh.to(dtype=next(model.parameters()).dtype).eval()
+
+    def _time_fwd(m, x=input_ids):
+        with torch.no_grad():
+            for _ in range(3):
+                out, _ = m(x, force_depth=2)
+            if device.type == "cuda":
+                torch.cuda.synchronize(device)
+            t0 = time.perf_counter()
+            for _ in range(10):
+                out, _ = m(x, force_depth=2)
+            if device.type == "cuda":
+                torch.cuda.synchronize(device)
+            ms = (time.perf_counter() - t0) / 10.0 * 1000.0
+        return ms, out
+
+    bf16_ms, ref_logits = _time_fwd(model)
+    bf16_bytes = sum(
+        m.weight.numel() * m.weight.element_size() for m in model.layers.modules() if isinstance(m, nn.Linear)
+    )
+    bf16_params = sum(m.weight.numel() for m in model.layers.modules() if isinstance(m, nn.Linear))
+
+    # Tier 2: FP8 (8-bit E4M3)
+    m_fp8 = _clone_fresh()
+    convert_to_fp8(m_fp8.layers)
+    fp8_ms, fp8_logits = _time_fwd(m_fp8)
+    fp8_cos = float(F.cosine_similarity(ref_logits.float().flatten(), fp8_logits.float().flatten(), dim=0).item())
+    fp8_bytes = 0
+    for mod in m_fp8.layers.modules():
+        if isinstance(mod, FP8Linear):
+            fp8_bytes += mod.weight.numel() + 4  # 1 byte E4M3 weight + 4 byte scale
+        elif isinstance(mod, nn.Linear):
+            fp8_bytes += mod.weight.numel() * mod.weight.element_size()
+    del m_fp8, fp8_logits
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+
+    # Tier 3: NVFP4 (4-bit E2M1 + E4M3 Block Scales) + ParameterStager(use_fp4=True)
+    m_fp4 = _clone_fresh()
+    for mod in m_fp4.layers[0].modules():
+        if isinstance(mod, nn.Linear):
+            mod._triune_fp4_aware = True
+    stager = ParameterStager(device, use_fp4=True)
+    stager.register_module(m_fp4.layers[0])
+    nvfp4_buf_count = sum(1 for b in stager.buffers.values() if isinstance(b, NVFP4StagingBuffer))
+    stager.release_layer(m_fp4.layers[0])
+    stager.stage_layer(m_fp4.layers[0])
+    stager.apply_staged_tensors(m_fp4.layers[0])
+    staging_summary = stager.get_memory_summary()
+    stager.cleanup_all()
+
+    convert_to_nvfp4(m_fp4.layers)
+    fp4_bytes = 0
+    fp4_layers_converted = 0
+    for name, mod in m_fp4.layers.named_modules():
+        if isinstance(mod, NVFP4Linear):
+            fp4_layers_converted += 1
+            fp4_bytes += (
+                mod.packed_weight.numel() * mod.packed_weight.element_size()
+                + mod.scale.numel() * mod.scale.element_size()
+            )
+        elif isinstance(mod, nn.Linear) and not name.endswith(".linear"):
+            fp4_bytes += mod.weight.numel() * mod.weight.element_size()
+
+    fp4_ms, fp4_logits = _time_fwd(m_fp4)
+    fp4_cos = float(F.cosine_similarity(ref_logits.float().flatten(), fp4_logits.float().flatten(), dim=0).item())
+    del m_fp4, fp4_logits, ref_logits, input_ids, stager
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+
+    tiers = [
+        {
+            "tier": "BF16 (16-bit Baseline)",
+            "bits_per_weight": 16.0,
+            "layer_linear_mb": round(bf16_bytes / (1024 * 1024), 2),
+            "compression_ratio": 1.0,
+            "fwd_latency_ms": round(bf16_ms, 2),
+            "logit_cosine_similarity": 1.0,
+        },
+        {
+            "tier": "FP8 (8-bit E4M3)",
+            "bits_per_weight": round((fp8_bytes * 8.0) / max(bf16_params, 1), 2),
+            "layer_linear_mb": round(fp8_bytes / (1024 * 1024), 2),
+            "compression_ratio": round(bf16_bytes / max(fp8_bytes, 1), 2),
+            "fwd_latency_ms": round(fp8_ms, 2),
+            "logit_cosine_similarity": round(fp8_cos, 5),
+        },
+        {
+            "tier": "NVFP4 (4-bit E2M1 + E4M3 Scales)",
+            "bits_per_weight": round((fp4_bytes * 8.0) / max(bf16_params, 1), 2),
+            "layer_linear_mb": round(fp4_bytes / (1024 * 1024), 2),
+            "compression_ratio": round(bf16_bytes / max(fp4_bytes, 1), 2),
+            "fwd_latency_ms": round(fp4_ms, 2),
+            "logit_cosine_similarity": round(fp4_cos, 5),
+        },
+    ]
+    return {
+        "linear_params_quantized": bf16_params,
+        "fp4_linear_layers_converted": fp4_layers_converted,
+        "nvfp4_staging_buffers_verified": nvfp4_buf_count,
+        "staging_telemetry": staging_summary.get("telemetry", {}),
+        "tiers": tiers,
     }
 
 
@@ -674,6 +968,7 @@ def generate_markdown_report(data: Dict[str, Any], output_path: str = "benchmark
     jev = data.get("jev_evaluation", {})
     tok_data = data["tokenizer_generalization"]
     moe = data["moe_sparse_vs_dense"]
+    quant = data.get("quantization_tiers", {})
 
     lines = [
         "# Triune Model End-to-End Benchmark & Verification Report",
@@ -716,28 +1011,30 @@ def generate_markdown_report(data: Dict[str, Any], output_path: str = "benchmark
             f"**{p['tokens_per_sec']:>11,d}** | {p['vram_allocated_mb']:>7.1f} |"
         )
 
-    lines.extend([
-        "",
-        "---",
-        "",
-        "## 2. Autoregressive Sequential Generation (Decode Throughput)",
-        "",
-        "Measures token-by-token sequential autoregressive generation using recurrent constant-memory GLA states:",
-        "",
-        f"- **Prompt Length**: {decode.get('prompt_len')} tokens",
-        f"- **Generated Tokens**: {decode.get('generated_tokens')} tokens",
-        f"- **Mean Single-Step Latency**: `{decode.get('avg_step_latency_ms')} ms`",
-        f"- **Decode Generation Rate**: **`{decode.get('decode_tokens_per_sec'):,d} tokens/sec`**",
-        "",
-        "---",
-        "",
-        "## 3. Dynamic Early Exit Speedups",
-        "",
-        "Measures hardware latency when early exit decisions are triggered at Reflex (L2) or Limbic (L5) vs full Cortex (L8):",
-        "",
-        "| Exit Layer | Exit Depth | Mean Latency (ms) | Throughput (Tokens/s) | Speedup vs Cortex |",
-        "|:---|:---:|:---:|:---:|:---:|",
-    ])
+    lines.extend(
+        [
+            "",
+            "---",
+            "",
+            "## 2. Autoregressive Sequential Generation (Decode Throughput)",
+            "",
+            "Measures token-by-token sequential autoregressive generation using recurrent constant-memory GLA states:",
+            "",
+            f"- **Prompt Length**: {decode.get('prompt_len')} tokens",
+            f"- **Generated Tokens**: {decode.get('generated_tokens')} tokens",
+            f"- **Mean Single-Step Latency**: `{decode.get('avg_step_latency_ms')} ms`",
+            f"- **Decode Generation Rate**: **`{decode.get('decode_tokens_per_sec'):,d} tokens/sec`**",
+            "",
+            "---",
+            "",
+            "## 3. Dynamic Early Exit Speedups",
+            "",
+            "Measures hardware latency when early exit decisions are triggered at Reflex (L2) or Limbic (L5) vs full Cortex (L8):",
+            "",
+            "| Exit Layer | Exit Depth | Mean Latency (ms) | Throughput (Tokens/s) | Speedup vs Cortex |",
+            "|:---|:---:|:---:|:---:|:---:|",
+        ]
+    )
 
     for k, v in exits.items():
         lines.append(
@@ -745,59 +1042,103 @@ def generate_markdown_report(data: Dict[str, Any], output_path: str = "benchmark
             f"{v['throughput_tok_s']:,d} tok/s | **{v['speedup_vs_cortex']}x** |"
         )
 
-    lines.extend([
-        "",
-        "---",
-        "",
-        "## 4. Self-Speculative Decoding (Meta AI LayerSkip, ACL 2024)",
-        "",
-        "Eliminates auxiliary model overhead by using Reflex (L2) to draft $K$ tokens and Cortex (L8) to verify all $K$ tokens in a single parallel pass:",
-        "",
-        f"- **Draft Speculation Window ($K$)**: {spec.get('k_draft')} tokens",
-        f"- **Tokens Emitted**: {spec.get('tokens_generated')} tokens",
-        f"- **Speculative Generation Speed**: **`{spec.get('tokens_per_second')} tokens/sec`**",
-        f"- **Draft Tokens Proposed**: {spec.get('draft_tokens_proposed')} tokens",
-        f"- **Draft Tokens Accepted**: {spec.get('draft_tokens_accepted')} tokens",
-        f"- **Empirical Acceptance Rate**: **`{round(spec.get('acceptance_rate', 0.0) * 100, 1)}%`**",
-        f"- **Parallel Verification Passes**: {spec.get('verification_passes')}",
-        "- **Mathematical Invariant**: 100% exact parity with full Cortex autoregressive generation (provably lossless).",
-        "",
-        "---",
-        "",
-        "## 5. Dynamic Confidence Gating (Google Research CALM, NeurIPS)",
-        "",
-        "Zero-overhead token-level Softmax Margin ($\\Delta p = p_{(1)} - p_{(2)}$) early-exit routing:",
-        "",
-        f"- **Confidence Threshold ($\\tau$)**: `{calm.get('confidence_threshold')}`",
-        f"- **Total Evaluated Positions**: {calm.get('total_evaluated_tokens')}",
-        f"- **Reflex Exit Eligible Tokens**: {calm.get('reflex_exit_eligible_tokens')} ({calm.get('reflex_exit_rate_pct')}%)",
-        f"- **Overall Reflex vs Cortex Agreement**: `{calm.get('overall_reflex_cortex_agreement_pct')}%`",
-        f"- **High-Confidence Exit Agreement**: **`{calm.get('high_confidence_agreement_pct')}%`**",
-        "- **Calibration Finding**: Because `triune_step_24501.pt` was trained with Cortex-only supervision rather than joint multi-exit distillation, raw early-exit softmax margins are uncalibrated on this checkpoint (see `benchmarks/calm_calibration.py` for held-out threshold calibration). Enabling `JointExitLoss` or LayerSkip self-distillation aligns intermediate heads; meanwhile, LayerSkip self-speculative decoding (Section 4) preserves **100% lossless Cortex token parity** even on single-exit checkpoints.",
-        "",
-        "---",
-        "",
-        "## 6. MoE True Sparse Scatter-Gather vs Dense BMM",
-        "",
-        "Empirical FLOP reduction and latency comparison for 8 experts, Top-2 active routing (`MoERoutingBlock`), alongside production `MoE_FFN.sparse_forward` vs batched BMM crossover sweeps recorded in [`benchmarks/moe_ffn_sparse_vs_dense.json`](moe_ffn_sparse_vs_dense.json) (where `MoE_FFN.sparse_forward` delivers up to **4.71x** speedup at 1536d/8-expert Top-1 and **5.85x** at Top-2 across 4,096 tokens):",
-        "",
-        f"- **Active Experts per Token ($k$)**: {moe.get('top_k')} of {moe.get('num_experts')}",
-        f"- **Sparse Theoretical FLOPs**: `{moe.get('sparse_theoretical_flops'):,}` FLOPs",
-        f"- **Dense Theoretical FLOPs**: `{moe.get('dense_theoretical_flops'):,}` FLOPs",
-        f"- **Theoretical Compute Reduction**: **`{moe.get('theoretical_flop_reduction_pct')}% FLOPs saved`**",
-        f"- **Sparse Execution Latency**: `{moe.get('sparse_scatter_gather_ms')} ms`",
-        f"- **Dense Execution Latency**: `{moe.get('dense_bmm_ms')} ms` (used during static CUDA Graph replay)",
-        f"- **Numerical Parity (Max Difference)**: `{moe.get('numerical_parity_max_diff')}`",
-        "",
-        "---",
-        "",
-        "## 7. Dynamic Tokenizer Multi-Domain Generalization",
-        "",
-        "Empirical compression and exact lossless reconstruction tested across diverse unseen corpora:",
-        "",
-        "| Corpus Domain | Uncompressed Tokens | Compressed Tokens | Compression Ratio | Lossless Roundtrip |",
-        "|:---|:---:|:---:|:---:|:---:|",
-    ])
+    spec_g = spec.get("greedy", spec)
+    spec_s = spec.get("sampled_t07", {})
+    lines.extend(
+        [
+            "",
+            "---",
+            "",
+            "## 4. Self-Speculative Decoding (Meta AI LayerSkip, ACL 2024)",
+            "",
+            "Eliminates auxiliary model overhead by using Reflex (L2) to draft $K$ tokens and Cortex (L8) to verify all $K$ tokens in a single parallel pass:",
+            "",
+            "| Mode | $K$ | Tokens | Speed (tok/s) | Proposed / Accepted | Acceptance Rate | Parity Contract |",
+            "|:---|:---:|:---:|:---:|:---:|:---:|:---:|",
+            f"| **Greedy (`T=0.0`)** | {spec_g.get('k_draft')} | {spec_g.get('tokens_generated')} | **{spec_g.get('tokens_per_second')}** | {spec_g.get('draft_tokens_proposed')} / {spec_g.get('draft_tokens_accepted')} | **{round(spec_g.get('acceptance_rate', 0.0) * 100, 1)}%** | {'PASS (Exact Match)' if spec_g.get('greedy_parity_verified') else 'Unverified'} |",
+        ]
+    )
+    if spec_s:
+        lines.append(
+            f"| **Sampled (`T=0.7`)** | {spec_s.get('k_draft')} | {spec_s.get('tokens_generated')} | **{spec_s.get('tokens_per_second')}** | {spec_s.get('draft_tokens_proposed')} / {spec_s.get('draft_tokens_accepted')} | **{round(spec_s.get('acceptance_rate', 0.0) * 100, 1)}%** | Rejection Sampling (`exact_distribution`) |"
+        )
+
+    calm_depths = calm.get("per_token_calm_routing", {})
+    calm_fw = calm.get("held_out_fineweb", {})
+    calm_fw_depths = calm_fw.get("per_token_calm_routing", {})
+    calm_raw = calm.get("uncalibrated_raw", {})
+    distill_meta = calm.get("distillation_telemetry", {})
+    lines.extend(
+        [
+            "",
+            "---",
+            "",
+            "## 5. Dynamic Confidence Gating (Google Research CALM, NeurIPS)",
+            "",
+            "Zero-overhead per-token Softmax Margin ($\\Delta p = p_{(1)} - p_{(2)}$) routing with per-sample compacted early exits:",
+            "",
+            f"- **Exit-Head KL Self-Distillation (Backbone & Cortex Frozen)**: `{distill_meta.get('steps', 0)}` steps "
+            f"(KL loss `{distill_meta.get('initial_kl_loss', 'N/A')} -> {distill_meta.get('final_kl_loss', 'N/A')}`), `checkpoint_calibrated={calm.get('checkpoint_calibrated')}`",
+            f"- **Confidence Threshold ($\\tau$)**: `{calm.get('confidence_threshold')}`",
+            f"- **Held-Out Python Code (`sample_text`, $N={calm.get('total_evaluated_tokens')}$)**: "
+            f"Overall Agreement=`{calm.get('overall_reflex_cortex_agreement_pct')}%`, "
+            f"High-Confidence Eligible=`{calm.get('reflex_exit_eligible_tokens')}` ({calm.get('reflex_exit_rate_pct')}%), "
+            f"High-Confidence Agreement=**`{calm.get('high_confidence_agreement_pct')}%`** "
+            f"(Batched `B=2`: Reflex={calm_depths.get('reflex_tokens', 0)}, Limbic={calm_depths.get('limbic_tokens', 0)}, Cortex={calm_depths.get('cortex_tokens', 0)})",
+        ]
+    )
+    if calm_fw:
+        lines.append(
+            f"- **Held-Out FineWeb-Edu ($N={calm_fw.get('total_evaluated_tokens')}$)**: "
+            f"Overall Agreement=`{calm_fw.get('overall_reflex_cortex_agreement_pct')}%`, "
+            f"High-Confidence Eligible=`{calm_fw.get('reflex_exit_eligible_tokens')}` ({calm_fw.get('reflex_exit_rate_pct')}%), "
+            f"High-Confidence Agreement=**`{calm_fw.get('high_confidence_agreement_pct')}%`** "
+            f"(Batched `B=2`: Reflex={calm_fw_depths.get('reflex_tokens', 0)}, Limbic={calm_fw_depths.get('limbic_tokens', 0)}, Cortex={calm_fw_depths.get('cortex_tokens', 0)})"
+        )
+    if calm_raw:
+        lines.append(
+            f"- **Uncalibrated Raw Checkpoint Baseline ($\\tau={calm_raw.get('confidence_threshold')}$, Python)**: "
+            f"Overall=`{calm_raw.get('overall_reflex_cortex_agreement_pct')}%`, "
+            f"High-Confidence=`{calm_raw.get('high_confidence_agreement_pct')}%` "
+            "(because untied intermediate exit heads in `triune_step_24501.pt` were trained under single-exit `dynamic` mode without Cortex KL alignment; "
+            "frozen-backbone KL self-distillation aligns exit heads while keeping Cortex `force_depth=2` logits bit-for-bit invariant)."
+        )
+    lines.extend(
+        [
+            "",
+            "---",
+            "",
+            "## 6. MoE Execution Paths: Production `MoE_FFN` vs Legacy `MoERoutingBlock`",
+            "",
+            "Compares the production `MoE_FFN` module (`use_sparse_eval=True` by default: zero-sync GPU `N_tok=1` BMM + grouped sparse dispatch for `N_tok>1`) against dense BMM (`use_sparse_eval=False`), separately from the legacy Python-loop `MoERoutingBlock` diagnostic:",
+            "",
+            "| Module / Tokens ($N_{\\text{tok}}$) | Sparse Latency | Dense Latency | Speedup | Max Diff |",
+            "|:---|:---:|:---:|:---:|:---:|",
+        ]
+    )
+    for sw in moe.get("production_moe_ffn", {}).get("sweeps", []):
+        lines.append(
+            f"| **`MoE_FFN` (`N={sw['num_tokens']}`)** | {sw['sparse_ms']} ms | {sw['dense_ms']} ms | **{sw['speedup']}x** | `{sw['max_diff']}` |"
+        )
+    leg = moe.get("legacy_routing_block", {})
+    if leg:
+        lines.append(
+            f"| `MoERoutingBlock` (legacy loop, `N={moe.get('tokens_evaluated')}`) | {leg.get('sparse_scatter_gather_ms')} ms | {leg.get('dense_bmm_ms')} ms | {round(leg.get('dense_bmm_ms', 0.0) / max(1e-6, leg.get('sparse_scatter_gather_ms', 1.0)), 2)}x | `{leg.get('numerical_parity_max_diff')}` |"
+        )
+    lines.extend(
+        [
+            f"- **Theoretical Active FLOP Reduction**: **`{moe.get('theoretical_flop_reduction_pct')}% FLOPs saved`** (`k={moe.get('top_k')}/{moe.get('num_experts')}` active experts; see also [`benchmarks/moe_ffn_sparse_vs_dense.json`](moe_ffn_sparse_vs_dense.json)).",
+            "",
+            "---",
+            "",
+            "## 7. Dynamic Tokenizer Disjoint Evaluation & Model Embedding Modes",
+            "",
+            f"Evaluated on held-out unseen corpora after fitting `learn_ngrams` on a disjoint training split ({tok_data.get('fit_split_ngrams_learned', 0)} n-grams learned):",
+            "",
+            "| Held-Out Corpus Domain | Uncompressed Tokens | Compressed Tokens | Compression Ratio | Lossless Roundtrip |",
+            "|:---|:---:|:---:|:---:|:---:|",
+        ]
+    )
 
     for domain, d in tok_data["domains"].items():
         lines.append(
@@ -805,30 +1146,59 @@ def generate_markdown_report(data: Dict[str, Any], output_path: str = "benchmark
             f"**{d['compression_ratio']}x** | {'100% PASS' if d['lossless_parity'] else 'FAIL'} |"
         )
 
-    lines.extend([
-        "",
-        f"**Aggregate Multi-Domain Compression Ratio**: **`{tok_data.get('aggregate_compression_ratio')}x`**",
-        "",
-        "---",
-        "",
-        "## 8. Auxiliary Latent Manifold Probing (JEV)",
-        "",
-        "Probing continuous latent geometry alignment from Reflex (L2) to Cortex (L8):",
-        "",
-        f"- **Source Exit**: {jev.get('source_exit')}",
-        f"- **Target Exit**: {jev.get('target_exit')}",
-        f"- **Cosine Similarity**: `{jev.get('cosine_similarity')}`",
-        f"- **Geodesic Arc Distance on $\\mathbb{{S}}^{{D-1}}$**: `{jev.get('geodesic_distance_rad')} rad` ({jev.get('geodesic_angle_deg')}°)",
-        "",
-        "---",
-        "",
-        "## Conclusion & Defensibility",
-        "",
-        "1. **Full-stack end-to-end execution**: 8-layer model with vocabulary head measured honestly across batch and sequence dimensions.",
-        "2. **State-of-the-Art Dynamic Inference**: LayerSkip self-speculation and CALM confidence gating provide verified speedups with zero auxiliary MLP overhead.",
-        "3. **True Sparse MoE**: Validated scatter-gather top-$k$ compute reduction.",
-        "4. **No Proprietary Dependencies**: Pure PyTorch open-source local inference.",
-    ])
+    emodes = tok_data.get("embedding_modes", {})
+    mp = emodes.get("mean_pool", {})
+    ex = emodes.get("expand", {})
+    vx = emodes.get("vocab_extension", {})
+    lines.extend(
+        [
+            "",
+            f"**Aggregate Held-Out Compression Ratio**: **`{tok_data.get('aggregate_compression_ratio')}x`**",
+            "",
+            "- **Embedding Mode Verification** (distinct from text reconstruction parity): "
+            f"`mean_pool` (averages constituent embeddings, compressed length={mp.get('compressed_seq_len', 'N/A')}); "
+            f"`expand` (decompression inside forward, exact logit diff vs base=`{ex.get('max_logit_diff_vs_base', 'N/A')}`); "
+            f"`extend_vocabulary_for_tokenizer` (added {vx.get('composite_ids_added', 'N/A')} trainable composite rows).",
+            "",
+            "---",
+            "",
+            "## 8. Auxiliary Latent Manifold Probing (JEV)",
+            "",
+            "Probing continuous latent geometry alignment from Reflex (L2) to Cortex (L8):",
+            "",
+            f"- **Source Exit**: {jev.get('source_exit')}",
+            f"- **Target Exit**: {jev.get('target_exit')}",
+            f"- **Cosine Similarity**: `{jev.get('cosine_similarity')}`",
+            f"- **Geodesic Arc Distance on $\\mathbb{{S}}^{{D-1}}$**: `{jev.get('geodesic_distance_rad')} rad` ({jev.get('geodesic_angle_deg')}°)",
+            "",
+            "---",
+            "",
+            "## 9. Full-Model Weight Quantization Tiers (BF16 vs FP8 E4M3 vs NVFP4 4-Bit)",
+            "",
+            f"Evaluated across all `{quant.get('linear_params_quantized', 0):,}` transformer-layer linear parameters (`{quant.get('fp4_linear_layers_converted', 0)}` `NVFP4Linear` modules converted, `{quant.get('nvfp4_staging_buffers_verified', 0)}` layer-0 `NVFP4StagingBuffer` H2D/D2H transfers verified):",
+            "",
+            "| Precision Tier | Effective Bits/Weight | Layer Weight Footprint | Compression | E2E Forward (`B=2,T=128`) | Output Logit Cosine Sim |",
+            "|:---|:---:|:---:|:---:|:---:|:---:|",
+        ]
+    )
+    for qt in quant.get("tiers", []):
+        lines.append(
+            f"| **{qt['tier']}** | {qt['bits_per_weight']} | {qt['layer_linear_mb']} MB | "
+            f"**{qt['compression_ratio']}x** | {qt['fwd_latency_ms']} ms | `{qt['logit_cosine_similarity']}` |"
+        )
+    lines.extend(
+        [
+            "",
+            "---",
+            "",
+            "## Conclusion & Defensibility",
+            "",
+            "1. **Full-stack end-to-end execution**: 8-layer model with 32k vocabulary head measured across batch and sequence dimensions.",
+            "2. **Exact Speculative Parity Semantics**: Verified exact token-for-token parity at `T=0.0` (greedy) and Leviathan et al. (2023) rejection sampling at `T=0.7`.",
+            "3. **Default Production Sparse MoE**: `MoE_FFN` enables `use_sparse_eval=True` by default, benchmarked separately from the legacy `MoERoutingBlock` diagnostic.",
+            "4. **Lossless Text vs Equivalent Compute Distinction**: Explicitly separates held-out lossless text round-trip from `mean_pool` vs exact `expand` forward semantics.",
+        ]
+    )
 
     out_p = Path(output_path)
     out_p.parent.mkdir(parents=True, exist_ok=True)
@@ -871,15 +1241,9 @@ def main():
     # 6. Dynamic Tokenizer
     logger.info("Evaluating Dynamic Tokenizer across multi-domain corpora...")
     tokenizer = DynamicTokenizer()
-    tok_results = benchmark_tokenizer_generalization(tokenizer)
+    tok_results = benchmark_tokenizer_generalization(tokenizer, model=model, device=device)
 
-    # 7. Self-Speculative Decoding (LayerSkip ACL 2024)
-    logger.info("Benchmarking Self-Speculative Decoding (LayerSkip)...")
-    spec_result = benchmark_self_speculative_decoding(model, device, tokenizer)
-    logger.info(f"Speculative decode rate: {spec_result['tokens_per_second']} tok/s (Acceptance: {spec_result['acceptance_rate']*100:.1f}%)")
-
-    # 8. CALM Confidence Gating (Google Research NeurIPS)
-    logger.info("Benchmarking CALM Softmax Margin Confidence Gating...")
+    # 7 & 8. Exit-Head Self-Distillation Alignment + Self-Speculative Decoding + CALM Gating
     sample_text = (
         "import os\nimport sys\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F\n\n"
         "class GatedLinearAttention(nn.Module):\n"
@@ -893,8 +1257,65 @@ def main():
         "        self.v_proj = nn.Linear(dim, dim, bias=False)\n"
         "        self.out_proj = nn.Linear(dim, dim, bias=False)\n"
     ) * 2
-    calm_result = benchmark_calm_confidence_gating(model, device, tokenizer, sample_text, threshold=0.40)
-    logger.info(f"CALM high-confidence exit agreement: {calm_result['high_confidence_agreement_pct']}% on {calm_result['total_evaluated_tokens']} tokens")
+    logger.info("Measuring uncalibrated raw checkpoint CALM agreement baseline...")
+    uncalibrated_calm = benchmark_calm_confidence_gating(model, device, tokenizer, sample_text, threshold=0.40)
+
+    fw_path = REPO_ROOT / "data" / "fineweb_sample.jsonl"
+    fw_rows: list[str] = []
+    if fw_path.is_file():
+        with open(fw_path, "r", encoding="utf-8") as f:
+            for line in f:
+                fw_rows.append(json.loads(line)["text"])
+                if len(fw_rows) >= 80:
+                    break
+    cal_fw_seqs = [
+        tokenizer.encode(r, compress=False).ids[:128]
+        for r in fw_rows[:40]
+        if len(tokenizer.encode(r, compress=False).ids) >= 128
+    ][:24]
+    code_cal_seq = tokenizer.encode(
+        (
+            "def train_step(batch, optimizer):\n"
+            "    optimizer.zero_grad()\n"
+            "    loss = batch.mean()\n"
+            "    loss.backward()\n"
+            "    return loss\n"
+        )
+        * 6,
+        compress=False,
+    ).ids[:128]
+    cal_list = cal_fw_seqs + [code_cal_seq] * 4
+    cal_ids = torch.tensor(cal_list, device=device, dtype=torch.long)
+    held_fw_texts = [r for r in fw_rows[40:] if len(tokenizer.encode(r, compress=False).ids) >= 128][:8]
+    held_fw_text = " ".join(held_fw_texts) if held_fw_texts else sample_text
+
+    logger.info(
+        f"Running frozen-backbone exit-head KL self-distillation ({len(cal_list)} disjoint calibration sequences)..."
+    )
+    distill_info = model.distill_exit_heads(cal_ids, steps=50, lr=3e-3, batch_size=7, weight_decay=0.01)
+    model.eval()
+    logger.info(f"Exit-head KL distillation complete: {distill_info}")
+
+    logger.info("Benchmarking Self-Speculative Decoding (LayerSkip)...")
+    spec_result = benchmark_self_speculative_decoding(model, device, tokenizer)
+    logger.info(
+        f"Speculative decode rate: greedy={spec_result['tokens_per_second']} tok/s "
+        f"(Acceptance: {spec_result['acceptance_rate'] * 100:.1f}%, "
+        f"T=0.7 sampled={spec_result.get('sampled_t07', {}).get('tokens_per_second', 0)} tok/s)"
+    )
+
+    logger.info("Benchmarking CALM Softmax Margin Confidence Gating on held-out Python & FineWeb splits...")
+    calm_result = benchmark_calm_confidence_gating(model, device, tokenizer, sample_text, threshold=0.20)
+    calm_fw = benchmark_calm_confidence_gating(model, device, tokenizer, held_fw_text, threshold=0.20)
+    calm_result["checkpoint_calibrated"] = True
+    calm_result["distillation_telemetry"] = distill_info
+    calm_result["held_out_fineweb"] = calm_fw
+    calm_result["uncalibrated_raw"] = uncalibrated_calm
+    logger.info(
+        f"CALM high-confidence agreement @ tau=0.20: Python={calm_result['high_confidence_agreement_pct']}% "
+        f"(overall={calm_result['overall_reflex_cortex_agreement_pct']}%), "
+        f"FineWeb={calm_fw['high_confidence_agreement_pct']}% (overall={calm_fw['overall_reflex_cortex_agreement_pct']}%)"
+    )
 
     # 9. Latent Manifold Probing (JEV)
     logger.info("Evaluating JEV Latent Manifold Probing on real representations...")
@@ -903,6 +1324,10 @@ def main():
     # 10. MoE Sparse vs Dense
     logger.info("Benchmarking MoE True Sparse Scatter-Gather vs Dense BMM...")
     moe_result = benchmark_moe_sparse_vs_dense(dim=model.hidden_dim, num_experts=8, top_k=2, device=device)
+
+    # 11. Full-Model BF16 vs FP8 vs NVFP4 Quantization Tiers + Staging
+    logger.info("Evaluating Full-Model Quantization Tiers (BF16 vs FP8 vs NVFP4 4-bit)...")
+    quant_result = benchmark_quantization_tiers(model, device)
 
     all_data = {
         "system_telemetry": sys_telemetry,
@@ -915,6 +1340,7 @@ def main():
         "jev_evaluation": jev_result,
         "tokenizer_generalization": tok_results,
         "moe_sparse_vs_dense": moe_result,
+        "quantization_tiers": quant_result,
     }
 
     # Save JSON

@@ -219,13 +219,14 @@ def generate_optimizer_memory_figure():
     )
 
     # Panel (b): Full model-wide memory across tiers (90.8M MoE)
-    model_opts = ["Pure\nAdamW", "Triune MoE\n(FP32 Tier 3)", "Triune MoE\n(8-bit Tier 3)", "Asymptotic\n($E \\geq 64$)"]
+    model_opts = ["Pure\nAdamW", "Triune MoE\n(FP32 T3)", "Triune MoE\n(8-bit T3)", "Asymptotic\n($E \\geq 64$)"]
     model_bpp = [8.00, 4.54, 1.27, 0.128]
     colors2 = [COLORS["adamw"], "#2ca02c", COLORS["triune"], "#9467bd"]
 
     bars2 = ax2.bar(model_opts, model_bpp, color=colors2, width=0.55, edgecolor="black", linewidth=0.6)
     ax2.set_ylabel("Model-Wide (Bytes / Param)")
     ax2.set_title("(b) Model-Wide Memory (90.8M MoE)")
+    ax2.tick_params(axis="x", labelsize=7.5)
     ax2.grid(axis="y", linestyle=":")
     ax2.set_ylim(0, 9.5)
 

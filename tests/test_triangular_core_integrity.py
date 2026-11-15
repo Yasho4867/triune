@@ -235,7 +235,9 @@ def test_basis_orthogonality_and_subdiagonal_residuals():
     subdiag_max_bf16 = S_bf16[lower_mask].float().abs().max().item()
     rel_subdiag_bf16 = subdiag_max_bf16 / G_bf16.float().norm().item()
     assert rel_subdiag_bf16 < 1e-4, f"BF16 relative subdiagonal residual must be < 1e-4, got {rel_subdiag_bf16:.3e}"
-    print(f"✅ Orthogonality & subdiagonal bounds verified (FP32 rel={rel_subdiag_f32:.2e}, BF16 rel={rel_subdiag_bf16:.2e})")
+    print(
+        f"✅ Orthogonality & subdiagonal bounds verified (FP32 rel={rel_subdiag_f32:.2e}, BF16 rel={rel_subdiag_bf16:.2e})"
+    )
 
 
 def test_cholesky_householder_fallback_integrity():
@@ -260,7 +262,9 @@ def test_cholesky_householder_fallback_integrity():
     Q_diag, diag = batched_qr(Y, cond_threshold=1e4, eps_shift=1e-7, orth_tol=1e-4, return_diagnostics=True)
     assert torch.equal(Q, Q_diag)
     assert torch.equal(fallback_mask, diag["fallback_mask"])
-    assert diag["cond_fail_mask"][1].item() or diag["orth_fail_mask"][1].item(), "Ill-conditioned matrix must trigger condition or orth fallback"
+    assert diag["cond_fail_mask"][1].item() or diag["orth_fail_mask"][1].item(), (
+        "Ill-conditioned matrix must trigger condition or orth fallback"
+    )
     assert diag["degen_mask"][2].item(), "Zero-column matrix must trigger degen fallback"
 
     # Verify mutually exclusive partition
@@ -270,7 +274,9 @@ def test_cholesky_householder_fallback_integrity():
         + diag["primary_cond_mask"].long()
         + diag["primary_orth_mask"].long()
     )
-    assert torch.equal(primary_sum, fallback_mask.long()), "Primary fallback reasons must partition fallback_mask exactly"
+    assert torch.equal(primary_sum, fallback_mask.long()), (
+        "Primary fallback reasons must partition fallback_mask exactly"
+    )
 
     # Also test that batched_subspace_projection in triune.ops uses guarded QR
     from triune.ops import batched_subspace_projection
@@ -315,9 +321,7 @@ def test_triangular_adamw_noise_filtering_and_update_equivalence():
     delta_triu = torch.zeros_like(R_triu)
     step_vals = torch.tensor([1.0], device=device)
 
-    fast_triangular_adamw(
-        R_triu, mom_triu, var_triu, delta_triu, step_vals, beta1=0.9, beta2=0.999, eps=1e-8
-    )
+    fast_triangular_adamw(R_triu, mom_triu, var_triu, delta_triu, step_vals, beta1=0.9, beta2=0.999, eps=1e-8)
 
     beta1, beta2, eps = 0.9, 0.999, 1e-8
     mom_full = (1.0 - beta1) * S_exact
@@ -348,9 +352,7 @@ def test_triangular_adamw_noise_filtering_and_update_equivalence():
     mom_filt = torch.zeros(1, r + 1, r + 1, device=device, dtype=torch.float32)
     var_filt = torch.zeros(1, r + 1, r + 1, device=device, dtype=torch.float32)
     delta_filt = torch.zeros_like(R_filtered)
-    fast_triangular_adamw(
-        R_filtered, mom_filt, var_filt, delta_filt, step_vals, beta1=0.9, beta2=0.999, eps=1e-8
-    )
+    fast_triangular_adamw(R_filtered, mom_filt, var_filt, delta_filt, step_vals, beta1=0.9, beta2=0.999, eps=1e-8)
     subdiag_filt_max = delta_filt[0][lower_mask].abs().max().item()
     assert subdiag_filt_max == 0.0, f"Filtered subdiagonal update must be identically zero, got {subdiag_filt_max}"
 
@@ -382,9 +384,7 @@ def test_scholqr2_shift_bias_elimination_and_zero_grad_skip():
 
     # 2. Verify that zero-gradient experts are skipped and non-refresh steps invoke 0 QR calls
     model = DummyMoEModel(d_model=128, num_experts=4, expert_dim=256).to(device=device, dtype=torch.bfloat16)
-    opt = CentroidSteerOptimizer(
-        model, rank=8, update_gap=5, use_triangular_core=True, adaptive_subspace_refresh=False
-    )
+    opt = CentroidSteerOptimizer(model, rank=8, update_gap=5, use_triangular_core=True, adaptive_subspace_refresh=False)
 
     x = torch.randn(2, 8, 128, device=device, dtype=torch.bfloat16)
     out, _ = model(x)
@@ -467,12 +467,18 @@ def test_benchmark_config_validation_and_scientific_pvalues():
     vals_adm = [4.1663 + 0.0001 * ((-1) ** i) for i in range(12)]
     stats_out = compute_paired_and_tost(vals_tri, vals_adm, eq_margin=0.05)
 
-    assert 0.0 < stats_out["p_value"] < 1e-4, f"Small p_value must retain non-zero float precision, got {stats_out['p_value']}"
+    assert 0.0 < stats_out["p_value"] < 1e-4, (
+        f"Small p_value must retain non-zero float precision, got {stats_out['p_value']}"
+    )
     assert "<0.0001" in stats_out["p_value_formatted"]
 
     for margin_key, m_entry in stats_out["tost_sensitivity_profile"].items():
-        assert 0.0 < m_entry["p_tost"] < 1e-4, f"{margin_key} p_tost must not be rounded to 0.0, got {m_entry['p_tost']}"
-        assert 0.0 < m_entry["p_upper"] < 1e-4, f"{margin_key} p_upper must not be rounded to 0.0, got {m_entry['p_upper']}"
+        assert 0.0 < m_entry["p_tost"] < 1e-4, (
+            f"{margin_key} p_tost must not be rounded to 0.0, got {m_entry['p_tost']}"
+        )
+        assert 0.0 < m_entry["p_upper"] < 1e-4, (
+            f"{margin_key} p_upper must not be rounded to 0.0, got {m_entry['p_upper']}"
+        )
         assert "<0.0001" in m_entry["p_tost_formatted"]
 
     assert format_p_value(1.5129e-7) == "1.513e-07 (<0.0001)"
@@ -480,6 +486,7 @@ def test_benchmark_config_validation_and_scientific_pvalues():
 
     # 4. Verify raw IEEE-754 float64 precision is preserved without 6-digit string rounding
     import scipy.stats as stats
+
     raw_expected_p = float(stats.ttest_rel(vals_tri, vals_adm).pvalue)
     assert stats_out["p_value"] == raw_expected_p, (
         f"p_value must preserve full IEEE-754 float64 precision ({raw_expected_p!r}), got {stats_out['p_value']!r}"
@@ -660,6 +667,3 @@ def test_subprocess_worker_validation_memory_semantics_and_aggregation(tmp_path,
             device=torch.device("cpu"),
         )
     print("✅ Subprocess worker validation, memory semantics, and secondary/extended aggregation verified!")
-
-
-

@@ -19,10 +19,11 @@ except ImportError:
 
 from triune.ops.centroid_steer import (
     batched_qr,
-    batched_subspace_projection as batched_fast_subspace_projection,
-    cholesky_qr,
     polar_stiefel_retraction,
     subspace_projection,
+)
+from triune.ops.centroid_steer import (
+    batched_subspace_projection as batched_fast_subspace_projection,
 )
 
 
@@ -695,7 +696,10 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                         )
                         if has_preset_proj:
                             ql_f32 = torch.stack(
-                                [g_list[b_idx]["projection"].to(device=device, dtype=torch.float32) for b_idx in qr_bucket_indices],
+                                [
+                                    g_list[b_idx]["projection"].to(device=device, dtype=torch.float32)
+                                    for b_idx in qr_bucket_indices
+                                ],
                                 dim=0,
                             )
                             Z = torch.bmm(G_qr.transpose(1, 2), ql_f32)
@@ -740,7 +744,9 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                             g["Q_R"] = QR_stack[b_idx]
                             g["projection"] = QL_stack[b_idx, :, :r]
                             g["projection_side"] = side
-                            g["proj_step"] = aligned_proj_step if not self.adaptive_subspace_refresh else self.step_count
+                            g["proj_step"] = (
+                                aligned_proj_step if not self.adaptive_subspace_refresh else self.step_count
+                            )
                             batch_mom[idx].zero_()
                             batch_var[idx].zero_()
                             st["momentum"] = batch_mom[idx]
@@ -784,6 +790,11 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                     or ((self.step_count - g0.get("last_steer_step", 0)) >= self.steer_update_gap)
                 )
                 if needs_steer_refresh:
+                    # Reset stale 1st and 2nd moments on the rotated (r+1)-th steering column and row
+                    batch_mom[start:end, : r + 1, r].zero_()
+                    batch_mom[start:end, r, : r + 1].zero_()
+                    batch_var[start:end, : r + 1, r].zero_()
+                    batch_var[start:end, r, : r + 1].zero_()
                     can_steer = self.steer_scale > 0 and all(
                         g["module"] is not None
                         and getattr(g["module"], "last_centroids", None) is not None
@@ -1398,9 +1409,14 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
             p = g["param"]
             m, n = p.shape
             r = min(self.rank, m, n)
-            side = g.get("projection_side", "left")
-            proj_elements = (r * n) if side == "left" else (m * r)
-            centroid_bytes += proj_elements * 2 * 4
+            if self.use_triangular_core:
+                basis_bytes = (m + n) * (r + 1) * p.element_size()
+                core_bytes = 2 * ((r + 1) * (r + 1)) * 4
+                centroid_bytes += basis_bytes + core_bytes
+            else:
+                side = g.get("projection_side", "left")
+                proj_elements = (r * n) if side == "left" else (m * r)
+                centroid_bytes += proj_elements * 2 * 4
 
         base_bytes = base_count * (2 if HAS_8BIT and AdamW8bit is not None else 8)
         triune_bytes = muon_bytes + centroid_bytes + base_bytes
@@ -1435,7 +1451,11 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                 "kernel": "triune/kernels/fast_muon.py",
             },
             "tier2_centroid": {
-                "name": "Adaptive SVD CentroidSteer",
+                "name": (
+                    "Steered Triangular Subspace (sCholQR2)"
+                    if self.use_triangular_core
+                    else "Single-Sided sCholQR2 CentroidSteer"
+                ),
                 "param_count": centroid_count,
                 "param_pct": round((centroid_count / max(1, total_count)) * 100, 1),
                 "target": "MoE Routed Experts (Feed-Forward Blocks)",

@@ -201,8 +201,357 @@ if HAS_TRITON:
             )
             d_init_4d = d_init.reshape(B, H, Dk, Dv).to(dtype=ctx.kv_dtype)
             return d_kv_5d, d_decay_5d, d_init_4d
+
+    @triton.jit
+    def _chunk_gla_tc_fwd_kernel(
+        Q_ptr,
+        K_ptr,
+        V_ptr,
+        G_ptr,
+        Out_ptr,
+        Init_ptr,
+        Final_ptr,
+        stride_qb,
+        stride_qt,
+        stride_qh,
+        stride_qd,
+        stride_kb,
+        stride_kt,
+        stride_kh,
+        stride_kd,
+        stride_vb,
+        stride_vt,
+        stride_vh,
+        stride_vd,
+        stride_gb,
+        stride_gt,
+        stride_gh,
+        stride_gd,
+        stride_ob,
+        stride_ot,
+        stride_oh,
+        stride_od,
+        stride_sb,
+        stride_sh,
+        stride_sk,
+        stride_sv,
+        T,
+        H,
+        HAS_INIT: tl.constexpr,
+        SAVE_FINAL: tl.constexpr,
+        BT: tl.constexpr,
+        DK: tl.constexpr,
+        BV: tl.constexpr,
+        G_THRESH: tl.constexpr,
+    ):
+        """Fused Tensor-Core Chunked GLA Forward Kernel (in-register state, 0 intermediate HBM)."""
+        bh = tl.program_id(0)
+        b = bh // H
+        h = bh % H
+
+        offs_t = tl.arange(0, BT)
+        offs_k = tl.arange(0, DK)
+        offs_v = tl.arange(0, BV)
+        causal_mask = offs_t[:, None] >= offs_t[None, :]
+
+        if HAS_INIT:
+            s = tl.load(
+                Init_ptr + b * stride_sb + h * stride_sh + offs_k[:, None] * stride_sk + offs_v[None, :] * stride_sv
+            ).to(tl.float32)
+        else:
+            s = tl.zeros([DK, BV], dtype=tl.float32)
+
+        q_base = Q_ptr + b * stride_qb + h * stride_qh
+        k_base = K_ptr + b * stride_kb + h * stride_kh
+        v_base = V_ptr + b * stride_vb + h * stride_vh
+        g_base = G_ptr + b * stride_gb + h * stride_gh
+        o_base = Out_ptr + b * stride_ob + h * stride_oh
+
+        num_chunks = T // BT
+        for c in range(num_chunks):
+            t_start = c * BT
+            ts = t_start + offs_t
+            q = tl.load(q_base + ts[:, None] * stride_qt + offs_k[None, :] * stride_qd)
+            k = tl.load(k_base + ts[:, None] * stride_kt + offs_k[None, :] * stride_kd)
+            v = tl.load(v_base + ts[:, None] * stride_vt + offs_v[None, :] * stride_vd)
+            g = tl.load(g_base + ts[:, None] * stride_gt + offs_k[None, :] * stride_gd).to(tl.float32)
+            g = tl.minimum(g, 0.0)
+
+            g_cum = tl.cumsum(g, axis=0)
+            g_last = tl.sum(g, axis=0)[None, :]
+
+            if tl.min(g_last) >= G_THRESH:
+                g_mid = 0.5 * g_last
+
+                q_inter = (q.to(tl.float32) * tl.exp(g_cum)).to(q.dtype)
+                o_inter = tl.dot(q_inter, s.to(q.dtype))
+
+                q_intra = (q.to(tl.float32) * tl.exp(g_cum - g_mid)).to(q.dtype)
+                k_intra = (k.to(tl.float32) * tl.exp(g_mid - g_cum)).to(k.dtype)
+                qk = tl.dot(q_intra, tl.trans(k_intra))
+                attn = tl.where(causal_mask, qk, 0.0).to(v.dtype)
+                o_intra = tl.dot(attn, v)
+
+                out_c = (o_inter + o_intra).to(Out_ptr.dtype.element_ty)
+                tl.store(o_base + ts[:, None] * stride_ot + offs_v[None, :] * stride_od, out_c)
+
+                k_dec = (k.to(tl.float32) * tl.exp(tl.minimum(g_last - g_cum, 0.0))).to(k.dtype)
+                s = s * tl.exp(g_last).reshape(DK, 1) + tl.dot(tl.trans(k_dec), v)
+            else:
+                for t_sub in range(BT):
+                    t_idx = t_start + t_sub
+                    q_t = tl.load(q_base + t_idx * stride_qt + offs_k * stride_qd).to(tl.float32)
+                    k_t = tl.load(k_base + t_idx * stride_kt + offs_k * stride_kd).to(tl.float32)
+                    v_t = tl.load(v_base + t_idx * stride_vt + offs_v * stride_vd).to(tl.float32)
+                    g_t = tl.load(g_base + t_idx * stride_gt + offs_k * stride_gd).to(tl.float32)
+                    d_t = tl.exp(tl.minimum(g_t, 0.0))
+                    s = s * d_t[:, None] + k_t[:, None] * v_t[None, :]
+                    o_t = tl.sum(q_t[:, None] * s, axis=0)
+                    tl.store(o_base + t_idx * stride_ot + offs_v * stride_od, o_t.to(Out_ptr.dtype.element_ty))
+
+        if SAVE_FINAL:
+            tl.store(
+                Final_ptr + b * stride_sb + h * stride_sh + offs_k[:, None] * stride_sk + offs_v[None, :] * stride_sv,
+                s.to(Final_ptr.dtype.element_ty),
+            )
+
+    def _triton_chunk_gla_tc_fwd(
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        g: torch.Tensor,
+        initial_state: torch.Tensor | None = None,
+        out: torch.Tensor | None = None,
+        save_final: bool = True,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        B, T, H, HD = q.shape
+        if out is None:
+            out = torch.empty_like(v)
+        has_init = initial_state is not None
+        final_state = (
+            torch.empty(B, H, HD, HD, device=q.device, dtype=q.dtype)
+            if save_final
+            else torch.empty((1,), device=q.device, dtype=q.dtype)
+        )
+        init_ptr = initial_state if has_init else final_state
+        sb, sh, sk, sv = init_ptr.stride() if has_init else (final_state.stride() if save_final else (0, 0, 0, 0))
+        _chunk_gla_tc_fwd_kernel[(B * H,)](
+            q,
+            k,
+            v,
+            g,
+            out,
+            init_ptr,
+            final_state,
+            q.stride(0),
+            q.stride(1),
+            q.stride(2),
+            q.stride(3),
+            k.stride(0),
+            k.stride(1),
+            k.stride(2),
+            k.stride(3),
+            v.stride(0),
+            v.stride(1),
+            v.stride(2),
+            v.stride(3),
+            g.stride(0),
+            g.stride(1),
+            g.stride(2),
+            g.stride(3),
+            out.stride(0),
+            out.stride(1),
+            out.stride(2),
+            out.stride(3),
+            sb,
+            sh,
+            sk,
+            sv,
+            T,
+            H,
+            HAS_INIT=has_init,
+            SAVE_FINAL=save_final,
+            BT=32,
+            DK=HD,
+            BV=HD,
+            G_THRESH=-18.0 if q.dtype == torch.float16 else -160.0,
+            num_warps=4,
+        )
+        return out, final_state
+
+    @triton.jit
+    def _triton_gated_deltanet_fwd_kernel(
+        Q_ptr,
+        K_ptr,
+        V_ptr,
+        G_ptr,
+        Beta_ptr,
+        Out_ptr,
+        Init_ptr,
+        Final_ptr,
+        stride_qb,
+        stride_qt,
+        stride_qh,
+        stride_qd,
+        stride_kb,
+        stride_kt,
+        stride_kh,
+        stride_kd,
+        stride_vb,
+        stride_vt,
+        stride_vh,
+        stride_vd,
+        stride_gb,
+        stride_gt,
+        stride_gh,
+        stride_gd,
+        stride_bb,
+        stride_bt,
+        stride_bh,
+        stride_bd,
+        stride_ob,
+        stride_ot,
+        stride_oh,
+        stride_od,
+        stride_sb,
+        stride_sh,
+        stride_sk,
+        stride_sv,
+        T,
+        H,
+        HAS_BETA: tl.constexpr,
+        HAS_INIT: tl.constexpr,
+        DK: tl.constexpr,
+        BV: tl.constexpr,
+    ):
+        """Fused register-state Gated DeltaNet kernel exploiting column independence of S[DK, BV]."""
+        bh = tl.program_id(0)
+        v_blk = tl.program_id(1)
+        b = bh // H
+        h = bh % H
+
+        offs_k = tl.arange(0, DK)
+        offs_v = v_blk * BV + tl.arange(0, BV)
+        v_mask = offs_v < DK
+
+        if HAS_INIT:
+            s = tl.load(
+                Init_ptr + b * stride_sb + h * stride_sh + offs_k[:, None] * stride_sk + offs_v[None, :] * stride_sv,
+                mask=v_mask[None, :],
+                other=0.0,
+            ).to(tl.float32)
+        else:
+            s = tl.zeros([DK, BV], dtype=tl.float32)
+
+        q_base = Q_ptr + b * stride_qb + h * stride_qh
+        k_base = K_ptr + b * stride_kb + h * stride_kh
+        v_base = V_ptr + b * stride_vb + h * stride_vh
+        g_base = G_ptr + b * stride_gb + h * stride_gh
+        beta_base = Beta_ptr + b * stride_bb + h * stride_bh
+        o_base = Out_ptr + b * stride_ob + h * stride_oh
+
+        for t in range(T):
+            q_t = tl.load(q_base + t * stride_qt + offs_k * stride_qd).to(tl.float32)
+            k_t = tl.load(k_base + t * stride_kt + offs_k * stride_kd).to(tl.float32)
+            v_t = tl.load(v_base + t * stride_vt + offs_v * stride_vd, mask=v_mask, other=0.0).to(tl.float32)
+            g_t = tl.load(g_base + t * stride_gt + offs_k * stride_gd).to(tl.float32)
+            d_t = tl.exp(tl.minimum(g_t, 0.0))
+
+            v_pred = tl.sum(k_t[:, None] * s, axis=0)
+            u_t = v_t - v_pred
+
+            if HAS_BETA:
+                b_t = tl.load(beta_base + t * stride_bt + offs_v * stride_bd, mask=v_mask, other=1.0).to(tl.float32)
+                upd = k_t[:, None] * (b_t * u_t)[None, :]
+            else:
+                upd = k_t[:, None] * u_t[None, :]
+
+            s = s * d_t[:, None] + upd
+            o_t = tl.sum(q_t[:, None] * s, axis=0)
+            tl.store(o_base + t * stride_ot + offs_v * stride_od, o_t.to(Out_ptr.dtype.element_ty), mask=v_mask)
+
+        tl.store(
+            Final_ptr + b * stride_sb + h * stride_sh + offs_k[:, None] * stride_sk + offs_v[None, :] * stride_sv,
+            s.to(Final_ptr.dtype.element_ty),
+            mask=v_mask[None, :],
+        )
+
+    def _triton_gated_deltanet_fwd(
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        g: torch.Tensor,
+        beta: torch.Tensor | None = None,
+        initial_state: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        B, T, H, HD = q.shape
+        out = torch.empty_like(v)
+        final_state = torch.empty(B, H, HD, HD, device=q.device, dtype=q.dtype)
+        has_init = initial_state is not None
+        init_ptr = initial_state if has_init else final_state
+        has_beta = beta is not None
+        if has_beta:
+            beta_ref = beta
+            stride_bb = beta.stride(0)
+            stride_bt = beta.stride(1)
+            stride_bh = beta.stride(2)
+            stride_bd = beta.stride(3) if beta.ndim == 4 else 0
+        else:
+            beta_ref = final_state
+            stride_bb = stride_bt = stride_bh = stride_bd = 0
+
+        BV = 8
+        grid = (B * H, triton.cdiv(HD, BV))
+        _triton_gated_deltanet_fwd_kernel[grid](
+            q,
+            k,
+            v,
+            g,
+            beta_ref,
+            out,
+            init_ptr,
+            final_state,
+            q.stride(0),
+            q.stride(1),
+            q.stride(2),
+            q.stride(3),
+            k.stride(0),
+            k.stride(1),
+            k.stride(2),
+            k.stride(3),
+            v.stride(0),
+            v.stride(1),
+            v.stride(2),
+            v.stride(3),
+            g.stride(0),
+            g.stride(1),
+            g.stride(2),
+            g.stride(3),
+            stride_bb,
+            stride_bt,
+            stride_bh,
+            stride_bd,
+            out.stride(0),
+            out.stride(1),
+            out.stride(2),
+            out.stride(3),
+            final_state.stride(0),
+            final_state.stride(1),
+            final_state.stride(2),
+            final_state.stride(3),
+            T,
+            H,
+            HAS_BETA=has_beta,
+            HAS_INIT=has_init,
+            DK=HD,
+            BV=BV,
+            num_warps=4,
+        )
+        return out, final_state
 else:
     FusedRecurrentScan = None
+    _triton_chunk_gla_tc_fwd = None
+    _triton_gated_deltanet_fwd = None
 
 _CAUSAL_MASK_INV_CACHE: dict[tuple[str, int], torch.Tensor] = {}
 
@@ -240,9 +589,33 @@ def _run_gla_chunks(
     causal_mask_inv = _get_causal_mask_inv(device, C)
 
     # Bounded-memory intra-chunk causal attention:
-    # Uses micro-chunked slices (at most 4 chunks at a time) to ensure peak memory is bounded (<50 MB)
-    # even at 8,192+ tokens, while strictly guaranteeing delta_g <= 0 so exp(delta_g) never overflows or NaNs.
-    if num_chunks > 4:
+    # Uses micro-chunked slices (at most 4 chunks at a time) to ensure peak memory is bounded.
+    # For normal decay ranges (g_cumsum.min() > -20.0), uses factored Tensor Core matmul with
+    # midpoint exponential shift for exact mathematical equivalence in O(C*HD + C^2) FLOPs;
+    # for extreme synthetic decays (e.g. g=-20.0 per step), falls back to pairwise clamped delta_g.
+    is_capturing = device.type == "cuda" and torch.cuda.is_current_stream_capturing()
+    use_factored_intra = (not is_capturing) and (dtype != torch.float64) and bool((g_cumsum.min() > -20.0).item())
+
+    if use_factored_intra:
+        g_mid = g_cumsum.float()[:, :, :, C // 2 : C // 2 + 1, :]
+        q_intra = q_c.float() * torch.exp(g_cumsum.float() - g_mid)
+        k_intra = k_c.float() * torch.exp(g_mid - g_cumsum.float())
+        if num_chunks > 4:
+            out_intra_list = []
+            micro = 4
+            for c_start in range(0, num_chunks, micro):
+                c_end = min(c_start + micro, num_chunks)
+                attn_sub = (
+                    torch.matmul(q_intra[:, :, c_start:c_end], k_intra[:, :, c_start:c_end].transpose(-1, -2))
+                    .masked_fill_(causal_mask_inv, 0.0)
+                    .to(dtype)
+                )
+                out_intra_list.append(torch.matmul(attn_sub, v_c[:, :, c_start:c_end]))
+            out_intra = torch.cat(out_intra_list, dim=2)
+        else:
+            attn_all = torch.matmul(q_intra, k_intra.transpose(-1, -2)).masked_fill_(causal_mask_inv, 0.0).to(dtype)
+            out_intra = torch.matmul(attn_all, v_c)
+    elif num_chunks > 4:
         out_intra_list = []
         micro = 4
         for c_start in range(0, num_chunks, micro):
@@ -253,7 +626,11 @@ def _run_gla_chunks(
             g_cum_sub = g_cumsum[:, :, c_start:c_end]
             if dtype == torch.float64:
                 delta_g_sub = torch.clamp(g_cum_sub.unsqueeze(-2) - g_cum_sub.unsqueeze(-3), max=0.0)
-                attn_sub = ((q_sub.unsqueeze(-2) * k_sub.unsqueeze(-3)) * torch.exp(delta_g_sub)).sum(dim=-1).masked_fill_(causal_mask_inv, 0.0)
+                attn_sub = (
+                    ((q_sub.unsqueeze(-2) * k_sub.unsqueeze(-3)) * torch.exp(delta_g_sub))
+                    .sum(dim=-1)
+                    .masked_fill_(causal_mask_inv, 0.0)
+                )
             else:
                 delta_g_sub = torch.clamp(g_cum_sub.float().unsqueeze(-2) - g_cum_sub.float().unsqueeze(-3), max=0.0)
                 d_exp_sub = torch.exp(delta_g_sub)
@@ -264,7 +641,11 @@ def _run_gla_chunks(
     else:
         if dtype == torch.float64:
             delta_g = torch.clamp(g_cumsum.unsqueeze(-2) - g_cumsum.unsqueeze(-3), max=0.0)
-            attn_all = ((q_c.unsqueeze(-2) * k_c.unsqueeze(-3)) * torch.exp(delta_g)).sum(dim=-1).masked_fill_(causal_mask_inv, 0.0)
+            attn_all = (
+                ((q_c.unsqueeze(-2) * k_c.unsqueeze(-3)) * torch.exp(delta_g))
+                .sum(dim=-1)
+                .masked_fill_(causal_mask_inv, 0.0)
+            )
         else:
             delta_g = torch.clamp(g_cumsum.float().unsqueeze(-2) - g_cumsum.float().unsqueeze(-3), max=0.0)
             d_exp = torch.exp(delta_g)
@@ -283,7 +664,14 @@ def _run_gla_chunks(
         out_inter = torch.matmul(q_exp, state.unsqueeze(2))
         kv_0 = torch.matmul(k_decayed_all[:, :, 0].transpose(-1, -2), v_c[:, :, 0])
         state = torch.addcmul(kv_0, state, chunk_decay[:, :, 0])
-    elif device.type == "cuda" and dtype != torch.float64 and FusedRecurrentScan is not None and is_turbo_mode_enabled() and is_triton_available() and B <= 4:
+    elif (
+        device.type == "cuda"
+        and dtype != torch.float64
+        and FusedRecurrentScan is not None
+        and is_turbo_mode_enabled()
+        and is_triton_available()
+        and B <= 4
+    ):
         kv_all = torch.matmul(k_decayed_all.transpose(-1, -2), v_c)
         S_all, state = FusedRecurrentScan.apply(kv_all, chunk_decay, state)
         out_inter = torch.matmul(q_exp, S_all)
@@ -321,6 +709,7 @@ def fast_chunk_gla(
     g: torch.Tensor,
     initial_state: torch.Tensor | None = None,
     chunk_size: int = 64,
+    out: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Execute high-efficiency chunked Gated Linear Attention (GLA) with exact mathematical parity.
 
@@ -331,6 +720,7 @@ def fast_chunk_gla(
         g: Log-decay gate tensor [B, T, H, HD]
         initial_state: Optional recurrent hidden state [B, H, HD, HD]
         chunk_size: Chunk size for blockwise GEMMs (default: 64)
+        out: Optional pre-allocated output tensor [B, T, H, HD]
 
     Returns:
         (out, final_state) where out is [B, T, H, HD] and final_state is [B, H, HD, HD]
@@ -338,6 +728,26 @@ def fast_chunk_gla(
     B, T, H, HD = q.shape
     device = q.device
     dtype = q.dtype
+
+    # Fast fused Triton Tensor-Core inference path (0 bytes of intermediate HBM allocation)
+    needs_grad = torch.is_grad_enabled() and (
+        q.requires_grad
+        or k.requires_grad
+        or v.requires_grad
+        or g.requires_grad
+        or (initial_state is not None and initial_state.requires_grad)
+    )
+    if (
+        not needs_grad
+        and q.is_cuda
+        and _triton_chunk_gla_tc_fwd is not None
+        and is_turbo_mode_enabled()
+        and HD == 64
+        and T >= 128
+        and (T % 64 == 0)
+        and dtype in (torch.bfloat16, torch.float16)
+    ):
+        return _triton_chunk_gla_tc_fwd(q, k, v, g, initial_state=initial_state, out=out)
 
     state = (
         initial_state.to(device=device, dtype=dtype)
@@ -485,5 +895,23 @@ def fast_chunk_gated_deltanet(
         query = q[:, 0].unsqueeze(-2)
         out = torch.matmul(query, state).squeeze(-2).unsqueeze(1)
         return out, state
+
+    # Fused Triton register-state DeltaNet forward kernel (eliminates Python T-loop)
+    needs_grad = torch.is_grad_enabled() and (
+        q.requires_grad
+        or k.requires_grad
+        or v.requires_grad
+        or g.requires_grad
+        or (beta is not None and beta.requires_grad)
+        or (initial_state is not None and initial_state.requires_grad)
+    )
+    if (
+        not needs_grad
+        and q.is_cuda
+        and _triton_gated_deltanet_fwd is not None
+        and is_turbo_mode_enabled()
+        and HD in (16, 32, 64, 128)
+    ):
+        return _triton_gated_deltanet_fwd(q, k, v, g, beta=beta, initial_state=initial_state)
 
     return fast_recurrent_gated_deltanet(q, k, v, g, beta=beta, initial_state=state)

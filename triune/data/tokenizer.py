@@ -68,7 +68,9 @@ class PurePythonBPETokenizer:
 
         self.byte_encoder = bytes_to_unicode()
         self.byte_decoder = {v: k for k, v in self.byte_encoder.items()}
-        self.pat = re.compile(r"""'s|'t|'re|'ve|'m|'ll|'d|[^\r\n\w\s]?[a-zA-Z]+|\d{1,3}| ?[^\s\w\d]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+""")
+        self.pat = re.compile(
+            r"""'s|'t|'re|'ve|'m|'ll|'d|[^\r\n\w\s]?[a-zA-Z]+|\d{1,3}| ?[^\s\w\d]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+"""
+        )
         self.special_tokens_set = set(SPECIAL_TOKENS)
 
     def _get_pairs(self, word: Tuple[str, ...]):

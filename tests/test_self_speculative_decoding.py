@@ -93,6 +93,41 @@ class TestSelfSpeculativeDecoding(unittest.TestCase):
         res = generator.generate("Prompt terminating", max_new_tokens=5)
         self.assertIsInstance(res["text"], str)
 
+    def test_self_speculative_greedy_exact_parity_and_rejection_sampling(self):
+        gen_greedy = SelfSpeculativeGenerator(
+            model=self.model,
+            tokenizer=self.tokenizer,
+            k_draft=2,
+            temperature=0.0,
+            eos_token_id=None,
+        )
+        res_greedy = gen_greedy.generate("Greedy test", max_new_tokens=6)
+        self.assertEqual(res_greedy["sampling_mode"], "greedy_exact_parity")
+
+        # Autoregressive greedy target reference at force_depth=2
+        prompt_ids = self.tokenizer.encode("Greedy test").ids
+        ref_curr = torch.tensor([prompt_ids], dtype=torch.long)
+        ref_toks = []
+        with torch.no_grad():
+            for _ in range(6):
+                logits, _ = self.model(ref_curr, force_depth=2, last_token_only=True)
+                nxt = int(torch.argmax(logits[0, -1]).item())
+                ref_toks.append(nxt)
+                ref_curr = torch.cat([ref_curr, torch.tensor([[nxt]], dtype=torch.long)], dim=1)
+        self.assertEqual(res_greedy["token_ids"], ref_toks)
+
+        torch.manual_seed(123)
+        gen_sample = SelfSpeculativeGenerator(
+            model=self.model,
+            tokenizer=self.tokenizer,
+            k_draft=2,
+            temperature=0.7,
+            eos_token_id=None,
+        )
+        res_sample = gen_sample.generate("Sampled test", max_new_tokens=6)
+        self.assertEqual(res_sample["sampling_mode"], "rejection_sampling_exact")
+        self.assertEqual(len(res_sample["token_ids"]), 6)
+
 
 if __name__ == "__main__":
     unittest.main()

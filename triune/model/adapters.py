@@ -287,7 +287,9 @@ def generate_adaptive(
         if hasattr(model, "_exit_manager"):
             model._exit_manager.intermediate_activations.clear()
 
-        use_jev_active = (getattr(model, "use_jev", False) or hasattr(model, "reflex_jev_router")) if use_jev is None else use_jev
+        use_jev_active = (
+            (getattr(model, "use_jev", False) or hasattr(model, "reflex_jev_router")) if use_jev is None else use_jev
+        )
         mgr = getattr(model, "_exit_manager", None)
         has_intermediate = mgr and r_idx in mgr.intermediate_activations and l_idx in mgr.intermediate_activations
 
@@ -297,6 +299,7 @@ def generate_adaptive(
             r_logits = reflex_logits[:, -1, :]
             l_logits = limbic_logits[:, -1, :]
             c_logits = cortex_logits[:, -1, :]
+
             def _evaluate_exit(logits: torch.Tensor, scale: float = 1.0) -> bool:
                 probs = F.softmax(logits.float() / max(temperature, 1e-5), dim=-1)
                 k_val = min(16, probs.size(-1))

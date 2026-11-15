@@ -1,6 +1,6 @@
 # Triune Category D: Long-Context Inference & Generation Report
 
-**Date**: November 12, 2026
+**Date**: November 15, 2026
 **Hardware**: NVIDIA GeForce RTX 5070 Laptop GPU (7.93 GB VRAM)
 **Software**: PyTorch 2.14.1+cu132, CUDA 13.2, Python 3.14.7
 
@@ -15,26 +15,27 @@ and sub-millisecond per-token latency even at context lengths exceeding 16,384 t
 
 | Context Length ($L$) | Standard SDPA Latency | GLA Latency | SDPA Peak VRAM | GLA Peak VRAM | VRAM Reduction | Speedup |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **512** | 0.31 ms | 2.58 ms | 41.5 MB | 207.07 MB | -399.0% | **0.12x** |
-| **1024** | 0.19 ms | 4.84 ms | 46.5 MB | 213.57 MB | -359.3% | **0.04x** |
-| **2048** | 0.47 ms | 9.46 ms | 52.5 MB | 226.57 MB | -331.6% | **0.05x** |
-| **4096** | 1.25 ms | 18.73 ms | 64.5 MB | 252.57 MB | -291.6% | **0.07x** |
-| **8192** | 3.91 ms | 36.36 ms | 88.5 MB | 321.13 MB | -262.9% | **0.11x** |
-| **16384** | 13.6 ms | 73.88 ms | 136.5 MB | 507.25 MB | -271.6% | **0.18x** |
+| **512** | 0.22 ms | 0.32 ms | 42.0 MB | 43.5 MB | -3.6% | **0.69x** |
+| **1024** | 0.23 ms | 0.34 ms | 47.5 MB | 46.5 MB | 2.1% | **0.68x** |
+| **2048** | 0.42 ms | 0.6 ms | 54.5 MB | 50.69 MB | 7.0% | **0.7x** |
+| **4096** | 1.33 ms | 1.02 ms | 68.5 MB | 56.69 MB | 17.2% | **1.3x** |
+| **8192** | 4.31 ms | 2.01 ms | 96.5 MB | 68.69 MB | 28.8% | **2.14x** |
+| **16384** | 14.97 ms | 3.72 ms | 152.5 MB | 94.69 MB | 37.9% | **4.02x** |
 
 ## 3. Autoregressive Decode Scaling ($O(1)$ vs $O(L)$)
 
 | Prompt Context Length | SDPA KV-Cache Memory | GLA Recurrent State Memory | SDPA Decode Latency | GLA Decode Latency | Decode Latency Advantage |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **512** | 1024.0 KB | **64.0 KB (Fixed)** | 0.296 ms/tok | **0.617 ms/tok** | **0.48x faster** |
-| **2048** | 4096.0 KB | **64.0 KB (Fixed)** | 0.352 ms/tok | **0.981 ms/tok** | **0.36x faster** |
-| **8192** | 16384.0 KB | **64.0 KB (Fixed)** | 0.442 ms/tok | **0.976 ms/tok** | **0.45x faster** |
+| **512** | 1024.0 KB | **64.0 KB (Fixed)** | 0.166 ms/tok | **0.151 ms/tok** | **1.1x faster** |
+| **2048** | 4096.0 KB | **64.0 KB (Fixed)** | 0.175 ms/tok | **0.147 ms/tok** | **1.18x faster** |
+| **8192** | 16384.0 KB | **64.0 KB (Fixed)** | 0.483 ms/tok | **0.152 ms/tok** | **3.19x faster** |
+| **16384** | 32768.0 KB | **64.0 KB (Fixed)** | 1.137 ms/tok | **0.275 ms/tok** | **4.13x faster** |
 
 ## 4. Key Takeaways
 
 1. **Constant Memory Footprint**:
    - Standard Softmax KV-cache grows linearly with sequence length. At $L=8,192$, the KV-cache consumes megabytes per layer.
-   - GLA maintains a fixed recurrent matrix of shape $(H, d_k, d_v)$ (64 KB total) regardless of whether sequence length is 512 or 16,384.
-2. **Decode Latency Invariance**:
-   - While SDPA decode latency increases as context expands due to growing attention dot-products over previous keys, GLA decode latency remains completely flat ($0.27 - 0.29$ ms/token).
+   - GLA maintains a fixed recurrent matrix of shape $(H, d_k, d_v)$ (64.0 KB total) regardless of context length.
+2. **Decode Latency & Scaling**:
+   - With fused Triton single-token recurrent state kernels, GLA decode latency stays bounded (0.147 - 0.275 ms/token across $L=512..16384$) with constant 64.0 KB state, eliminating $O(L)$ KV-cache memory growth.
 

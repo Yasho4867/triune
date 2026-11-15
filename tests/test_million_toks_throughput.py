@@ -20,12 +20,9 @@ from __future__ import annotations
 import unittest
 
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 
 from triune.data.dynamic_tokenizer import DynamicTokenizer, DynamicTokenizerOutput
-from triune.model.jev import JEVExitRouter, JEVLatentPredictor
-from triune.runtime.parallel_engine import GLAPipelineBlock, MoERoutingBlock, ParallelEngine
+from triune.runtime.parallel_engine import ParallelEngine
 
 
 class TestDynamicTokenizer(unittest.TestCase):
@@ -65,9 +62,7 @@ class TestDynamicTokenizer(unittest.TestCase):
 
         # Invariant: Sequence compression ratio must be >= 2.0x
         self.assertGreaterEqual(res.compression_ratio, 2.0)
-        self.assertGreaterEqual(
-            res.uncompressed_length / res.compressed_length, 2.0
-        )
+        self.assertGreaterEqual(res.uncompressed_length / res.compressed_length, 2.0)
 
     def test_compression_ratio_repetitive_and_natural_text(self):
         """Verifies compression ratio >= 2.0x on natural language and structured markdown."""
@@ -254,9 +249,7 @@ class TestParallelEngine(unittest.TestCase):
         # Throughput for batch 16 must exceed batch 1
         res_b1 = next(r for r in bench_res["results"] if r["batch_size"] == 1)
         res_b16 = next(r for r in bench_res["results"] if r["batch_size"] == 16)
-        self.assertGreater(
-            res_b16["throughput_tok_s"], res_b1["throughput_tok_s"]
-        )
+        self.assertGreater(res_b16["throughput_tok_s"], res_b1["throughput_tok_s"])
 
         if self.is_cuda:
             # On NVIDIA RTX 5070 GPU, confirm throughput easily exceeds 1,000,000 tok/s
@@ -277,13 +270,9 @@ class TestParallelEngine(unittest.TestCase):
         target_latents = draft_latents + 0.05 * torch.randn(B, K, D, device=self.device)
 
         # Warmup run
-        _ = self.engine.score_draft_chunks(
-            draft_latents, target_latents, threshold=0.8, metric="cosine"
-        )
+        _ = self.engine.score_draft_chunks(draft_latents, target_latents, threshold=0.8, metric="cosine")
 
-        scoring = self.engine.score_draft_chunks(
-            draft_latents, target_latents, threshold=0.8, metric="cosine"
-        )
+        scoring = self.engine.score_draft_chunks(draft_latents, target_latents, threshold=0.8, metric="cosine")
 
         self.assertIn("accepted_mask", scoring)
         self.assertIn("scores", scoring)

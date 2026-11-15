@@ -1,12 +1,12 @@
 """Unit tests for DynamicTokenizer and ParallelEngine."""
 
 import unittest
-import torch
-import torch.nn.functional as F
 
-from triune.data import DynamicTokenizer, DynamicTokenizerOutput
-from triune.runtime import ParallelEngine, GLAPipelineBlock, MoERoutingBlock
-from triune.model.jev import JEVLatentPredictor, JEVExitRouter
+import torch
+
+from triune.data import DynamicTokenizer
+from triune.model.jev import JEVExitRouter, JEVLatentPredictor
+from triune.runtime import ParallelEngine
 
 
 class TestDynamicTokenizer(unittest.TestCase):

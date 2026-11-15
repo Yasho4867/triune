@@ -40,6 +40,7 @@ def time_ms(fn, reps: int, device: torch.device) -> float:
 def run(cfg: dict, token_counts: list[int], dtype: torch.dtype, device: torch.device, reps: int) -> list[dict]:
     torch.manual_seed(0)
     moe = MoE_FFN(**cfg).to(device=device, dtype=dtype).eval()
+    moe.use_sparse_eval = False
     moe.router.weight.data.normal_(0, 0.5)
     rows = []
     for n in token_counts:
@@ -47,8 +48,8 @@ def run(cfg: dict, token_counts: list[int], dtype: torch.dtype, device: torch.de
         with torch.no_grad():
             dense_out, sparse_out = moe(x), moe.sparse_forward(x)
             max_diff = (dense_out.float() - sparse_out.float()).abs().max().item()
-            dense_ms = time_ms(lambda: moe(x), reps, device)
-            sparse_ms = time_ms(lambda: moe.sparse_forward(x), reps, device)
+            dense_ms = time_ms(lambda m=moe, x_in=x: m(x_in), reps, device)
+            sparse_ms = time_ms(lambda m=moe, x_in=x: m.sparse_forward(x_in), reps, device)
         rows.append(
             {
                 "tokens": n,
@@ -58,7 +59,6 @@ def run(cfg: dict, token_counts: list[int], dtype: torch.dtype, device: torch.de
                 "max_abs_diff": max_diff,
             }
         )
-    del moe
     if device.type == "cuda":
         torch.cuda.empty_cache()
     return rows
@@ -83,7 +83,9 @@ def main() -> None:
     for name, rows in result["configs"].items():
         print(name)
         for r in rows:
-            print(f"  N={r['tokens']:>6} dense={r['dense_ms']:>9.3f}ms sparse={r['sparse_ms']:>9.3f}ms x{r['sparse_speedup_x']}  diff={r['max_abs_diff']:.2e}")
+            print(
+                f"  N={r['tokens']:>6} dense={r['dense_ms']:>9.3f}ms sparse={r['sparse_ms']:>9.3f}ms x{r['sparse_speedup_x']}  diff={r['max_abs_diff']:.2e}"
+            )
 
 
 if __name__ == "__main__":

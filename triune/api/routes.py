@@ -2688,7 +2688,7 @@ if HAS_FASTAPI:
 
     atexit.register(pytorch_state.stop_prefetch_worker)
 
-    from triune.api.srsm import SessionRecurrentStateManager, ServingRequestQueue
+    from triune.api.srsm import ServingRequestQueue, SessionRecurrentStateManager
 
     srsm = SessionRecurrentStateManager(max_active_sessions=512, session_ttl_seconds=3600.0)
     serving_queue = ServingRequestQueue(max_concurrency=16)
@@ -5136,13 +5136,13 @@ if HAS_FASTAPI:
                     "kernel": "triune/kernels/fast_muon.py",
                 },
                 "tier2_centroid": {
-                    "name": "Adaptive SVD CentroidSteer",
+                    "name": "Steered Triangular Subspace (sCholQR2)",
                     "param_count": 0,
                     "param_pct": 0.0,
                     "target": "MoE Routed Experts (Feed-Forward Blocks)",
                     "vram_saving": "Not active",
                     "basis_transport": "Not active",
-                    "steer_invariant": "P^T c_orth = 0",
+                    "steer_invariant": "Q_L^T c_perp = 0",
                 },
                 "tier3_adamw": {
                     "name": "Decoupled AdamW",
@@ -6339,8 +6339,7 @@ SYSTEM \"\"\"You are Triune AI, a high-efficiency cognitive language model train
 
         avg_tokens_exiting_reflex = 0.45
         weighted_active_params = (
-            reflex_params + embed_params
-            + (1.0 - avg_tokens_exiting_reflex) * (limbic_active_params + cortex_params)
+            reflex_params + embed_params + (1.0 - avg_tokens_exiting_reflex) * (limbic_active_params + cortex_params)
         )
 
         layer_mapping = []
@@ -6366,27 +6365,31 @@ SYSTEM \"\"\"You are Triune AI, a high-efficiency cognitive language model train
             else:
                 tier = "cortex"
                 tier_label = "Cortex Tier (GLA Reasoning)"
-                mechanism = "Gated Linear Attention O(S) Recurrent State Scan" if cortex_gla else "Deep Softmax Reasoning"
+                mechanism = (
+                    "Gated Linear Attention O(S) Recurrent State Scan" if cortex_gla else "Deep Softmax Reasoning"
+                )
                 complexity = "O(S) Linear Gated Attention" if cortex_gla else "O(S^2) Softmax"
                 sparsity = 0.0
                 active_exp = 1
                 tot_exp = 1
                 exit_prob = 1.0
 
-            layer_mapping.append({
-                "layer_index": i,
-                "original_name": f"transformer.layers.{i}",
-                "original_type": "DenseTransformerBlock",
-                "upgraded_tier": tier,
-                "upgraded_label": tier_label,
-                "mechanism": mechanism,
-                "attention_complexity": complexity,
-                "sparsity_pct": sparsity,
-                "total_experts": tot_exp,
-                "active_experts": active_exp,
-                "reflex_early_exit_prob": exit_prob,
-                "active_flops_ratio": round(active_exp / tot_exp if tier == "limbic" else 1.0, 2),
-            })
+            layer_mapping.append(
+                {
+                    "layer_index": i,
+                    "original_name": f"transformer.layers.{i}",
+                    "original_type": "DenseTransformerBlock",
+                    "upgraded_tier": tier,
+                    "upgraded_label": tier_label,
+                    "mechanism": mechanism,
+                    "attention_complexity": complexity,
+                    "sparsity_pct": sparsity,
+                    "total_experts": tot_exp,
+                    "active_experts": active_exp,
+                    "reflex_early_exit_prob": exit_prob,
+                    "active_flops_ratio": round(active_exp / tot_exp if tier == "limbic" else 1.0, 2),
+                }
+            )
 
         def _fmt(n: int) -> str:
             if n >= 1_000_000_000:
@@ -6408,7 +6411,9 @@ SYSTEM \"\"\"You are Triune AI, a high-efficiency cognitive language model train
                     num_heads=safe_heads,
                     num_experts=limbic_experts,
                     reflex_exit_layer=max(1, int(safe_layers * reflex_ratio)),
-                    limbic_exit_layer=max(2, safe_layers - (max(1, int(round(safe_layers * 0.25))) if cortex_gla else 0))
+                    limbic_exit_layer=max(
+                        2, safe_layers - (max(1, int(round(safe_layers * 0.25))) if cortex_gla else 0)
+                    ),
                 )
                 pytorch_state.active_model_id = active_model_id
                 # Reconfiguration builds fresh Triune weights; it does not import
@@ -6462,13 +6467,13 @@ SYSTEM \"\"\"You are Triune AI, a high-efficiency cognitive language model train
             "layer_mapping": layer_mapping,
             "transmutation_summary": {
                 "early_exit_assumption": "45% (model estimate; not measured)",
-                "moe_expert_reduction": f"Top-2 of {limbic_experts} ({round((1 - 2/limbic_experts)*100, 1)}% FFN sparsity)",
+                "moe_expert_reduction": f"Top-2 of {limbic_experts} ({round((1 - 2 / limbic_experts) * 100, 1)}% FFN sparsity)",
                 "gla_linear_memory": "O(1) KV cache footprint per token" if cortex_gla else "O(S) standard KV",
                 "message": (
                     f"Built a Triune architecture profile for {arch_family} ({_fmt(dense_params_total)}). "
                     "Source weights were not converted or transferred; train the new model or load a compatible checkpoint."
-                )
-            }
+                ),
+            },
         }
 
     # Tokenizer Endpoint
@@ -7051,7 +7056,11 @@ SYSTEM \"\"\"You are Triune AI, a high-efficiency cognitive language model train
             elif i <= reflex_exit:
                 tier = "reflex"
                 lbl = f"Reflex Block {i}" + (" [Early Exit]" if i == reflex_exit else "")
-                mech = "RoPE Attention + Early Exit Classification Tap" if i == reflex_exit else "RoPE Attention + Dense FFN"
+                mech = (
+                    "RoPE Attention + Early Exit Classification Tap"
+                    if i == reflex_exit
+                    else "RoPE Attention + Dense FFN"
+                )
                 is_moe = False
             elif i <= limbic_exit:
                 tier = "limbic"
@@ -7064,21 +7073,25 @@ SYSTEM \"\"\"You are Triune AI, a high-efficiency cognitive language model train
                 mech = "Vectorised Gated Linear Attention (GLA) Recurrent Memory"
                 is_moe = False
 
-            layer_mapping.append({
-                "layer_index": i,
-                "original_name": f"transformer.layers.{i}",
-                "original_type": "DenseTransformerBlock",
-                "upgraded_tier": tier,
-                "upgraded_label": lbl,
-                "mechanism": mech,
-                "attention_complexity": "O(S) Linear Recurrent" if tier == "cortex" else "O(S^2) Scaled Dot-Product",
-                "sparsity_pct": 75 if is_moe else 0,
-                "total_experts": num_experts if is_moe else 0,
-                "active_experts": 2 if is_moe else 0,
-                "is_moe": is_moe,
-                "reflex_early_exit_prob": 0.82 if i == reflex_exit else 0.0,
-                "active_flops_ratio": round(2 / num_experts if is_moe else 1.0, 2),
-            })
+            layer_mapping.append(
+                {
+                    "layer_index": i,
+                    "original_name": f"transformer.layers.{i}",
+                    "original_type": "DenseTransformerBlock",
+                    "upgraded_tier": tier,
+                    "upgraded_label": lbl,
+                    "mechanism": mech,
+                    "attention_complexity": "O(S) Linear Recurrent"
+                    if tier == "cortex"
+                    else "O(S^2) Scaled Dot-Product",
+                    "sparsity_pct": 75 if is_moe else 0,
+                    "total_experts": num_experts if is_moe else 0,
+                    "active_experts": 2 if is_moe else 0,
+                    "is_moe": is_moe,
+                    "reflex_early_exit_prob": 0.82 if i == reflex_exit else 0.0,
+                    "active_flops_ratio": round(2 / num_experts if is_moe else 1.0, 2),
+                }
+            )
 
         tier_summary = {
             "reflex_layers": reflex_exit + 1,

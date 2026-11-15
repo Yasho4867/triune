@@ -1,7 +1,13 @@
 \documentclass[10pt,twocolumn,letterpaper]{article}
 
 \usepackage[margin=0.75in]{geometry}
-\usepackage{amsmath,amssymb,amsfonts,amsthm}
+\usepackage{amsmath,amsthm}
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage{amssymb,amsfonts}
+\else
+  \usepackage{unicode-math}
+\fi
 \usepackage{booktabs}
 \usepackage{graphicx}
 \usepackage{microtype}
@@ -32,7 +38,7 @@
     \texttt{yash@triune.ai}
 }
 
-\date{\today}
+\date{November 15, 2026}
 
 \begin{document}
 
@@ -132,7 +138,10 @@ The mapping $\mathcal{R}_Q^{\text{polar}}$ defined in Eq.~\eqref{eq:polar_retrac
 \begin{proof}
 Let $Y = Q + \xi$. If $Y$ has full column rank $r$, then $Y^T Y$ is symmetric positive definite with unique factor $L L^T = Y^T Y$. Then:
 \begin{equation}
-    (Y L^{-T})^T (Y L^{-T}) = L^{-1} (Y^T Y) L^{-T} = L^{-1} (L L^T) L^{-T} = I_r
+\begin{aligned}
+    (Y L^{-T})^T (Y L^{-T}) &= L^{-1} (Y^T Y) L^{-T} \\
+    &= L^{-1} (L L^T) L^{-T} = I_r
+\end{aligned}
 \end{equation}
 Thus $\mathcal{R}_Q^{\text{polar}}(\xi) \in \operatorname{St}(r, d)$. At $\xi = \mathbf{0}$, $Y = Q$, $Q^T Q = I_r$, $L = I_r$, so $\mathcal{R}_Q^{\text{polar}}(\mathbf{0}) = Q$.
 Differentiating $Y(t) = Q + t \xi$ at $t = 0$:
@@ -295,7 +304,10 @@ Suppose that across the token population, routing entropy satisfies $\mathbb{E}[
     where $\gamma = \min_{j \neq e} \|W_{\text{gate}, e} - W_{\text{gate}, j}\|_2$ is the router margin and $\Sigma_{\text{total}}$ is the total activation covariance.
     \item \textbf{Centroid Perturbation Bound}: The residual orthogonal steering energy satisfies:
     \begin{equation}
-        \| c_\perp \|_2^2 = \| (I - Q_L Q_L^T) c_e \|_2^2 \le \| c_e \|_2^2 \left( 1 - \frac{\sum_{j=1}^r \sigma_j^2(G)}{\sum_{j=1}^{\min(m, n)} \sigma_j^2(G)} \right) + \mathcal{O}\left( \sqrt{\mathcal{H}_0} \right)
+    \begin{aligned}
+        \| c_\perp \|_2^2 &= \| (I - Q_L Q_L^T) c_e \|_2^2 \\
+        &\le \| c_e \|_2^2 \left( 1 - \frac{\sum_{j=1}^r \sigma_j^2(G)}{\sum_{j=1}^{\min(m, n)} \sigma_j^2(G)} \right) + \mathcal{O}\left( \sqrt{\mathcal{H}_0} \right)
+    \end{aligned}
     \end{equation}
     where $\sigma_j(G)$ are the singular values of the expert gradient $G$.
 \end{enumerate}
@@ -304,7 +316,18 @@ Suppose that across the token population, routing entropy satisfies $\mathbb{E}[
 \begin{proof}
 For part (1), by Fano's inequality and Pinsker's inequality on the simplex $\Delta^{E-1}$, the total variation distance between the routing assignment and an expert boundary satisfies $D_{\text{TV}}(p(x), \mathbf{e}_e) \le \sqrt{\frac{1}{2} D_{\text{KL}}(p(x) \parallel \mathbf{e}_e)} \le \sqrt{\mathcal{H}(p(x)) / 2}$. For any token $x_i \in \mathcal{S}_e$, the router logit gap satisfies $(W_{\text{gate}, e} - W_{\text{gate}, j})^T x_i \ge \log(p_e / p_j)$. Integrating over $\mathcal{S}_e$, the spatial variance around centroid $c_e$ is confined within the Voronoi polytope cell of expert $e$. Applying the Poincaré inequality on the convex polytope with router boundary separation $\gamma$ yields $\operatorname{tr}(\Sigma_e) \le \frac{2 \mathcal{H}_0}{\gamma^2} \operatorname{tr}(\Sigma_{\text{total}})$.
 
-For part (2), the expert gradient outer product expands as $G = \sum_{i \in \mathcal{S}_e} \delta_i x_i^T = \left(\sum_i \delta_i\right) c_e^T + \sum_{i \in \mathcal{S}_e} \delta_i (x_i - c_e)^T$. The left subspace $Q_L$ obtained via alternating Krylov iteration on $G$ spans the dominant $r$ left singular vectors of $G$. Writing $c_e = Q_L Q_L^T c_e + c_\perp$, the residual energy is $(c_e^T (I - Q_L Q_L^T) c_e) / \|c_e\|_2^2 = 1 - \|Q_L^T c_e\|_2^2 / \|c_e\|_2^2$. By the Davis-Kahan $\sin \Theta$ theorem, the principal angle between $c_e$ and $\operatorname{span}(Q_L)$ is bounded by the ratio of the neglected singular spectrum $\sum_{j > r} \sigma_j^2(G)$ plus the perturbation induced by the intra-cluster fluctuation $\sum_i \delta_i (x_i - c_e)^T$, whose Frobenius norm is bounded by $\|\delta\|_2 \sqrt{\operatorname{tr}(\Sigma_e)} \le \mathcal{O}(\sqrt{\mathcal{H}_0})$. This establishes the bound.
+For part (2), the expert gradient outer product decomposes cleanly into a rank-1 centroid mean term $M_c$ and a zero-mean intra-cluster fluctuation residual $E_\Sigma$:
+\begin{equation}
+    G = \sum_{i \in \mathcal{S}_e} \delta_i x_i^T = \underbrace{\left(\sum_{i \in \mathcal{S}_e} \delta_i\right) c_e^T}_{M_c} + \underbrace{\sum_{i \in \mathcal{S}_e} \delta_i (x_i - c_e)^T}_{E_\Sigma}.
+\end{equation}
+By the mean-covariance trace decomposition around $c_e$, let $\hat{c}_e = c_e / \|c_e\|_2$ and $\Sigma_{\delta} = \sum_{i \in \mathcal{S}_e} \|\delta_i\|_2^2 I$; Cauchy-Schwarz over token residuals yields
+\begin{equation}
+\begin{aligned}
+    \|E_\Sigma\|_F^2 &= \operatorname{tr}(E_\Sigma^T E_\Sigma) \le \left(\sum_{i \in \mathcal{S}_e} \|\delta_i\|_2^2\right) \sum_{i \in \mathcal{S}_e} \|x_i - c_e\|_2^2 \\
+    &= |\mathcal{S}_e| \|\delta\|_2^2 \operatorname{tr}(\Sigma_e) \le \frac{2 |\mathcal{S}_e| \|\delta\|_2^2 \operatorname{tr}(\Sigma_{\text{total}})}{\gamma^2} \mathcal{H}_0,
+\end{aligned}
+\end{equation}
+where the last step substitutes part~(1). The left basis $Q_L$ obtained via alternating Krylov iteration on $G = M_c + E_\Sigma$ spans the dominant $r$ left singular directions. Expressing the orthogonal projection via trace identity gives $\|c_\perp\|_2^2 = \|c_e\|_2^2 \operatorname{tr}\!\left((I - Q_L Q_L^T)\hat{c}_e \hat{c}_e^T\right)$. Applying Wedin's $\sin\Theta$ perturbation theorem between the clean centroid rank-1 factor $M_c$ and $G = M_c + E_\Sigma$ bounds the residual centroid energy by the neglected gradient spectral tail plus the linear perturbation term $\mathcal{O}(\|E_\Sigma\|_F) = \mathcal{O}(\sqrt{\operatorname{tr}(\Sigma_e)}) = \mathcal{O}(\sqrt{\mathcal{H}_0})$.
 \end{proof}
 
 \begin{theorem}[Orthogonal Stability \& Convergence of Two-Pass Shifted Cholesky-QR]
@@ -313,12 +336,18 @@ Let $Y \in \mathbb{R}^{d \times r}$ have condition number $\kappa(Y) = \sigma_{\
 \begin{enumerate}
     \item \textbf{Finite-Precision Orthogonal Stability}: If $\kappa(Y) \le \frac{1}{2 \sqrt{\epsilon_{\text{shift}}}} \approx 1.58 \times 10^3$, the computed matrix $\hat{Q}$ from \texttt{sCholQR2} satisfies:
     \begin{equation}
-        \| \hat{Q}^T \hat{Q} - I_r \|_F \le C_1 \epsilon_{\text{mach}} \kappa(Y) + \frac{\epsilon_{\text{shift}} \sqrt{r}}{2 \sigma_{\min}(\hat{Q}_1)^2} + \mathcal{O}(\epsilon_{\text{mach}}^2) \le 10^{-4}
+    \begin{aligned}
+        \| \hat{Q}^T \hat{Q} - I_r \|_F &\le C_1 \epsilon_{\text{mach}} \kappa(Y) + \frac{\epsilon_{\text{shift}} \sqrt{r}}{2 \sigma_{\min}(\hat{Q}_1)^2} \\
+        &\quad + \mathcal{O}(\epsilon_{\text{mach}}^2) \le 10^{-4}
+    \end{aligned}
     \end{equation}
     where $C_1$ is a small dimensional constant depending only on $d$ and $r$.
     \item \textbf{Ergodic Convergence on Stiefel Manifold}: Let $\mathcal{L}: \operatorname{St}(r, d) \to \mathbb{R}$ be $L$-retraction smooth with respect to $\mathcal{R}^{\text{polar}}$. With step size $\eta \le 1/L$, the sequence of iterates $\{Q_t\}$ generated by CentroidSteer satisfies the non-convex ergodic rate:
     \begin{equation}
-        \frac{1}{T} \sum_{t=0}^{T-1} \mathbb{E}\left[ \| \operatorname{grad} \mathcal{L}(Q_t) \|_F^2 \right] \le \frac{2 (\mathcal{L}(Q_0) - \mathcal{L}^*)}{T \eta} + \frac{L \eta \sigma^2}{B}
+    \begin{aligned}
+        \frac{1}{T} \sum_{t=0}^{T-1} \mathbb{E}\left[ \| \operatorname{grad} \mathcal{L}(Q_t) \|_F^2 \right] &\le \frac{2 (\mathcal{L}(Q_0) - \mathcal{L}^*)}{T \eta} \\
+        &\quad + \frac{L \eta \sigma^2}{B}
+    \end{aligned}
     \end{equation}
     where $\operatorname{grad} \mathcal{L}(Q) = \mathcal{P}_{T_Q}(\nabla \mathcal{L}(Q))$, $\sigma^2$ is the stochastic gradient variance bound, and $B$ is the mini-batch size.
 \end{enumerate}
@@ -334,7 +363,10 @@ For part (2), by $L$-retraction smoothness of $\mathcal{L}$ under retraction $\m
 \end{align}
 where $\xi_t = \mathcal{P}_{T_{Q_t}}(G_t)$ is the stochastic Riemannian gradient estimator with $\mathbb{E}[\xi_t \mid Q_t] = \operatorname{grad} \mathcal{L}(Q_t)$ and $\mathbb{E}[\|\xi_t - \operatorname{grad} \mathcal{L}(Q_t)\|_F^2] \le \sigma^2 / B$. Taking conditional expectations:
 \begin{equation}
-    \mathbb{E}[\mathcal{L}(Q_{t+1}) \mid Q_t] \le \mathcal{L}(Q_t) - \eta \left( 1 - \frac{L \eta}{2} \right) \| \operatorname{grad} \mathcal{L}(Q_t) \|_F^2 + \frac{L \eta^2 \sigma^2}{2 B}
+\begin{aligned}
+    \mathbb{E}[\mathcal{L}(Q_{t+1}) \mid Q_t] &\le \mathcal{L}(Q_t) - \eta \left( 1 - \frac{L \eta}{2} \right) \| \operatorname{grad} \mathcal{L}(Q_t) \|_F^2 \\
+    &\quad + \frac{L \eta^2 \sigma^2}{2 B}
+\end{aligned}
 \end{equation}
 For $\eta \le 1/L$, $1 - \frac{L \eta}{2} \ge \frac{1}{2}$. Rearranging and telescoping the sum from $t = 0$ to $T-1$ yields:
 \begin{equation}
@@ -362,21 +394,27 @@ Theorem~\ref{thm:augmented_triu} establishes the structural upper-triangular ide
     \end{itemize}
     \item \textbf{Basis Orthogonality Quantification}: Across all evaluated active expert layers over 5 FineWeb-Edu batches and 24 synthetic matrix runs ($12$ seeds $\times 2$ shapes), the FP32 basis orthogonality error satisfies:
     \begin{equation}
-        \|Q^T Q - I\|_F \le \begin{cases}
-            2.04 \times 10^{-6} & \text{FineWeb-Edu Multi-Batch Gradients} \\
-            1.44 \times 10^{-6} & \text{High-Entropy Stress Test ($7 / 32$ fallbacks)} \\
-            1.64 \times 10^{-6} & \text{12-Seed Synthetic Matrices ($24$ runs)}
+    \begin{aligned}
+        \|Q^T Q &- I\|_F \le \\
+        &\begin{cases}
+            2.04 \times 10^{-6}, & \text{FineWeb-Edu (5 batches)} \\
+            1.44 \times 10^{-6}, & \text{Stress (7/32 fallbacks)} \\
+            1.64 \times 10^{-6}, & \text{12-Seed Synthetic}
         \end{cases}
+    \end{aligned}
     \end{equation}
     When stored in BF16, mantissa truncation bounds orthogonality to $\|Q^T Q - I\|_F \le 8.30 \times 10^{-3}$ on FineWeb-Edu ($8.47 \times 10^{-3}$ on stress test, $2.86 \times 10^{-3}$ on synthetic matrices), strictly matching theoretical $\mathcal{O}(\epsilon_{\text{BF16}} \sqrt{r+1})$ expectations.
     \item \textbf{Sub-Diagonal Error Quantification}: Recorded in benchmark artifacts, the relative sub-diagonal residual $\max_{i > j} |\bar{S}_{ij}| / \|G\|_F$ satisfies:
     \begin{equation}
-        \frac{\max_{i > j} |\bar{S}_{ij}|}{\|G\|_F} \le \begin{cases}
-            3.82 \times 10^{-7} \text{ (FineWeb-Edu Gradients)}, & \text{FP32 Bases} \\
-            1.84 \times 10^{-3} \text{ (FineWeb-Edu Gradients)}, & \text{BF16 Bases} \\
-            9.36 \times 10^{-9} \text{ (12-Seed Synthetic Matrices)}, & \text{FP32 Bases} \\
-            9.06 \times 10^{-5} \text{ (12-Seed Synthetic Matrices)}, & \text{BF16 Bases}
+    \begin{aligned}
+        \frac{\max_{i > j} |\bar{S}_{ij}|}{\|G\|_F} &\le \\
+        &\begin{cases}
+            3.82 \times 10^{-7}, & \text{FineWeb-Edu (FP32)} \\
+            1.84 \times 10^{-3}, & \text{FineWeb-Edu (BF16)} \\
+            9.36 \times 10^{-9}, & \text{Synth.\ 12-Seed (FP32)} \\
+            9.06 \times 10^{-5}, & \text{Synth.\ 12-Seed (BF16)}
         \end{cases}
+    \end{aligned}
     \end{equation}
     \item \textbf{Production Optimizer Multi-Seed Trajectory \& Equivalence Analysis}: Scale-invariant coordinate optimizers (AdamW) amplify subdiagonal floating-point noise ($|S_{ij}| \sim 10^{-7}$) into spurious steps. Computing $R = \operatorname{triu}(\bar{S})$ functions as a regularized projection filter that zeroes subdiagonal noise before variance normalization. We evaluate 200-step continuation trajectories ($102,400$ tokens/seed) starting from our 75.8M 6-layer Studio checkpoint (\texttt{step\_36500.pt}, initial validation loss $4.1800$) on genuine FineWeb-Edu text across $N=12$ random seeds (degrees of freedom $df = 11$, Student-$t$ critical values $t_{0.975, 11} = 2.2010$ and $t_{0.95, 11} = 1.7959$). Each seed deterministically samples 200 micro-batches without replacement from a $1,000$-batch ($512,000$-token) FineWeb-Edu training pool, and optimizer execution order follows 4 complete $3 \times 3$ Latin squares so every optimizer executes exactly 4 times in 1st, 2nd, and 3rd position. Generalization is evaluated in full FP32 reduction precision on a strictly disjoint 64-batch ($32,768$-token) held-out validation set.
     Averaged over all 200 steps per seed, mean training loss is $4.4099 \pm 0.0196$ ($95\%$ CI $[4.3975, 4.4224]$) for Triangular CentroidSteer vs.\ $4.4073 \pm 0.0186$ ($95\%$ CI $[4.3955, 4.4192]$) for Standard 2D AdamW, with a paired mean-training difference of $+0.0026 \pm 0.0033$ nats ($95\%$ CI $[+0.0005, +0.0047]$, two-tailed $t = 2.7172, p = 0.0200$, passing Schuirmann TOST at $\pm 0.01$ nats with $p_{\text{TOST}} = 5.05 \times 10^{-6}$).
@@ -385,7 +423,7 @@ Theorem~\ref{thm:augmented_triu} establishes the structural upper-triangular ide
     In separate-OS-subprocess verification (36 fresh child processes spanning 4 complete Latin squares from an unallocated $0.00$\,MB PyTorch baseline), Triangular CentroidSteer consumes $937.9 \pm 11.2$\,MB peak PyTorch-allocated tensor memory vs.\ $1,064.7 \pm 7.0$\,MB for Standard 2D AdamW, confirming a $126.8$\,MB ($11.9\%$) reduction in peak tensor allocation at matched full-step latency ($89.54 \pm 6.67$\,ms vs.\ $89.67 \pm 3.74$\,ms).
 \end{enumerate}
 
-A fused Triton kernel applies triangular AdamW updates to $R$, yielding preconditioned update direction $\Delta_R$. To apply steering acceleration, the $(r+1)$-th column of $\Delta_R$ is scaled by $(1 + \alpha)$, where $\alpha \ge 0$ is the steering scale. The full weight update is reconstructed via:
+A fused Triton kernel applies triangular AdamW updates to $R$, yielding preconditioned update direction $\Delta_R$. To enforce subspace moment consistency across adaptive steps, \texttt{CentroidSteerOptimizer} enforces a \textbf{non-refresh steering moment-zeroing invariant}: whenever an updated router centroid rotates the orthogonal steering column/row ($\tilde{c}_\perp, \tilde{v}_\perp$) between full Krylov refreshes (\texttt{needs\_steer\_refresh}), the optimizer unconditionally zeroes the $(r+1)$-th column and row of both the first and second triangular core moments ($M_{:, r+1}, M_{r+1, :}, V_{:, r+1}, V_{r+1, :} \leftarrow \mathbf{0}$) prior to accumulation. This prevents stale exponential moving averages computed along a discarded orthogonal basis vector from corrupting second-moment normalization along the newly orthogonalized steering direction. To apply steering acceleration, the $(r+1)$-th column of $\Delta_R$ is scaled by $(1 + \alpha)$, where $\alpha \ge 0$ is the steering scale. The full weight update is reconstructed via:
 \begin{equation}
     \Delta W = \bar{Q}_L \Delta_R \bar{Q}_R^T \in \mathbb{R}^{m \times n}
 \end{equation}
@@ -397,6 +435,7 @@ A fused Triton kernel applies triangular AdamW updates to $R$, yielding precondi
 \small
 \caption{\textbf{Memory Accounting per 2D Parameter Matrix} ($m \times n$) with rank $r \ll \min(m, n)$. Values computed for $m=384, n=1024, r=16$ ($393,216$ parameters).}
 \label{tab:memory_breakdown}
+\resizebox{\columnwidth}{!}{%
 \begin{tabular}{lccc}
 \toprule
 \textbf{Optimizer} & \textbf{Persistent States} & \textbf{Total Bytes} & \textbf{Bytes / Param} \\
@@ -407,7 +446,8 @@ GaLore (1-Sided) & $2rn$ FP32 + $mr$ BF16 & $143,360$ B & $0.365$ B/p \\
 \textbf{CentroidSteer} & $2(r+1)^2$ FP32 & \textbf{50,184~B} & \textbf{0.128~B/p} \\
  & $+ (m+n)(r+1)$ BF16 & & \\
 \bottomrule
-\end{tabular}
+\end{tabular}%
+}
 \end{table}
 
 We explicitly distinguish between persistent optimizer moment states, projection bases, and transient workspace. For an expert weight matrix $W \in \mathbb{R}^{m \times n}$ with $P = mn$ parameters:
@@ -466,6 +506,7 @@ Because dense models contain no routed MoE modules, Tier 2 contains 0 parameters
 \small
 \caption{\textbf{Multi-Seed 100-Step Convergence on Dense Transformer (43.46M Parameters)} across 3 random seeds (Mean $\pm$ Std). All regimes evaluate identical bitwise initial weights.}
 \label{tab:dense_convergence}
+\resizebox{\textwidth}{!}{%
 \begin{tabular}{lcccccc}
 \toprule
 \textbf{Optimizer Regime} & \textbf{Final Val Loss} & \textbf{Val Loss Drop} & \textbf{Final Val PPL} & \textbf{Step Time} & \textbf{Peak VRAM} & \textbf{Convergence Efficiency} \\
@@ -476,7 +517,8 @@ Muon Baseline (2D Hidden) & $7.5280 \pm 0.0061$ & $3.0173 \pm 0.0123$ & $1859.3 
 CentroidSteer (No Muon) & \textbf{7.4967} $\pm$ \textbf{0.0111} & \textbf{3.0485} $\pm$ \textbf{0.0029} & \textbf{1802.2} $\pm$ \textbf{19.9} & $33.39 \text{ ms}$ & 924.8 MB & $0.8642 \text{ loss/s}$ \\
 \textbf{Full Triune Stack} & $7.5280 \pm 0.0061$ & $3.0173 \pm 0.0123$ & $1859.3 \pm 11.3$ & $31.65 \text{ ms}$ & 863.2 MB & $0.9213 \text{ loss/s}$ \\
 \bottomrule
-\end{tabular}
+\end{tabular}%
+}
 \end{table*}
 
 \begin{table*}[t]
@@ -484,6 +526,7 @@ CentroidSteer (No Muon) & \textbf{7.4967} $\pm$ \textbf{0.0111} & \textbf{3.0485
 \small
 \caption{\textbf{Multi-Seed Convergence on Mixture-of-Experts (90.79M Parameters)} with 4 routed experts per layer across 3 random seeds. Active Tier 2 parameters: $35,389,440$ ($39.0\%$).}
 \label{tab:moe_convergence}
+\resizebox{\textwidth}{!}{%
 \begin{tabular}{lcccccc}
 \toprule
 \textbf{MoE Optimizer Regime} & \textbf{Final Val Loss} & \textbf{Val Loss Drop} & \textbf{Final Val PPL} & \textbf{Step Time} & \textbf{Peak VRAM} & \textbf{Convergence Efficiency} \\
@@ -493,7 +536,8 @@ Muon + AdamW Baseline & \textbf{7.8246} $\pm$ \textbf{0.0041} & \textbf{2.6260} 
 CentroidSteer (No Muon) & $7.8860 \pm 0.0369$ & $2.5647 \pm 0.0413$ & $2660.9 \pm 97.8$ & $136.15 \text{ ms}$ & 1659.7 MB & $0.1761 \text{ loss/s}$ \\
 \textbf{Triune MoE Stack (3-Tier)} & $7.8268 \pm 0.0558$ & $2.6238 \pm 0.0517$ & $2509.5 \pm 139.7$ & \textbf{131.71 ms} & 1602.0 MB & \textbf{0.1916 loss/s} \\
 \bottomrule
-\end{tabular}
+\end{tabular}%
+}
 \end{table*}
 
 \subsection{Convergence on Mixture-of-Experts}
@@ -507,6 +551,7 @@ In Table~\ref{tab:moe_convergence} and Figure~\ref{fig:moe_conv}, we evaluate \t
 \small
 \caption{\textbf{Controlled Routing Steering Ablation on MoE Model (3 Seeds)} under identical initial weights and sequence ordering. Per-seed trajectories and paired statistical tests.}
 \label{tab:steering_ablation}
+\resizebox{\textwidth}{!}{%
 \begin{tabular}{lcccccc}
 \toprule
 \textbf{Steering Regime} & \textbf{Seed 42} & \textbf{Seed 1337} & \textbf{Seed 2026} & \textbf{Mean $\pm$ Std} & \textbf{Val Loss Drop} & \textbf{Paired $\Delta$ vs.\ Unsteered} \\
@@ -515,7 +560,8 @@ Unsteered Subspace ($\alpha=0$) & 7.7835 & 7.8767 & 7.7660 & $7.8087 \pm 0.0595$
 Random Orthogonal Direction & 7.7817 & 7.7751 & 7.8616 & $7.8061 \pm 0.0481$ & $2.6445 \pm 0.0437$ & $-0.0026 \pm 0.098$ ($p=0.96$) \\
 \textbf{Router Centroid Steering} & \textbf{7.7043} & 7.8768 & 7.8145 & \textbf{7.7985} $\pm$ \textbf{0.0874} & \textbf{2.6521} $\pm$ \textbf{0.0863} & $\mathbf{-0.0102 \pm 0.064}$ ($p=0.81$) \\
 \bottomrule
-\end{tabular}
+\end{tabular}%
+}
 \end{table*}
 
 To isolate whether router-derived activation geometry provides an effective inductive bias, Table~\ref{tab:steering_ablation} and Figure~\ref{fig:moe_ablation} evaluate three controlled configurations across three identical random seeds:
@@ -541,6 +587,15 @@ Statistical inspection reveals that on Seed 42, router centroid steering exhibit
 \section{Limitations \& Future Work}
 
 While CentroidSteer achieves substantial memory savings and solid convergence, several limitations warrant note. First, computing Cholesky-QR basis updates every $\tau_{\text{gap}}$ steps incurs a modest periodic refresh cost ($27.57$\,ms vs.\ $8.44$\,ms on non-refresh steps, or $0.957$\,ms/step amortized at $\tau_{\text{gap}}=20$ and $\le 0.096$\,ms/step at $\tau_{\text{gap}}=200$), with small boolean host-device readbacks on eager refresh steps to filter unrouted experts and dispatch sliced Householder fallbacks. Second, evaluations in this work comprise 100-step from-scratch ablations ($N=3$ seeds at 43.5M–90.8M scale) and 200-step checkpoint-continuation runs across two pre-training checkpoint stages ($N=12$ seeds, $df=11$, 4 complete $3 \times 3$ Latin squares at primary checkpoint step $36,500$ [$222.7\text{M}$ tokens] plus supplementary stage-consistency verification across $N=3$ seeds at step $35,500$ [$157.2\text{M}$ tokens] over a $32,768$-token validation set), accompanied by extended-horizon continuation up to 600 steps/seed ($N=3$, tracking intermediate validation curves at steps 0, 200, 400, and 600, where the paired validation difference narrows from $+0.0051$ to $+0.0031$ nats), where full-rank 2D AdamW retains a $+0.0037$-nat validation advantage ($p = 5.58 \times 10^{-5}$) while remaining equivalent within $\pm 0.01$ nats ($\Delta_{\min} = \pm 0.0047$ nats, $p_{\text{TOST}} = 1.52 \times 10^{-7}$) conditional on the evaluated checkpoints and FineWeb-Edu pool. Multi-thousand-step continuation and from-scratch pre-training over billions of tokens will be required to characterize long-horizon scaling laws. Future work will investigate dynamic rank scheduling and distributed tensor-parallel basis synchronization.
+
+\section{Reproducibility \& Artifact Provenance}
+
+To guarantee transparent verification of every quantitative and mathematical claim in this paper, all source implementations, benchmark generators, raw machine-readable JSON outputs, and automated validity checks are maintained in the Triune repository:
+\begin{itemize}\raggedright\setlength{\itemsep}{2pt}
+    \item \textbf{Core Optimizer Implementation}: \texttt{triune/optim/centroid.py} (\texttt{CentroidSteerOptimizer}, non-refresh moment-zeroing invariant, \texttt{get\_telemetry()}) and \texttt{triune/ops/centroid\_steer.py} (\texttt{sCholQR2} \texttt{batched\_qr}, Kahan-Parlett centroid projection, Triangular Core kernel).
+    \item \textbf{Convergence \& Competitive Scripts}: \texttt{scripts/benchmark\_convergence\_100\_steps.py} (dense sweep), \texttt{scripts/benchmark\_moe\_convergence\_100\_steps.py} (MoE sweep \& steering ablation), and \texttt{scripts/benchmark\_full\_matrix\_comparison.py} ($3\times 2\times 2$ Latin-square baselines).
+    \item \textbf{Machine-Readable Artifacts \& Verification}: Outputs serialized in \texttt{benchmarks/optimizer\_benchmark\_results.json}, \texttt{benchmarks/convergence\_100\_steps\_results.json}, and \texttt{benchmarks/master\_matrix\_results.json}, validated via \texttt{pytest tests/test\_triangular\_core\_integrity.py tests/test\_benchmark\_validity.py} (PyTorch 2.14.1+cu132, CUDA 13.2).
+\end{itemize}
 
 \section{Conclusion}
 

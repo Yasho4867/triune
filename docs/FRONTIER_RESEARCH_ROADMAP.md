@@ -259,7 +259,7 @@ The query is projected once into the latent space ($\tilde{q}_t^C = W^{UK \top} 
 ---
 
 ### 3.3 Dynamic Expert Pruning (DEP) & CentroidSteer Co-Design
-Triune's existing `CentroidSteer` optimizer (`triune/optim/centroid_steer.py`) already calculates running activation centroids $c_e \in \mathbb{R}^D$ for each expert $e$:
+Triune's `CentroidSteerOptimizer` and `MoE_FFN` (`triune/optim/centroid.py`, `triune/ops/centroid_steer.py`, `triune/model/moe.py`) already maintain running activation centroids $c_e \in \mathbb{R}^D$ for each routed expert $e$:
 $$c_e^{(t)} = (1 - \alpha) c_e^{(t-1)} + \alpha \cdot \frac{1}{|\mathcal{S}_e|} \sum_{x \in \mathcal{S}_e} x$$
 Under the Dynamic Expert Pruning (DEP) framework (Chen et al., 2026; Liu et al., 2026, arXiv:2610.02951):
 1. **Domain Affinity Calculation**: For an incoming prompt or sequence with sequence mean embedding $\bar{x}_{\text{prompt}}$, compute the directional alignment with each expert centroid:
@@ -315,9 +315,9 @@ Triune inherently integrates a native draft-verification pipeline without loadin
 - **Drafting (Reflex Tier, Layer 2)**: Proposes $K$ candidate tokens at $22,700\text{ tok/s}$.
 - **Verification (Cortex Tier, Layer $N$)**: Verifies all $K$ tokens simultaneously in a single batched parallel forward pass.
 
-With the addition of **Sequential Multi-Token Prediction (MTP)** (DeepSeek-V3 / Gloeckle et al., Meta 2024), candidate acceptance probability increases:
+With calibrated **Sequential Multi-Token Prediction (MTP)** (DeepSeek-V3 / Gloeckle et al., Meta 2024) on top of Triune's exact self-speculative decoder (`T=0` greedy exact match and `T>0` Leviathan et al. rejection sampling), candidate acceptance probability increases over the current uncalibrated single-exit baseline (`40.0%` greedy / `21.7%` sampled at $T=0.7$):
 $$\mathbb{E}[\text{tokens per step}] = 1 + \sum_{k=1}^K \prod_{j=1}^k p_j \ge 2.65\text{ tokens/step}$$
-yielding an empirical **$2.4\times–3.1\times$ wall-clock decoding acceleration** with 100% mathematical token parity with full Cortex evaluation.
+targeting **$2.4\times–3.1\times$ wall-clock decoding acceleration** while preserving exact Cortex parity/distribution.
 
 ---
 

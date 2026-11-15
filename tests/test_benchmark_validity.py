@@ -11,6 +11,7 @@ Guarantees:
 
 from __future__ import annotations
 
+import ast
 import json
 import math
 import unittest
@@ -140,16 +141,92 @@ class BenchmarkValidityTest(unittest.TestCase):
                 )
 
     def test_competitor_execution_integrity(self):
-        """Verifies that AdamW and Unsloth are genuine real baselines."""
+        """Verifies competitor scripts actually construct/step optimizers and runs a live parity/VRAM check."""
+        import torch.nn as nn
         import torch.optim as optim
 
+        from triune.model.moe import MoE_FFN
+        from triune.optim.centroid import CentroidSteerOptimizer
+
         self.assertTrue(hasattr(optim, "AdamW"), "PyTorch standard AdamW must exist")
+
+        # 1. Static AST audit across primary competitor benchmark scripts
+        expected_scripts = (
+            REPO_ROOT / "scripts" / "benchmark_full_matrix_comparison.py",
+            REPO_ROOT / "scripts" / "benchmark_optimizer_suite.py",
+            REPO_ROOT / "scripts" / "benchmark_convergence_100_steps.py",
+        )
+        for spath in expected_scripts:
+            self.assertTrue(spath.is_file(), f"Missing competitor benchmark script: {spath}")
+            tree = ast.parse(spath.read_text(encoding="utf-8"), filename=str(spath))
+            called_names = set()
+            called_attrs = set()
+            all_attrs = {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call):
+                    if isinstance(node.func, ast.Name):
+                        called_names.add(node.func.id)
+                    elif isinstance(node.func, ast.Attribute):
+                        called_attrs.add(node.func.attr)
+            called = called_attrs | called_names
+            self.assertIn("step", called_attrs, f"{spath.name} must invoke optimizer.step()")
+            self.assertIn("AdamW", called, f"{spath.name} must call AdamW")
+            self.assertIn("AdamW8bit", all_attrs, f"{spath.name} must bind bnb.optim.AdamW8bit")
+            self.assertTrue(
+                bool({"AdamW8bit", "BnbAdamW8bit"} & called),
+                f"{spath.name} must invoke AdamW8bit / BnbAdamW8bit",
+            )
+            self.assertIn("CentroidSteerOptimizer", called, f"{spath.name} must invoke CentroidSteerOptimizer")
+
+        # 2. Live 2-step execution comparison: Triune CentroidSteerOptimizer vs PyTorch AdamW
+        torch.manual_seed(42)
+        x = torch.randn(2, 8, 256)
+        target = torch.randn(2, 8, 256)
+
+        def _run_two_steps(use_triune: bool):
+            torch.manual_seed(0)
+            block = MoE_FFN(dim=256, num_experts=4, top_k=1)
+            opt = (
+                CentroidSteerOptimizer(block, lr=1e-2, rank=8, use_muon=False)
+                if use_triune
+                else optim.AdamW(block.parameters(), lr=1e-2)
+            )
+            w0 = block.experts[0][0].weight.detach().clone()
+            losses = []
+            for _ in range(2):
+                opt.zero_grad()
+                out = block(x)
+                loss = nn.functional.mse_loss(out, target)
+                loss.backward()
+                opt.step()
+                losses.append(float(loss.item()))
+            delta = float((block.experts[0][0].weight.detach() - w0).abs().max().item())
+            return losses, delta, opt
+
+        adam_losses, adam_delta, _ = _run_two_steps(False)
+        triune_losses, triune_delta, triune_opt = _run_two_steps(True)
+        self.assertGreater(adam_delta, 0.0, "AdamW failed to mutate weights")
+        self.assertGreater(triune_delta, 0.0, "CentroidSteerOptimizer failed to mutate weights")
+        self.assertLess(adam_losses[-1], adam_losses[0], "AdamW loss must decrease over 2 steps")
+        self.assertLess(triune_losses[-1], triune_losses[0], "CentroidSteerOptimizer loss must decrease over 2 steps")
+
+        mem = triune_opt.get_telemetry()["memory"]
+        self.assertGreater(mem["uncompressed_state_mb"], 0.0)
+        self.assertLess(
+            mem["triune_state_mb"],
+            mem["uncompressed_state_mb"],
+            f"Expected CentroidSteer state < uncompressed AdamW state, got {mem}",
+        )
+
+        # 3. Native 8-bit AdamW presence check (required on CUDA; optional on CPU-only CI runners)
         try:
             import bitsandbytes as bnb
 
             self.assertTrue(hasattr(bnb.optim, "AdamW8bit"), "BitsAndBytes AdamW8bit must exist")
         except ImportError:
-            self.fail("BitsAndBytes must be installed and functional for Unsloth baselines")
+            if torch.cuda.is_available():
+                self.fail("BitsAndBytes must be installed and functional for Unsloth baselines on CUDA")
+            self.skipTest("bitsandbytes not installed on CPU-only environment")
 
     def test_master_matrix_provenance_and_competitor_integrity(self):
         """Verifies master matrix records git provenance, valid optimizers, and non-zero adapter drift."""
@@ -285,6 +362,74 @@ class BenchmarkValidityTest(unittest.TestCase):
             )
             self.assertGreater(r["throughput_tok_s"], 0.0)
             self.assertEqual(len(r["step_records"]), 100, "Must record all 100 training steps")
+
+    def test_full_model_e2e_results_validity(self):
+        """Verifies benchmarks/full_model_e2e.json schema, speculative parity contract, sparse MoE, and disjoint tokenizer."""
+        fpath = BENCHMARK_DIR / "full_model_e2e.json"
+        with open(fpath, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        spec = data["self_speculative_decoding"]
+        self.assertTrue(spec["greedy"]["greedy_parity_verified"])
+        self.assertEqual(spec["greedy"]["sampling_mode"], "greedy_exact_parity")
+        self.assertFalse(spec["sampled_t07"]["greedy_parity_verified"])
+        self.assertEqual(spec["sampled_t07"]["sampling_mode"], "rejection_sampling_exact")
+
+        calm = data["calm_confidence_gating"]
+        self.assertIn("per_token_calm_routing", calm)
+        self.assertEqual(len(calm["per_token_calm_routing"]["depths_shape"]), 2)
+
+        tok = data["tokenizer_generalization"]
+        self.assertTrue(tok["disjoint_eval_split"])
+        self.assertEqual(tok["embedding_modes"]["expand"]["max_logit_diff_vs_base"], 0.0)
+        self.assertGreater(tok["embedding_modes"]["vocab_extension"]["composite_ids_added"], 0)
+
+        moe = data["moe_sparse_vs_dense"]
+        self.assertTrue(moe["default_use_sparse_eval"])
+        self.assertIn("production_moe_ffn", moe)
+        self.assertIn("legacy_routing_block", moe)
+        sweeps_4k = [s for s in moe["production_moe_ffn"]["sweeps"] if s["num_tokens"] == 4096]
+        self.assertEqual(len(sweeps_4k), 1)
+        self.assertGreater(sweeps_4k[0]["speedup"], 1.5)
+
+    def test_moe_ffn_sparse_vs_dense_validity(self):
+        """Verifies benchmarks/moe_ffn_sparse_vs_dense.json sparse speedup and single-token exactness."""
+        fpath = BENCHMARK_DIR / "moe_ffn_sparse_vs_dense.json"
+        with open(fpath, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        configs = data["configs"]
+        for cfg_name in ("default_1536d_8e_top1", "default_1536d_8e_top2", "checkpoint_384d_4e_top1"):
+            self.assertIn(cfg_name, configs)
+            rows = {r["tokens"]: r for r in configs[cfg_name]}
+            self.assertEqual(rows[1]["max_abs_diff"], 0.0)
+            self.assertGreater(rows[4096]["sparse_speedup_x"], 1.5)
+
+    def test_mqar_associative_recall_results_validity(self):
+        """Verifies benchmarks/mqar_associative_recall_results.json recall fidelity and monotonic GLA latency."""
+        fpath = BENCHMARK_DIR / "mqar_associative_recall_results.json"
+        with open(fpath, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        self.assertIsInstance(data, list)
+        by_model = {}
+        for row in data:
+            self.assertGreater(row["accuracy"], 0.5)
+            self.assertGreater(row["latency_ms"], 0.0)
+            self.assertFalse(math.isnan(row["latency_ms"]))
+            self.assertFalse(math.isinf(row["latency_ms"]))
+            by_model.setdefault(row["model_type"], {})[row["seq_len"]] = row
+
+        for mtype in ("softmax", "gla", "gated_deltanet"):
+            self.assertIn(mtype, by_model)
+
+        gla_latencies = [by_model["gla"][t]["latency_ms"] for t in (256, 512, 1024, 2048)]
+        self.assertEqual(gla_latencies, sorted(gla_latencies), f"GLA latency must scale monotonically: {gla_latencies}")
+        for t in (256, 512, 1024, 2048):
+            self.assertGreaterEqual(
+                by_model["gated_deltanet"][t]["overwrite_accuracy"],
+                by_model["gla"][t]["overwrite_accuracy"],
+            )
 
 
 if __name__ == "__main__":

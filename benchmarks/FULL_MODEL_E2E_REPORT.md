@@ -1,6 +1,6 @@
 # Triune Model End-to-End Benchmark & Verification Report
 
-**Date:** 2026-11-14 08:17:48 UTC  
+**Date:** 2026-11-15 04:07:39 UTC  
 **Target System:** NVIDIA GeForce RTX 5070 Laptop GPU (12.0) | PyTorch 2.14.1+cu132 | CUDA 13.2  
 **Model Checkpoint:** `checkpoints/triune_step_24501.pt` (Trained to Step 24,501)  
 **Architecture Spec:** 8 Layers, Dim 384, 6 Heads, 4 Experts, Vocab 32,000  
@@ -29,22 +29,22 @@ Measures full-stack forward pass through all 8 layers and the 32k vocabulary pro
 
 | Batch Size | Sequence Length | Total Positions | Mean Latency (ms) | P50 Latency (ms) | Throughput (Tokens/s) | VRAM (MB) |
 |:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-|  1 |  128 |     128 |    12.74 |    12.76 | **     10,045** |   276.7 |
-|  1 |  512 |     512 |    13.56 |    13.65 | **     37,754** |   353.3 |
-|  1 | 1024 |   1,024 |    18.54 |    18.45 | **     55,226** |   359.4 |
-|  1 | 2048 |   2,048 |    24.88 |    24.40 | **     82,314** |   371.9 |
-|  4 |  128 |     512 |    11.94 |    11.63 | **     42,887** |   425.0 |
-|  4 |  512 |   2,048 |    25.31 |    25.31 | **     80,907** |   732.0 |
-|  4 | 1024 |   4,096 |    48.43 |    48.83 | **     84,583** |   755.6 |
-|  4 | 2048 |   8,192 |    89.60 |    89.14 | **     91,426** |   803.5 |
-| 16 |  128 |   2,048 |    63.34 |    63.28 | **     32,336** |  1182.0 |
-| 16 |  512 |   8,192 |    89.09 |    90.64 | **     91,948** |  2410.5 |
-| 16 | 1024 |  16,384 |   176.44 |   177.91 | **     92,858** |  2506.5 |
-| 16 | 2048 |  32,768 |   356.80 |   358.93 | **     91,838** |  2698.7 |
-| 32 |  128 |   4,096 |    47.86 |    47.98 | **     85,582** |  1976.2 |
-| 32 |  512 |  16,384 |   177.94 |   179.09 | **     92,078** |  4427.3 |
-| 32 | 1024 |  32,768 |   413.17 |   407.20 | **     79,309** |  4571.4 |
-| 32 | 2048 |  65,536 |   787.93 |   792.61 | **     83,174** |  4907.6 |
+|  1 |  128 |     128 |     2.22 |     2.20 | **     57,585** |   228.5 |
+|  1 |  512 |     512 |     2.23 |     2.23 | **    230,153** |   232.6 |
+|  1 | 1024 |   1,024 |     3.00 |     2.95 | **    341,415** |   237.8 |
+|  1 | 2048 |   2,048 |     4.61 |     4.70 | **    444,530** |   248.8 |
+|  4 |  128 |     512 |     2.30 |     2.29 | **    222,747** |   232.6 |
+|  4 |  512 |   2,048 |     2.53 |     2.62 | **    810,774** |   248.8 |
+|  4 | 1024 |   4,096 |     3.80 |     3.73 | **  1,078,008** |   269.4 |
+|  4 | 2048 |   8,192 |     7.60 |     7.56 | **  1,077,481** |   311.3 |
+| 16 |  128 |   2,048 |     2.23 |     2.19 | **    917,394** |   248.8 |
+| 16 |  512 |   8,192 |    14.07 |    13.99 | **    582,055** |   313.6 |
+| 16 | 1024 |  16,384 |    19.57 |    19.57 | **    837,138** |   394.6 |
+| 16 | 2048 |  32,768 |    24.71 |    24.72 | **  1,325,868** |   570.3 |
+| 32 |  128 |   4,096 |     3.11 |     3.14 | **  1,318,207** |   276.8 |
+| 32 |  512 |  16,384 |    10.59 |    10.59 | **  1,546,622** |   402.1 |
+| 32 | 1024 |  32,768 |    29.87 |    30.05 | **  1,096,963** |   543.3 |
+| 32 | 2048 |  65,536 |    66.45 |    66.46 | **    986,164** |   852.5 |
 
 ---
 
@@ -54,8 +54,8 @@ Measures token-by-token sequential autoregressive generation using recurrent con
 
 - **Prompt Length**: 64 tokens
 - **Generated Tokens**: 64 tokens
-- **Mean Single-Step Latency**: `20.998 ms`
-- **Decode Generation Rate**: **`48 tokens/sec`**
+- **Mean Single-Step Latency**: `7.723 ms`
+- **Decode Generation Rate**: **`129 tokens/sec`**
 
 ---
 
@@ -65,9 +65,9 @@ Measures hardware latency when early exit decisions are triggered at Reflex (L2)
 
 | Exit Layer | Exit Depth | Mean Latency (ms) | Throughput (Tokens/s) | Speedup vs Cortex |
 |:---|:---:|:---:|:---:|:---:|
-| **Reflex (L2)** | L2 | 26.73 ms | 76,614 tok/s | **2.81x** |
-| **Limbic (L5)** | L5 | 55.22 ms | 37,089 tok/s | **1.36x** |
-| **Cortex (L8 / Full)** | L8 / Full | 75.03 ms | 27,295 tok/s | **1.0x** |
+| **Reflex (L2)** | L2 | 2.44 ms | 838,522 tok/s | **3.69x** |
+| **Limbic (L5)** | L5 | 5.97 ms | 343,217 tok/s | **1.51x** |
+| **Cortex (L8 / Full)** | L8 / Full | 9.00 ms | 227,521 tok/s | **1.0x** |
 
 ---
 
@@ -75,56 +75,53 @@ Measures hardware latency when early exit decisions are triggered at Reflex (L2)
 
 Eliminates auxiliary model overhead by using Reflex (L2) to draft $K$ tokens and Cortex (L8) to verify all $K$ tokens in a single parallel pass:
 
-- **Draft Speculation Window ($K$)**: 3 tokens
-- **Tokens Emitted**: 32 tokens
-- **Speculative Generation Speed**: **`28.68 tokens/sec`**
-- **Draft Tokens Proposed**: 45 tokens
-- **Draft Tokens Accepted**: 18 tokens
-- **Empirical Acceptance Rate**: **`40.0%`**
-- **Parallel Verification Passes**: 15
-- **Mathematical Invariant**: 100% exact parity with full Cortex autoregressive generation (provably lossless).
+| Mode | $K$ | Tokens | Speed (tok/s) | Proposed / Accepted | Acceptance Rate | Parity Contract |
+|:---|:---:|:---:|:---:|:---:|:---:|:---:|
+| **Greedy (`T=0.0`)** | 3 | 32 | **77.07** | 33 / 21 | **63.6%** | PASS (Exact Match) |
+| **Sampled (`T=0.7`)** | 3 | 32 | **61.99** | 39 / 20 | **51.3%** | Rejection Sampling (`exact_distribution`) |
 
 ---
 
 ## 5. Dynamic Confidence Gating (Google Research CALM, NeurIPS)
 
-Zero-overhead token-level Softmax Margin ($\Delta p = p_{(1)} - p_{(2)}$) early-exit routing:
+Zero-overhead per-token Softmax Margin ($\Delta p = p_{(1)} - p_{(2)}$) routing with per-sample compacted early exits:
 
-- **Confidence Threshold ($\tau$)**: `0.4`
-- **Total Evaluated Positions**: 256
-- **Reflex Exit Eligible Tokens**: 74 (28.9%)
-- **Overall Reflex vs Cortex Agreement**: `16.8%`
-- **High-Confidence Exit Agreement**: **`4.1%`**
-- **Calibration Finding**: Because `triune_step_24501.pt` was trained with Cortex-only supervision rather than joint multi-exit distillation, raw early-exit softmax margins are uncalibrated on this checkpoint (see `benchmarks/calm_calibration.py` for held-out threshold calibration). Enabling `JointExitLoss` or LayerSkip self-distillation aligns intermediate heads; meanwhile, LayerSkip self-speculative decoding (Section 4) preserves **100% lossless Cortex token parity** even on single-exit checkpoints.
-
----
-
-## 6. MoE True Sparse Scatter-Gather vs Dense BMM
-
-Empirical FLOP reduction and latency comparison for 8 experts, Top-2 active routing (`MoERoutingBlock`), alongside production `MoE_FFN.sparse_forward` vs batched BMM crossover sweeps recorded in [`benchmarks/moe_ffn_sparse_vs_dense.json`](moe_ffn_sparse_vs_dense.json) (where `MoE_FFN.sparse_forward` delivers up to **4.71x** speedup at 1536d/8-expert Top-1 and **5.85x** at Top-2 across 4,096 tokens):
-
-- **Active Experts per Token ($k$)**: 2 of 8
-- **Sparse Theoretical FLOPs**: `9,663,676,416` FLOPs
-- **Dense Theoretical FLOPs**: `38,654,705,664` FLOPs
-- **Theoretical Compute Reduction**: **`75.0% FLOPs saved`**
-- **Sparse Execution Latency**: `39.788 ms`
-- **Dense Execution Latency**: `9.847 ms` (used during static CUDA Graph replay)
-- **Numerical Parity (Max Difference)**: `0.00016`
+- **Exit-Head KL Self-Distillation (Backbone & Cortex Frozen)**: `50` steps (KL loss `236.975 -> 46.5053`), `checkpoint_calibrated=True`
+- **Confidence Threshold ($\tau$)**: `0.2`
+- **Held-Out Python Code (`sample_text`, $N=128$)**: Overall Agreement=`67.2%`, High-Confidence Eligible=`10` (7.8%), High-Confidence Agreement=**`100.0%`** (Batched `B=2`: Reflex=19, Limbic=5, Cortex=232)
+- **Held-Out FineWeb-Edu ($N=128$)**: Overall Agreement=`79.7%`, High-Confidence Eligible=`24` (18.8%), High-Confidence Agreement=**`100.0%`** (Batched `B=2`: Reflex=40, Limbic=5, Cortex=211)
+- **Uncalibrated Raw Checkpoint Baseline ($\tau=0.4$, Python)**: Overall=`23.4%`, High-Confidence=`8.8%` (because untied intermediate exit heads in `triune_step_24501.pt` were trained under single-exit `dynamic` mode without Cortex KL alignment; frozen-backbone KL self-distillation aligns exit heads while keeping Cortex `force_depth=2` logits bit-for-bit invariant).
 
 ---
 
-## 7. Dynamic Tokenizer Multi-Domain Generalization
+## 6. MoE Execution Paths: Production `MoE_FFN` vs Legacy `MoERoutingBlock`
 
-Empirical compression and exact lossless reconstruction tested across diverse unseen corpora:
+Compares the production `MoE_FFN` module (`use_sparse_eval=True` by default: zero-sync GPU `N_tok=1` BMM + grouped sparse dispatch for `N_tok>1`) against dense BMM (`use_sparse_eval=False`), separately from the legacy Python-loop `MoERoutingBlock` diagnostic:
 
-| Corpus Domain | Uncompressed Tokens | Compressed Tokens | Compression Ratio | Lossless Roundtrip |
+| Module / Tokens ($N_{\text{tok}}$) | Sparse Latency | Dense Latency | Speedup | Max Diff |
 |:---|:---:|:---:|:---:|:---:|
-| **Python Code** | 2183 | 839 | **2.6x** | 100% PASS |
-| **Mathematical Prose** | 555 | 211 | **2.63x** | 100% PASS |
-| **JSON Structured Config** | 2044 | 786 | **2.6x** | 100% PASS |
-| **Repetitive Log & Delimiters** | 1464 | 552 | **2.65x** | 100% PASS |
+| **`MoE_FFN` (`N=1`)** | 0.647 ms | 0.878 ms | **1.358x** | `0.0` |
+| **`MoE_FFN` (`N=256`)** | 1.656 ms | 1.735 ms | **1.047x** | `0.007812` |
+| **`MoE_FFN` (`N=4096`)** | 1.967 ms | 14.668 ms | **7.458x** | `0.007812` |
+| `MoERoutingBlock` (legacy loop, `N=4096`) | 9.56 ms | 9.428 ms | 0.99x | `0.000157` |
+- **Theoretical Active FLOP Reduction**: **`75.0% FLOPs saved`** (`k=2/8` active experts; see also [`benchmarks/moe_ffn_sparse_vs_dense.json`](moe_ffn_sparse_vs_dense.json)).
 
-**Aggregate Multi-Domain Compression Ratio**: **`2.62x`**
+---
+
+## 7. Dynamic Tokenizer Disjoint Evaluation & Model Embedding Modes
+
+Evaluated on held-out unseen corpora after fitting `learn_ngrams` on a disjoint training split (64 n-grams learned):
+
+| Held-Out Corpus Domain | Uncompressed Tokens | Compressed Tokens | Compression Ratio | Lossless Roundtrip |
+|:---|:---:|:---:|:---:|:---:|
+| **Python Code (Held-Out)** | 679 | 259 | **2.62x** | 100% PASS |
+| **Mathematical Prose (Held-Out)** | 219 | 83 | **2.64x** | 100% PASS |
+| **JSON Structured Config (Held-Out)** | 662 | 248 | **2.67x** | 100% PASS |
+| **Repetitive Log & Delimiters (Held-Out)** | 1360 | 512 | **2.66x** | 100% PASS |
+
+**Aggregate Held-Out Compression Ratio**: **`2.65x`**
+
+- **Embedding Mode Verification** (distinct from text reconstruction parity): `mean_pool` (averages constituent embeddings, compressed length=35); `expand` (decompression inside forward, exact logit diff vs base=`0.0`); `extend_vocabulary_for_tokenizer` (added 714 trainable composite rows).
 
 ---
 
@@ -134,14 +131,26 @@ Probing continuous latent geometry alignment from Reflex (L2) to Cortex (L8):
 
 - **Source Exit**: Reflex (Layer 2)
 - **Target Exit**: Cortex (Layer 8)
-- **Cosine Similarity**: `0.7466`
-- **Geodesic Arc Distance on $\mathbb{S}^{D-1}$**: `0.6815 rad` (39.04°)
+- **Cosine Similarity**: `0.7541`
+- **Geodesic Arc Distance on $\mathbb{S}^{D-1}$**: `0.6697 rad` (38.37°)
+
+---
+
+## 9. Full-Model Weight Quantization Tiers (BF16 vs FP8 E4M3 vs NVFP4 4-Bit)
+
+Evaluated across all `78,257,664` transformer-layer linear parameters (`103` `NVFP4Linear` modules converted, `7` layer-0 `NVFP4StagingBuffer` H2D/D2H transfers verified):
+
+| Precision Tier | Effective Bits/Weight | Layer Weight Footprint | Compression | E2E Forward (`B=2,T=128`) | Output Logit Cosine Sim |
+|:---|:---:|:---:|:---:|:---:|:---:|
+| **BF16 (16-bit Baseline)** | 16.0 | 149.26 MB | **1.0x** | 10.04 ms | `1.0` |
+| **FP8 (8-bit E4M3)** | 8.0 | 74.63 MB | **2.0x** | 63.67 ms | `0.97377` |
+| **NVFP4 (4-bit E2M1 + E4M3 Scales)** | 5.0 | 46.65 MB | **3.2x** | 17.33 ms | `0.92187` |
 
 ---
 
 ## Conclusion & Defensibility
 
-1. **Full-stack end-to-end execution**: 8-layer model with vocabulary head measured honestly across batch and sequence dimensions.
-2. **State-of-the-Art Dynamic Inference**: LayerSkip self-speculation and CALM confidence gating provide verified speedups with zero auxiliary MLP overhead.
-3. **True Sparse MoE**: Validated scatter-gather top-$k$ compute reduction.
-4. **No Proprietary Dependencies**: Pure PyTorch open-source local inference.
+1. **Full-stack end-to-end execution**: 8-layer model with 32k vocabulary head measured across batch and sequence dimensions.
+2. **Exact Speculative Parity Semantics**: Verified exact token-for-token parity at `T=0.0` (greedy) and Leviathan et al. (2023) rejection sampling at `T=0.7`.
+3. **Default Production Sparse MoE**: `MoE_FFN` enables `use_sparse_eval=True` by default, benchmarked separately from the legacy `MoERoutingBlock` diagnostic.
+4. **Lossless Text vs Equivalent Compute Distinction**: Explicitly separates held-out lossless text round-trip from `mean_pool` vs exact `expand` forward semantics.

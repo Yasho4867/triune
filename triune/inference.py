@@ -101,7 +101,7 @@ class IncrementalStreamingDecoder:
         text = self.tokenizer.decode(self.token_cache, skip_special_tokens=self.skip_special_tokens)
         if text.endswith("\ufffd"):
             return self.cumulative_text, ""
-        delta = text[self.print_len:]
+        delta = text[self.print_len :]
         self.cumulative_text += delta
         if text.endswith(" ") or text.endswith("\n") or len(self.token_cache) >= 16:
             self.token_cache = []
@@ -114,7 +114,7 @@ class IncrementalStreamingDecoder:
         if self.token_cache:
             text = self.tokenizer.decode(self.token_cache, skip_special_tokens=self.skip_special_tokens)
             if self.print_len < len(text):
-                delta = text[self.print_len:]
+                delta = text[self.print_len :]
                 self.cumulative_text += delta
                 self.token_cache = []
                 self.print_len = 0
@@ -246,6 +246,7 @@ def generate_response(
             if stream_decoder is not None:
                 cur_tier = 0 if decode_depth is None else int(decode_depth)
                 cur_route = "AUTO" if decode_depth is None else ("REFLEX", "LIMBIC", "CORTEX")[decode_depth]
+
                 def _emit_text(txt: str) -> None:
                     if on_text is not None:
                         try:

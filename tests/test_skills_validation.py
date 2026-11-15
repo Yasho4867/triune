@@ -1,9 +1,8 @@
-import os
-import re
 import ast
-import yaml
 from pathlib import Path
+
 import pytest
+import yaml
 from markdown_it import MarkdownIt
 
 SKILLS_DIR = Path("C:/Users/yashb_f1ls/.gemini/config/skills")
@@ -54,9 +53,7 @@ def test_agentic_workflow_scripts_execution():
 
 
 def test_frontier_examples_python():
-    nvme_script = (
-        SKILLS_DIR / "frontier-deep-learning-engineering" / "examples" / "nvme_streamer.py"
-    )
+    nvme_script = SKILLS_DIR / "frontier-deep-learning-engineering" / "examples" / "nvme_streamer.py"
     assert nvme_script.is_file()
     ast.parse(nvme_script.read_text(encoding="utf-8"))
 
@@ -72,6 +69,7 @@ def test_host_app_viewer_scripts():
     assert interact_script.is_file(), "interact_app.ps1 missing"
 
     import subprocess
+
     cmd_list = [
         "powershell",
         "-ExecutionPolicy",
