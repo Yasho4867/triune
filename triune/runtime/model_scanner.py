@@ -183,6 +183,33 @@ def parse_gguf_header(gguf_path: Path, max_kv: int = 96) -> Optional[dict[str, A
         return None
 
 
+_NON_CAUSAL_MODEL_PREFIXES = (
+    "bert",
+    "roberta",
+    "albert",
+    "electra",
+    "deberta",
+    "vit",
+    "clip",
+    "siglip",
+    "depth",
+    "dino",
+    "sam",
+    "detr",
+    "wav2vec",
+    "whisper",
+)
+
+
+def _is_hf_causal_config(cfg: dict[str, Any]) -> bool:
+    """Return True if a Hugging Face config.json describes an autoregressive CausalLM."""
+    arch_list = [str(a) for a in (cfg.get("architectures") or []) if isinstance(a, str)]
+    if arch_list:
+        return any(a.endswith(("ForCausalLM", "LMHeadModel", "CausalLM")) for a in arch_list)
+    model_type_low = str(cfg.get("model_type") or "").lower()
+    return not any(model_type_low.startswith(prefix) for prefix in _NON_CAUSAL_MODEL_PREFIXES)
+
+
 def _parse_hf_config_dir(model_dir: Path) -> Optional[dict[str, Any]]:
     cfg_p = model_dir / "config.json"
     if not cfg_p.is_file():
@@ -206,6 +233,7 @@ def _parse_hf_config_dir(model_dir: Path) -> Optional[dict[str, Any]]:
     )
     return {
         "model_type": str(cfg.get("model_type") or "hf"),
+        "is_causal_lm": _is_hf_causal_config(cfg),
         "num_layers": int(n_l) if n_l is not None else None,
         "hidden_dim": int(h_d) if h_d is not None else None,
         "num_heads": int(heads) if heads is not None else None,
@@ -213,6 +241,48 @@ def _parse_hf_config_dir(model_dir: Path) -> Optional[dict[str, Any]]:
         "vocab_size": int(vocab) if vocab is not None else None,
         "has_weights": has_w,
         "size_bytes": _dir_weights_bytes(model_dir) if has_w else 0,
+    }
+
+
+def _build_hf_scan_entry(
+    entry_id: str,
+    name: str,
+    path_str: str,
+    *,
+    source: str,
+    kind: str,
+    prefix: str,
+    cfg_meta: dict[str, Any],
+    obj: Optional[str] = None,
+    spec_fallback: str = "HF Config",
+    status_suffix: Optional[str] = None,
+) -> dict[str, Any]:
+    n_l, h_d = cfg_meta.get("num_layers"), cfg_meta.get("hidden_dim")
+    is_causal = bool(cfg_meta.get("is_causal_lm", True))
+    has_weights = bool(cfg_meta.get("has_weights"))
+    spec = f"{n_l}L / {h_d}D" if (n_l and h_d) else spec_fallback
+    extra_tag = f", {status_suffix}" if status_suffix else ""
+    if not is_causal:
+        extra_tag = f"{extra_tag}, non-CausalLM"
+    return {
+        "id": entry_id,
+        "name": name,
+        "path": path_str,
+        "source": source,
+        "object": obj or kind,
+        "kind": kind,
+        "model_type": cfg_meta.get("model_type"),
+        "is_causal_lm": is_causal,
+        "num_layers": n_l,
+        "hidden_dim": h_d,
+        "num_heads": cfg_meta.get("num_heads"),
+        "ffn_dim": cfg_meta.get("ffn_dim"),
+        "vocab_size": cfg_meta.get("vocab_size"),
+        "size_formatted": _format_size(cfg_meta.get("size_bytes", 0)),
+        "has_weights": has_weights,
+        "can_load_direct": bool(has_weights and is_causal),
+        "can_transmute": True,
+        "description": f"{prefix}: {name} ({spec}{extra_tag})",
     }
 
 
@@ -269,6 +339,153 @@ def _read_hermes_config_refs(hermes_dir: Path) -> list[str]:
     return refs
 
 
+def resolve_ollama_host(base_url: str | None = None) -> str:
+    """Resolve local Ollama HTTP base URL from override or OLLAMA_HOST environment variable."""
+    host = (base_url or os.environ.get("OLLAMA_HOST") or "http://127.0.0.1:11434").strip()
+    if not host.startswith(("http://", "https://")):
+        host = f"http://{host}"
+    return host.rstrip("/")
+
+
+def query_ollama_running_tags(base_url: str | None = None, timeout: float = 0.6) -> set[str]:
+    """Query the local Ollama daemon (/api/tags) and return available model tags in lowercase."""
+    import urllib.request
+
+    url = f"{resolve_ollama_host(base_url)}/api/tags"
+    req = urllib.request.Request(url, method="GET")
+    tags: set[str] = set()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if getattr(resp, "status", 200) != 200:
+                return tags
+            payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+        for item in payload.get("models") or []:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or item.get("model") or "").strip().lower()
+            if name:
+                tags.add(name)
+                if name.endswith(":latest"):
+                    tags.add(name[: -len(":latest")])
+    except Exception:
+        pass
+    return tags
+
+
+def stream_ollama_chat(
+    tag: str,
+    messages: list[Any],
+    *,
+    max_new_tokens: int = 256,
+    temperature: float = 0.7,
+    base_url: str | None = None,
+    cancel_event: Any = None,
+    on_text: Any = None,
+    timeout: float = 180.0,
+) -> dict[str, Any]:
+    """Stream a multi-turn chat completion from the local Ollama daemon (/api/chat)."""
+    import urllib.request
+
+    clean_tag = str(tag or "").strip()
+    if clean_tag.lower().startswith("ollama:"):
+        clean_tag = clean_tag[len("ollama:") :].strip()
+    if not clean_tag:
+        raise RuntimeError("No Ollama model tag specified.")
+
+    formatted_msgs = []
+    for m in messages or []:
+        role = m.role if hasattr(m, "role") else m.get("role", "user")
+        content = m.content if hasattr(m, "content") else m.get("content", "")
+        formatted_msgs.append({"role": str(role), "content": str(content)})
+
+    url = f"{resolve_ollama_host(base_url)}/api/chat"
+    payload = json.dumps(
+        {
+            "model": clean_tag,
+            "messages": formatted_msgs,
+            "stream": True,
+            "options": {
+                "num_predict": max(1, int(max_new_tokens)),
+                "temperature": max(0.0, float(temperature)),
+            },
+        }
+    ).encode("utf-8")
+
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    t0 = time.perf_counter()
+    ttft_ms: Optional[float] = None
+    chunks: list[str] = []
+    eval_count = 0
+    eval_ns = 0
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        for raw_line in resp:
+            if cancel_event is not None and cancel_event.is_set():
+                break
+            line = raw_line.decode("utf-8", errors="replace").strip()
+            if not line:
+                continue
+            try:
+                pkt = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            msg_obj = pkt.get("message") if isinstance(pkt, dict) else None
+            delta = str(msg_obj.get("content") or "") if isinstance(msg_obj, dict) else ""
+            if delta:
+                if ttft_ms is None:
+                    ttft_ms = round((time.perf_counter() - t0) * 1000.0, 1)
+                chunks.append(delta)
+                eval_count += 1
+                if on_text is not None:
+                    on_text(delta)
+            if pkt.get("done"):
+                if pkt.get("eval_count"):
+                    eval_count = int(pkt["eval_count"])
+                if pkt.get("eval_duration"):
+                    eval_ns = int(pkt["eval_duration"])
+                break
+
+    elapsed_s = max(1e-4, (eval_ns / 1e9) if eval_ns > 0 else (time.perf_counter() - t0))
+    total_ms = round((time.perf_counter() - t0) * 1000.0, 1)
+    tps = round(eval_count / elapsed_s, 1) if eval_count > 0 else 0.0
+    cancelled = bool(cancel_event is not None and cancel_event.is_set())
+    return {
+        "text": "".join(chunks),
+        "route": "OLLAMA",
+        "latency_ms": total_ms,
+        "ttft_ms": ttft_ms,
+        "tokens_per_sec": tps,
+        "decode_tokens_per_sec": tps,
+        "tokens_count": int(eval_count),
+        "tokens_generated": int(eval_count),
+        "weights_loaded": True,
+        "checkpoint": clean_tag,
+        "cache": None,
+        "cancelled": cancelled,
+        "status": "cancelled" if cancelled else "ok",
+    }
+
+
+def _is_tag_live_in_ollama(tag: str, live_tags: set[str]) -> bool:
+    """Return True when a model tag (with optional 'ollama:' prefix) is live in local Ollama."""
+    if not live_tags:
+        return False
+    clean = str(tag or "").strip().lower()
+    if clean.startswith("ollama:"):
+        clean = clean[len("ollama:") :].strip()
+    if not clean:
+        return False
+    if clean in live_tags or f"{clean}:latest" in live_tags:
+        return True
+    if clean.endswith(":latest") and clean[: -len(":latest")] in live_tags:
+        return True
+    return False
+
+
 def scan_pc_models(
     extra_paths: Optional[list[str]] = None,
     *,
@@ -281,6 +498,7 @@ def scan_pc_models(
     results: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
     scanned_roots: list[str] = []
+    running_ollama_tags = query_ollama_running_tags()
 
     def _add(entry: dict[str, Any]) -> None:
         eid = str(entry.get("id") or "")
@@ -377,28 +595,16 @@ def scan_pc_models(
                             }
                         )
                     elif (cfg_meta := _parse_hf_config_dir(item)) is not None:
-                        n_l, h_d = cfg_meta.get("num_layers"), cfg_meta.get("hidden_dim")
-                        sz = _format_size(cfg_meta.get("size_bytes", 0))
-                        spec = f"{n_l}L / {h_d}D" if (n_l and h_d) else "HF Config"
                         _add(
-                            {
-                                "id": rel,
-                                "name": item.name,
-                                "path": rel,
-                                "source": _infer_model_family_source(item.name, "huggingface"),
-                                "object": "hf_local",
-                                "kind": "hf_local",
-                                "num_layers": n_l,
-                                "hidden_dim": h_d,
-                                "num_heads": cfg_meta.get("num_heads"),
-                                "ffn_dim": cfg_meta.get("ffn_dim"),
-                                "vocab_size": cfg_meta.get("vocab_size"),
-                                "size_formatted": sz,
-                                "has_weights": cfg_meta["has_weights"],
-                                "can_load_direct": cfg_meta["has_weights"],
-                                "can_transmute": True,
-                                "description": f"Local HF: {item.name} ({spec})",
-                            }
+                            _build_hf_scan_entry(
+                                rel,
+                                item.name,
+                                rel,
+                                source=_infer_model_family_source(item.name, "huggingface"),
+                                kind="hf_local",
+                                prefix="Local HF",
+                                cfg_meta=cfg_meta,
+                            )
                         )
             except OSError:
                 continue
@@ -483,6 +689,7 @@ def scan_pc_models(
                             "size_formatted": sz_str,
                             "has_weights": blob_path.is_file(),
                             "can_load_direct": False,
+                            "ollama_running": _is_tag_live_in_ollama(display_name, running_ollama_tags),
                             "can_transmute": True,
                             "description": f"Ollama: {display_name} ({spec}, {quant}, {sz_str})",
                         }
@@ -526,30 +733,21 @@ def scan_pc_models(
                 cfg_meta = _parse_hf_config_dir(snap)
                 if cfg_meta is None:
                     continue
-                n_l, h_d = cfg_meta.get("num_layers"), cfg_meta.get("hidden_dim")
-                spec_str = f"{n_l}L / {h_d}D" if (n_l and h_d) else "cached config"
                 sz_bytes = cfg_meta.get("size_bytes", 0)
                 w_tag = _format_size(sz_bytes) if cfg_meta["has_weights"] else "config cached"
                 src = _infer_model_family_source(repo_id, "huggingface")
                 _add(
-                    {
-                        "id": repo_id,
-                        "name": repo_id,
-                        "path": str(snap).replace("\\", "/"),
-                        "source": src,
-                        "object": "hf_cache",
-                        "kind": "hf_cache",
-                        "num_layers": n_l,
-                        "hidden_dim": h_d,
-                        "num_heads": cfg_meta.get("num_heads"),
-                        "ffn_dim": cfg_meta.get("ffn_dim"),
-                        "vocab_size": cfg_meta.get("vocab_size"),
-                        "size_formatted": _format_size(sz_bytes),
-                        "has_weights": cfg_meta["has_weights"],
-                        "can_load_direct": cfg_meta["has_weights"],
-                        "can_transmute": True,
-                        "description": f"{'Hermes' if src == 'hermes' else 'HF Cache'}: {repo_id} ({spec_str}, {w_tag})",
-                    }
+                    _build_hf_scan_entry(
+                        repo_id,
+                        repo_id,
+                        str(snap).replace("\\", "/"),
+                        source=src,
+                        kind="hf_cache",
+                        prefix="Hermes" if src == "hermes" else "HF Cache",
+                        cfg_meta=cfg_meta,
+                        spec_fallback="cached config",
+                        status_suffix=w_tag,
+                    )
                 )
                 break
 
@@ -570,28 +768,17 @@ def scan_pc_models(
             if cfg_meta is None:
                 continue
             rel = str(mdir).replace("\\", "/")
-            n_l, h_d = cfg_meta.get("num_layers"), cfg_meta.get("hidden_dim")
-            sz = _format_size(cfg_meta.get("size_bytes", 0))
-            spec = f"{n_l}L / {h_d}D" if (n_l and h_d) else "vLLM Model"
             _add(
-                {
-                    "id": rel,
-                    "name": mdir.name,
-                    "path": rel,
-                    "source": "vllm",
-                    "object": "vllm",
-                    "kind": "vllm",
-                    "num_layers": n_l,
-                    "hidden_dim": h_d,
-                    "num_heads": cfg_meta.get("num_heads"),
-                    "ffn_dim": cfg_meta.get("ffn_dim"),
-                    "vocab_size": cfg_meta.get("vocab_size"),
-                    "size_formatted": sz,
-                    "has_weights": cfg_meta["has_weights"],
-                    "can_load_direct": cfg_meta["has_weights"],
-                    "can_transmute": True,
-                    "description": f"vLLM: {mdir.name} ({spec})",
-                }
+                _build_hf_scan_entry(
+                    rel,
+                    mdir.name,
+                    rel,
+                    source="vllm",
+                    kind="vllm",
+                    prefix="vLLM",
+                    cfg_meta=cfg_meta,
+                    spec_fallback="vLLM Model",
+                )
             )
 
     # 5. Hermes / Nous Research local directories & configs
@@ -612,27 +799,17 @@ def scan_pc_models(
             if cfg_meta is None:
                 continue
             rel = str(mdir).replace("\\", "/")
-            n_l, h_d = cfg_meta.get("num_layers"), cfg_meta.get("hidden_dim")
-            spec = f"{n_l}L / {h_d}D" if (n_l and h_d) else "Hermes Model"
             _add(
-                {
-                    "id": rel,
-                    "name": mdir.name,
-                    "path": rel,
-                    "source": "hermes",
-                    "object": "hermes",
-                    "kind": "hermes",
-                    "num_layers": n_l,
-                    "hidden_dim": h_d,
-                    "num_heads": cfg_meta.get("num_heads"),
-                    "ffn_dim": cfg_meta.get("ffn_dim"),
-                    "vocab_size": cfg_meta.get("vocab_size"),
-                    "size_formatted": _format_size(cfg_meta.get("size_bytes", 0)),
-                    "has_weights": cfg_meta["has_weights"],
-                    "can_load_direct": cfg_meta["has_weights"],
-                    "can_transmute": True,
-                    "description": f"Hermes: {mdir.name} ({spec})",
-                }
+                _build_hf_scan_entry(
+                    rel,
+                    mdir.name,
+                    rel,
+                    source="hermes",
+                    kind="hermes",
+                    prefix="Hermes",
+                    cfg_meta=cfg_meta,
+                    spec_fallback="Hermes Model",
+                )
             )
         for gguf_f in h_root.rglob("*.gguf"):
             rel = str(gguf_f).replace("\\", "/")
@@ -732,27 +909,18 @@ def scan_pc_models(
             if cfg_meta is None:
                 continue
             rel = str(mdir).replace("\\", "/")
-            n_l, h_d = cfg_meta.get("num_layers"), cfg_meta.get("hidden_dim")
-            spec = f"{n_l}L / {h_d}D" if (n_l and h_d) else "HF Model"
             _add(
-                {
-                    "id": rel,
-                    "name": mdir.name,
-                    "path": rel,
-                    "source": "lmstudio",
-                    "object": "lmstudio",
-                    "kind": "hf_local",
-                    "num_layers": n_l,
-                    "hidden_dim": h_d,
-                    "num_heads": cfg_meta.get("num_heads"),
-                    "ffn_dim": cfg_meta.get("ffn_dim"),
-                    "vocab_size": cfg_meta.get("vocab_size"),
-                    "size_formatted": _format_size(cfg_meta.get("size_bytes", 0)),
-                    "has_weights": cfg_meta["has_weights"],
-                    "can_load_direct": cfg_meta["has_weights"],
-                    "can_transmute": True,
-                    "description": f"LM Studio HF: {mdir.name} ({spec})",
-                }
+                _build_hf_scan_entry(
+                    rel,
+                    mdir.name,
+                    rel,
+                    source="lmstudio",
+                    obj="lmstudio",
+                    kind="hf_local",
+                    prefix="LM Studio HF",
+                    cfg_meta=cfg_meta,
+                    spec_fallback="HF Model",
+                )
             )
 
     # 7. Installed / Cloned module repositories with model weights
@@ -823,28 +991,16 @@ def scan_pc_models(
                     pass
 
             if "config.json" in filenames and (cfg_meta := _parse_hf_config_dir(cur_p)) is not None:
-                n_l, h_d = cfg_meta.get("num_layers"), cfg_meta.get("hidden_dim")
-                sz = _format_size(cfg_meta.get("size_bytes", 0))
-                spec = f"{n_l}L / {h_d}D" if (n_l and h_d) else "HF Config"
                 _add(
-                    {
-                        "id": rel_dir,
-                        "name": cur_p.name,
-                        "path": rel_dir,
-                        "source": _infer_model_family_source(cur_p.name, "hf_local"),
-                        "object": "hf_local",
-                        "kind": "hf_local",
-                        "num_layers": n_l,
-                        "hidden_dim": h_d,
-                        "num_heads": cfg_meta.get("num_heads"),
-                        "ffn_dim": cfg_meta.get("ffn_dim"),
-                        "vocab_size": cfg_meta.get("vocab_size"),
-                        "size_formatted": sz,
-                        "has_weights": cfg_meta["has_weights"],
-                        "can_load_direct": cfg_meta["has_weights"],
-                        "can_transmute": True,
-                        "description": f"Local Model: {cur_p.name} ({spec})",
-                    }
+                    _build_hf_scan_entry(
+                        rel_dir,
+                        cur_p.name,
+                        rel_dir,
+                        source=_infer_model_family_source(cur_p.name, "hf_local"),
+                        kind="hf_local",
+                        prefix="Local Model",
+                        cfg_meta=cfg_meta,
+                    )
                 )
                 dirnames.clear()
                 continue

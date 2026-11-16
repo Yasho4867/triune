@@ -117,8 +117,6 @@ body {
 .react-sidebar {
   width: 270px;
   background-color: var(--bg-surface);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
   border-right: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
@@ -321,7 +319,7 @@ body {
 }
 .btn-purge:hover {
   background: var(--primary);
-  color: #fff;
+  color: var(--primary-contrast, #ffffff);
 }
 
 /* Main Area Layout */
@@ -344,8 +342,6 @@ body {
   justify-content: space-between;
   padding: 8px 20px;
   background-color: var(--bg-surface);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
   gap: 14px;
   z-index: 9;
 }
@@ -421,8 +417,6 @@ body {
 
 .pill {
   background-color: var(--bg-card);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
   color: var(--text-muted);
   border: 1px solid var(--border-color);
   padding: 4px 11px;
@@ -433,7 +427,7 @@ body {
   align-items: center;
   gap: 6px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
-  transition: all 0.15s ease;
+  transition: border-color 0.15s ease, color 0.15s ease, background-color 0.15s ease;
 }
 
 .pill:hover {
@@ -472,7 +466,6 @@ body {
   border-radius: 8px;
   color: var(--text-main);
   background: var(--bg-card);
-  backdrop-filter: blur(12px);
   font-size: 12.5px;
 }
 
@@ -492,7 +485,7 @@ body {
   border-radius: 6px;
   padding: 6px 12px;
   background: var(--primary);
-  color: #fff;
+  color: var(--primary-contrast, #ffffff);
   font: inherit;
   font-weight: 600;
   cursor: pointer;
@@ -517,7 +510,6 @@ body {
   margin-bottom: 14px;
   padding: 10px 14px;
   background: var(--bg-card);
-  backdrop-filter: blur(12px);
   border: 1px solid var(--border-color);
   border-radius: 10px;
 }
@@ -571,7 +563,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  padding: 16px 24px 24px 24px;
+  padding: 16px 24px 36px 24px;
   will-change: scroll-position;
   transform: translateZ(0);
 }
@@ -582,7 +574,6 @@ body {
   border-radius: 10px;
   border: 1px solid var(--border-color);
   background: rgba(17, 19, 24, 0.95);
-  backdrop-filter: blur(16px);
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -595,8 +586,6 @@ body {
 
 .chat-bubble {
   background: var(--bg-card);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
   border: 1px solid var(--border-color);
   border-radius: 12px;
   padding: 16px 18px;
@@ -902,8 +891,6 @@ body {
 
 .chat-input-container {
   background: var(--bg-card);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
   border: 1px solid var(--border-color);
   border-radius: 14px;
   padding: 12px 16px 10px 16px;
@@ -1069,7 +1056,7 @@ body {
 
 .btn-input-send {
   background: var(--primary);
-  color: #fff;
+  color: var(--primary-contrast, #ffffff);
   border: 1px solid rgba(255, 255, 255, 0.15);
   padding: 6px 14px;
   border-radius: 8px;
@@ -1078,8 +1065,15 @@ body {
   cursor: pointer;
   display: inline-flex;
   align-items: center;
-  transition: all 0.18s ease;
+  gap: 2px;
+  transition: background-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease, opacity 0.18s ease;
   box-shadow: 0 2px 8px var(--primary-glow);
+}
+
+.btn-input-send:disabled {
+  opacity: 0.68;
+  cursor: not-allowed;
+  box-shadow: none;
 }
 
 .btn-input-send:hover:not(:disabled) {
@@ -1132,8 +1126,6 @@ body {
 
 .chat-controls-box {
   background: var(--bg-card);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
   border: 1px solid var(--border-color);
   border-radius: 12px;
   padding: 14px;
@@ -1333,8 +1325,6 @@ body {
 
 .card-stat {
   background: var(--bg-card);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
   border: 1px solid var(--border-color);
   border-radius: 12px;
   padding: 16px 18px;
@@ -1454,7 +1444,7 @@ body {
 
 .btn-action.pause {
   background: var(--primary);
-  color: #fff;
+  color: var(--primary-contrast, #ffffff);
 }
 
 .telemetry-box {
@@ -1568,8 +1558,6 @@ body {
 .node-card-react {
   position: absolute;
   background: var(--bg-card);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
   border: 1px solid var(--border-dark);
   border-radius: 10px;
   width: 250px;
@@ -1836,7 +1824,7 @@ body {
 }
 .btn-sec:hover {
   background: var(--primary);
-  color: #fff;
+  color: var(--primary-contrast, #ffffff);
   border-color: var(--primary);
 }
 
@@ -1917,7 +1905,7 @@ body {
 
 .btn-execute {
   background: var(--primary);
-  color: #fff;
+  color: var(--primary-contrast, #ffffff);
   border: none;
   padding: 12px 24px;
   border-radius: 6px;
@@ -3173,7 +3161,6 @@ body {
   max-width: calc(100% - 32px);
   background: color-mix(in srgb, var(--bg-card) 96%, transparent);
   color: var(--text-main);
-  backdrop-filter: blur(8px);
   border: 1px solid var(--border-color);
   border-radius: 8px;
   padding: 6px 12px;
@@ -3243,7 +3230,6 @@ body {
   bottom: 16px;
   left: 16px;
   background: var(--bg-card);
-  backdrop-filter: blur(8px);
   border: 1px solid var(--border-color);
   border-radius: 6px;
   padding: 6px 14px;
@@ -4262,7 +4248,6 @@ body {
   overflow-y: auto;
   z-index: 1000;
   padding: 8px;
-  backdrop-filter: blur(8px);
   animation: quickAddFade 0.12s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
@@ -4926,7 +4911,7 @@ body {
 .axis-mode-btn.active {
   background: var(--primary);
   border-color: var(--primary);
-  color: #fff;
+  color: var(--primary-contrast, #ffffff);
   font-weight: 600;
 }
 
@@ -5834,8 +5819,6 @@ body {
   flex: 0 0 260px;
   border-right: 1px solid var(--border-color);
   background: var(--bg-surface);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -6162,7 +6145,7 @@ body {
 
 .project-filter-chip.active {
   background: var(--primary);
-  color: #fff;
+  color: var(--primary-contrast, #ffffff);
   border-color: var(--primary);
 }
 
@@ -6750,9 +6733,7 @@ body {
   margin-bottom: 14px;
   border-radius: 10px;
   border: 1px solid rgba(139, 92, 246, 0.22);
-  background: rgba(13, 15, 22, 0.75);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  background: rgba(13, 15, 22, 0.92);
   overflow: hidden;
   transition: border-color 0.25s ease, box-shadow 0.25s ease;
 }
@@ -7047,8 +7028,7 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: rgba(17, 19, 24, 0.85);
-  backdrop-filter: blur(12px);
+  background: rgba(17, 19, 24, 0.94);
 }
 
 .arena-column:first-child {
@@ -7207,7 +7187,6 @@ body {
   align-items: center;
   padding: 16px;
   background: var(--bg-card);
-  backdrop-filter: blur(12px);
   border: 1px solid var(--border-color);
   border-radius: 10px;
   min-height: 140px;
@@ -7256,7 +7235,6 @@ body {
 .token-inspector-panel {
   border-left: 1px solid var(--border-color);
   background: var(--bg-surface);
-  backdrop-filter: blur(16px);
   overflow-y: auto;
   padding: 16px;
   display: flex;
@@ -7334,7 +7312,7 @@ body {
 
 .btn-substitute-token:hover {
   background: var(--primary);
-  color: #ffffff;
+  color: var(--primary-contrast, #ffffff);
 }
 
 .neuron-theater-container {
@@ -7397,7 +7375,7 @@ body {
 
 .neuron-backend-btn.active {
   background: var(--primary);
-  color: #ffffff;
+  color: var(--primary-contrast, #ffffff);
   box-shadow: 0 0 10px var(--primary-glow);
 }
 
@@ -7500,8 +7478,7 @@ body {
   align-items: center;
   gap: 6px;
   pointer-events: none;
-  background: rgba(8, 10, 16, 0.82);
-  backdrop-filter: blur(10px);
+  background: rgba(8, 10, 16, 0.92);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 6px;
   padding: 3px 8px;
@@ -7554,8 +7531,7 @@ body {
   flex-wrap: wrap;
   gap: 8px;
   pointer-events: none;
-  background: rgba(8, 10, 16, 0.82);
-  backdrop-filter: blur(10px);
+  background: rgba(8, 10, 16, 0.92);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 6px;
   padding: 4px 10px;
@@ -7601,13 +7577,12 @@ body {
   font-size: 11px;
   font-weight: 700;
   cursor: pointer;
-  transition: all 0.18s ease;
-  backdrop-filter: blur(6px);
+  transition: background-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
 }
 
 .btn-stimulate-synapse:hover {
   background: var(--primary);
-  color: #ffffff;
+  color: var(--primary-contrast, #ffffff);
   box-shadow: 0 0 14px var(--primary-glow);
 }
 
@@ -7624,8 +7599,7 @@ body {
   font-size: 10.5px;
   font-weight: 500;
   cursor: pointer;
-  transition: all 0.15s ease;
-  backdrop-filter: blur(8px);
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
   user-select: none;
 }
 
@@ -7652,9 +7626,7 @@ body {
 
 /* Architecture Transmutation Wizard & Visual Layer Inspector */
 .transmutation-wizard-card {
-  background: rgba(17, 19, 24, 0.88);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  background: rgba(17, 19, 24, 0.95);
   border: 1px solid rgba(139, 92, 246, 0.28);
   border-radius: 12px;
   padding: 20px;
@@ -7982,9 +7954,7 @@ body {
 .neural-intelligence-console.floating {
   margin: 0 !important;
   border: 1px solid rgba(139, 92, 246, 0.35) !important;
-  background: rgba(10, 13, 19, 0.95) !important;
-  backdrop-filter: blur(24px) !important;
-  -webkit-backdrop-filter: blur(24px) !important;
+  background: rgba(10, 13, 19, 0.97) !important;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8), 0 0 24px rgba(139, 92, 246, 0.15) !important;
 }
 
@@ -7997,9 +7967,7 @@ body {
 .neural-intelligence-console.fullscreen {
   margin: 0 !important;
   border: 1px solid rgba(139, 92, 246, 0.5) !important;
-  background: rgba(9, 11, 16, 0.98) !important;
-  backdrop-filter: blur(28px) !important;
-  -webkit-backdrop-filter: blur(28px) !important;
+  background: rgba(9, 11, 16, 0.99) !important;
   box-shadow: 0 30px 90px rgba(0, 0, 0, 0.95) !important;
 }
 
@@ -8151,9 +8119,7 @@ body {
   padding: 8px 12px;
   border-radius: 8px;
   border: 1px solid rgba(139, 92, 246, 0.25);
-  background: rgba(13, 16, 24, 0.95);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  background: rgba(13, 16, 24, 0.96);
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -8163,7 +8129,7 @@ body {
   z-index: 2;
   flex-shrink: 0;
   box-sizing: border-box;
-  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .neural-console-header {
@@ -8531,9 +8497,7 @@ body {
 .neural-intelligence-console.floating {
   margin: 0 !important;
   border: 1px solid rgba(139, 92, 246, 0.35) !important;
-  background: rgba(10, 13, 19, 0.95) !important;
-  backdrop-filter: blur(24px) !important;
-  -webkit-backdrop-filter: blur(24px) !important;
+  background: rgba(10, 13, 19, 0.97) !important;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8), 0 0 24px rgba(139, 92, 246, 0.15) !important;
 }
 
@@ -8546,9 +8510,7 @@ body {
 .neural-intelligence-console.fullscreen {
   margin: 0 !important;
   border: 1px solid rgba(139, 92, 246, 0.5) !important;
-  background: rgba(9, 11, 16, 0.98) !important;
-  backdrop-filter: blur(28px) !important;
-  -webkit-backdrop-filter: blur(28px) !important;
+  background: rgba(9, 11, 16, 0.99) !important;
   box-shadow: 0 30px 90px rgba(0, 0, 0, 0.95) !important;
 }
 

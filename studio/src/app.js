@@ -1153,6 +1153,18 @@
   ];
 
   const DEFAULT_SYSTEM_PROMPT = 'You are Triune Transformer, an advanced Mixture-of-Experts AI engine with dynamic exit-head routing.';
+  const CLOUD_BYOK_MODEL_IDS = new Set([
+    'gpt-4o-mini',
+    'claude-3-5-sonnet-latest',
+    'gemini-2.5-flash',
+    'gemini-3.8-flash'
+  ]);
+  const isCloudByokModel = (id, loadedWeights = false) => {
+    if (!id) return false;
+    if (CLOUD_BYOK_MODEL_IDS.has(id)) return true;
+    if (loadedWeights) return false;
+    return /^(gpt-3\.5|gpt-4|gpt-5|chatgpt|o1-|o3-|claude-3|claude-4|gemini-\d)/i.test(String(id));
+  };
 
   const POPULAR_DATASETS = [
     { name: 'FineWeb-Edu (10BT)', id: 'HuggingFaceFW/fineweb-edu', config: 'sample-10BT', split: 'train', col: 'text', desc: 'Highest quality educational web crawl', category: 'Reasoning' },
@@ -1751,6 +1763,14 @@
     const lastFpsCalcRef = useRef(performance.now());
     const modelSigRef = useRef('');
     const lastPulseEmitTimeRef = useRef(0);
+    const livePropsRef = useRef({ activeTierIdx, route, streamVelocity, isGenerating, neuronScopeData });
+    livePropsRef.current = { activeTierIdx, route, streamVelocity, isGenerating, neuronScopeData };
+    const sizeRef = useRef({ width: 600, height: isExpanded ? 380 : 205, dpr: 1 });
+    const bgCacheRef = useRef({ width: 0, height: 0, grad: null });
+    const labelWidthCacheRef = useRef(new Map());
+    const lastReportedFpsRef = useRef(-1);
+    const isVisibleRef = useRef(typeof document !== 'undefined' ? !document.hidden : true);
+    const isInViewRef = useRef(true);
 
     const activeSpec = (() => {
       if (upgradeResult && !upgradeResult.activated && upgradeResult.layer_mapping && upgradeResult.layer_mapping.length > 0) {
@@ -2510,27 +2530,75 @@
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
 
-      let lastSpawn = 0;
-
-      const render = () => {
+      const updateCanvasSize = () => {
         const rect = canvas.getBoundingClientRect();
         const width = Math.max(300, Math.floor(rect.width || 600));
         const height = Math.max(160, Math.floor(rect.height || (isExpanded ? 380 : 205)));
-        const dpr = Math.min(window.devicePixelRatio || 1, 2);
-
-        if (canvas.width !== Math.floor(width * dpr) || canvas.height !== Math.floor(height * dpr)) {
-          canvas.width = Math.floor(width * dpr);
-          canvas.height = Math.floor(height * dpr);
+        const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+        sizeRef.current = { width, height, dpr };
+        const targetW = Math.floor(width * dpr);
+        const targetH = Math.floor(height * dpr);
+        if (canvas.width !== targetW || canvas.height !== targetH) {
+          canvas.width = targetW;
+          canvas.height = targetH;
+          bgCacheRef.current = { width: 0, height: 0, grad: null };
         }
+      };
+      updateCanvasSize();
 
+      let resizeObserver = null;
+      if (typeof ResizeObserver !== 'undefined') {
+        resizeObserver = new ResizeObserver(updateCanvasSize);
+        resizeObserver.observe(canvas);
+      }
+
+      let ioObserver = null;
+      if (typeof IntersectionObserver !== 'undefined' && wrapRef.current) {
+        ioObserver = new IntersectionObserver(entries => {
+          isInViewRef.current = entries.some(entry => entry.isIntersecting);
+        }, { threshold: 0.01 });
+        ioObserver.observe(wrapRef.current);
+      }
+
+      const onVisibilityChange = () => {
+        isVisibleRef.current = !document.hidden;
+      };
+      document.addEventListener('visibilitychange', onVisibilityChange);
+
+      let lastSpawn = 0;
+      let lastDrawAt = 0;
+
+      const render = () => {
+        if (!isVisibleRef.current || !isInViewRef.current) {
+          animIdRef.current = requestAnimationFrame(render);
+          return;
+        }
+        const now = performance.now();
+        const {
+          activeTierIdx: liveTierIdx,
+          streamVelocity: liveStreamVelocity,
+          isGenerating: liveIsGenerating,
+          neuronScopeData: liveNeuronScopeData
+        } = livePropsRef.current;
+        const hasActiveMotion = isDraggingRef.current || isResettingRef.current || liveIsGenerating
+          || pulsesRef.current.length > 0 || ripplesRef.current.length > 0;
+        if (!hasActiveMotion && now - lastDrawAt < 33) {
+          animIdRef.current = requestAnimationFrame(render);
+          return;
+        }
+        lastDrawAt = now;
+
+        const { width, height, dpr } = sizeRef.current;
         ctx.save();
         ctx.scale(dpr, dpr);
 
-        const now = performance.now();
         frameCountRef.current++;
         if (now - lastFpsCalcRef.current >= 500) {
           const measuredFps = Math.round((frameCountRef.current * 1000) / (now - lastFpsCalcRef.current));
-          setFps(Math.max(0, measuredFps));
+          if (measuredFps !== lastReportedFpsRef.current) {
+            lastReportedFpsRef.current = measuredFps;
+            setFps(Math.max(0, measuredFps));
+          }
           frameCountRef.current = 0;
           lastFpsCalcRef.current = now;
         }
@@ -2567,11 +2635,14 @@
         ctx.fillStyle = '#06080d';
         ctx.fillRect(0, 0, width, height);
 
-        const bgGrad = ctx.createRadialGradient(cx, cy, 20, cx, cy, Math.max(width, height) * 0.7);
-        bgGrad.addColorStop(0, 'rgba(16, 22, 38, 0.55)');
-        bgGrad.addColorStop(0.5, 'rgba(10, 14, 24, 0.75)');
-        bgGrad.addColorStop(1, 'rgba(6, 8, 13, 0.98)');
-        ctx.fillStyle = bgGrad;
+        if (bgCacheRef.current.width !== width || bgCacheRef.current.height !== height || !bgCacheRef.current.grad) {
+          const bgGrad = ctx.createRadialGradient(cx, cy, 20, cx, cy, Math.max(width, height) * 0.7);
+          bgGrad.addColorStop(0, 'rgba(16, 22, 38, 0.55)');
+          bgGrad.addColorStop(0.5, 'rgba(10, 14, 24, 0.75)');
+          bgGrad.addColorStop(1, 'rgba(6, 8, 13, 0.98)');
+          bgCacheRef.current = { width, height, grad: bgGrad };
+        }
+        ctx.fillStyle = bgCacheRef.current.grad;
         ctx.fillRect(0, 0, width, height);
 
         const ringY = 72;
@@ -2622,14 +2693,16 @@
         const pulses = pulsesRef.current;
         const ripples = ripplesRef.current;
 
-        const tokSpeed = (streamVelocity && typeof streamVelocity.current === 'number') ? streamVelocity.current : (typeof streamVelocity === 'number' ? streamVelocity : (isGenerating ? 24 : 0));
-        if (!isGenerating && (now - lastSpawn > 800)) {
+        const tokSpeed = (liveStreamVelocity && typeof liveStreamVelocity.current === 'number')
+          ? liveStreamVelocity.current
+          : (typeof liveStreamVelocity === 'number' ? liveStreamVelocity : (liveIsGenerating ? 24 : 0));
+        if (!liveIsGenerating && (now - lastSpawn > 900)) {
           lastSpawn = now;
           emitRealtimePulse({ tier: Math.random() < 0.5 ? 0 : 1 });
         }
 
         const currentPos = [];
-        const layerBins = (neuronScopeData && neuronScopeData.layer_bins) || {};
+        const layerBins = (liveNeuronScopeData && liveNeuronScopeData.layer_bins) || {};
 
         particles.forEach(p => {
           let px = p.x;
@@ -2677,8 +2750,8 @@
           const avgDepth = (posA.proj.depth + posB.proj.depth) * 0.5;
           const depthAlpha = Math.max(0.08, Math.min(1.0, 360 / avgDepth));
 
-          const isDirectlyActive = (activeTierIdx === w.tierFrom && activeTierIdx === w.tierTo) ||
-            (activeTierIdx === w.tierFrom || activeTierIdx === w.tierTo);
+          const isDirectlyActive = (liveTierIdx === w.tierFrom && liveTierIdx === w.tierTo) ||
+            (liveTierIdx === w.tierFrom || liveTierIdx === w.tierTo);
 
           let baseAlpha = 0.14 * depthAlpha;
           let lineWidth = 0.95 * Math.min(1.8, (posA.proj.scale + posB.proj.scale) * 0.5);
@@ -2702,10 +2775,7 @@
             ctx.strokeStyle = `rgba(0, 240, 255, ${baseAlpha})`;
           } else {
             ctx.setLineDash([]);
-            const grad = ctx.createLinearGradient(posA.proj.sx, posA.proj.sy, posB.proj.sx, posB.proj.sy);
-            grad.addColorStop(0, posA.p.color);
-            grad.addColorStop(1, posB.p.color);
-            ctx.strokeStyle = grad;
+            ctx.strokeStyle = posA.p.color;
           }
 
           ctx.globalAlpha = baseAlpha;
@@ -2824,7 +2894,7 @@
           const { p, proj } = item;
           const { sx, sy, scale } = proj;
 
-          const isTierActive = activeTierIdx === p.tier;
+          const isTierActive = liveTierIdx === p.tier;
           const breathe = Math.sin(now * 0.003 + p.phaseX) * 0.35;
           const r = Math.max(2.0, (p.baseR + breathe + (isTierActive ? 1.6 : 0) + p.charge * 2.8) * scale);
 
@@ -2867,19 +2937,26 @@
 
         const labelCandidates = visibleParticles
           .filter(({ p, proj }) => p.isInput || p.isOutput || p.isRouterHub || p.isExit ||
-            (p.isExpert && activeTierIdx === 1 && proj.scale > 0.9) ||
-            (p.tier === activeTierIdx && !p.isExpert && proj.scale > 0.85))
+            (p.isExpert && liveTierIdx === 1 && proj.scale > 0.9) ||
+            (p.tier === liveTierIdx && !p.isExpert && proj.scale > 0.85))
           .sort((a, b) => {
             const priority = p => p.isInput || p.isOutput ? 4 : p.isRouterHub ? 3 : p.isExit ? 2 : p.isExpert ? 0 : 1;
             return priority(b.p) - priority(a.p) || a.proj.depth - b.proj.depth;
           });
         const labelRects = [];
+        const labelCache = labelWidthCacheRef.current;
         for (const { p, proj } of labelCandidates) {
           const { sx, sy, scale } = proj;
           const fontSize = Math.max(9, Math.min(12, Math.round(10 * scale)));
           const radius = Math.max(2, p.baseR * scale);
+          const fontKey = `${fontSize}|${p.label}`;
           ctx.font = `600 ${fontSize}px JetBrains Mono, Fira Code, monospace`;
-          const textWidth = ctx.measureText(p.label).width;
+          let textWidth = labelCache.get(fontKey);
+          if (textWidth === undefined) {
+            textWidth = ctx.measureText(p.label).width;
+            if (labelCache.size > 256) labelCache.clear();
+            labelCache.set(fontKey, textWidth);
+          }
           let textX = sx + radius + 5;
           if (textX + textWidth > width - 5) textX = sx - radius - 5 - textWidth;
           const rect = { left: textX - 3, right: textX + textWidth + 3, top: sy - fontSize - 2, bottom: sy + 5 };
@@ -2898,8 +2975,11 @@
       animIdRef.current = requestAnimationFrame(render);
       return () => {
         if (animIdRef.current) cancelAnimationFrame(animIdRef.current);
+        if (resizeObserver) resizeObserver.disconnect();
+        if (ioObserver) ioObserver.disconnect();
+        document.removeEventListener('visibilitychange', onVisibilityChange);
       };
-    }, [isExpanded, layoutMode, activeTierIdx, route, streamVelocity, isGenerating, neuronScopeData, upgradeResult, activeModel]);
+    }, [isExpanded, layoutMode]);
 
     const targetCanvasHeight = isExpanded ? '440px' : (customHeight || `${customCanvasHeight}px`);
     return e('div', {
@@ -3502,6 +3582,156 @@
     );
   });
 
+  const ChatComposer = React.memo(function ChatComposer(props) {
+    const {
+      chatInputRef,
+      onSubmitPrompt,
+      isGenerating,
+      activeModel,
+      isLocalModel,
+      route,
+      setRoute,
+      weightsLoaded,
+      activeCheckpointName,
+      cudaAvailable,
+      activeAdapter,
+      temperature,
+      setTemperature,
+      maxTokens,
+      setMaxTokens,
+      hasRetryableMessage,
+      onRegenerateLast,
+      onStopGeneration
+    } = props;
+    const [chatInput, setChatInput] = useState(() => (chatInputRef && chatInputRef.current) || '');
+    const handleSendMessage = () => {
+      const trimmed = chatInput.trim();
+      if (!trimmed || isGenerating) return;
+      setChatInput('');
+      if (chatInputRef) chatInputRef.current = '';
+      onSubmitPrompt(trimmed);
+    };
+    const isTriuneEngine = String(activeModel || '').startsWith('triune');
+    return e('div', { className: 'chat-input-container' },
+      e('div', { className: 'chat-input-area-wrap' },
+        e('textarea', {
+          className: 'chat-input-textarea',
+          placeholder: isGenerating ? 'Generating response…' : 'Ask a research question or enter prompt… (Enter to send, Shift+Enter for newline)',
+          value: chatInput,
+          disabled: isGenerating,
+          rows: 2,
+          onChange: ev => {
+            const val = ev.target.value;
+            setChatInput(val);
+            if (chatInputRef) chatInputRef.current = val;
+          },
+          onKeyDown: ev => { if (ev.key === 'Enter' && !ev.shiftKey && !isGenerating) { ev.preventDefault(); handleSendMessage(); } }
+        })
+      ),
+      e('div', { className: 'chat-input-actions-bar' },
+        e('div', { className: 'chat-input-meta-left' },
+          isTriuneEngine ? e('div', { className: 'chat-input-meta-group' },
+            e('div', { className: 'chat-control-pill', title: 'Dynamic Exit Route' },
+              renderIcon('branch', 12, { marginRight: '4px' }),
+              e('select', {
+                value: route,
+                onChange: ev => setRoute(ev.target.value),
+                className: 'chat-meta-select'
+              },
+                e('option', { value: 'auto' }, 'Auto Exit'),
+                e('option', { value: 'reflex' }, 'Reflex (Shallow)'),
+                e('option', { value: 'limbic' }, 'Limbic (Mid)'),
+                e('option', { value: 'cortex' }, 'Cortex (Deep)')
+              )
+            ),
+            e('span', {
+              className: `pill ${weightsLoaded ? 'online' : 'warning'}`,
+              style: { fontSize: '10.5px', padding: '2px 7px' },
+              title: weightsLoaded ? `Trained weights: ${activeCheckpointName || 'loaded'}` : 'No checkpoint weights loaded'
+            }, weightsLoaded ? (activeCheckpointName ? activeCheckpointName.replace('.pt', '') : 'Weights Loaded') : 'Untrained'),
+            !cudaAvailable && e('span', {
+              className: 'pill warning',
+              style: { fontSize: '10px', padding: '2px 6px' }
+            }, 'CPU')
+          ) : e('span', {
+            className: 'pill',
+            style: { fontSize: '10.5px', background: isLocalModel ? 'rgba(16, 185, 129, 0.14)' : 'rgba(217, 119, 6, 0.15)', color: isLocalModel ? '#10b981' : 'var(--accent-bronze, #d97706)' }
+          }, String(activeModel || '').toUpperCase()),
+          activeAdapter && e('span', {
+            className: 'pill online',
+            style: { fontSize: '10.5px' },
+            title: `LoRA: ${activeAdapter.name}`
+          }, [renderIcon('finetune', 11, { marginRight: '3px' }), activeAdapter.name]),
+          e('div', { className: 'chat-param-control', title: 'Sampling Temperature (0.00 - 2.00)' },
+            e('span', { className: 'chat-param-label' }, 'Temp:'),
+            e('input', {
+              type: 'range',
+              min: 0,
+              max: 2.0,
+              step: 0.05,
+              value: temperature,
+              onChange: ev => setTemperature(parseFloat(ev.target.value)),
+              className: 'chat-param-slider'
+            }),
+            e('input', {
+              type: 'number',
+              min: 0,
+              max: 2.0,
+              step: 0.05,
+              value: temperature,
+              onChange: ev => {
+                const v = parseFloat(ev.target.value);
+                if (!isNaN(v)) setTemperature(Math.max(0, Math.min(2.0, v)));
+              },
+              className: 'chat-param-number'
+            })
+          ),
+          e('div', { className: 'chat-param-control', title: 'Max Generation Tokens (1 - 8192)' },
+            e('span', { className: 'chat-param-label' }, 'Tokens:'),
+            e('input', {
+              type: 'range',
+              min: 32,
+              max: 8192,
+              step: 32,
+              value: maxTokens,
+              onChange: ev => setMaxTokens(parseInt(ev.target.value, 10)),
+              className: 'chat-param-slider'
+            }),
+            e('input', {
+              type: 'number',
+              min: 1,
+              max: 8192,
+              step: 32,
+              value: maxTokens,
+              onChange: ev => {
+                const v = parseInt(ev.target.value, 10);
+                if (!isNaN(v)) setMaxTokens(Math.max(1, Math.min(8192, v)));
+              },
+              className: 'chat-param-number chat-param-number-wide'
+            })
+          )
+        ),
+        e('div', { className: 'chat-input-buttons-right' },
+          !isGenerating && hasRetryableMessage && e('button', {
+            className: 'btn-input-retry',
+            title: 'Regenerate last response',
+            onClick: onRegenerateLast
+          }, [renderIcon('refresh', 12, { marginRight: '4px' }), 'Retry']),
+          isGenerating ? e('button', {
+            className: 'btn-input-stop',
+            onClick: onStopGeneration
+          }, [renderIcon('pause', 12, { marginRight: '4px' }), 'Stop']) : e('button', {
+            className: 'btn-input-send',
+            disabled: !chatInput.trim(),
+            onClick: () => {
+              handleSendMessage();
+            }
+          }, [renderIcon('arrowRight', 12, { marginRight: '5px' }), 'Send', e('kbd', { className: 'kbd-hint' }, '↵')])
+        )
+      )
+    );
+  });
+
   function TriuneStudio() {
     const cleanText = (str) => {
       if (!str) return '';
@@ -3534,6 +3764,9 @@
         return 'chat';
       }
     });
+    const activeTabRef = useRef(activeTab);
+    activeTabRef.current = activeTab;
+    const wsConnectedRef = useRef(false);
 
     useEffect(() => {
       const onHashChange = () => {
@@ -3598,15 +3831,21 @@
     });
 
     useEffect(() => {
+      try { window.localStorage.setItem('triune.studio.activeTab', activeTab); } catch (e) {}
+    }, [activeTab]);
+    useEffect(() => {
+      try { window.localStorage.setItem('triune.studio.sidebarCollapsed', String(sidebarCollapsed)); } catch (e) {}
+    }, [sidebarCollapsed]);
+    useEffect(() => {
       try {
-        window.localStorage.setItem('triune.studio.activeTab', activeTab);
-        window.localStorage.setItem('triune.studio.sidebarCollapsed', String(sidebarCollapsed));
         window.localStorage.setItem('triune.studio.theme', studioTheme);
-        window.localStorage.setItem(CUSTOM_THEME_STORAGE_KEY, JSON.stringify(customThemes));
         if (customAccent) window.localStorage.setItem('triune.studio.customAccent', customAccent);
         else window.localStorage.removeItem('triune.studio.customAccent');
       } catch (e) {}
-    }, [activeTab, sidebarCollapsed, studioTheme, customAccent, customThemes]);
+    }, [studioTheme, customAccent]);
+    useEffect(() => {
+      try { window.localStorage.setItem(CUSTOM_THEME_STORAGE_KEY, JSON.stringify(customThemes)); } catch (e) {}
+    }, [customThemes]);
 
     // Chat State & Conversation History
     const [chatSessions, setChatSessions] = useState(() => {
@@ -3652,7 +3891,7 @@
         isAssistant: true
       }
     ]);
-    const [chatInput, setChatInput] = useState('');
+    const chatInputRef = useRef('');
     const [isGenerating, setIsGenerating] = useState(false);
     const [inferenceWarmupStatus, setInferenceWarmupStatus] = useState('unknown');
     const [inferenceWarmupError, setInferenceWarmupError] = useState('');
@@ -3661,6 +3900,7 @@
     const [temperature, setTemperature] = useState(0.7);
     const [maxTokens, setMaxTokens] = useState(256);
     const chatBottomRef = useRef(null);
+    const chatScrollAreaRef = useRef(null);
     const chatAbortControllerRef = useRef(null);
     const [neuronScopeData, setNeuronScopeData] = useState(null);
     const [showNeuralConsole, setShowNeuralConsole] = useState(() => {
@@ -3825,7 +4065,11 @@
     const [workflowName, setWorkflowName] = useState(() => (readSavedWorkflow() || {}).name || 'My Triune Workflow');
     const [workflowSaveState, setWorkflowSaveState] = useState('Saved locally');
     const [canvasPan, setCanvasPan] = useState({ x: 0, y: 0 });
+    const canvasPanRef = useRef(canvasPan);
+    canvasPanRef.current = canvasPan;
     const [canvasZoom, setCanvasZoom] = useState(1.0);
+    const canvasZoomRef = useRef(canvasZoom);
+    canvasZoomRef.current = canvasZoom;
     const [socketPositions, setSocketPositions] = useState({});
     // Card dimensions change when the window, sidebar, font metrics, or a
     // node's live output changes.  Keep a layout epoch so wire endpoints are
@@ -3835,6 +4079,9 @@
     const [panStart, setPanStart] = useState({ x: 0, y: 0 });
     const [connectingWire, setConnectingWire] = useState(null);
     const [canvasMousePos, setCanvasMousePos] = useState({ x: 0, y: 0, screenX: 0, screenY: 0 });
+    const canvasMousePosRef = useRef({ x: 0, y: 0, screenX: 0, screenY: 0 });
+    const gridRectRef = useRef(null);
+    const canvasMoveRafRef = useRef(null);
     const [omnibarQuery, setOmnibarQuery] = useState('');
     const [showOmnibarDropdown, setShowOmnibarDropdown] = useState(false);
     const [showWireList, setShowWireList] = useState(false);
@@ -3858,7 +4105,6 @@
     const [draggingNodeId, setDraggingNodeId] = useState(null);
     const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
     const [connectingFromId, setConnectingFromId] = useState(null);
-    const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
     const [dagExecutionStatus, setDagExecutionStatus] = useState(null);
     const dagRunIdRef = useRef(null);
     const [isDagRunSubmitting, setIsDagRunSubmitting] = useState(false);
@@ -3894,6 +4140,8 @@
       const frame = window.requestAnimationFrame(() => {
         if (!gridRef.current) return;
         const gridRect = gridRef.current.getBoundingClientRect();
+        gridRectRef.current = gridRect;
+        const curPan = canvasPanRef.current;
         const measured = {};
         gridRef.current.querySelectorAll('[data-dag-input-node], [data-dag-output-node]').forEach(pin => {
           const nodeId = pin.dataset.dagInputNode || pin.dataset.dagOutputNode;
@@ -3901,8 +4149,8 @@
           const side = pin.dataset.dagInputNode ? 'in' : 'out';
           const pinRect = pin.getBoundingClientRect();
           measured[`${nodeId}|${side}|${port}`] = {
-            x: (pinRect.left + pinRect.width / 2 - gridRect.left - canvasPan.x) / canvasZoom,
-            y: (pinRect.top + pinRect.height / 2 - gridRect.top - canvasPan.y) / canvasZoom
+            x: (pinRect.left + pinRect.width / 2 - gridRect.left - curPan.x) / canvasZoom,
+            y: (pinRect.top + pinRect.height / 2 - gridRect.top - curPan.y) / canvasZoom
           };
         });
         setSocketPositions(previous => {
@@ -3915,7 +4163,7 @@
         });
       });
       return () => window.cancelAnimationFrame(frame);
-    }, [activeTab, nodes, edges, canvasPan, canvasZoom, nodeExecOutputs, studioTheme, canvasLayoutEpoch]);
+    }, [activeTab, nodes, edges, canvasZoom, nodeExecOutputs, studioTheme, canvasLayoutEpoch]);
 
     // The canvas used to measure sockets only after graph-state changes. A
     // resize then left wires offset from their pins until the user moved a
@@ -3957,11 +4205,12 @@
           // Shift + A -> Quick Add Menu
           if ((ev.key === 'A' || ev.key === 'a') && ev.shiftKey) {
             ev.preventDefault();
+            const curMouse = canvasMousePosRef.current || {};
             setQuickAddMenu({
-              x: Math.min(window.innerWidth - 290, Math.max(20, (canvasMousePos && canvasMousePos.screenX) || 240)),
-              y: Math.min(window.innerHeight - 320, Math.max(60, (canvasMousePos && canvasMousePos.screenY) || 180)),
-              canvasX: (canvasMousePos && canvasMousePos.x) || 120,
-              canvasY: (canvasMousePos && canvasMousePos.y) || 120,
+              x: Math.min(window.innerWidth - 290, Math.max(20, curMouse.screenX || 240)),
+              y: Math.min(window.innerHeight - 320, Math.max(60, curMouse.screenY || 180)),
+              canvasX: curMouse.x || 120,
+              canvasY: curMouse.y || 120,
               search: ''
             });
             return;
@@ -3992,7 +4241,7 @@
       };
       window.addEventListener('keydown', handleGlobalKeyDown);
       return () => window.removeEventListener('keydown', handleGlobalKeyDown);
-    }, [activeTab, selectedNodeId, selectedNodeIds, canvasMousePos, frames, nodes, edges]);
+    }, [activeTab, selectedNodeId, selectedNodeIds, frames, nodes, edges]);
 
     // LoRA Fine-Tuner State
     const [loraConfig, setLoraConfig] = useState({
@@ -4096,7 +4345,7 @@
       toastTimerRef.current = setTimeout(() => setStatusToast(null), 3000);
     };
 
-    const handleUpgradeModel = async (customName = null, applyAsActive = false) => {
+    const handleUpgradeModel = async (customName = null, applyAsActive = false, opts = {}) => {
       const targetModel = (customName && customName !== '__custom__')
         ? customName
         : (upgradeModelName === '__custom__' ? customUpgradePath.trim() : upgradeModelName);
@@ -4104,7 +4353,12 @@
         showToast('Select a saved model or enter a model path / Hugging Face repo ID first.');
         return;
       }
+      const transferWeights = Boolean(opts.transferWeights);
+      const transferMode = opts.transferMode || 'early_exit';
       setIsUpgradingModel(true);
+      if (transferWeights) {
+        showToast(`Transferring real weights from ${targetModel} into Triune (${transferMode})…`);
+      }
       try {
         const res = await apiFetch('/v1/models/upgrade_to_triune', {
           method: 'POST',
@@ -4115,26 +4369,41 @@
             reflex_ratio: upgradeReflexRatio,
             limbic_experts: upgradeLimbicExperts,
             cortex_gla: upgradeCortexGla,
-            apply_as_active: applyAsActive
+            apply_as_active: applyAsActive,
+            transfer_weights: transferWeights,
+            transfer_mode: transferMode,
+            quantize: opts.quantize || null,
+            disk_stream: Boolean(opts.diskStream),
+            use_jev: true
           })
         });
         if (res.ok) {
           const data = await res.json();
+          if (data.status === 'error') {
+            showToast(data.message || 'Weight transfer failed');
+            return;
+          }
           data.timestamp = Date.now();
           setUpgradeResult(data);
           if (data.layer_mapping && data.layer_mapping.length > 0) {
             setSelectedInspectorLayer(data.layer_mapping[0]);
           }
-          if (applyAsActive) {
+          if (applyAsActive && data.activated) {
             const nextActiveId = data.active_model_id || `triune-${targetModel}`;
             setActiveModel(nextActiveId);
-            setWeightsLoaded(false);
-            setActiveCheckpointName(null);
+            if (data.weights_transferred) {
+              setWeightsLoaded(true);
+              setActiveCheckpointName(targetModel);
+              showToast(`Transferred real weights from ${targetModel} into ${nextActiveId} (${data.activation_kind || '3-tier'}).`);
+            } else {
+              setWeightsLoaded(false);
+              setActiveCheckpointName(null);
+              showToast('Triune architecture activated with fresh weights. Use Transfer Weights & Run or Load Saved Weights for trained inference.');
+            }
             try {
               window.localStorage.setItem('triune.studio.activeModel', nextActiveId);
             } catch (_) {}
             refreshNeuronScope();
-            showToast('Triune architecture activated with fresh weights. The selected source model weights were not transferred; load a compatible checkpoint or train before inference.');
           } else {
             showToast(`Architecture profile ready for ${targetModel}. Source weights are not converted, and performance is not benchmarked.`);
           }
@@ -4224,18 +4493,29 @@
       }
     };
 
+    const consoleDragRafRef = useRef(null);
+
     const handleColResizeStart = (e) => {
       e.preventDefault();
       setIsResizingConsole(true);
       const startX = e.clientX;
       const startW = neuralConsoleWidth;
+      let pendingW = startW;
       const onMove = (moveEv) => {
         const delta = startX - moveEv.clientX;
         const maxW = Math.max(400, Math.floor((window.innerWidth || 1200) * 0.75));
-        const newW = Math.max(320, Math.min(maxW, startW + delta));
-        setNeuralConsoleWidth(newW);
+        pendingW = Math.max(320, Math.min(maxW, startW + delta));
+        if (consoleDragRafRef.current) return;
+        consoleDragRafRef.current = requestAnimationFrame(() => {
+          consoleDragRafRef.current = null;
+          setNeuralConsoleWidth(pendingW);
+        });
       };
       const onUp = (upEv) => {
+        if (consoleDragRafRef.current) {
+          cancelAnimationFrame(consoleDragRafRef.current);
+          consoleDragRafRef.current = null;
+        }
         setIsResizingConsole(false);
         window.removeEventListener('pointermove', onMove);
         window.removeEventListener('pointerup', onUp);
@@ -4243,6 +4523,7 @@
           const delta = startX - upEv.clientX;
           const maxW = Math.max(400, Math.floor((window.innerWidth || 1200) * 0.75));
           const finalW = Math.max(320, Math.min(maxW, startW + delta));
+          setNeuralConsoleWidth(finalW);
           window.localStorage.setItem('triune.playground.neuralConsoleWidth', String(finalW));
         } catch (_) {}
       };
@@ -4255,13 +4536,22 @@
       setIsResizingConsole(true);
       const startY = e.clientY;
       const startH = neuralConsoleHeight;
+      let pendingH = startH;
       const onMove = (moveEv) => {
         const delta = moveEv.clientY - startY;
         const maxH = Math.max(300, Math.floor((window.innerHeight || 800) * 0.75));
-        const newH = Math.max(165, Math.min(maxH, startH + delta));
-        setNeuralConsoleHeight(newH);
+        pendingH = Math.max(165, Math.min(maxH, startH + delta));
+        if (consoleDragRafRef.current) return;
+        consoleDragRafRef.current = requestAnimationFrame(() => {
+          consoleDragRafRef.current = null;
+          setNeuralConsoleHeight(pendingH);
+        });
       };
       const onUp = (upEv) => {
+        if (consoleDragRafRef.current) {
+          cancelAnimationFrame(consoleDragRafRef.current);
+          consoleDragRafRef.current = null;
+        }
         setIsResizingConsole(false);
         window.removeEventListener('pointermove', onMove);
         window.removeEventListener('pointerup', onUp);
@@ -4269,6 +4559,7 @@
           const delta = upEv.clientY - startY;
           const maxH = Math.max(300, Math.floor((window.innerHeight || 800) * 0.75));
           const finalH = Math.max(165, Math.min(maxH, startH + delta));
+          setNeuralConsoleHeight(finalH);
           window.localStorage.setItem('triune.playground.neuralConsoleHeight', String(finalH));
         } catch (_) {}
       };
@@ -4284,19 +4575,31 @@
       const startY = e.clientY;
       const startW = neuralConsoleWidth;
       const startH = neuralConsoleHeight;
+      let pendingW = startW;
+      let pendingH = startH;
       const onMove = (moveEv) => {
-        const newW = Math.max(340, Math.min((window.innerWidth || 1200) - 40, startW + (moveEv.clientX - startX)));
-        const newH = Math.max(220, Math.min((window.innerHeight || 800) - 80, startH + (moveEv.clientY - startY)));
-        setNeuralConsoleWidth(newW);
-        setNeuralConsoleHeight(newH);
+        pendingW = Math.max(340, Math.min((window.innerWidth || 1200) - 40, startW + (moveEv.clientX - startX)));
+        pendingH = Math.max(220, Math.min((window.innerHeight || 800) - 80, startH + (moveEv.clientY - startY)));
+        if (consoleDragRafRef.current) return;
+        consoleDragRafRef.current = requestAnimationFrame(() => {
+          consoleDragRafRef.current = null;
+          setNeuralConsoleWidth(pendingW);
+          setNeuralConsoleHeight(pendingH);
+        });
       };
       const onUp = (upEv) => {
+        if (consoleDragRafRef.current) {
+          cancelAnimationFrame(consoleDragRafRef.current);
+          consoleDragRafRef.current = null;
+        }
         setIsResizingConsole(false);
         window.removeEventListener('pointermove', onMove);
         window.removeEventListener('pointerup', onUp);
         try {
           const finalW = Math.max(340, Math.min((window.innerWidth || 1200) - 40, startW + (upEv.clientX - startX)));
           const finalH = Math.max(220, Math.min((window.innerHeight || 800) - 80, startH + (upEv.clientY - startY)));
+          setNeuralConsoleWidth(finalW);
+          setNeuralConsoleHeight(finalH);
           window.localStorage.setItem('triune.playground.neuralConsoleWidth', String(finalW));
           window.localStorage.setItem('triune.playground.neuralConsoleHeight', String(finalH));
         } catch (_) {}
@@ -4322,7 +4625,11 @@
       const maxH = (window.innerHeight || 800) - 100;
       const newX = Math.max(10, Math.min(maxW, e.clientX - consoleDragOffsetRef.current.x));
       const newY = Math.max(50, Math.min(maxH, e.clientY - consoleDragOffsetRef.current.y));
-      setNeuralConsolePos({ x: newX, y: newY });
+      if (consoleDragRafRef.current) return;
+      consoleDragRafRef.current = requestAnimationFrame(() => {
+        consoleDragRafRef.current = null;
+        setNeuralConsolePos({ x: newX, y: newY });
+      });
     };
 
     const handleFloatHeaderPointerUp = (e) => {
@@ -4579,6 +4886,7 @@
           ws = new WebSocket(wsUrl);
           ws.onopen = () => {
             wsReconnectDelay = 1000;
+            wsConnectedRef.current = true;
             // Cloudflare Access authenticates the browser at the edge and the
             // tunnel reaches this server over loopback. Only send a Triune
             // bearer token when a direct-remote API request has already needed it.
@@ -4691,6 +4999,7 @@
             } catch (e) {}
           };
           ws.onclose = (event) => {
+            wsConnectedRef.current = false;
             if (event.code === 1008 && !isLocalStudioHost(window.location.hostname)) {
               apiAuthToken = '';
               // A direct remote server rejects the unauthenticated socket;
@@ -4714,8 +5023,25 @@
 
       let fetchInFlight = false;
       let backendHealthFailures = 0;
-      const fetchSystemInfo = async () => {
+      let pollCounter = 0;
+      let lastVramSig = '';
+      let lastDiagSig = '';
+      let lastHwSig = '';
+      let lastStatusSig = '';
+
+      const fetchJsonQuiet = async (url) => {
+        try {
+          const res = await apiFetch(url);
+          if (!res.ok) return null;
+          return await res.json();
+        } catch (_) {
+          return null;
+        }
+      };
+
+      const fetchSystemInfo = async (forceHeavy = false) => {
         if (fetchInFlight) return;
+        if (!forceHeavy && typeof document !== 'undefined' && document.hidden) return;
         fetchInFlight = true;
         let healthCheckSucceeded = false;
         try {
@@ -4724,124 +5050,159 @@
             backendHealthFailures += 1;
             if (backendHealthFailures >= 3) {
               activeApiBase = '';
-              setBackendStatus('offline');
+              setBackendStatus(prev => (prev === 'offline' ? prev : 'offline'));
             }
             return;
           }
           healthCheckSucceeded = true;
           backendHealthFailures = 0;
-          setBackendStatus('online');
+          setBackendStatus(prev => (prev === 'online' ? prev : 'online'));
 
-          const resDiag = await apiFetch('/v1/system/diagnostics');
-          if (!resDiag.ok) return;
-          const dataDiag = await resDiag.json();
-          if (dataDiag.device_name) setSystemDiagnostics(dataDiag);
+          const curTab = activeTabRef.current;
+          const needEnvOrTrain = forceHeavy || pollCounter === 0 || curTab === 'environment' || curTab === 'training' || (pollCounter % 4 === 0);
+          pollCounter += 1;
 
-          const resVram = await apiFetch('/v1/vram/stats');
-          const dataVram = await resVram.json();
-          if (dataVram.total_gb !== undefined || dataVram.total !== undefined) {
-            setVramUsage({
+          const [dataVram, statusData, dataDiag, dataHw, dataKern, dataOpt] = await Promise.all([
+            fetchJsonQuiet('/v1/vram/stats'),
+            fetchJsonQuiet('/v1/training/status'),
+            needEnvOrTrain ? fetchJsonQuiet('/v1/system/diagnostics') : Promise.resolve(null),
+            needEnvOrTrain ? fetchJsonQuiet('/v1/hardware/profile') : Promise.resolve(null),
+            (forceHeavy || pollCounter === 1 || curTab === 'environment') ? fetchJsonQuiet('/v1/engine/kernels') : Promise.resolve(null),
+            (forceHeavy || pollCounter === 1 || curTab === 'training' || curTab === 'environment') ? fetchJsonQuiet('/v1/training/optimizer') : Promise.resolve(null)
+          ]);
+
+          if (dataDiag && dataDiag.device_name) {
+            const diagSig = `${dataDiag.device_name}|${dataDiag.cuda_available}|${dataDiag.model_weights_loaded}|${dataDiag.active_checkpoint || ''}`;
+            if (diagSig !== lastDiagSig) {
+              lastDiagSig = diagSig;
+              setSystemDiagnostics(dataDiag);
+            }
+          }
+
+          if (dataVram && (dataVram.total_gb !== undefined || dataVram.total !== undefined)) {
+            const nextVram = {
               allocated: (dataVram.allocated !== undefined && dataVram.allocated !== null) ? dataVram.allocated : ((dataVram.allocated_gb !== undefined && dataVram.allocated_gb !== null) ? dataVram.allocated_gb : 0.0),
               reserved: (dataVram.reserved !== undefined && dataVram.reserved !== null) ? dataVram.reserved : ((dataVram.reserved_gb !== undefined && dataVram.reserved_gb !== null) ? dataVram.reserved_gb : 0.0),
               total: (dataVram.total !== undefined && dataVram.total !== null) ? dataVram.total : ((dataVram.total_gb !== undefined && dataVram.total_gb !== null) ? dataVram.total_gb : 8.0),
               oom_risk: Boolean(dataVram.oom_risk)
-            });
-          }
-
-          try {
-            const resHw = await apiFetch('/v1/hardware/profile');
-            const dataHw = await resHw.json();
-            if (dataHw && dataHw.device_name) setHardwareProfile(dataHw);
-          } catch (hwErr) {}
-
-          try {
-            const resKern = await apiFetch('/v1/engine/kernels');
-            if (resKern.ok) {
-              const dataKern = await resKern.json();
-              setKernelTelemetry(dataKern);
-            }
-          } catch (kernErr) {}
-
-          try {
-            const resOpt = await apiFetch('/v1/training/optimizer');
-            if (resOpt.ok) {
-              const dataOpt = await resOpt.json();
-              setOptimizerTelemetry(dataOpt);
-            }
-          } catch (optErr) {}
-
-          const statusRes = await apiFetch('/v1/training/status');
-          const statusData = await statusRes.json();
-          setIsTraining(statusData.is_training);
-          if (statusData.active_model) {
-            setActiveModel(prev => {
-              const isByok = prev && (prev.includes('gpt') || prev.includes('claude') || prev.includes('gemini'));
-              return isByok ? prev : statusData.active_model;
-            });
-          }
-          setWeightsLoaded(Boolean(statusData.weights_loaded));
-          if (statusData.inference_warmup) setInferenceWarmupStatus(statusData.inference_warmup);
-          setInferenceWarmupError(statusData.inference_warmup_error || '');
-          if (statusData.precision) {
-            setTrainPrecision(statusData.precision);
-            setPrecision(statusData.precision);
-          }
-          if (statusData.gpu_offload_pct !== undefined) setGpuOffloadPct(statusData.gpu_offload_pct);
-          if (statusData.gpu_layers !== undefined) setGpuLayers(statusData.gpu_layers);
-          if (statusData.warmup_steps !== undefined) setTrainWarmup(statusData.warmup_steps);
-          if (statusData.active_adapter !== undefined) {
-            setActiveAdapter(statusData.active_adapter);
-          }
-          if (statusData.wandb_url) setWandbUrl(statusData.wandb_url);
-          if (statusData.wandb_active !== undefined) setWandbActive(statusData.wandb_active);
-          if (statusData.dataset) {
-            const arch = statusData.architecture || {};
-            setDatasetInfo(prev => ({
-              ...prev,
-              ...statusData.dataset,
-              num_layers: arch.num_layers || (statusData.dataset && statusData.dataset.num_layers) || prev.num_layers || 8,
-              hidden_dim: arch.hidden_dim || (statusData.dataset && statusData.dataset.hidden_dim) || prev.hidden_dim || 384,
-              num_heads: arch.num_heads || (statusData.dataset && statusData.dataset.num_heads) || prev.num_heads || 6,
-              num_experts: arch.num_experts || (statusData.dataset && statusData.dataset.num_experts) || prev.num_experts || 4
-            }));
-            if (statusData.dataset.name) setActiveDataset(statusData.dataset.name);
-            if (Date.now() - lastManualConfigEditRef.current > 4000) {
-              if (statusData.dataset.batch_size) setTrainBatchSize(statusData.dataset.batch_size);
-              if (statusData.dataset.seq_len) setTrainSeqLen(statusData.dataset.seq_len);
-              if (statusData.dataset.grad_accum_steps) setTrainGradAccum(statusData.dataset.grad_accum_steps);
-              if (statusData.dataset.depth_mode) setTrainDepthMode(statusData.dataset.depth_mode);
-              if (statusData.dataset.lr_peak) setTrainLR(String(statusData.dataset.lr_peak));
-              else if (statusData.lr_peak) setTrainLR(String(statusData.lr_peak));
-            }
-            if (statusData.dataset.active_batch_preview) {
-              setActiveBatchPreview(statusData.dataset.active_batch_preview);
+            };
+            const vramSig = `${nextVram.allocated}|${nextVram.reserved}|${nextVram.total}|${nextVram.oom_risk}`;
+            if (vramSig !== lastVramSig) {
+              lastVramSig = vramSig;
+              setVramUsage(nextVram);
             }
           }
-          setActiveCheckpointName(statusData.active_checkpoint || null);
-          if (statusData.history && statusData.history.length > 0) {
-            setMetricsHistory(statusData.history);
-            const latest = statusData.history[statusData.history.length - 1];
-            setMetrics({
-              ...latest,
-              loss: (latest.loss !== undefined && latest.loss !== null) ? latest.loss : statusData.loss,
-              throughput: (latest.throughput !== undefined && latest.throughput !== null) ? latest.throughput : (statusData.throughput || 0),
-              lr: (typeof latest.lr === 'number' && latest.lr > 0) ? latest.lr : (statusData.current_lr || latest.lr)
-            });
-            if (latest.exit_usage) setExitUsage(latest.exit_usage);
-            else if (statusData.exit_usage) setExitUsage(statusData.exit_usage);
-            if (latest.batch_preview) setActiveBatchPreview(latest.batch_preview);
-          } else if (typeof statusData.step === 'number' && statusData.step > 0) {
-            setMetrics(prev => ({
-              ...prev,
-              step: statusData.step,
-              loss: (statusData.loss !== undefined && statusData.loss !== null) ? statusData.loss : prev.loss,
-              throughput: (statusData.throughput !== undefined && statusData.throughput !== null) ? statusData.throughput : prev.throughput,
-              lr: statusData.current_lr || prev.lr,
-              tokens_trained: statusData.tokens_trained || prev.tokens_trained
-            }));
-            if (statusData.exit_usage) setExitUsage(statusData.exit_usage);
+
+          if (dataHw && dataHw.device_name) {
+            const hwSig = `${dataHw.device_name}|${dataHw.gpu_offload_pct}|${dataHw.total_params}|${dataHw.precision}`;
+            if (hwSig !== lastHwSig) {
+              lastHwSig = hwSig;
+              setHardwareProfile(dataHw);
+            }
           }
-          if (statusData.logs && statusData.logs.length > 0) setTelemetryLogs(statusData.logs);
+          if (dataKern) setKernelTelemetry(dataKern);
+          if (dataOpt) setOptimizerTelemetry(dataOpt);
+
+          if (statusData) {
+            const histLen = Array.isArray(statusData.history) ? statusData.history.length : 0;
+            const logLen = Array.isArray(statusData.logs) ? statusData.logs.length : 0;
+            const statusSig = [
+              Boolean(statusData.is_training),
+              statusData.step || 0,
+              statusData.loss ?? '',
+              statusData.throughput ?? '',
+              statusData.tokens_trained || 0,
+              statusData.active_model || '',
+              Boolean(statusData.weights_loaded),
+              statusData.active_checkpoint || '',
+              statusData.inference_warmup || '',
+              statusData.inference_warmup_error || '',
+              statusData.precision || '',
+              histLen,
+              logLen,
+              statusData.logs?.[0] || '',
+              statusData.dataset?.name || ''
+            ].join('|');
+            if (statusSig !== lastStatusSig) {
+              lastStatusSig = statusSig;
+              setIsTraining(prev => (prev === Boolean(statusData.is_training) ? prev : Boolean(statusData.is_training)));
+              if (statusData.active_model) {
+                setActiveModel(prev => {
+                  const isByok = CLOUD_BYOK_MODEL_IDS.has(prev) || isCloudByokModel(prev, Boolean(statusData.weights_loaded));
+                  return isByok || prev === statusData.active_model ? prev : statusData.active_model;
+                });
+              }
+              setWeightsLoaded(prev => (prev === Boolean(statusData.weights_loaded) ? prev : Boolean(statusData.weights_loaded)));
+              if (statusData.inference_warmup) {
+                setInferenceWarmupStatus(prev => (prev === statusData.inference_warmup ? prev : statusData.inference_warmup));
+              }
+              setInferenceWarmupError(prev => {
+                const nextErr = statusData.inference_warmup_error || '';
+                return prev === nextErr ? prev : nextErr;
+              });
+              if (statusData.precision) {
+                setTrainPrecision(prev => (prev === statusData.precision ? prev : statusData.precision));
+                setPrecision(prev => (prev === statusData.precision ? prev : statusData.precision));
+              }
+              if (statusData.gpu_offload_pct !== undefined) setGpuOffloadPct(statusData.gpu_offload_pct);
+              if (statusData.gpu_layers !== undefined) setGpuLayers(statusData.gpu_layers);
+              if (statusData.warmup_steps !== undefined) setTrainWarmup(statusData.warmup_steps);
+              if (statusData.active_adapter !== undefined) setActiveAdapter(statusData.active_adapter);
+              if (statusData.wandb_url) setWandbUrl(statusData.wandb_url);
+              if (statusData.wandb_active !== undefined) setWandbActive(statusData.wandb_active);
+              if (statusData.dataset) {
+                const arch = statusData.architecture || {};
+                setDatasetInfo(prev => ({
+                  ...prev,
+                  ...statusData.dataset,
+                  num_layers: arch.num_layers || (statusData.dataset && statusData.dataset.num_layers) || prev.num_layers || 8,
+                  hidden_dim: arch.hidden_dim || (statusData.dataset && statusData.dataset.hidden_dim) || prev.hidden_dim || 384,
+                  num_heads: arch.num_heads || (statusData.dataset && statusData.dataset.num_heads) || prev.num_heads || 6,
+                  num_experts: arch.num_experts || (statusData.dataset && statusData.dataset.num_experts) || prev.num_experts || 4
+                }));
+                if (statusData.dataset.name) setActiveDataset(prev => (prev === statusData.dataset.name ? prev : statusData.dataset.name));
+                if (Date.now() - lastManualConfigEditRef.current > 4000) {
+                  if (statusData.dataset.batch_size) setTrainBatchSize(statusData.dataset.batch_size);
+                  if (statusData.dataset.seq_len) setTrainSeqLen(statusData.dataset.seq_len);
+                  if (statusData.dataset.grad_accum_steps) setTrainGradAccum(statusData.dataset.grad_accum_steps);
+                  if (statusData.dataset.depth_mode) setTrainDepthMode(statusData.dataset.depth_mode);
+                  if (statusData.dataset.lr_peak) setTrainLR(String(statusData.dataset.lr_peak));
+                  else if (statusData.lr_peak) setTrainLR(String(statusData.lr_peak));
+                }
+                if (statusData.dataset.active_batch_preview) {
+                  setActiveBatchPreview(statusData.dataset.active_batch_preview);
+                }
+              }
+              setActiveCheckpointName(prev => {
+                const nextName = statusData.active_checkpoint || null;
+                return prev === nextName ? prev : nextName;
+              });
+              if (statusData.history && statusData.history.length > 0) {
+                setMetricsHistory(statusData.history);
+                const latest = statusData.history[statusData.history.length - 1];
+                setMetrics({
+                  ...latest,
+                  loss: (latest.loss !== undefined && latest.loss !== null) ? latest.loss : statusData.loss,
+                  throughput: (latest.throughput !== undefined && latest.throughput !== null) ? latest.throughput : (statusData.throughput || 0),
+                  lr: (typeof latest.lr === 'number' && latest.lr > 0) ? latest.lr : (statusData.current_lr || latest.lr)
+                });
+                if (latest.exit_usage) setExitUsage(latest.exit_usage);
+                else if (statusData.exit_usage) setExitUsage(statusData.exit_usage);
+                if (latest.batch_preview) setActiveBatchPreview(latest.batch_preview);
+              } else if (typeof statusData.step === 'number' && statusData.step > 0) {
+                setMetrics(prev => ({
+                  ...prev,
+                  step: statusData.step,
+                  loss: (statusData.loss !== undefined && statusData.loss !== null) ? statusData.loss : prev.loss,
+                  throughput: (statusData.throughput !== undefined && statusData.throughput !== null) ? statusData.throughput : prev.throughput,
+                  lr: statusData.current_lr || prev.lr,
+                  tokens_trained: statusData.tokens_trained || prev.tokens_trained
+                }));
+                if (statusData.exit_usage) setExitUsage(statusData.exit_usage);
+              }
+              if (statusData.logs && statusData.logs.length > 0) setTelemetryLogs(statusData.logs);
+            }
+          }
         } catch (err) {
           if (!healthCheckSucceeded) {
             backendHealthFailures += 1;
@@ -4851,10 +5212,15 @@
           fetchInFlight = false;
         }
       };
-      fetchSystemInfo();
-      const interval = setInterval(fetchSystemInfo, 3000);
+      fetchSystemInfo(true);
+      const interval = setInterval(() => fetchSystemInfo(false), 5000);
+      const onVisibilityResume = () => {
+        if (!document.hidden) fetchSystemInfo(false);
+      };
+      document.addEventListener('visibilitychange', onVisibilityResume);
       return () => {
         clearInterval(interval);
+        document.removeEventListener('visibilitychange', onVisibilityResume);
         if (wsReconnectTimer) clearTimeout(wsReconnectTimer);
         if (ws) {
           ws.onclose = null; // prevent reconnect on intentional close
@@ -4865,15 +5231,23 @@
 
     // Auto-scroll chat smoothly on new messages or instant-scroll during high-speed token generation
     useEffect(() => {
-      if (activeTab === 'chat' && chatBottomRef.current) {
+      if (activeTab !== 'chat') return undefined;
+      const raf = window.requestAnimationFrame(() => {
         try {
-          if (isGenerating) {
-            chatBottomRef.current.scrollIntoView({ behavior: 'auto', block: 'end' });
-          } else {
-            chatBottomRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
+          const area = chatScrollAreaRef.current;
+          if (area) {
+            area.scrollTop = area.scrollHeight;
+          }
+          if (chatBottomRef.current) {
+            if (isGenerating) {
+              chatBottomRef.current.scrollIntoView({ behavior: 'auto', block: 'end' });
+            } else {
+              chatBottomRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
+            }
           }
         } catch (e) {}
-      }
+      });
+      return () => window.cancelAnimationFrame(raf);
     }, [messages, isGenerating, activeTab]);
 
     // Fetch and synchronize conversation history from disk and localStorage
@@ -5917,59 +6291,69 @@
       checkModuleUpdates();
     }, []);
 
-    // Non-Blocking Active Hardware Telemetry Polling Loop
+    // Non-Blocking Active Hardware Telemetry Polling Loop (WS pushes steps; slow fallback only)
     useEffect(() => {
-      let interval;
-      if (isTraining) {
-        interval = setInterval(async () => {
-          try {
-            const res = await apiFetch('/v1/training/status');
-            const data = await res.json();
-            if (data.active_model) {
-              setActiveModel(data.active_model);
+      if (!isTraining) return undefined;
+      let trainPollInFlight = false;
+      let lastTrainSig = '';
+      const pollMs = wsConnectedRef.current ? 1500 : 600;
+      const interval = setInterval(async () => {
+        if (trainPollInFlight || (typeof document !== 'undefined' && document.hidden)) return;
+        trainPollInFlight = true;
+        try {
+          const res = await apiFetch('/v1/training/status');
+          if (!res.ok) return;
+          const data = await res.json();
+          const sig = `${data.step || 0}|${data.loss ?? ''}|${data.throughput ?? ''}|${(data.logs || []).length}|${(data.history || []).length}`;
+          if (sig === lastTrainSig) return;
+          lastTrainSig = sig;
+          if (data.active_model) {
+            setActiveModel(prev => (prev === data.active_model ? prev : data.active_model));
+          }
+          if (data.dataset) {
+            setDatasetInfo(data.dataset);
+            if (Date.now() - lastManualConfigEditRef.current > 4000) {
+              if (data.dataset.batch_size) setTrainBatchSize(data.dataset.batch_size);
+              if (data.dataset.seq_len) setTrainSeqLen(data.dataset.seq_len);
+              if (data.dataset.grad_accum_steps) setTrainGradAccum(data.dataset.grad_accum_steps);
+              if (data.dataset.depth_mode) setTrainDepthMode(data.dataset.depth_mode);
             }
-            if (data.dataset) {
-              setDatasetInfo(data.dataset);
-              if (Date.now() - lastManualConfigEditRef.current > 4000) {
-                if (data.dataset.batch_size) setTrainBatchSize(data.dataset.batch_size);
-                if (data.dataset.seq_len) setTrainSeqLen(data.dataset.seq_len);
-                if (data.dataset.grad_accum_steps) setTrainGradAccum(data.dataset.grad_accum_steps);
-                if (data.dataset.depth_mode) setTrainDepthMode(data.dataset.depth_mode);
-              }
-              if (data.dataset.active_batch_preview) {
-                setActiveBatchPreview(data.dataset.active_batch_preview);
-              }
+            if (data.dataset.active_batch_preview) {
+              setActiveBatchPreview(data.dataset.active_batch_preview);
             }
-            if (data.active_checkpoint) {
-              setActiveCheckpointName(data.active_checkpoint);
-            }
-            if (data.history && data.history.length > 0) {
-              setMetricsHistory(data.history);
-              const latest = data.history[data.history.length - 1];
-              setMetrics({
-                ...latest,
-                loss: (latest.loss !== undefined && latest.loss !== null) ? latest.loss : data.loss,
-                throughput: (latest.throughput !== undefined && latest.throughput !== null) ? latest.throughput : (data.throughput || 0),
-                lr: (typeof latest.lr === 'number' && latest.lr > 0) ? latest.lr : (data.current_lr || latest.lr)
-              });
-              if (latest.exit_usage) setExitUsage(latest.exit_usage);
-              else if (data.exit_usage) setExitUsage(data.exit_usage);
-              if (latest.batch_preview) setActiveBatchPreview(latest.batch_preview);
-            } else if (typeof data.step === 'number' && data.step > 0) {
-              setMetrics(prev => ({
-                ...prev,
-                step: data.step,
-                loss: (data.loss !== undefined && data.loss !== null) ? data.loss : prev.loss,
-                throughput: (data.throughput !== undefined && data.throughput !== null) ? data.throughput : prev.throughput,
-                tokens_trained: data.tokens_trained || prev.tokens_trained
-              }));
-              if (data.exit_usage) setExitUsage(data.exit_usage);
-            }
-            if (data.logs && data.logs.length > 0) setTelemetryLogs(data.logs);
-            if (data.last_sample) setLastSample(data.last_sample.replace(/Ġ/g, ' ').replace(/\s+/g, ' ').trim());
-          } catch (err) {}
-        }, 300);
-      }
+          }
+          if (data.active_checkpoint) {
+            setActiveCheckpointName(prev => (prev === data.active_checkpoint ? prev : data.active_checkpoint));
+          }
+          if (data.history && data.history.length > 0) {
+            setMetricsHistory(data.history);
+            const latest = data.history[data.history.length - 1];
+            setMetrics({
+              ...latest,
+              loss: (latest.loss !== undefined && latest.loss !== null) ? latest.loss : data.loss,
+              throughput: (latest.throughput !== undefined && latest.throughput !== null) ? latest.throughput : (data.throughput || 0),
+              lr: (typeof latest.lr === 'number' && latest.lr > 0) ? latest.lr : (data.current_lr || latest.lr)
+            });
+            if (latest.exit_usage) setExitUsage(latest.exit_usage);
+            else if (data.exit_usage) setExitUsage(data.exit_usage);
+            if (latest.batch_preview) setActiveBatchPreview(latest.batch_preview);
+          } else if (typeof data.step === 'number' && data.step > 0) {
+            setMetrics(prev => ({
+              ...prev,
+              step: data.step,
+              loss: (data.loss !== undefined && data.loss !== null) ? data.loss : prev.loss,
+              throughput: (data.throughput !== undefined && data.throughput !== null) ? data.throughput : prev.throughput,
+              tokens_trained: data.tokens_trained || prev.tokens_trained
+            }));
+            if (data.exit_usage) setExitUsage(data.exit_usage);
+          }
+          if (data.logs && data.logs.length > 0) setTelemetryLogs(data.logs);
+          if (data.last_sample) setLastSample(data.last_sample.replace(/Ġ/g, ' ').replace(/\s+/g, ' ').trim());
+        } catch (err) {
+        } finally {
+          trainPollInFlight = false;
+        }
+      }, pollMs);
       return () => clearInterval(interval);
     }, [isTraining]);
 
@@ -7250,8 +7634,9 @@
 
     const handleCreateVisualFrame = (titleText) => {
       const selNode = nodes.find(n => n.id === selectedNodeId);
-      const fx = selNode ? (selNode.x - 20) : ((canvasMousePos && canvasMousePos.x) || 100);
-      const fy = selNode ? (selNode.y - 36) : ((canvasMousePos && canvasMousePos.y) || 100);
+      const curMouse = canvasMousePosRef.current || {};
+      const fx = selNode ? (selNode.x - 20) : (curMouse.x || 100);
+      const fy = selNode ? (selNode.y - 36) : (curMouse.y || 100);
       const fw = selNode ? (NODE_WIDTH + 40) : 340;
       const fh = selNode ? 340 : 260;
       const defaultTitle = selNode ? `Frame: ${selNode.title}` : 'Visual Node Frame';
@@ -8021,32 +8406,43 @@
       const node = nodes.find(n => n.id === nodeId);
       if (node && gridRef.current) {
         const rect = gridRef.current.getBoundingClientRect();
+        gridRectRef.current = rect;
         const screenX = ev.clientX - rect.left;
         const screenY = ev.clientY - rect.top;
-        const canvasX = (screenX - canvasPan.x) / canvasZoom;
-        const canvasY = (screenY - canvasPan.y) / canvasZoom;
+        const canvasX = (screenX - canvasPanRef.current.x) / canvasZoomRef.current;
+        const canvasY = (screenY - canvasPanRef.current.y) / canvasZoomRef.current;
         setDragOffset({ x: canvasX - node.x, y: canvasY - node.y });
       }
     };
 
     const handleCanvasMouseDown = (ev) => {
       if (ev.target === gridRef.current || (ev.target.tagName && ev.target.tagName.toLowerCase() === 'svg') || ev.target.classList.contains('node-canvas-viewport')) {
+        if (gridRef.current) gridRectRef.current = gridRef.current.getBoundingClientRect();
         setIsPanning(true);
-        setPanStart({ x: ev.clientX - canvasPan.x, y: ev.clientY - canvasPan.y });
+        setPanStart({ x: ev.clientX - canvasPanRef.current.x, y: ev.clientY - canvasPanRef.current.y });
         setSelectedNodeId(null);
         setSelectedNodeIds([]);
       }
     };
 
-    const handleCanvasMouseMove = (ev) => {
-      if (!gridRef.current) return;
-      const rect = gridRef.current.getBoundingClientRect();
+    const pendingMoveEventRef = useRef(null);
+    const flushCanvasMouseMove = () => {
+      canvasMoveRafRef.current = null;
+      const ev = pendingMoveEventRef.current;
+      if (!ev || !gridRef.current) return;
+      const rect = gridRectRef.current || gridRef.current.getBoundingClientRect();
+      gridRectRef.current = rect;
+      const curPan = canvasPanRef.current;
+      const curZoom = canvasZoomRef.current;
       const screenX = ev.clientX - rect.left;
       const screenY = ev.clientY - rect.top;
-      const canvasX = (screenX - canvasPan.x) / canvasZoom;
-      const canvasY = (screenY - canvasPan.y) / canvasZoom;
-      setCanvasMousePos({ x: canvasX, y: canvasY, screenX, screenY });
-      setMousePos({ x: canvasX, y: canvasY });
+      const canvasX = (screenX - curPan.x) / curZoom;
+      const canvasY = (screenY - curPan.y) / curZoom;
+      canvasMousePosRef.current = { x: canvasX, y: canvasY, screenX, screenY };
+
+      if (connectingWire) {
+        setCanvasMousePos({ x: canvasX, y: canvasY, screenX, screenY });
+      }
 
       if (isPanning) {
         setCanvasPan({
@@ -8057,25 +8453,49 @@
       }
 
       if (draggingNodeId) {
-        setNodes(prev => prev.map(n => {
-          if (n.id === draggingNodeId) {
-            return {
-              ...n,
-              x: Math.round(canvasX - dragOffset.x),
-              y: Math.round(canvasY - dragOffset.y)
-            };
-          }
-          return n;
-        }));
+        const nx = Math.round(canvasX - dragOffset.x);
+        const ny = Math.round(canvasY - dragOffset.y);
+        setNodes(prev => prev.map(n => (n.id === draggingNodeId ? { ...n, x: nx, y: ny } : n)));
+      }
+    };
+
+    const handleCanvasMouseMove = (ev) => {
+      if (!gridRef.current) return;
+      if (!isPanning && !draggingNodeId && !connectingWire) {
+        const rect = gridRectRef.current || gridRef.current.getBoundingClientRect();
+        const curPan = canvasPanRef.current;
+        const curZoom = canvasZoomRef.current;
+        const screenX = ev.clientX - rect.left;
+        const screenY = ev.clientY - rect.top;
+        canvasMousePosRef.current = {
+          x: (screenX - curPan.x) / curZoom,
+          y: (screenY - curPan.y) / curZoom,
+          screenX,
+          screenY
+        };
+        return;
+      }
+      pendingMoveEventRef.current = { clientX: ev.clientX, clientY: ev.clientY };
+      if (!canvasMoveRafRef.current) {
+        canvasMoveRafRef.current = requestAnimationFrame(flushCanvasMouseMove);
       }
     };
 
     const handleCanvasMouseUp = () => {
+      if (canvasMoveRafRef.current) {
+        cancelAnimationFrame(canvasMoveRafRef.current);
+        canvasMoveRafRef.current = null;
+      }
       setIsPanning(false);
       setDraggingNodeId(null);
       setConnectingWire(null);
       setConnectingFromId(null);
     };
+
+    const handleCanvasMoveLatestRef = useRef(null);
+    handleCanvasMoveLatestRef.current = handleCanvasMouseMove;
+    const handleCanvasUpLatestRef = useRef(null);
+    handleCanvasUpLatestRef.current = handleCanvasMouseUp;
 
     // Non-passive wheel handler attached directly to canvas DOM element to strictly
     // prevent browser window zoom while zooming canvas nodes smoothly
@@ -8090,6 +8510,7 @@
           const newZoom = Math.min(Math.max(prevZoom * zoomFactor, 0.25), 2.5);
           if (gridRef.current) {
             const rect = gridRef.current.getBoundingClientRect();
+            gridRectRef.current = rect;
             const mouseScreenX = ev.clientX - rect.left;
             const mouseScreenY = ev.clientY - rect.top;
             setCanvasPan(prevPan => ({
@@ -8107,10 +8528,12 @@
     // Keep drags and wires alive when the pointer leaves the canvas, and make
     // the same gestures work with touch and pen input.
     useEffect(() => {
-      const isCanvasInteraction = () => draggingNodeId || isPanning || connectingWire;
       const onPointerMove = (ev) => {
         if (!gridRef.current || activeTab !== 'nodegraph') return;
-        if (gridRef.current.contains(ev.target) || isCanvasInteraction()) handleCanvasMouseMove(ev);
+        const interacting = draggingNodeId || isPanning || connectingWire;
+        if (interacting || gridRef.current.contains(ev.target)) {
+          if (handleCanvasMoveLatestRef.current) handleCanvasMoveLatestRef.current(ev);
+        }
       };
       const onPointerUp = (ev) => {
         if (connectingWire) {
@@ -8125,7 +8548,7 @@
             setConnectingFromId(null);
           }
         }
-        if (draggingNodeId || isPanning) handleCanvasMouseUp();
+        if ((draggingNodeId || isPanning) && handleCanvasUpLatestRef.current) handleCanvasUpLatestRef.current();
       };
       window.addEventListener('pointermove', onPointerMove);
       window.addEventListener('pointerup', onPointerUp);
@@ -8135,15 +8558,24 @@
         window.removeEventListener('pointerup', onPointerUp);
         window.removeEventListener('pointercancel', onPointerUp);
       };
-    }, [activeTab, draggingNodeId, isPanning, connectingWire, canvasPan, panStart, dragOffset]);
+    }, [activeTab, draggingNodeId, isPanning, Boolean(connectingWire)]);
 
     const handleStartWire = (ev, nodeId, portName, portType, portIndex) => {
       ev.stopPropagation();
       ev.preventDefault();
       const pinRect = ev.currentTarget.getBoundingClientRect();
       const gridRect = gridRef.current ? gridRef.current.getBoundingClientRect() : { left: 0, top: 0 };
+      gridRectRef.current = gridRect;
       const startX = (pinRect.left + pinRect.width / 2 - gridRect.left - canvasPan.x) / canvasZoom;
       const startY = (pinRect.top + pinRect.height / 2 - gridRect.top - canvasPan.y) / canvasZoom;
+      const initPos = {
+        x: startX,
+        y: startY,
+        screenX: ev.clientX - gridRect.left,
+        screenY: ev.clientY - gridRect.top
+      };
+      canvasMousePosRef.current = initPos;
+      setCanvasMousePos(initPos);
       setConnectingWire({
         source: nodeId,
         source_port: portName,
@@ -8549,7 +8981,7 @@
     };
 
     const handleSendMessage = async (overridePrompt = null) => {
-      const userText = (overridePrompt !== null ? overridePrompt : chatInput).trim();
+      const userText = (overridePrompt !== null ? overridePrompt : chatInputRef.current).trim();
       if (!userText || isGenerating) return;
 
       if (overridePrompt === null) {
@@ -8557,7 +8989,7 @@
           ...prev,
           { sender: 'User', text: userText, time: new Date().toLocaleTimeString(), isAssistant: false }
         ]);
-        setChatInput('');
+        chatInputRef.current = '';
       }
       setIsGenerating(true);
 
@@ -8604,7 +9036,7 @@
             throw new Error(rawText.trim() || `Request failed (${response.status})`);
           }
           streamedMessageId = `triune-stream-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-          const streamingSender = activeModel.includes('gpt') || activeModel.includes('claude') || activeModel.includes('gemini')
+          const streamingSender = isCloudByokModel(activeModel, weightsLoaded)
             ? activeModel.toUpperCase() : 'Triune MoE Engine';
           setMessages(prev => [...prev, {
             id: streamedMessageId,
@@ -8708,7 +9140,7 @@
           const detail = typeof data.detail === 'string' ? data.detail : (data.message || `Request failed (${response.status})`);
           throw new Error(detail);
         }
-        const isExternal = activeModel.includes('gpt') || activeModel.includes('claude') || activeModel.includes('gemini');
+        const isExternal = isCloudByokModel(activeModel, weightsLoaded);
         const rawReply = data.choices
           ? data.choices[0].message.content
           : (data.error ? `[API Key Notice]: ${data.error}` : 'Engine processing completed.');
@@ -9846,6 +10278,10 @@
                         return;
                       }
                       const found = (savedModels || []).find(m => m.id === val);
+                      if (found && found.kind === 'ollama' && found.ollama_running) {
+                        handleLoadSavedModel(val, {});
+                        return;
+                      }
                       if (found && (found.can_load_direct === false || found.has_weights === false || ['ollama', 'gguf'].includes(found.kind) || ['ollama', 'gguf'].includes(found.source))) {
                         setUpgradeModelName(val);
                         setActiveTab('models');
@@ -9854,7 +10290,7 @@
                         return;
                       }
                       handleLoadSavedModel(val, {
-                        nvfp4: Boolean(found && (found.kind === 'nvfp4_cache' || found.kind === 'hf_cache' || found.source === 'vllm' || found.source === 'hermes')),
+                        nvfp4: Boolean(found && found.kind === 'nvfp4_cache'),
                         diskStream: Boolean(found && found.kind === 'nvfp4_cache')
                       });
                     },
@@ -9882,8 +10318,8 @@
                     localLoadable.length > 0 && e('optgroup', { label: 'Saved Models (HF / vLLM / Hermes / NVFP4 / Ckpt)', style: { background: 'var(--bg-card)', color: 'var(--text-main)' } },
                       localLoadable.map(m => e('option', { key: `hdr:${m.id}`, value: m.id, style: { background: 'var(--bg-card)', color: 'var(--text-main)' } }, m.description || m.name || m.id))
                     ),
-                    ollamaAndGguf.length > 0 && e('optgroup', { label: 'Ollama & GGUF (Transmute)', style: { background: 'var(--bg-card)', color: 'var(--text-main)' } },
-                      ollamaAndGguf.map(m => e('option', { key: `hdr-ol:${m.id}`, value: m.id, style: { background: 'var(--bg-card)', color: 'var(--text-main)' } }, m.description || m.name || m.id))
+                    ollamaAndGguf.length > 0 && e('optgroup', { label: 'Ollama & GGUF (Live / Transmute)', style: { background: 'var(--bg-card)', color: 'var(--text-main)' } },
+                      ollamaAndGguf.map(m => e('option', { key: `hdr-ol:${m.id}`, value: m.id, style: { background: 'var(--bg-card)', color: 'var(--text-main)' } }, `${m.description || m.name || m.id}${m.ollama_running ? ' · Live' : ''}`))
                     ),
                     e('optgroup', { label: 'BYOK Cloud APIs', style: { background: 'var(--bg-card)', color: 'var(--text-main)' } },
                       e('option', { value: 'gpt-4o-mini', style: { background: 'var(--bg-card)', color: 'var(--text-main)' } }, 'GPT-4o Mini (BYOK)'),
@@ -10308,37 +10744,48 @@
                         onPointerUp: dockMode === 'float' ? handleFloatHeaderPointerUp : undefined,
                         style: dockMode === 'float' ? { cursor: isDraggingConsoleWindow ? 'grabbing' : 'grab' } : undefined
                       },
-                        e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
-                          dockMode === 'float' && e('span', { className: 'neural-drag-indicator', title: 'Drag titlebar to move floating window' }, renderIcon('grip', 13, { color: 'var(--primary)' })),
-                          e('div', { style: { display: 'flex', alignItems: 'center', gap: '6px' } },
-                            renderIcon('bolt', 13, { color: 'var(--primary)' }),
-                e('span', { style: { fontWeight: 700, fontFamily: 'var(--font-mono)', fontSize: '11px', letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--text-main)' } }, 'Neural Intelligence Console')
+                        e('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: '8px' } },
+                          e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', flex: 1, minWidth: 0 } },
+                            dockMode === 'float' && e('span', { className: 'neural-drag-indicator', title: 'Drag titlebar to move floating window' }, renderIcon('grip', 13, { color: 'var(--primary)' })),
+                            e('div', { style: { display: 'flex', alignItems: 'center', gap: '6px' } },
+                              renderIcon('bolt', 13, { color: 'var(--primary)' }),
+                              e('span', { style: { fontWeight: 700, fontFamily: 'var(--font-mono)', fontSize: '11px', letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--text-main)' } }, 'Neural Intelligence Console')
+                            ),
+                            e('div', { className: 'neural-console-tabs' },
+                              e('button', {
+                                className: `neural-console-tab-btn ${neuralConsoleView === '3d' ? 'active' : ''}`,
+                                onClick: () => {
+                                  setNeuralConsoleView('3d');
+                                  try { window.localStorage.setItem('triune.playground.neuralConsoleView', '3d'); } catch (_) {}
+                                }
+                              }, [renderIcon('bolt', 11), '3D Synapses']),
+                              e('button', {
+                                className: `neural-console-tab-btn ${neuralConsoleView === 'transmute' ? 'active' : ''}`,
+                                onClick: () => {
+                                  setNeuralConsoleView('transmute');
+                                  try { window.localStorage.setItem('triune.playground.neuralConsoleView', 'transmute'); } catch (_) {}
+                                }
+                              }, [renderIcon('branch', 11), 'Architecture Transmutation']),
+                              e('button', {
+                                className: `neural-console-tab-btn ${neuralConsoleView === 'split' ? 'active' : ''}`,
+                                onClick: () => {
+                                  setNeuralConsoleView('split');
+                                  try { window.localStorage.setItem('triune.playground.neuralConsoleView', 'split'); } catch (_) {}
+                                }
+                              }, [renderIcon('columns', 11), 'Split View'])
+                            )
                           ),
-                          e('div', { className: 'neural-console-tabs' },
-                            e('button', {
-                              className: `neural-console-tab-btn ${neuralConsoleView === '3d' ? 'active' : ''}`,
-                              onClick: () => {
-                                setNeuralConsoleView('3d');
-                                try { window.localStorage.setItem('triune.playground.neuralConsoleView', '3d'); } catch (_) {}
-                              }
-                            }, [renderIcon('bolt', 11), '3D Synapses']),
-                            e('button', {
-                              className: `neural-console-tab-btn ${neuralConsoleView === 'transmute' ? 'active' : ''}`,
-                              onClick: () => {
-                                setNeuralConsoleView('transmute');
-                                try { window.localStorage.setItem('triune.playground.neuralConsoleView', 'transmute'); } catch (_) {}
-                              }
-                            }, [renderIcon('branch', 11), 'Architecture Transmutation']),
-                            e('button', {
-                              className: `neural-console-tab-btn ${neuralConsoleView === 'split' ? 'active' : ''}`,
-                              onClick: () => {
-                                setNeuralConsoleView('split');
-                                try { window.localStorage.setItem('triune.playground.neuralConsoleView', 'split'); } catch (_) {}
-                              }
-                            }, [renderIcon('columns', 11), 'Split View'])
-                          )
+                          e('button', {
+                            className: 'neural-console-close-btn',
+                            style: { padding: '2px 6px', fontSize: '11px', minWidth: 'auto', flexShrink: 0, border: '1px solid rgba(255, 255, 255, 0.08)', background: 'transparent', color: 'var(--text-muted)' },
+                            onClick: () => {
+                              setShowNeuralConsole(false);
+                              try { window.localStorage.setItem('triune.playground.neuralConsoleOpen', 'false'); } catch (_) {}
+                            },
+                            title: 'Collapse Neural Console'
+                          }, [renderIcon('close', 11)])
                         ),
-                        e('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' } },
+                        e('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', width: '100%' } },
                           // Dock Mode Switcher
                           e('div', { className: 'neural-dock-control-group' },
                             e('button', {
@@ -10387,16 +10834,7 @@
                           e('span', {
                             className: 'pill',
                             style: { fontSize: '10px', padding: '1px 6px' }
-                          }, neuronScopeData?.graphics_interop || 'Canvas renderer · frame rate measured below'),
-                          e('button', {
-                            className: 'neural-console-close-btn',
-                            style: { padding: '2px 6px', fontSize: '11px', minWidth: 'auto', border: '1px solid rgba(255, 255, 255, 0.08)', background: 'transparent', color: 'var(--text-muted)' },
-                            onClick: () => {
-                              setShowNeuralConsole(false);
-                              try { window.localStorage.setItem('triune.playground.neuralConsoleOpen', 'false'); } catch (_) {}
-                            },
-                            title: 'Collapse Neural Console'
-                          }, [renderIcon('close', 11)])
+                          }, neuronScopeData?.graphics_interop || 'Canvas renderer · frame rate measured below')
                         )
                       ),
 
@@ -10456,7 +10894,7 @@
                     style: { display: 'flex', flexDirection: 'column', flex: 1, minWidth: '320px', minHeight: 0, overflow: 'hidden' }
                   },
                     lineageBanner,
-                    e('div', { className: 'chat-scroll-area' },
+                    e('div', { className: 'chat-scroll-area', ref: chatScrollAreaRef },
                       messages.map((m, idx) => {
                         const isLastAssistant = m.isAssistant && idx === messages.length - 1;
                         const isThoughtExpanded = expandedThoughts[m.id || idx] !== undefined
@@ -10486,7 +10924,7 @@
                           e('span', { className: 'generating-dot' })
                         ),
                         e('span', { className: 'generating-hint' },
-                          activeModel.startsWith('triune')
+                          !isCloudByokModel(activeModel, weightsLoaded)
                             ? (inferenceWarmupStatus === 'running'
                                 ? 'Initializing local Triune PyTorch engine and running warmup forward pass…'
                                 : (inferenceWarmupStatus === 'ready'
@@ -10499,121 +10937,29 @@
                       ),
                       e('div', { ref: chatBottomRef })
                     ),
-                    e('div', { className: 'chat-input-container' },
-                      e('div', { className: 'chat-input-area-wrap' },
-                        e('textarea', {
-                          className: 'chat-input-textarea',
-                          placeholder: isGenerating ? 'Generating response…' : 'Ask a research question or enter prompt… (Enter to send, Shift+Enter for newline)',
-                          value: chatInput,
-                          disabled: isGenerating,
-                          rows: 2,
-                          onChange: ev => setChatInput(ev.target.value),
-                          onKeyDown: ev => { if (ev.key === 'Enter' && !ev.shiftKey && !isGenerating) { ev.preventDefault(); handleSendMessage(); } }
-                        })
-                      ),
-                      e('div', { className: 'chat-input-actions-bar' },
-                        e('div', { className: 'chat-input-meta-left' },
-                          activeModel.startsWith('triune') ? e('div', { className: 'chat-input-meta-group' },
-                            e('div', { className: 'chat-control-pill', title: 'Dynamic Exit Route' },
-                              renderIcon('branch', 12, { marginRight: '4px' }),
-                              e('select', {
-                                value: route,
-                                onChange: ev => setRoute(ev.target.value),
-                                className: 'chat-meta-select'
-                              },
-                                e('option', { value: 'auto' }, 'Auto Exit'),
-                                e('option', { value: 'reflex' }, 'Reflex (Shallow)'),
-                                e('option', { value: 'limbic' }, 'Limbic (Mid)'),
-                                e('option', { value: 'cortex' }, 'Cortex (Deep)')
-                              )
-                            ),
-                            e('span', {
-                              className: `pill ${weightsLoaded ? 'online' : 'warning'}`,
-                              style: { fontSize: '10.5px', padding: '2px 7px' },
-                              title: weightsLoaded ? `Trained weights: ${activeCheckpointName || 'loaded'}` : 'No checkpoint weights loaded'
-                            }, weightsLoaded ? (activeCheckpointName ? activeCheckpointName.replace('.pt', '') : 'Weights Loaded') : 'Untrained'),
-                            !systemDiagnostics.cuda_available && e('span', {
-                              className: 'pill warning',
-                              style: { fontSize: '10px', padding: '2px 6px' }
-                            }, 'CPU')
-                          ) : e('span', {
-                            className: 'pill',
-                            style: { fontSize: '10.5px', background: 'rgba(217, 119, 6, 0.15)', color: 'var(--accent-bronze, #d97706)' }
-                          }, activeModel.toUpperCase()),
-                          activeAdapter && e('span', {
-                            className: 'pill online',
-                            style: { fontSize: '10.5px' },
-                            title: `LoRA: ${activeAdapter.name}`
-                          }, [renderIcon('finetune', 11, { marginRight: '3px' }), activeAdapter.name]),
-                          e('div', { className: 'chat-param-control', title: 'Sampling Temperature (0.00 - 2.00)' },
-                            e('span', { className: 'chat-param-label' }, 'Temp:'),
-                            e('input', {
-                              type: 'range',
-                              min: 0,
-                              max: 2.0,
-                              step: 0.05,
-                              value: temperature,
-                              onChange: ev => setTemperature(parseFloat(ev.target.value)),
-                              className: 'chat-param-slider'
-                            }),
-                            e('input', {
-                              type: 'number',
-                              min: 0,
-                              max: 2.0,
-                              step: 0.05,
-                              value: temperature,
-                              onChange: ev => {
-                                const v = parseFloat(ev.target.value);
-                                if (!isNaN(v)) setTemperature(Math.max(0, Math.min(2.0, v)));
-                              },
-                              className: 'chat-param-number'
-                            })
-                          ),
-                          e('div', { className: 'chat-param-control', title: 'Max Generation Tokens (1 - 8192)' },
-                            e('span', { className: 'chat-param-label' }, 'Tokens:'),
-                            e('input', {
-                              type: 'range',
-                              min: 32,
-                              max: 8192,
-                              step: 32,
-                              value: maxTokens,
-                              onChange: ev => setMaxTokens(parseInt(ev.target.value, 10)),
-                              className: 'chat-param-slider'
-                            }),
-                            e('input', {
-                              type: 'number',
-                              min: 1,
-                              max: 8192,
-                              step: 32,
-                              value: maxTokens,
-                              onChange: ev => {
-                                const v = parseInt(ev.target.value, 10);
-                                if (!isNaN(v)) setMaxTokens(Math.max(1, Math.min(8192, v)));
-                              },
-                              className: 'chat-param-number chat-param-number-wide'
-                            })
-                          )
-                        ),
-                        e('div', { className: 'chat-input-buttons-right' },
-                          !isGenerating && messages.some(m => !m.isAssistant && m.sender !== 'System') && e('button', {
-                            className: 'btn-input-retry',
-                            title: 'Regenerate last response',
-                            onClick: handleRegenerateLast
-                          }, [renderIcon('refresh', 12, { marginRight: '4px' }), 'Retry']),
-                          isGenerating ? e('button', {
-                            className: 'btn-input-stop',
-                            onClick: handleStopGeneration
-                          }, [renderIcon('pause', 12, { marginRight: '4px' }), 'Stop']) : e('button', {
-                            className: 'btn-input-send',
-                            disabled: !chatInput.trim(),
-                            style: !chatInput.trim() ? { opacity: 0.45, cursor: 'not-allowed' } : {},
-                            onClick: () => {
-                              handleSendMessage();
-                            }
-                          }, [renderIcon('arrowRight', 12, { marginRight: '5px' }), 'Send', e('kbd', { className: 'kbd-hint' }, '↵')])
-                        )
-                      )
-                    )
+                    e(ChatComposer, {
+                      chatInputRef,
+                      onSubmitPrompt: (text) => {
+                        chatInputRef.current = text;
+                        handleSendMessage(null);
+                      },
+                      isGenerating,
+                      activeModel,
+                      isLocalModel: !isCloudByokModel(activeModel, weightsLoaded),
+                      route,
+                      setRoute,
+                      weightsLoaded,
+                      activeCheckpointName,
+                      cudaAvailable: Boolean(systemDiagnostics.cuda_available),
+                      activeAdapter,
+                      temperature,
+                      setTemperature,
+                      maxTokens,
+                      setMaxTokens,
+                      hasRetryableMessage: messages.some(m => !m.isAssistant && m.sender !== 'System'),
+                      onRegenerateLast: handleRegenerateLast,
+                      onStopGeneration: handleStopGeneration
+                    })
                   );
 
                   if (neuralConsoleDock === 'dock-right') {
@@ -11583,7 +11929,7 @@
                             stroke: wireColor,
                             strokeWidth: 2.6,
                             fill: 'none',
-                            style: { pointerEvents: 'none', filter: 'drop-shadow(0 1px 2px rgba(60, 45, 30, 0.25))' }
+                            style: { pointerEvents: 'none' }
                           })
                         );
                       }),
@@ -11601,8 +11947,7 @@
                           stroke: wireColor,
                           strokeWidth: 2.6,
                           strokeDasharray: '6 4',
-                          fill: 'none',
-                          style: { filter: 'drop-shadow(0 1px 3px rgba(60, 45, 30, 0.3))' }
+                          fill: 'none'
                         });
                       })()
                     );
@@ -12713,10 +13058,21 @@
                           const isHfOrCustom = !selectedSavedObj || ['hf_local', 'hf_cache', 'vllm', 'hermes'].includes(selectedSavedObj.kind) || ['huggingface', 'vllm', 'hermes'].includes(selectedSavedObj.source);
                           if (isGgufOrOllama) {
                             return [
+                              selectedSavedObj && selectedSavedObj.ollama_running && e('button', {
+                                key: 'run-ollama-live',
+                                type: 'button',
+                                className: 'btn-sec',
+                                style: { padding: '3px 8px', fontSize: '11px', color: 'var(--accent-sage)', fontWeight: 600 },
+                                disabled: isLoadingSavedModel,
+                                title: 'Connect directly to local Ollama daemon for real inference',
+                                onClick: () => handleLoadSavedModel(targetId, {})
+                              }, 'Run Ollama Live'),
                               e('span', {
                                 key: 'gguf-note',
                                 style: { fontSize: '11px', color: 'var(--text-muted)', fontStyle: 'italic' }
-                              }, 'Ollama/GGUF binary detected — click 1-Click Transmute or Transmute & Run above.')
+                              }, selectedSavedObj && selectedSavedObj.ollama_running
+                                ? 'Live in local Ollama — run directly or build a fresh Triune skeleton.'
+                                : 'Ollama/GGUF binary detected — click 1-Click Transmute or Transmute & Run below.')
                             ];
                           }
                           return [
@@ -12791,10 +13147,20 @@
                         style: { background: 'var(--accent-olive)', color: '#fff' },
                         onClick: () => handleUpgradeModel(upgradeModelName, true),
                         disabled: isUpgradingModel,
-                        title: 'Transmute layers and activate as active model in engine'
+                        title: 'Transmute layers and activate fresh Triune skeleton in engine'
                       }, [
                         renderIcon('bolt', 13, { marginRight: '4px' }),
                         isUpgradingModel ? 'Transmuting & Activating…' : 'Transmute & Run'
+                      ]),
+                      e('button', {
+                        className: 'btn-transmute-action',
+                        style: { background: 'var(--primary)', color: 'var(--primary-contrast, #ffffff)' },
+                        onClick: () => handleUpgradeModel(upgradeModelName, true, { transferWeights: true, transferMode: 'early_exit' }),
+                        disabled: isUpgradingModel,
+                        title: 'Load real Hugging Face / SafeTensors weights + attach 3-tier Reflex/Limbic/Cortex early-exit routers'
+                      }, [
+                        renderIcon('bolt', 13, { marginRight: '4px' }),
+                        isUpgradingModel ? 'Transferring Weights…' : 'Transfer Weights & Run'
                       ])
                     )
                   )
@@ -14298,6 +14664,17 @@
                         e('div', { style: { fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', marginTop: '3px', wordBreak: 'break-all' } }, m.path || m.id)
                       ),
                       e('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' } },
+                        m.ollama_running && e('button', {
+                          type: 'button',
+                          className: 'btn-sec',
+                          disabled: isLoadingSavedModel,
+                          style: { padding: '4px 10px', fontSize: '11.5px', color: 'var(--accent-sage)', fontWeight: 600 },
+                          title: 'Stream directly from live local Ollama runtime',
+                          onClick: () => {
+                            setShowModelScannerModal(false);
+                            handleLoadSavedModel(m.id, {});
+                          }
+                        }, 'Run Ollama'),
                         canLoad && e('button', {
                           type: 'button',
                           className: 'btn-sec',
@@ -14306,7 +14683,7 @@
                           onClick: () => {
                             setShowModelScannerModal(false);
                             handleLoadSavedModel(m.id, {
-                              nvfp4: ['nvfp4_cache', 'hf_cache'].includes(m.kind) || ['vllm', 'hermes'].includes(m.source),
+                              nvfp4: m.kind === 'nvfp4_cache',
                               diskStream: m.kind === 'nvfp4_cache'
                             });
                           }
@@ -14321,6 +14698,19 @@
                             handleLoadSavedModel(m.id, { nvfp4: true, diskStream: true });
                           }
                         }, 'Stream NVFP4'),
+                        canLoad && ['hf_local', 'hf_cache', 'huggingface', 'vllm', 'hermes'].includes(m.kind) && e('button', {
+                          type: 'button',
+                          className: 'btn-transmute-action',
+                          disabled: isUpgradingModel,
+                          style: { padding: '4px 10px', fontSize: '11.5px', background: 'var(--primary)', color: 'var(--primary-contrast, #ffffff)' },
+                          title: 'Load real weights with Triune 3-tier Reflex/Limbic/Cortex early-exit heads',
+                          onClick: () => {
+                            setUpgradeModelName(m.id);
+                            setShowModelScannerModal(false);
+                            setActiveTab('models');
+                            handleUpgradeModel(m.id, true, { transferWeights: true, transferMode: 'early_exit' });
+                          }
+                        }, [renderIcon('bolt', 11, { marginRight: '4px' }), 'Transfer Weights & Run']),
                         e('button', {
                           type: 'button',
                           className: 'btn-transmute-action',

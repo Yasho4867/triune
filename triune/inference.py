@@ -280,14 +280,88 @@ class IncrementalStreamingDecoder:
         return self.cumulative_text, ""
 
 
+def _extract_exit_hidden(acts: dict, key_name: str, layer_idx: int | None):
+    """Fetch captured intermediate hidden states by symbolic tier name or layer index."""
+    if not acts:
+        return None
+    if key_name in acts and acts[key_name] is not None:
+        return acts[key_name]
+    if layer_idx is not None and layer_idx in acts and acts[layer_idx] is not None:
+        return acts[layer_idx]
+    return None
+
+
+def _compute_tier_logits(head: torch.nn.Module, hidden: torch.Tensor) -> torch.Tensor:
+    """Run an exit projection head cleanly with dtype/device alignment."""
+    ref_param = next(head.parameters(), None)
+    if ref_param is not None:
+        hidden = hidden.to(device=ref_param.device, dtype=ref_param.dtype)
+    return head(hidden)
+
+
+def _confidence_margin(logits: torch.Tensor) -> float:
+    """Compute last-token top-1 vs top-2 probability margin for early-exit gating."""
+    last = logits[:, -1, :].float()
+    probs = torch.softmax(last, dim=-1)
+    top2 = torch.topk(probs, k=min(2, probs.size(-1)), dim=-1).values
+    if top2.size(-1) < 2:
+        return float(top2[0, 0].item())
+    return float((top2[0, 0] - top2[0, 1]).item())
+
+
 def _forward_generation_step(model, ids_step: torch.Tensor, cache, force_depth: int | None):
     """Execute one generation step transparently across TriuneTransformer and HF CausalLM models."""
     if hasattr(model, "init_cache") or getattr(model, "_is_triune", False):
         return model(ids_step, cache=cache, force_depth=force_depth)
+
+    exit_mgr = getattr(model, "_exit_manager", None)
+    acts = getattr(exit_mgr, "intermediate_activations", None) if exit_mgr is not None else None
+    if isinstance(acts, dict):
+        acts.clear()
+
     out = model(input_ids=ids_step, past_key_values=cache, use_cache=True)
-    logits = out.logits if hasattr(out, "logits") else out[0]
+    cortex_logits = out.logits if hasattr(out, "logits") else out[0]
     next_cache = getattr(out, "past_key_values", None)
-    return logits, next_cache
+
+    if exit_mgr is not None and getattr(model, "_is_triune_transmuted", False) and isinstance(acts, dict):
+        try:
+            r_idx = getattr(model, "reflex_layer_idx", getattr(model, "reflex_exit_layer", None))
+            l_idx = getattr(model, "limbic_layer_idx", getattr(model, "limbic_exit_layer", None))
+            h_reflex = _extract_exit_hidden(acts, "reflex", r_idx)
+            h_limbic = _extract_exit_hidden(acts, "limbic", l_idx)
+            reflex_head = getattr(model, "reflex_head", None)
+            limbic_head = getattr(model, "limbic_head", None)
+
+            selected_logits = cortex_logits
+            chosen_depth = 2
+
+            if force_depth == 0 and h_reflex is not None and reflex_head is not None:
+                selected_logits = _compute_tier_logits(reflex_head, h_reflex)
+                chosen_depth = 0
+            elif force_depth == 1 and h_limbic is not None and limbic_head is not None:
+                selected_logits = _compute_tier_logits(limbic_head, h_limbic)
+                chosen_depth = 1
+            elif force_depth is None:
+                settled = False
+                if h_reflex is not None and reflex_head is not None:
+                    r_logits = _compute_tier_logits(reflex_head, h_reflex)
+                    if _confidence_margin(r_logits) >= 0.85:
+                        selected_logits = r_logits
+                        chosen_depth = 0
+                        settled = True
+                if not settled and h_limbic is not None and limbic_head is not None:
+                    l_logits = _compute_tier_logits(limbic_head, h_limbic)
+                    if _confidence_margin(l_logits) >= 0.78:
+                        selected_logits = l_logits
+                        chosen_depth = 1
+
+            model.last_depth_choice = torch.tensor([chosen_depth], device=cortex_logits.device, dtype=torch.long)
+            selected_logits = selected_logits.to(dtype=cortex_logits.dtype)
+            return selected_logits, next_cache
+        finally:
+            acts.clear()
+
+    return cortex_logits, next_cache
 
 
 @torch.inference_mode()
@@ -344,7 +418,11 @@ def generate_response(
     generated: list[int] = []
     seen = torch.zeros(vocab_size, dtype=torch.bool, device=device)
     token_counts = torch.zeros(vocab_size, dtype=torch.float32, device=device)
-    is_triune_model = hasattr(model, "init_cache") or getattr(model, "_is_triune", False)
+    is_triune_model = (
+        hasattr(model, "init_cache")
+        or getattr(model, "_is_triune", False)
+        or getattr(model, "_is_triune_transmuted", False)
+    )
     if cache is None and hasattr(model, "init_cache"):
         cache = model.init_cache(batch_size=1)
     stop_eos_ids: set[int] = set(getattr(model, "_triune_extra_eos_ids", (eos_token_id,)))

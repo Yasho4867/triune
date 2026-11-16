@@ -716,6 +716,146 @@ class TestDiskStreamingAndUnifiedHF(unittest.TestCase):
         self.assertIn("PC Model Scanner & Universal Transmuter", app_js)
         self.assertIn("handleScanPcModels", app_js)
 
+    def test_custom_and_transmuted_inference_routing_fixes(self):
+        """Verify transmuted models aren't overwritten, local google/openai models bypass BYOK, and HF file/encoder guards work."""
+        from unittest.mock import patch
+
+        from fastapi.testclient import TestClient
+
+        from triune.api import routes as routes_mod
+        from triune.api.server import create_app
+
+        app = create_app()
+        client = TestClient(app)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tp = Path(tmp)
+            # 1. Encoder-only HF config (e.g. BERT) should be flagged non-loadable in scanner & blocked cleanly
+            bert_dir = tp / "bert-custom"
+            bert_dir.mkdir(parents=True)
+            (bert_dir / "config.json").write_text(
+                json.dumps({"model_type": "bert", "architectures": ["BertForMaskedLM"], "hidden_size": 768}),
+                encoding="utf-8",
+            )
+            (bert_dir / "model.safetensors").write_bytes(b"stub")
+
+            scan = client.post(
+                "/v1/models/scan",
+                json={"extra_paths": [str(tp)], "include_wsl": False, "max_depth": 3},
+            ).json()
+            found = {m["id"]: m for m in scan["models"]}
+            bert_id = str(bert_dir).replace("\\", "/")
+            self.assertIn(bert_id, found)
+            self.assertFalse(found[bert_id]["is_causal_lm"])
+            self.assertFalse(found[bert_id]["can_load_direct"])
+
+            bert_load = client.post("/v1/models/load", json={"checkpoint_path": str(bert_dir / "model.safetensors")})
+            self.assertEqual(bert_load.status_code, 200)
+            self.assertEqual(bert_load.json()["status"], "error")
+            self.assertIn("CausalLM", bert_load.json()["message"])
+
+        # 2. Transmuted active model must not call load_model_checkpoint during generate_text
+        session_file = Path("studio_session.json")
+        session_backup = session_file.read_text(encoding="utf-8") if session_file.is_file() else None
+        st = routes_mod.pytorch_state
+        saved_stream = getattr(st.model, "_streaming_engine", None)
+        saved_state = {
+            "model": st.model,
+            "tokenizer": st.tokenizer,
+            "optimizer": st.optimizer,
+            "training_engine": st.training_engine,
+            "streaming_engine": st.streaming_engine,
+            "active_adapter": st.active_adapter,
+            "active_finetuner": getattr(st, "active_finetuner", None),
+            "active_model_id": st.active_model_id,
+            "active_checkpoint": st.active_checkpoint,
+            "weights_loaded": st.weights_loaded,
+            "explicit_architecture_active": getattr(st, "explicit_architecture_active", False),
+            "architecture_spec": dict(st.architecture_spec),
+            "precision": st.precision,
+            "step": st.step,
+            "total_tokens_trained": st.total_tokens_trained,
+            "tokens_trained": st.tokens_trained,
+            "pad_token_id": st.pad_token_id,
+            "history": list(st.history),
+            "batch_size": st.batch_size,
+            "seq_len": st.seq_len,
+            "gpu_layers": st.gpu_layers,
+            "gpu_offload_pct": st.gpu_offload_pct,
+        }
+        try:
+            up = client.post(
+                "/v1/models/upgrade_to_triune",
+                json={"model_name": "qwen-2.5-7b", "apply_as_active": True},
+            )
+            self.assertEqual(up.status_code, 200)
+            self.assertEqual(st.active_model_id, "triune-qwen-2.5-7b")
+            self.assertTrue(st.explicit_architecture_active)
+
+            with (
+                patch.object(st, "load_model_checkpoint") as mock_load_ckpt,
+                patch(
+                    "triune.inference.generate_response",
+                    return_value={
+                        "text": "ok",
+                        "route": "CORTEX",
+                        "tokens_count": 1,
+                        "tokens_per_sec": 10,
+                        "latency_ms": 5,
+                        "cancelled": False,
+                    },
+                ),
+            ):
+                st.generate_text("hello", max_new_tokens=4)
+                mock_load_ckpt.assert_not_called()
+
+            # 3. Loaded local google/... model must run locally rather than routing to Gemini BYOK
+            st.active_model_id = "google/gemma-2-2b"
+            st.weights_loaded = True
+            st.explicit_architecture_active = False
+            with patch.object(
+                st,
+                "generate_text",
+                return_value={
+                    "text": "local gemma reply",
+                    "route": "CORTEX",
+                    "tokens_count": 3,
+                    "tokens_per_sec": 30,
+                    "latency_ms": 12,
+                    "vram_gb": 2.1,
+                    "checkpoint": "gemma-2-2b",
+                    "weights_loaded": True,
+                    "cancelled": False,
+                },
+            ) as mock_gen:
+                chat_res = client.post(
+                    "/v1/chat/completions",
+                    json={
+                        "model": "google/gemma-2-2b",
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "stream": False,
+                    },
+                )
+            self.assertEqual(chat_res.status_code, 200)
+            self.assertEqual(chat_res.json()["choices"][0]["message"]["content"], "local gemma reply")
+            mock_gen.assert_called_once()
+        finally:
+            for eng_attr in ("_streaming_engine", "_disk_streaming_engine"):
+                eng = getattr(st.model, eng_attr, None)
+                if eng is not None and eng is not saved_stream and hasattr(eng, "detach"):
+                    try:
+                        eng.detach()
+                    except Exception:
+                        pass
+            for k, v in saved_state.items():
+                setattr(st, k, v)
+            if saved_stream is not None and not saved_stream.is_attached:
+                saved_stream.attach(optimizer=saved_state["optimizer"])
+            if session_backup is not None:
+                session_file.write_text(session_backup, encoding="utf-8")
+            elif session_file.is_file():
+                session_file.unlink()
+
 
 if __name__ == "__main__":
     unittest.main()
