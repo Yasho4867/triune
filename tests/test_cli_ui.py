@@ -11,8 +11,12 @@ from contextlib import redirect_stdout
 from unittest.mock import patch
 
 from scripts.chat import main as chat_main
-from tests.test_weight_transmutation import _build_tiny_hf_llama_dir
 from triune.cli import main as cli_main
+
+try:
+    from tests.test_weight_transmutation import _build_tiny_hf_llama_dir
+except ModuleNotFoundError:
+    from test_weight_transmutation import _build_tiny_hf_llama_dir
 
 
 class TestTriuneBeautifiedCLI(unittest.TestCase):

@@ -667,6 +667,32 @@ class DiskNVFP4StreamingEngine:
         self.is_attached = False
 
 
+@contextlib.contextmanager
+def _init_empty_weights():
+    """Initialize module parameters on ``meta`` without requiring ``accelerate``.
+
+    Buffers remain on CPU so derived initialization buffers (such as rotary
+    embedding ``inv_freq``) retain their real computed values.
+    """
+    old_register_parameter = nn.Module.register_parameter
+
+    def _register_empty_parameter(module: nn.Module, name: str, param: nn.Parameter | None) -> None:
+        old_register_parameter(module, name, param)
+        registered = module._parameters.get(name)
+        if registered is not None and registered.device.type != "meta":
+            param_cls = type(registered)
+            new_param = param_cls(registered.to("meta"), requires_grad=registered.requires_grad)
+            if registered.__dict__:
+                new_param.__dict__.update(registered.__dict__)
+            module._parameters[name] = new_param
+
+    nn.Module.register_parameter = _register_empty_parameter  # type: ignore[method-assign]
+    try:
+        yield
+    finally:
+        nn.Module.register_parameter = old_register_parameter  # type: ignore[method-assign]
+
+
 def load_disk_streamed_model(
     model_or_cache_dir: str | Path,
     *,
@@ -681,7 +707,6 @@ def load_disk_streamed_model(
     local_files_only: bool = False,
 ) -> tuple[nn.Module, DiskNVFP4StreamingEngine, Path]:
     """Instantiate an HF CausalLM on meta, load root weights to device, and stream NVFP4 layers from NVMe."""
-    from accelerate import init_empty_weights
     from safetensors.torch import load_file
     from transformers import AutoConfig, AutoModelForCausalLM
 
@@ -703,7 +728,7 @@ def load_disk_streamed_model(
         manifest = json.load(f)
 
     hf_cfg = AutoConfig.from_pretrained(str(resolved_cache))
-    with init_empty_weights():
+    with _init_empty_weights():
         try:
             model = AutoModelForCausalLM.from_config(hf_cfg, dtype=torch.bfloat16)
         except TypeError:

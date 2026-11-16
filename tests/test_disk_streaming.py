@@ -127,6 +127,31 @@ class TestDiskStreamingAndUnifiedHF(unittest.TestCase):
             finally:
                 engine.detach()
 
+    def test_init_empty_weights_without_accelerate_preserves_buffers_and_ties(self):
+        from unittest.mock import patch
+
+        from triune.runtime.disk_streaming import _init_empty_weights
+
+        class TinyRotaryAndLinear(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.proj_in = torch.nn.Linear(16, 16, bias=False)
+                self.proj_out = torch.nn.Linear(16, 16, bias=False)
+                self.proj_out.weight = self.proj_in.weight
+                inv_freq = 1.0 / (10000.0 ** (torch.arange(0, 8, 2, dtype=torch.float32) / 8.0))
+                self.register_buffer("inv_freq", inv_freq, persistent=False)
+
+        orig_reg = torch.nn.Module.register_parameter
+        with patch.dict("sys.modules", {"accelerate": None}):
+            with _init_empty_weights():
+                m = TinyRotaryAndLinear()
+            self.assertEqual(m.proj_in.weight.device.type, "meta")
+            self.assertIs(m.proj_out.weight, m.proj_in.weight)
+            self.assertEqual(m.inv_freq.device.type, "cpu")
+            self.assertTrue(torch.isfinite(m.inv_freq).all())
+            self.assertGreater(m.inv_freq.abs().sum().item(), 0.0)
+        self.assertIs(torch.nn.Module.register_parameter, orig_reg)
+
     def test_disk_streamed_qlora_sft_masking_and_step(self):
         from triune.inference import generate_response, load_model_for_inference
         from triune.runtime.disk_streaming import build_nvfp4_disk_cache, load_disk_streamed_model
