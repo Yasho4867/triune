@@ -4,12 +4,12 @@ Supports two complementary conversion modes when upgrading an existing model
 (HuggingFace CausalLM, local SafeTensors directory, or Ollama candidate) into a
 3-tier Triune adaptive architecture:
 
-1. **Zero-loss Early-Exit Transmutation** (``transmute_hf_to_triune``):
+1. **Cortex-Preserving Early-Exit Transmutation** (``transmute_hf_to_triune``):
    Loads the source model's weights cleanly (including BF16, NVFP4, or
    disk-streamed 4-bit execution) and attaches Triune's weight-tied Reflex and
-   Limbic early-exit heads plus optional JEV routing routers. Intelligence is
-   100% preserved while enabling genuine 3-tier REFLEX / LIMBIC / CORTEX exit
-   execution during KV-cached generation.
+   Limbic early-exit heads plus optional JEV routing routers. The original
+   full-depth backbone weights remain intact for Cortex execution while attached
+   early-exit heads are marked uncalibrated until tuned/validated.
 
 2. **Structural Weight Surgery + Distillation** (``transfer_weights_to_native_triune``
    and ``distill_native_triune_step``):
@@ -281,6 +281,7 @@ def transmute_hf_to_triune(
     _align_exit_attachments_to_head(model, attach_target, lm_head)
 
     model._is_triune_transmuted = True
+    model._exits_calibrated = False
     model.reflex_exit_layer = int(getattr(model, "reflex_layer_idx", reflex_idx))
     model.limbic_exit_layer = int(getattr(model, "limbic_layer_idx", limbic_idx))
     model.last_depth_choice = None
@@ -299,20 +300,32 @@ def transmute_hf_to_triune(
     return model, tokenizer, enriched_meta, target_dev, pad_id, eos_id
 
 
-def _copy_matrix_projected(dst: torch.Tensor, src: torch.Tensor) -> None:
-    """Copy or symmetrically center-crop/strided-project ``src`` matrix into ``dst`` without allocations blowing memory."""
+def _weights_are_tied(emb_w: torch.Tensor | None, head_w: torch.Tensor | None) -> bool:
+    """Return True when input embeddings and LM head share identical storage or values."""
+    if emb_w is None or head_w is None:
+        return True
+    if emb_w.data_ptr() == head_w.data_ptr() and emb_w.shape == head_w.shape:
+        return True
+    if emb_w.shape != head_w.shape:
+        return False
+    with torch.no_grad():
+        return bool(torch.allclose(emb_w.detach().float(), head_w.detach().float(), atol=1e-6, rtol=1e-5))
+
+
+def _copy_matrix_projected(dst: torch.Tensor, src: torch.Tensor) -> int:
+    """Copy or crop ``src`` into ``dst`` without memory blowups and return exact copied elements."""
     with torch.no_grad():
         s = src.detach().to(device=dst.device, dtype=dst.dtype)
         if s.shape == dst.shape:
             dst.copy_(s)
-            return
+            return int(dst.numel())
 
         if s.ndim == 1 and dst.ndim == 1:
             n = min(dst.shape[0], s.shape[0])
             dst[:n].copy_(s[:n])
             if dst.shape[0] > n:
                 dst[n:].zero_()
-            return
+            return int(n)
 
         out_d, in_d = dst.shape[:2]
         src_out, src_in = s.shape[:2]
@@ -320,22 +333,23 @@ def _copy_matrix_projected(dst: torch.Tensor, src: torch.Tensor) -> None:
         cols = min(in_d, src_in)
         dst.zero_()
         dst[:rows, :cols].copy_(s[:rows, :cols])
+        return int(rows * cols)
 
 
-def _copy_linear_projected(dst_linear: nn.Module, src_linear: nn.Module | None) -> bool:
-    """Copy linear weight (and bias if compatible) into ``dst_linear``. Returns True if copied."""
+def _copy_linear_projected(dst_linear: nn.Module, src_linear: nn.Module | None) -> int:
+    """Copy linear weight (and bias if compatible) into ``dst_linear``. Returns copied element count."""
     if src_linear is None or not hasattr(dst_linear, "weight") or not hasattr(src_linear, "weight"):
-        return False
+        return 0
     src_w = getattr(src_linear, "weight", None)
     dst_w = getattr(dst_linear, "weight", None)
     if src_w is None or dst_w is None or src_w.device.type == "meta" or dst_w.device.type == "meta":
-        return False
-    _copy_matrix_projected(dst_w, src_w)
+        return 0
+    copied = _copy_matrix_projected(dst_w, src_w)
     dst_b = getattr(dst_linear, "bias", None)
     src_b = getattr(src_linear, "bias", None)
     if dst_b is not None and src_b is not None and src_b.device.type != "meta":
-        _copy_matrix_projected(dst_b, src_b)
-    return True
+        copied += _copy_matrix_projected(dst_b, src_b)
+    return copied
 
 
 def _expand_gqa_weight(weight: torch.Tensor, num_q_heads: int, num_kv_heads: int) -> torch.Tensor:
@@ -459,22 +473,47 @@ def transfer_weights_to_native_triune(
     transferred_tensors = 0
     transferred_params = 0
 
-    def _record_copy(dst_tensor: torch.Tensor) -> None:
+    def _record_copy(copied_elems: int) -> None:
         nonlocal transferred_tensors, transferred_params
-        transferred_tensors += 1
-        transferred_params += int(dst_tensor.numel())
+        if copied_elems > 0:
+            transferred_tensors += 1
+            transferred_params += int(copied_elems)
 
-    # 1. Embeddings (token_embed.weight is shared with final_head.weight in TriuneTransformer)
+    # 1. Embeddings (token_embed.weight defaults to shared with final_head.weight in TriuneTransformer)
     emb_w = _extract_source_weight(embed_tokens)
     if emb_w is not None:
-        _copy_matrix_projected(student.token_embed.weight, emb_w)
-        _record_copy(student.token_embed.weight)
+        _record_copy(_copy_matrix_projected(student.token_embed.weight, emb_w))
+
+    # 1b. Explicit LM head transfer when teacher lm_head is untied, shaped differently, or biased
+    lm_head_w = _extract_source_weight(lm_head)
+    head_bias = getattr(lm_head, "bias", None) if lm_head is not None else None
+    has_head_bias = (
+        head_bias is not None
+        and getattr(head_bias, "device", torch.device("cpu")).type != "meta"
+        and head_bias.dtype.is_floating_point
+    )
+    lm_head_transferred = False
+    lm_head_untied = False
+    if lm_head_w is not None:
+        tied_to_embed = emb_w is not None and _weights_are_tied(emb_w, lm_head_w) and not has_head_bias
+        if tied_to_embed:
+            lm_head_transferred = True
+        else:
+            dev = student.token_embed.weight.device
+            dt = student.token_embed.weight.dtype
+            untied_head = nn.Linear(s_dim, t_vocab, bias=has_head_bias, device=dev, dtype=dt)
+            copied_head = _copy_matrix_projected(untied_head.weight, lm_head_w)
+            _record_copy(copied_head)
+            if has_head_bias:
+                _record_copy(_copy_matrix_projected(untied_head.bias, head_bias))
+            student.final_head = untied_head
+            lm_head_transferred = True
+            lm_head_untied = True
 
     # 2. Final RMSNorm
     norm_w = _extract_source_weight(t_final_norm)
     if norm_w is not None and hasattr(student.final_norm, "weight"):
-        _copy_matrix_projected(student.final_norm.weight, norm_w)
-        _record_copy(student.final_norm.weight)
+        _record_copy(_copy_matrix_projected(student.final_norm.weight, norm_w))
 
     # 3. Transformer blocks
     for s_idx, s_layer in enumerate(student.layers):
@@ -483,40 +522,33 @@ def transfer_weights_to_native_triune(
 
         n1_w = _extract_source_weight(norm1)
         if n1_w is not None and hasattr(s_layer.norm1, "weight"):
-            _copy_matrix_projected(s_layer.norm1.weight, n1_w)
-            _record_copy(s_layer.norm1.weight)
+            _record_copy(_copy_matrix_projected(s_layer.norm1.weight, n1_w))
 
         n2_w = _extract_source_weight(norm2)
         if n2_w is not None and hasattr(s_layer.norm2, "weight"):
-            _copy_matrix_projected(s_layer.norm2.weight, n2_w)
-            _record_copy(s_layer.norm2.weight)
+            _record_copy(_copy_matrix_projected(s_layer.norm2.weight, n2_w))
 
         # Attention projections (HybridAttention.gla)
         gla = getattr(getattr(s_layer, "attn", None), "gla", None)
         if gla is not None:
             q_w = _extract_source_weight(q_p)
             if q_w is not None:
-                _copy_matrix_projected(gla.q_proj.weight, q_w)
-                _record_copy(gla.q_proj.weight)
+                _record_copy(_copy_matrix_projected(gla.q_proj.weight, q_w))
 
             k_w = _extract_source_weight(k_p)
             if k_w is not None:
                 k_exp = _expand_gqa_weight(k_w, t_num_heads, t_num_kv_heads)
-                _copy_matrix_projected(gla.k_proj.weight, k_exp)
-                _record_copy(gla.k_proj.weight)
+                _record_copy(_copy_matrix_projected(gla.k_proj.weight, k_exp))
                 # Seed GLA decay gate smoothly near identity/moderate decay from k_proj structure
                 if hasattr(gla, "g_proj"):
-                    _copy_matrix_projected(gla.g_proj.weight, k_exp * 0.1)
-                    _record_copy(gla.g_proj.weight)
+                    _record_copy(_copy_matrix_projected(gla.g_proj.weight, k_exp * 0.1))
 
             v_w = _extract_source_weight(v_p)
             if v_w is not None:
                 v_exp = _expand_gqa_weight(v_w, t_num_heads, t_num_kv_heads)
-                _copy_matrix_projected(gla.v_proj.weight, v_exp)
-                _record_copy(gla.v_proj.weight)
+                _record_copy(_copy_matrix_projected(gla.v_proj.weight, v_exp))
 
-            if _copy_linear_projected(gla.out_proj, o_p):
-                _record_copy(gla.out_proj.weight)
+            _record_copy(_copy_linear_projected(gla.out_proj, o_p))
 
         # FFN / MoE upcycling (blend gate_proj + up_proj when teacher is SwiGLU)
         gate_w = _extract_source_weight(gate_p)
@@ -531,19 +563,15 @@ def transfer_weights_to_native_triune(
         ffn = getattr(s_layer, "ffn", None)
         if isinstance(ffn, nn.Sequential) and len(ffn) >= 3:
             if fc1_src is not None and hasattr(ffn[0], "weight"):
-                _copy_matrix_projected(ffn[0].weight, fc1_src)
-                _record_copy(ffn[0].weight)
+                _record_copy(_copy_matrix_projected(ffn[0].weight, fc1_src))
             if down_w is not None and hasattr(ffn[2], "weight"):
-                _copy_matrix_projected(ffn[2].weight, down_w)
-                _record_copy(ffn[2].weight)
+                _record_copy(_copy_matrix_projected(ffn[2].weight, down_w))
         elif ffn is not None and hasattr(ffn, "experts"):
             if getattr(ffn, "shared", None) is not None and len(ffn.shared) >= 3:
                 if fc1_src is not None:
-                    _copy_matrix_projected(ffn.shared[0].weight, fc1_src)
-                    _record_copy(ffn.shared[0].weight)
+                    _record_copy(_copy_matrix_projected(ffn.shared[0].weight, fc1_src))
                 if down_w is not None:
-                    _copy_matrix_projected(ffn.shared[2].weight, down_w)
-                    _record_copy(ffn.shared[2].weight)
+                    _record_copy(_copy_matrix_projected(ffn.shared[2].weight, down_w))
 
             n_exp = len(ffn.experts)
             for e_idx, exp in enumerate(ffn.experts):
@@ -551,19 +579,17 @@ def transfer_weights_to_native_triune(
                     # Slight deterministic specialization factor across experts avoids dead collapse
                     spec_scale = 1.0 + (e_idx - (n_exp - 1) / 2.0) * 1e-3
                     if fc1_src is not None:
-                        _copy_matrix_projected(exp[0].weight, fc1_src * spec_scale)
-                        _record_copy(exp[0].weight)
+                        _record_copy(_copy_matrix_projected(exp[0].weight, fc1_src * spec_scale))
                     if down_w is not None:
-                        _copy_matrix_projected(exp[2].weight, down_w / spec_scale)
-                        _record_copy(exp[2].weight)
+                        _record_copy(_copy_matrix_projected(exp[2].weight, down_w / spec_scale))
 
         # Initialize exit_norm from teacher's final norm for stable early-exit logits
         if getattr(s_layer, "exit_norm", None) is not None and norm_w is not None:
-            _copy_matrix_projected(s_layer.exit_norm.weight, norm_w)
-            _record_copy(s_layer.exit_norm.weight)
+            _record_copy(_copy_matrix_projected(s_layer.exit_norm.weight, norm_w))
 
     if tokenizer is not None:
         student.tokenizer = tokenizer
+    student._exits_calibrated = False
 
     total_student_params = sum(int(p.numel()) for p in student.parameters())
     report = {
@@ -572,7 +598,10 @@ def transfer_weights_to_native_triune(
         "transferred_tensors": transferred_tensors,
         "transferred_params": transferred_params,
         "total_student_params": total_student_params,
-        "coverage_ratio": round(transferred_params / max(1, total_student_params), 4),
+        "coverage_ratio": round(min(1.0, transferred_params / max(1, total_student_params)), 4),
+        "lm_head_transferred": lm_head_transferred,
+        "lm_head_untied": lm_head_untied,
+        "exits_calibrated": False,
         "teacher_layers": t_num_layers,
         "student_layers": s_num_layers,
         "teacher_dim": t_dim,
@@ -612,10 +641,14 @@ def distill_native_triune_step(
     logits_reflex, _ = student(input_ids, force_depth=0)
 
     def _kl_loss(student_logits: torch.Tensor) -> torch.Tensor:
-        # Align vocab slice if student & teacher differ in padding vocab length
+        # Align vocab slice if student & teacher differ in padding vocab length,
+        # and flatten [B, T, V] -> [B*T, V] so batchmean averages per token cleanly,
+        # keeping loss weighting invariant to sequence length and aligned with CE.
         v = min(student_logits.size(-1), target_probs.size(-1))
-        log_p = F.log_softmax(student_logits[..., :v].float() / temp, dim=-1)
-        q_p = target_probs[..., :v]
+        log_p = F.log_softmax(student_logits[..., :v].float() / temp, dim=-1).reshape(-1, v)
+        q_p = target_probs[..., :v].reshape(-1, v)
+        if v < target_probs.size(-1):
+            q_p = q_p / q_p.sum(dim=-1, keepdim=True).clamp_min(1e-12)
         return F.kl_div(log_p, q_p, reduction="batchmean") * (temp * temp)
 
     cortex_kl = _kl_loss(logits_cortex)

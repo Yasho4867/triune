@@ -4040,6 +4040,8 @@
     const [nodeCatalog, setNodeCatalog] = useState(BUILTIN_NODE_CATALOG);
 
     const [upgradeModelName, setUpgradeModelName] = useState('llama-3-8b');
+    const [inspectorTargetModel, setInspectorTargetModel] = useState('active');
+    const [upgradeTransferMode, setUpgradeTransferMode] = useState('early_exit');
     const [customUpgradePath, setCustomUpgradePath] = useState('');
     const [savedModels, setSavedModels] = useState([]);
     const [isLoadingSavedModel, setIsLoadingSavedModel] = useState(false);
@@ -4342,7 +4344,8 @@
     const showToast = (msg) => {
       if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
       setStatusToast(msg);
-      toastTimerRef.current = setTimeout(() => setStatusToast(null), 3000);
+      const isErr = /\b(error|failed|failure|unable|could not|invalid|unavailable|denied|rejected|refused)\b/i.test(String(msg || ''));
+      toastTimerRef.current = setTimeout(() => setStatusToast(null), isErr ? 6500 : 3200);
     };
 
     const handleUpgradeModel = async (customName = null, applyAsActive = false, opts = {}) => {
@@ -4354,7 +4357,7 @@
         return;
       }
       const transferWeights = Boolean(opts.transferWeights);
-      const transferMode = opts.transferMode || 'early_exit';
+      const transferMode = opts.transferMode || upgradeTransferMode || 'early_exit';
       setIsUpgradingModel(true);
       if (transferWeights) {
         showToast(`Transferring real weights from ${targetModel} into Triune (${transferMode})…`);
@@ -4391,10 +4394,26 @@
           if (applyAsActive && data.activated) {
             const nextActiveId = data.active_model_id || `triune-${targetModel}`;
             setActiveModel(nextActiveId);
+            if (data.architecture) {
+              setDatasetInfo(prev => ({
+                ...prev,
+                num_layers: data.architecture.num_layers || prev.num_layers,
+                hidden_dim: data.architecture.hidden_dim || prev.hidden_dim,
+                num_heads: data.architecture.num_heads || prev.num_heads,
+                num_experts: data.architecture.num_experts ?? prev.num_experts
+              }));
+              if (data.architecture.precision) {
+                setPrecision(data.architecture.precision);
+                setTrainPrecision(data.architecture.precision);
+              }
+            }
             if (data.weights_transferred) {
               setWeightsLoaded(true);
-              setActiveCheckpointName(targetModel);
-              showToast(`Transferred real weights from ${targetModel} into ${nextActiveId} (${data.activation_kind || '3-tier'}).`);
+              setActiveCheckpointName(data.checkpoint || targetModel);
+              setInspectorTargetModel('active');
+              showToast(data.message || `Transferred real weights from ${targetModel} into ${nextActiveId} (${data.activation_kind || '3-tier'}).`);
+              setActiveTab('chat');
+              setPlaygroundMode('chat');
             } else {
               setWeightsLoaded(false);
               setActiveCheckpointName(null);
@@ -6233,6 +6252,12 @@
           const data = await res.json();
           if (Array.isArray(data.saved_models)) {
             setSavedModels(data.saved_models);
+            setUpgradeModelName(prev => {
+              if (prev && prev !== 'llama-3-8b' && prev !== 'active') return prev;
+              const preferred = data.saved_models.find(m => m.has_weights !== false && ['ollama', 'gguf', 'hf_local', 'hf_cache', 'huggingface'].includes(m.kind || m.source))
+                || data.saved_models.find(m => m.has_weights !== false);
+              return preferred ? (preferred.id || preferred.path || prev) : 'llama-3-8b';
+            });
           }
           if (data.counts_by_source || data.scanned_roots) {
             setScannerSummary(prev => ({
@@ -6260,6 +6285,12 @@
           const data = await res.json();
           if (Array.isArray(data.models)) {
             setSavedModels(data.models);
+            setUpgradeModelName(prev => {
+              if (prev && prev !== 'llama-3-8b' && prev !== 'active') return prev;
+              const preferred = data.models.find(m => m.has_weights !== false && ['ollama', 'gguf', 'hf_local', 'hf_cache', 'huggingface'].includes(m.kind || m.source))
+                || data.models.find(m => m.has_weights !== false);
+              return preferred ? (preferred.id || preferred.path || prev) : 'llama-3-8b';
+            });
           }
           setScannerSummary({
             counts_by_source: data.counts_by_source || {},
@@ -9719,7 +9750,29 @@
       onMouseUp: handleMouseUp
     },
       // Toast Banner
-      statusToast && e('div', { className: `pill ${/\b(error|failed|failure|unable|could not|invalid|unavailable|denied|rejected|refused)\b/i.test(String(statusToast)) ? 'warning' : 'online'}`, role: 'status', 'aria-live': 'polite', style: { position: 'fixed', top: '16px', right: '20px', zIndex: 100, background: 'var(--bg-card)', border: '1px solid var(--border-dark)' } }, statusToast),
+      statusToast && e('div', {
+        className: `pill ${/\b(error|failed|failure|unable|could not|invalid|unavailable|denied|rejected|refused)\b/i.test(String(statusToast)) ? 'warning' : 'online'}`,
+        role: 'status',
+        'aria-live': 'polite',
+        title: 'Click to dismiss notification',
+        onClick: () => setStatusToast(null),
+        style: {
+          position: 'fixed',
+          top: '58px',
+          right: '20px',
+          maxWidth: '520px',
+          whiteSpace: 'normal',
+          wordBreak: 'break-word',
+          lineHeight: 1.4,
+          padding: '8px 14px',
+          borderRadius: '10px',
+          zIndex: 100,
+          cursor: 'pointer',
+          background: 'var(--bg-card)',
+          border: '1px solid var(--border-dark)',
+          boxShadow: '0 10px 28px rgba(0, 0, 0, 0.45)'
+        }
+      }, statusToast),
 
       // Custom Node Creation Modal
       showCustomNodeModal && e('div', { className: 'modal-overlay', onClick: () => setShowCustomNodeModal(false) },
@@ -10564,7 +10617,7 @@
                       };
                     })();
 
-                    const isInspectActive = upgradeModelName === 'active';
+                    const isInspectActive = inspectorTargetModel === 'active';
                     const activeLayers = (isInspectActive ? activeModelSpec.layer_mapping : (upgradeResult ? upgradeResult.layer_mapping : activeModelSpec.layer_mapping)) || [];
 
                     const renderArchitectureTransmutationPanel = (isCompact = false) => {
@@ -10583,19 +10636,17 @@
                           e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
                             e('span', { style: { fontWeight: 700, fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--primary)' } }, isCompact ? 'Arch Transmute:' : 'Visual Architecture Inspector:'),
                             e('select', {
-                              value: upgradeModelName,
+                              value: inspectorTargetModel,
                               onChange: ev => {
                                 const val = ev.target.value;
                                 if (val === 'active') {
-                                  setUpgradeModelName('active');
-                                  setUpgradeResult(null);
+                                  setInspectorTargetModel('active');
                                   refreshNeuronScope();
                                 } else if (MODEL_PRESETS.some(p => p.id === val)) {
-                                  setUpgradeModelName('active');
-                                  setUpgradeResult(null);
+                                  setInspectorTargetModel('active');
                                   handleSelectModelPreset(val);
                                 } else {
-                                  setUpgradeModelName(val);
+                                  setInspectorTargetModel(val);
                                   handleUpgradeModel(val, false);
                                 }
                               },
@@ -10616,7 +10667,7 @@
                               className: 'btn-transmute-action',
                               disabled: isInspectActive || isUpgradingModel,
                               onClick: () => {
-                                if (!isInspectActive) handleUpgradeModel(upgradeModelName, true);
+                                if (!isInspectActive) handleUpgradeModel(inspectorTargetModel, true);
                               },
                               title: isInspectActive ? 'Current active architecture running in live PyTorch engine' : 'Instantly transmute and activate this architecture in the live Triune inference engine'
                             }, [
@@ -10627,11 +10678,11 @@
                           isInspectActive ? e('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--font-mono)', fontSize: '10.5px' } },
                             e('span', { className: 'pill online', style: { color: 'var(--accent-sage)' } }, `${activeModelSpec.num_layers} Layers`),
                             e('span', { className: 'pill', style: { background: 'var(--primary-glow)', color: 'var(--primary)' } }, `${activeModelSpec.num_experts} MoE Experts`),
-                            !isCompact && e('span', { className: 'pill', style: { color: 'var(--text-muted)' } }, 'Live Architecture')
+                            !isCompact && e('span', { className: 'pill', style: { color: 'var(--text-muted)' } }, weightsLoaded ? 'Weights Loaded' : 'Fresh Architecture')
                           ) : (upgradeResult && e('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--font-mono)', fontSize: '10.5px' } },
-                            e('span', { className: 'pill', style: { color: 'var(--text-muted)' } }, 'Performance not benchmarked'),
+                            e('span', { className: 'pill', style: { color: 'var(--text-muted)' } }, upgradeResult.weights_transferred ? 'Weights Transferred' : 'Performance not benchmarked'),
                             e('span', { className: 'pill', style: { background: 'var(--primary-glow)', color: 'var(--primary)' } }, `${Math.round((upgradeResult.estimated_active_parameter_ratio || 0) * 100)}% estimated active params`),
-                            !isCompact && e('span', { className: 'pill', style: { color: 'var(--text-muted)' } }, 'Source weights not transferred')
+                            !isCompact && e('span', { className: 'pill', style: { color: 'var(--text-muted)' } }, upgradeResult.weights_transferred ? `${upgradeResult.activation_kind || '3-tier active'}` : 'Source weights not transferred')
                           ))
                         ),
                         activeLayers.length > 0 && e('div', { className: 'transmutation-layer-matrix', style: { maxHeight: isCompact ? '85px' : '110px', margin: '2px 0', padding: '6px 8px' } },
@@ -12983,11 +13034,13 @@
                     'Universal Model Upgrader to Triune Architecture'
                   ),
                   e('p', { style: { color: 'var(--text-muted)', fontSize: '13px', margin: '4px 0 0 0' } },
-                    'Preview a Triune architecture layout from a dense-model specification. This does not import or convert the source model weights; activating it creates a fresh Triune model.'
+                    upgradeResult && upgradeResult.weights_transferred
+                      ? `Real weights transferred (${upgradeResult.activation_kind || '3-tier'}). Switch to Chat & Playground to run inference on ${upgradeResult.active_model_id || activeModel}.`
+                      : 'Select any downloaded Ollama GGUF, Hugging Face model, or checkpoint to transfer real weights via Transfer Weights & Run — or preview/build a fresh Triune skeleton.'
                   )
                 ),
                 upgradeResult && e('div', { className: 'transmutation-badge-glow' },
-                  'Performance not benchmarked'
+                  upgradeResult.weights_transferred ? `Weights Active · ${upgradeResult.activation_kind || '3-tier'}` : 'Performance not benchmarked'
                 )
               ),
               (() => {
@@ -13014,7 +13067,23 @@
                     });
                   }
                 });
-                const selectedSavedObj = savedUpgradeList.find(m => m.id === upgradeModelName || m.path === upgradeModelName);
+                const isKnownSelectOption = upgradeModelName === '__custom__'
+                  || savedUpgradeList.some(m => m.id === upgradeModelName || m.path === upgradeModelName)
+                  || UPGRADEABLE_MODELS.some(m => m.id === upgradeModelName);
+                const resolvedSelectVal = isKnownSelectOption
+                  ? upgradeModelName
+                  : (savedUpgradeList.length > 0 ? savedUpgradeList[0].id : (UPGRADEABLE_MODELS[0] ? UPGRADEABLE_MODELS[0].id : '__custom__'));
+                const effectiveTarget = resolvedSelectVal === '__custom__' ? customUpgradePath.trim() : resolvedSelectVal;
+                const selectedSavedObj = savedUpgradeList.find(m => m.id === resolvedSelectVal || m.path === resolvedSelectVal);
+                const isAbstractPreset = UPGRADEABLE_MODELS.some(m => m.id === effectiveTarget);
+                const hasMissingWeights = Boolean(selectedSavedObj && selectedSavedObj.has_weights === false);
+                const transferDisabledReason = !effectiveTarget
+                  ? 'Enter a valid local path or HF repo ID first'
+                  : (isAbstractPreset
+                      ? 'Architecture blueprint preset has no weights on disk — pick a saved Ollama/GGUF/HF model or click Transmute & Run'
+                      : (hasMissingWeights
+                          ? 'Only config.json is cached locally (missing model weight files)'
+                          : ''));
                 return e('div', null,
                   e('div', { className: 'transmutation-controls-grid' },
                     e('div', { className: 'transmutation-form-field' },
@@ -13029,19 +13098,19 @@
                         }, [renderIcon('search', 11, { marginRight: '3px' }), 'Scan PC'])
                       ),
                       e('select', {
-                        value: upgradeModelName,
+                        value: resolvedSelectVal,
                         onChange: ev => setUpgradeModelName(ev.target.value),
                         className: 'transmutation-select'
                       },
                         savedUpgradeList.length > 0 && e('optgroup', { label: 'Saved Models, Checkpoints & HF Cache' },
                           savedUpgradeList.map(m => e('option', { key: `saved:${m.id}`, value: m.id }, m.description || m.name || m.id))
                         ),
-                        e('optgroup', { label: 'Architecture Presets' },
+                        e('optgroup', { label: 'Architecture Blueprint Presets (No Weights)' },
                           UPGRADEABLE_MODELS.map(m => e('option', { key: m.id, value: m.id }, m.desc))
                         ),
                         e('option', { value: '__custom__' }, 'Custom Local Path or HF Repo ID…')
                       ),
-                      upgradeModelName === '__custom__' && e('input', {
+                      resolvedSelectVal === '__custom__' && e('input', {
                         type: 'text',
                         className: 'ckpt-input',
                         style: { marginTop: '6px', width: '100%' },
@@ -13049,8 +13118,16 @@
                         value: customUpgradePath,
                         onChange: ev => setCustomUpgradePath(ev.target.value)
                       }),
-                      (selectedSavedObj || (upgradeModelName === '__custom__' && customUpgradePath.trim())) && e('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '6px' } },
+                      (selectedSavedObj || (resolvedSelectVal === '__custom__' && customUpgradePath.trim()) || isAbstractPreset) && e('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '6px' } },
                         (() => {
+                          if (isAbstractPreset) {
+                            return [
+                              e('span', {
+                                key: 'preset-note',
+                                style: { fontSize: '11px', color: 'var(--accent-amber, #f59e0b)', alignSelf: 'center' }
+                              }, 'Blueprint preset only (no weights). Select a saved Ollama/HF model above for Transfer Weights & Run, or click Transmute & Run.')
+                            ];
+                          }
                           const targetId = selectedSavedObj ? selectedSavedObj.id : customUpgradePath.trim();
                           const isCache = selectedSavedObj && selectedSavedObj.kind === 'nvfp4_cache';
                           const noWeights = Boolean(selectedSavedObj && selectedSavedObj.has_weights === false);
@@ -13061,18 +13138,18 @@
                               selectedSavedObj && selectedSavedObj.ollama_running && e('button', {
                                 key: 'run-ollama-live',
                                 type: 'button',
-                                className: 'btn-sec',
-                                style: { padding: '3px 8px', fontSize: '11px', color: 'var(--accent-sage)', fontWeight: 600 },
+                                className: 'btn-transmute-action',
+                                style: { padding: '5px 12px', fontSize: '11.5px', background: 'var(--accent-sage)', color: '#fff', fontWeight: 700 },
                                 disabled: isLoadingSavedModel,
-                                title: 'Connect directly to local Ollama daemon for real inference',
+                                title: 'Connect directly to local Ollama daemon for fastest zero-copy inference',
                                 onClick: () => handleLoadSavedModel(targetId, {})
                               }, 'Run Ollama Live'),
                               e('span', {
                                 key: 'gguf-note',
-                                style: { fontSize: '11px', color: 'var(--text-muted)', fontStyle: 'italic' }
+                                style: { fontSize: '11px', color: 'var(--text-muted)', fontStyle: 'italic', alignSelf: 'center' }
                               }, selectedSavedObj && selectedSavedObj.ollama_running
-                                ? 'Live in local Ollama — run directly or build a fresh Triune skeleton.'
-                                : 'Ollama/GGUF binary detected — click 1-Click Transmute or Transmute & Run below.')
+                                ? 'Live in Ollama OR click Transfer Weights & Run to load real weights directly into Triune PyTorch & chat.'
+                                : 'Local GGUF archive detected — click Transfer Weights & Run to load real weights directly into Triune & open Chat.')
                             ];
                           }
                           return [
@@ -13123,6 +13200,17 @@
                       )
                     ),
                     e('div', { className: 'transmutation-form-field' },
+                      e('label', { className: 'transmutation-label' }, 'Weight Transfer Mode'),
+                      e('select', {
+                        value: upgradeTransferMode,
+                        onChange: ev => setUpgradeTransferMode(ev.target.value),
+                        className: 'transmutation-select'
+                      },
+                        e('option', { value: 'early_exit' }, '3-Tier Early-Exit (Exact Weights)'),
+                        e('option', { value: 'native_distill' }, 'Native MoE/GLA Surgery (Distill)')
+                      )
+                    ),
+                    e('div', { className: 'transmutation-form-field' },
                       e('label', { className: 'transmutation-label' }, 'Cortex Linear Attn (GLA)'),
                       e('label', { style: { display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', height: '34px', fontFamily: 'var(--font-mono)', fontSize: '12px', color: 'var(--text-main)' } },
                         e('input', {
@@ -13136,8 +13224,8 @@
                     e('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' } },
                       e('button', {
                         className: 'btn-transmute-action',
-                        onClick: () => handleUpgradeModel(upgradeModelName, false),
-                        disabled: isUpgradingModel
+                        onClick: () => handleUpgradeModel(effectiveTarget, false),
+                        disabled: isUpgradingModel || !effectiveTarget
                       }, [
                         renderIcon('bolt', 13, { marginRight: '4px' }),
                         isUpgradingModel ? 'Transmuting Layers…' : '1-Click Transmute'
@@ -13146,7 +13234,7 @@
                         className: 'btn-transmute-action',
                         style: { background: 'var(--accent-olive)', color: '#fff' },
                         onClick: () => handleUpgradeModel(upgradeModelName, true),
-                        disabled: isUpgradingModel,
+                        disabled: isUpgradingModel || !effectiveTarget,
                         title: 'Transmute layers and activate fresh Triune skeleton in engine'
                       }, [
                         renderIcon('bolt', 13, { marginRight: '4px' }),
@@ -13154,10 +13242,14 @@
                       ]),
                       e('button', {
                         className: 'btn-transmute-action',
-                        style: { background: 'var(--primary)', color: 'var(--primary-contrast, #ffffff)' },
-                        onClick: () => handleUpgradeModel(upgradeModelName, true, { transferWeights: true, transferMode: 'early_exit' }),
-                        disabled: isUpgradingModel,
-                        title: 'Load real Hugging Face / SafeTensors weights + attach 3-tier Reflex/Limbic/Cortex early-exit routers'
+                        style: {
+                          background: 'var(--primary)',
+                          color: 'var(--primary-contrast, #ffffff)',
+                          opacity: transferDisabledReason ? 0.55 : 1
+                        },
+                        onClick: () => handleUpgradeModel(effectiveTarget, true, { transferWeights: true, transferMode: upgradeTransferMode }),
+                        disabled: isUpgradingModel || Boolean(transferDisabledReason),
+                        title: transferDisabledReason || 'Load real weights into Triune, attach 3-tier Reflex/Limbic/Cortex routing, and launch Chat & Playground'
                       }, [
                         renderIcon('bolt', 13, { marginRight: '4px' }),
                         isUpgradingModel ? 'Transferring Weights…' : 'Transfer Weights & Run'
@@ -14698,17 +14790,16 @@
                             handleLoadSavedModel(m.id, { nvfp4: true, diskStream: true });
                           }
                         }, 'Stream NVFP4'),
-                        canLoad && ['hf_local', 'hf_cache', 'huggingface', 'vllm', 'hermes'].includes(m.kind) && e('button', {
+                        m.has_weights !== false && ['ollama', 'gguf', 'hf_local', 'hf_cache', 'huggingface', 'vllm', 'hermes'].includes(m.kind) && e('button', {
                           type: 'button',
                           className: 'btn-transmute-action',
                           disabled: isUpgradingModel,
                           style: { padding: '4px 10px', fontSize: '11.5px', background: 'var(--primary)', color: 'var(--primary-contrast, #ffffff)' },
-                          title: 'Load real weights with Triune 3-tier Reflex/Limbic/Cortex early-exit heads',
+                          title: 'Load real weights with Triune 3-tier Reflex/Limbic/Cortex early-exit heads and open Chat',
                           onClick: () => {
                             setUpgradeModelName(m.id);
                             setShowModelScannerModal(false);
-                            setActiveTab('models');
-                            handleUpgradeModel(m.id, true, { transferWeights: true, transferMode: 'early_exit' });
+                            handleUpgradeModel(m.id, true, { transferWeights: true, transferMode: upgradeTransferMode });
                           }
                         }, [renderIcon('bolt', 11, { marginRight: '4px' }), 'Transfer Weights & Run']),
                         e('button', {

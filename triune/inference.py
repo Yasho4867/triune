@@ -105,8 +105,10 @@ class _HFInferenceTokenizerAdapter:
     def token_to_id(self, token: str):
         if token == "[PAD]":
             return self.pad_token_id
-        if token == "[SEP]":
+        if token in ("[SEP]", "[EOS]"):
             return self.eos_token_id
+        if token == "[BOS]":
+            return getattr(self.hf, "bos_token_id", None)
         return self.hf.convert_tokens_to_ids(token)
 
     def encode(self, text: str):
@@ -121,8 +123,57 @@ class _HFInferenceTokenizerAdapter:
     def decode(self, token_ids: list[int], skip_special_tokens: bool = True) -> str:
         return self.hf.decode(token_ids, skip_special_tokens=skip_special_tokens)
 
+    @staticmethod
+    def _normalize_chat_messages(messages: list[dict], *, system_as_content_blocks: bool = False) -> list[dict]:
+        sys_parts: list[str] = []
+        turns: list[dict] = []
+        for m in messages or []:
+            role = str(m.get("role") or "user").strip().lower()
+            content = str(m.get("content") or "").strip()
+            if not content:
+                continue
+            if role == "system":
+                sys_parts.append(content)
+                continue
+            if role not in ("user", "assistant"):
+                role = "user"
+            # Collapse consecutive same-role messages for strict alternating templates (Gemma / Mistral)
+            if turns and turns[-1]["role"] == role:
+                turns[-1]["content"] = f"{turns[-1]['content']}\n\n{content}"
+            else:
+                turns.append({"role": role, "content": content})
+
+        if sys_parts:
+            sys_blob = "\n\n".join(sys_parts)
+            if system_as_content_blocks:
+                return [{"role": "system", "content": [{"type": "text", "text": sys_blob}]}, *turns]
+            if turns and turns[0]["role"] == "user":
+                turns[0] = {"role": "user", "content": f"{sys_blob}\n\n{turns[0]['content']}"}
+            else:
+                turns.insert(0, {"role": "user", "content": sys_blob})
+        return turns
+
     def apply_chat_template(self, messages, *, tokenize: bool = False, add_generation_prompt: bool = True):
-        return self.hf.apply_chat_template(messages, tokenize=tokenize, add_generation_prompt=add_generation_prompt)
+        try:
+            return self.hf.apply_chat_template(
+                messages,
+                tokenize=tokenize,
+                add_generation_prompt=add_generation_prompt,
+            )
+        except Exception:
+            for as_blocks in (True, False):
+                norm = self._normalize_chat_messages(messages, system_as_content_blocks=as_blocks)
+                if not norm:
+                    continue
+                try:
+                    return self.hf.apply_chat_template(
+                        norm,
+                        tokenize=tokenize,
+                        add_generation_prompt=add_generation_prompt,
+                    )
+                except Exception:
+                    continue
+            raise
 
 
 def load_model_for_inference(
@@ -138,8 +189,39 @@ def load_model_for_inference(
     hadamard: bool = True,
     local_files_only: bool = False,
 ):
-    """Unified loader for Triune .pt checkpoints, NVFP4 disk caches, and Hugging Face repos/dirs."""
-    src_path = Path(source)
+    """Unified loader for Triune .pt checkpoints, NVFP4 disk caches, GGUF archives, and HF repos/dirs."""
+    raw_str = str(source).strip()
+    src_path = Path(raw_str)
+    is_direct_gguf = False
+    if src_path.is_file() and src_path.suffix.lower() not in (".pt", ".pth", ".ckpt", ".safetensors"):
+        from triune.runtime.gguf_loader import is_gguf_file
+
+        is_direct_gguf = src_path.suffix.lower() == ".gguf" or is_gguf_file(src_path)
+
+    if raw_str.lower().startswith("ollama:") or is_direct_gguf:
+        from triune.runtime.gguf_loader import load_gguf_hf_model, resolve_ollama_gguf_blob
+
+        gguf_file = src_path if is_direct_gguf else resolve_ollama_gguf_blob(raw_str)
+        if gguf_file is None or not gguf_file.is_file():
+            raise FileNotFoundError(f"Could not locate local GGUF / Ollama blob for '{raw_str}'.")
+        model, tokenizer, metadata, target_dev, pad_id, eos_id = load_gguf_hf_model(
+            gguf_file,
+            device=device,
+            quantize=quantize,
+            hadamard=hadamard,
+        )
+        if adapter_path is not None and Path(adapter_path).exists():
+            from triune.trainer.finetune import LoRAConfig, TriuneFineTuner
+
+            tuner = TriuneFineTuner(
+                model,
+                LoRAConfig.from_pretrained(adapter_path),
+                tokenizer=getattr(tokenizer, "hf", tokenizer),
+                adapter_device=target_dev,
+            )
+            tuner.load_adapter(adapter_path)
+        return model, tokenizer, metadata, target_dev, pad_id, eos_id
+
     if src_path.is_file() and src_path.suffix.lower() in (".pt", ".pth", ".ckpt", ".bin"):
         model, tokenizer, ckpt, dev, pad_id, eos_id = load_checkpoint_model(
             src_path, tokenizer_path, device=device, adapter_path=adapter_path
@@ -341,7 +423,7 @@ def _forward_generation_step(model, ids_step: torch.Tensor, cache, force_depth: 
             elif force_depth == 1 and h_limbic is not None and limbic_head is not None:
                 selected_logits = _compute_tier_logits(limbic_head, h_limbic)
                 chosen_depth = 1
-            elif force_depth is None:
+            elif force_depth is None and getattr(model, "_exits_calibrated", False):
                 settled = False
                 if h_reflex is not None and reflex_head is not None:
                     r_logits = _compute_tier_logits(reflex_head, h_reflex)

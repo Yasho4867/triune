@@ -355,6 +355,512 @@ class TestWeightTransmutationAndOllamaRuntime(unittest.TestCase):
         with patch("urllib.request.urlopen", side_effect=OSError("connection refused")):
             self.assertEqual(query_ollama_running_tags(), set())
 
+    def test_gguf_block_dequantization_and_synthetic_archive_transmutation(self) -> None:
+        import struct
+
+        import numpy as np
+
+        from triune.runtime.gguf_loader import dequantize_ggml_tensor, load_gguf_hf_model
+
+        # 1. Verify Q4_0 and Q8_0 dequantization precision on synthetic blocks
+        d_f16 = np.float16(0.5).tobytes()
+        qs_q8 = np.arange(-16, 16, dtype=np.int8).tobytes()
+        t_q8 = dequantize_ggml_tensor(d_f16 + qs_q8, (32,), 8, torch.float32)
+        expected_q8 = torch.arange(-16, 16, dtype=torch.float32) * 0.5
+        self.assertTrue(torch.allclose(t_q8, expected_q8, atol=1e-4))
+
+        qs_q4 = bytes([0x90] * 16)  # low nibble=0 (-8*0.5=-4.0), high nibble=9 ((9-8)*0.5=+0.5)
+        t_q4 = dequantize_ggml_tensor(d_f16 + qs_q4, (32,), 2, torch.float32)
+        self.assertAlmostEqual(float(t_q4[:16].mean()), -4.0, places=4)
+        self.assertAlmostEqual(float(t_q4[16:].mean()), 0.5, places=4)
+
+        # 2. Write a minimal valid synthetic GGUF v3 Llama archive (2L, H=32, 2 heads, vocab=64) and transmute via API
+        def _pack_str(s: str) -> bytes:
+            b = s.encode("utf-8")
+            return struct.pack("<Q", len(b)) + b
+
+        vocab = ["<unk>", "<s>", "</s>"] + [f"▁tok{i}" for i in range(3, 61)] + ["▁hello", "▁triune", "▁world"]
+        kvs: list[tuple[str, int, bytes]] = [
+            ("general.architecture", 8, _pack_str("llama")),
+            ("general.alignment", 4, struct.pack("<I", 32)),
+            ("llama.block_count", 4, struct.pack("<I", 4)),
+            ("llama.embedding_length", 4, struct.pack("<I", 32)),
+            ("llama.attention.head_count", 4, struct.pack("<I", 2)),
+            ("llama.attention.head_count_kv", 4, struct.pack("<I", 2)),
+            ("llama.feed_forward_length", 4, struct.pack("<I", 64)),
+            ("llama.context_length", 4, struct.pack("<I", 128)),
+            ("tokenizer.ggml.model", 8, _pack_str("llama")),
+            ("tokenizer.ggml.bos_token_id", 4, struct.pack("<I", 1)),
+            ("tokenizer.ggml.eos_token_id", 4, struct.pack("<I", 2)),
+            ("tokenizer.ggml.unknown_token_id", 4, struct.pack("<I", 0)),
+            ("tokenizer.ggml.padding_token_id", 4, struct.pack("<I", 0)),
+            (
+                "tokenizer.ggml.tokens",
+                9,
+                struct.pack("<IQ", 8, len(vocab)) + b"".join(_pack_str(t) for t in vocab),
+            ),
+            (
+                "tokenizer.ggml.scores",
+                9,
+                struct.pack("<IQ", 6, len(vocab)) + np.full(len(vocab), -1.0, dtype="<f4").tobytes(),
+            ),
+        ]
+
+        rng = np.random.default_rng(7)
+        tensor_specs: list[tuple[str, tuple[int, ...], bytes]] = [
+            ("token_embd.weight", (32, 64), (rng.standard_normal((64, 32)).astype("<f4") * 0.05).tobytes()),
+            ("output_norm.weight", (32,), np.ones(32, dtype="<f4").tobytes()),
+        ]
+        for li in range(4):
+            tensor_specs.extend(
+                [
+                    (f"blk.{li}.attn_norm.weight", (32,), np.ones(32, dtype="<f4").tobytes()),
+                    (f"blk.{li}.ffn_norm.weight", (32,), np.ones(32, dtype="<f4").tobytes()),
+                    (
+                        f"blk.{li}.attn_q.weight",
+                        (32, 32),
+                        (rng.standard_normal((32, 32)).astype("<f4") * 0.05).tobytes(),
+                    ),
+                    (
+                        f"blk.{li}.attn_k.weight",
+                        (32, 32),
+                        (rng.standard_normal((32, 32)).astype("<f4") * 0.05).tobytes(),
+                    ),
+                    (
+                        f"blk.{li}.attn_v.weight",
+                        (32, 32),
+                        (rng.standard_normal((32, 32)).astype("<f4") * 0.05).tobytes(),
+                    ),
+                    (
+                        f"blk.{li}.attn_output.weight",
+                        (32, 32),
+                        (rng.standard_normal((32, 32)).astype("<f4") * 0.05).tobytes(),
+                    ),
+                    (
+                        f"blk.{li}.ffn_gate.weight",
+                        (32, 64),
+                        (rng.standard_normal((64, 32)).astype("<f4") * 0.05).tobytes(),
+                    ),
+                    (
+                        f"blk.{li}.ffn_up.weight",
+                        (32, 64),
+                        (rng.standard_normal((64, 32)).astype("<f4") * 0.05).tobytes(),
+                    ),
+                    (
+                        f"blk.{li}.ffn_down.weight",
+                        (64, 32),
+                        (rng.standard_normal((32, 64)).astype("<f4") * 0.05).tobytes(),
+                    ),
+                ]
+            )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gguf_path = Path(tmpdir) / "tiny_test.gguf"
+            header = bytearray()
+            header.extend(b"GGUF")
+            header.extend(struct.pack("<IQQ", 3, len(tensor_specs), len(kvs)))
+            for k, vt, raw_val in kvs:
+                header.extend(_pack_str(k))
+                header.extend(struct.pack("<I", vt))
+                header.extend(raw_val)
+
+            offset = 0
+            tensor_data = bytearray()
+            for tname, dims, buf in tensor_specs:
+                header.extend(_pack_str(tname))
+                header.extend(struct.pack("<I", len(dims)))
+                header.extend(struct.pack(f"<{len(dims)}Q", *dims))
+                header.extend(struct.pack("<IQ", 0, offset))
+                pad_len = (32 - (len(buf) % 32)) % 32
+                tensor_data.extend(buf)
+                tensor_data.extend(b"\x00" * pad_len)
+                offset += len(buf) + pad_len
+
+            head_pad = (32 - (len(header) % 32)) % 32
+            gguf_bytes = bytes(header) + (b"\x00" * head_pad) + bytes(tensor_data)
+            gguf_path.write_bytes(gguf_bytes)
+            # Also save as extensionless Ollama-style sha256 blob (regression test for local blob transmutation)
+            blob_path = Path(tmpdir) / "sha256-deadbeef12345678"
+            blob_path.write_bytes(gguf_bytes)
+
+            m_gguf, _, meta_g, dev_g, _, _ = load_gguf_hf_model(gguf_path, device="cpu")
+            self.assertTrue(meta_g["gguf_loaded_direct"])
+            self.assertEqual(meta_g["gguf_arch"], "llama")
+            self.assertEqual(meta_g["num_layers"], 4)
+
+            snap = self._snapshot_engine_state()
+            try:
+                for cand_path in (gguf_path, blob_path):
+                    up = self.client.post(
+                        "/v1/models/upgrade_to_triune",
+                        json={"model_name": str(cand_path), "apply_as_active": True, "transfer_weights": True},
+                    )
+                    self.assertEqual(up.status_code, 200)
+                    uj = up.json()
+                    self.assertEqual(uj["status"], "success")
+                    self.assertTrue(uj["activated"])
+                    self.assertTrue(uj["weights_transferred"])
+            finally:
+                self._restore_engine_state(snap)
+
+    def test_native_untied_lm_head_exact_crop_coverage_and_seq_invariant_kl(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from transformers import AutoModelForCausalLM
+
+            tiny_dir = _build_tiny_hf_llama_dir(tmpdir)
+            teacher = AutoModelForCausalLM.from_pretrained(str(tiny_dir))
+            # Untie lm_head explicitly with distinct weights from embed_tokens
+            with torch.no_grad():
+                untied_head = torch.nn.Linear(teacher.config.hidden_size, teacher.config.vocab_size, bias=False)
+                untied_head.weight.copy_(torch.randn_like(teacher.model.embed_tokens.weight) * 0.25 + 0.5)
+                teacher.lm_head = untied_head
+
+            student, rep = transfer_weights_to_native_triune(teacher, num_experts=4)
+            self.assertTrue(rep["lm_head_transferred"])
+            self.assertTrue(rep["lm_head_untied"])
+            self.assertFalse(getattr(student, "_exits_calibrated", True))
+            self.assertNotEqual(student.final_head.weight.data_ptr(), student.token_embed.weight.data_ptr())
+            self.assertTrue(torch.allclose(student.final_head.weight, teacher.lm_head.weight, atol=1e-5))
+
+            # Expanding hidden_dim from 64 -> 128 only initializes 64 columns cleanly; coverage must reflect real copy size
+            wide_student, wide_rep = transfer_weights_to_native_triune(teacher, num_experts=4, target_dim=128)
+            self.assertLess(wide_rep["coverage_ratio"], 0.7)
+            self.assertGreater(wide_student.hidden_dim, teacher.config.hidden_size)
+
+            # Sequence-length invariance check for per-token KL distillation normalization
+            student.eval()
+            torch.manual_seed(7)
+            seq_short = torch.randint(0, 64, (2, 8))
+            seq_long = seq_short.repeat(1, 4)  # T=32 repeating identical chunks
+
+            opt_zero = torch.optim.SGD(student.parameters(), lr=0.0)
+            m_short = distill_native_triune_step(student, teacher, seq_short, opt_zero, ce_weight=0.0)
+            m_long = distill_native_triune_step(student, teacher, seq_long, opt_zero, ce_weight=0.0)
+            self.assertAlmostEqual(m_short["cortex_kl"], m_long["cortex_kl"], delta=0.15)
+            self.assertLess(abs(m_short["reflex_kl"] - m_long["reflex_kl"]), 0.25)
+
+    def test_early_exit_cortex_logits_match_teacher_equivalently(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from transformers import AutoModelForCausalLM
+
+            tiny_dir = _build_tiny_hf_llama_dir(tmpdir)
+            teacher_ref = AutoModelForCausalLM.from_pretrained(str(tiny_dir)).eval()
+            triune_wrapped, tok, report, dev, pad_id, eos_id = transmute_hf_to_triune(
+                str(tiny_dir),
+                reflex_ratio=0.25,
+                rank=16,
+                use_jev=True,
+                device="cpu",
+                local_files_only=True,
+            )
+            try:
+                triune_wrapped.eval()
+                self.assertFalse(getattr(triune_wrapped, "_exits_calibrated", True))
+                self.assertEqual(report["transmute_mode"], "early_exit")
+
+                x = torch.randint(0, 64, (1, 10))
+                with torch.no_grad():
+                    ref_logits = teacher_ref(x).logits
+                    cortex_logits = triune_wrapped(x).logits
+                    self.assertTrue(torch.allclose(cortex_logits, ref_logits, atol=1e-5))
+
+                # Uncalibrated AUTO exit must fall back safely to full CORTEX depth, matching teacher generation
+                auto_info = generate_response(
+                    triune_wrapped,
+                    tok,
+                    "hello triune world",
+                    device=dev,
+                    max_new_tokens=6,
+                    temperature=0.0,
+                    force_depth=None,
+                    pad_token_id=pad_id,
+                    eos_token_id=eos_id,
+                    return_info=True,
+                )
+                cortex_info = generate_response(
+                    triune_wrapped,
+                    tok,
+                    "hello triune world",
+                    device=dev,
+                    max_new_tokens=6,
+                    temperature=0.0,
+                    force_depth=2,
+                    pad_token_id=pad_id,
+                    eos_token_id=eos_id,
+                    return_info=True,
+                )
+                self.assertEqual(auto_info["route"], "CORTEX")
+                self.assertEqual(auto_info["text"], cortex_info["text"])
+
+                # Reflex and Limbic exit heads run independently on intermediate layers
+                reflex_info = generate_response(
+                    triune_wrapped,
+                    tok,
+                    "hello triune world",
+                    device=dev,
+                    max_new_tokens=4,
+                    temperature=0.0,
+                    force_depth=0,
+                    pad_token_id=pad_id,
+                    eos_token_id=eos_id,
+                    return_info=True,
+                )
+                self.assertEqual(reflex_info["route"], "REFLEX")
+                self.assertGreaterEqual(int(reflex_info["tokens_count"]), 1)
+            finally:
+                exit_mgr = getattr(triune_wrapped, "_exit_manager", None)
+                if exit_mgr is not None and hasattr(exit_mgr, "remove_hooks"):
+                    exit_mgr.remove_hooks()
+
+    def test_gemma3_gguf_rotary_buffers_system_chat_template_and_upgrade_guards(self) -> None:
+        import struct
+
+        import numpy as np
+
+        from triune.runtime.gguf_loader import load_gguf_hf_model
+
+        def _pack_str(s: str) -> bytes:
+            b = s.encode("utf-8")
+            return struct.pack("<Q", len(b)) + b
+
+        # Gemma3 GGUF with multimodal system template & sliding/full RoPE bases
+        gemma3_tmpl = (
+            "{{ bos_token }}"
+            "{%- if messages[0]['role'] == 'system' -%}"
+            "{%- set first_user_prefix = messages[0]['content'][0]['text'] + '\\n\\n' -%}"
+            "{%- set loop_messages = messages[1:] -%}"
+            "{%- else -%}"
+            "{%- set first_user_prefix = '' -%}"
+            "{%- set loop_messages = messages -%}"
+            "{%- endif -%}"
+            "{%- for message in loop_messages -%}"
+            "{{ '<start_of_turn>' + ('model' if message['role'] == 'assistant' else message['role']) + '\\n' + (first_user_prefix if loop.first else '') + message['content'] + '<end_of_turn>\\n' }}"
+            "{%- endfor -%}"
+            "{%- if add_generation_prompt -%}{{ '<start_of_turn>model\\n' }}{%- endif -%}"
+        )
+        vocab = (
+            ["<pad>", "<eos>", "<bos>", "<unk>", "<start_of_turn>", "<end_of_turn>"]
+            + [f"▁w{i}" for i in range(6, 61)]
+            + ["▁hello", "▁triune", "▁world"]
+        )
+        token_types = [3] * 6 + [1] * (len(vocab) - 6)
+        kvs: list[tuple[str, int, bytes]] = [
+            ("general.architecture", 8, _pack_str("gemma3")),
+            ("general.alignment", 4, struct.pack("<I", 32)),
+            ("gemma3.block_count", 4, struct.pack("<I", 6)),
+            ("gemma3.embedding_length", 4, struct.pack("<I", 32)),
+            ("gemma3.attention.head_count", 4, struct.pack("<I", 2)),
+            ("gemma3.attention.head_count_kv", 4, struct.pack("<I", 1)),
+            ("gemma3.attention.key_length", 4, struct.pack("<I", 16)),
+            ("gemma3.attention.value_length", 4, struct.pack("<I", 16)),
+            ("gemma3.attention.sliding_window", 4, struct.pack("<I", 512)),
+            ("gemma3.feed_forward_length", 4, struct.pack("<I", 64)),
+            ("gemma3.context_length", 4, struct.pack("<I", 128)),
+            ("gemma3.rope.local.freq_base", 6, struct.pack("<f", 10000.0)),
+            ("gemma3.rope.global.freq_base", 6, struct.pack("<f", 1000000.0)),
+            ("tokenizer.ggml.model", 8, _pack_str("llama")),
+            ("tokenizer.ggml.bos_token_id", 4, struct.pack("<I", 2)),
+            ("tokenizer.ggml.eos_token_id", 4, struct.pack("<I", 1)),
+            ("tokenizer.ggml.unknown_token_id", 4, struct.pack("<I", 3)),
+            ("tokenizer.ggml.padding_token_id", 4, struct.pack("<I", 0)),
+            ("tokenizer.chat_template", 8, _pack_str(gemma3_tmpl)),
+            ("tokenizer.ggml.tokens", 9, struct.pack("<IQ", 8, len(vocab)) + b"".join(_pack_str(t) for t in vocab)),
+            (
+                "tokenizer.ggml.token_type",
+                9,
+                struct.pack("<IQ", 4, len(vocab)) + struct.pack(f"<{len(vocab)}I", *token_types),
+            ),
+            (
+                "tokenizer.ggml.scores",
+                9,
+                struct.pack("<IQ", 6, len(vocab)) + np.full(len(vocab), -1.0, dtype="<f4").tobytes(),
+            ),
+        ]
+        rng = np.random.default_rng(11)
+        tensor_specs: list[tuple[str, tuple[int, ...], bytes]] = [
+            ("token_embd.weight", (32, 64), (rng.standard_normal((64, 32)).astype("<f4") * 0.05).tobytes()),
+            ("output_norm.weight", (32,), np.ones(32, dtype="<f4").tobytes()),
+        ]
+        for li in range(6):
+            tensor_specs.extend(
+                [
+                    (f"blk.{li}.attn_norm.weight", (32,), np.ones(32, dtype="<f4").tobytes()),
+                    (f"blk.{li}.post_attention_norm.weight", (32,), np.ones(32, dtype="<f4").tobytes()),
+                    (f"blk.{li}.ffn_norm.weight", (32,), np.ones(32, dtype="<f4").tobytes()),
+                    (f"blk.{li}.post_ffw_norm.weight", (32,), np.ones(32, dtype="<f4").tobytes()),
+                    (f"blk.{li}.attn_q_norm.weight", (16,), np.ones(16, dtype="<f4").tobytes()),
+                    (f"blk.{li}.attn_k_norm.weight", (16,), np.ones(16, dtype="<f4").tobytes()),
+                    (
+                        f"blk.{li}.attn_q.weight",
+                        (32, 32),
+                        (rng.standard_normal((32, 32)).astype("<f4") * 0.05).tobytes(),
+                    ),
+                    (
+                        f"blk.{li}.attn_k.weight",
+                        (32, 16),
+                        (rng.standard_normal((16, 32)).astype("<f4") * 0.05).tobytes(),
+                    ),
+                    (
+                        f"blk.{li}.attn_v.weight",
+                        (32, 16),
+                        (rng.standard_normal((16, 32)).astype("<f4") * 0.05).tobytes(),
+                    ),
+                    (
+                        f"blk.{li}.attn_output.weight",
+                        (32, 32),
+                        (rng.standard_normal((32, 32)).astype("<f4") * 0.05).tobytes(),
+                    ),
+                    (
+                        f"blk.{li}.ffn_gate.weight",
+                        (32, 64),
+                        (rng.standard_normal((64, 32)).astype("<f4") * 0.05).tobytes(),
+                    ),
+                    (
+                        f"blk.{li}.ffn_up.weight",
+                        (32, 64),
+                        (rng.standard_normal((64, 32)).astype("<f4") * 0.05).tobytes(),
+                    ),
+                    (
+                        f"blk.{li}.ffn_down.weight",
+                        (64, 32),
+                        (rng.standard_normal((32, 64)).astype("<f4") * 0.05).tobytes(),
+                    ),
+                ]
+            )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            g3_blob = Path(tmpdir) / "sha256-gemma3test"
+            header = bytearray(b"GGUF" + struct.pack("<IQQ", 3, len(tensor_specs), len(kvs)))
+            for k, vt, raw_val in kvs:
+                header.extend(_pack_str(k) + struct.pack("<I", vt) + raw_val)
+            offset = 0
+            tensor_data = bytearray()
+            for tname, dims, buf in tensor_specs:
+                header.extend(
+                    _pack_str(tname)
+                    + struct.pack("<I", len(dims))
+                    + struct.pack(f"<{len(dims)}Q", *dims)
+                    + struct.pack("<IQ", 0, offset)
+                )
+                pad_len = (32 - (len(buf) % 32)) % 32
+                tensor_data.extend(buf + b"\x00" * pad_len)
+                offset += len(buf) + pad_len
+            head_pad = (32 - (len(header) % 32)) % 32
+            g3_blob.write_bytes(bytes(header) + (b"\x00" * head_pad) + bytes(tensor_data))
+
+            m_g3, tok_g3, meta_g3, dev_g3, _, _ = load_gguf_hf_model(g3_blob, device="cpu")
+            self.assertEqual(meta_g3["gguf_arch"], "gemma3")
+            # 1. Non-parameter rotary buffers must be properly initialized (never to_empty() stack garbage)
+            for bname, buf in m_g3.named_buffers():
+                if "inv_freq" in bname:
+                    self.assertTrue(torch.isfinite(buf).all(), f"{bname} has non-finite values")
+                    self.assertGreater(float(buf.min()), 0.0, f"{bname} uninitialized min")
+                    self.assertLessEqual(float(buf.max()), 1.0, f"{bname} uninitialized max")
+            # 2. <unk> (id=3) must never pollute _triune_extra_eos_ids
+            self.assertNotIn(3, m_g3._triune_extra_eos_ids)
+            self.assertIn(5, m_g3._triune_extra_eos_ids)
+
+            # 3. Studio DEFAULT_SYSTEM_PROMPT must format cleanly via _HFInferenceTokenizerAdapter
+            rendered = tok_g3.apply_chat_template(
+                [
+                    {"role": "system", "content": "You are Triune Transformer, an engine with dynamic routing."},
+                    {"role": "user", "content": "hello"},
+                    {"role": "assistant", "content": "triune"},
+                    {"role": "user", "content": "world"},
+                ],
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+            self.assertIn("<start_of_turn>user", rendered)
+            self.assertIn("You are Triune Transformer", rendered)
+
+            # 4. Upgrade endpoint -> Chat Playground inference (streaming + non-streaming), blueprint guard & .pt checkpoint
+            snap = self._snapshot_engine_state()
+            try:
+                up_g3 = self.client.post(
+                    "/v1/models/upgrade_to_triune",
+                    json={"model_name": str(g3_blob), "apply_as_active": True, "transfer_weights": True},
+                )
+                self.assertEqual(up_g3.status_code, 200)
+                uj = up_g3.json()
+                self.assertEqual(uj["status"], "success")
+                self.assertTrue(uj["weights_transferred"])
+                self.assertTrue(bool(uj.get("message")))
+
+                chat_res = self.client.post(
+                    "/v1/chat/completions",
+                    json={
+                        "model": uj["active_model_id"],
+                        "messages": [
+                            {"role": "system", "content": "You are Triune Transformer."},
+                            {"role": "user", "content": "hello triune"},
+                        ],
+                        "max_tokens": 6,
+                        "temperature": 0.0,
+                        "stream": False,
+                    },
+                )
+                self.assertEqual(chat_res.status_code, 200)
+                self.assertGreaterEqual(chat_res.json()["telemetry"]["tokens_count"], 1)
+
+                # Blueprint preset guard when transfer_weights=True
+                pre_res = self.client.post(
+                    "/v1/models/upgrade_to_triune",
+                    json={"model_name": "llama-3-8b", "apply_as_active": True, "transfer_weights": True},
+                )
+                self.assertEqual(pre_res.json()["status"], "error")
+                self.assertIn("blueprint", pre_res.json()["message"])
+
+                # Triune native .pt checkpoint upgrade path
+                pt_path = Path(tmpdir) / "native_triune.pt"
+                tiny_m = TriuneTransformer(
+                    vocab_size=64,
+                    hidden_dim=64,
+                    num_layers=4,
+                    num_heads=2,
+                    head_dim=32,
+                    num_experts=2,
+                    router_prefix_layers=1,
+                    reflex_exit_layer=2,
+                    limbic_exit_layer=3,
+                )
+                torch.save(
+                    {
+                        "model_state": tiny_m.state_dict(),
+                        "config": {
+                            "vocab_size": 64,
+                            "num_layers": 4,
+                            "hidden_dim": 64,
+                            "num_heads": 2,
+                            "head_dim": 32,
+                            "num_experts": 2,
+                            "router_prefix_layers": 1,
+                            "reflex_exit_layer": 2,
+                            "limbic_exit_layer": 3,
+                        },
+                    },
+                    pt_path,
+                )
+                pt_res = self.client.post(
+                    "/v1/models/upgrade_to_triune",
+                    json={"model_name": str(pt_path), "apply_as_active": True, "transfer_weights": True},
+                )
+                self.assertEqual(pt_res.status_code, 200)
+                self.assertEqual(pt_res.json()["activation_kind"], "triune_checkpoint_loaded")
+                self.assertTrue(pt_res.json()["weights_transferred"])
+            finally:
+                self._restore_engine_state(snap)
+
+            # Unsupported GGUF architecture (phi2) fails fast & explicitly
+            phi_blob = Path(tmpdir) / "unsupported_phi2.gguf"
+            phi_kvs = [("general.architecture", 8, _pack_str("phi2")), ("phi2.block_count", 4, struct.pack("<I", 2))]
+            phi_hdr = bytearray(b"GGUF" + struct.pack("<IQQ", 3, 0, len(phi_kvs)))
+            for k, vt, raw_val in phi_kvs:
+                phi_hdr.extend(_pack_str(k) + struct.pack("<I", vt) + raw_val)
+            phi_blob.write_bytes(bytes(phi_hdr))
+            with self.assertRaises(ValueError):
+                load_gguf_hf_model(phi_blob, device="cpu")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,6 +6,8 @@ import os
 
 os.environ["HF_HUB_DISABLE_XET"] = "1"
 import asyncio
+import contextlib
+import gc
 import ipaddress
 import warnings
 
@@ -1049,6 +1051,26 @@ if HAS_FASTAPI:
             """Cosine learning rate schedule with linear warmup delegating to canonical scheduler."""
             return float(self.lr_schedule(self.config, step))
 
+        def _detach_prev_streaming_engine(self) -> None:
+            prev_disk_eng = getattr(getattr(self, "model", None), "_streaming_engine", None)
+            if prev_disk_eng is not None and hasattr(prev_disk_eng, "detach"):
+                try:
+                    prev_disk_eng.detach()
+                except Exception:
+                    pass
+
+        def _release_active_model_vram(self) -> None:
+            """Release the active model/optimizer/teacher so multi-GB HF/GGUF loads get full VRAM headroom."""
+            self._detach_prev_streaming_engine()
+            self.model = None
+            self.optimizer = None
+            self.distill_teacher = None
+            self.tokenizer = None
+            self.weights_loaded = False
+            gc.collect()
+            if HAS_TORCH and getattr(self, "device", None) is not None and self.device.type == "cuda":
+                torch.cuda.empty_cache()
+
         def load_tokenizer(self):
             if self.tokenizer is not None:
                 return self.tokenizer
@@ -1081,12 +1103,7 @@ if HAS_FASTAPI:
 
             if getattr(getattr(self, "tokenizer", None), "hf", None) is not None:
                 self.tokenizer = None
-            prev_disk_eng = getattr(getattr(self, "model", None), "_streaming_engine", None)
-            if prev_disk_eng is not None and hasattr(prev_disk_eng, "detach"):
-                try:
-                    prev_disk_eng.detach()
-                except Exception:
-                    pass
+            self._detach_prev_streaming_engine()
 
             p_id = preset_id or getattr(self, "active_model_id", "triune-small") or "triune-small"
             spec_overrides = {
@@ -1319,12 +1336,7 @@ if HAS_FASTAPI:
             """Load a checkpoint only after matching the model architecture and validating every weight."""
             if getattr(getattr(self, "tokenizer", None), "hf", None) is not None:
                 self.tokenizer = None
-            prev_disk_eng = getattr(getattr(self, "model", None), "_streaming_engine", None)
-            if prev_disk_eng is not None and hasattr(prev_disk_eng, "detach"):
-                try:
-                    prev_disk_eng.detach()
-                except Exception:
-                    pass
+            self._detach_prev_streaming_engine()
             p = Path(checkpoint_path).resolve()
             if not p.is_file():
                 raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
@@ -1616,12 +1628,6 @@ if HAS_FASTAPI:
                     f"{raw_tag} is an Ollama / GGUF binary not currently active in Ollama. Start Ollama (`ollama run {clean_tag}`) or use 'Transmute' to inspect/upgrade."
                 )
 
-            prev_disk_eng = getattr(getattr(self, "model", None), "_streaming_engine", None)
-            if prev_disk_eng is not None and hasattr(prev_disk_eng, "detach"):
-                try:
-                    prev_disk_eng.detach()
-                except Exception:
-                    pass
             if getattr(self, "neuron_scope", None) is not None:
                 try:
                     self.neuron_scope.detach()
@@ -1630,15 +1636,8 @@ if HAS_FASTAPI:
                     pass
 
             # Free PyTorch CUDA weights so local Ollama keeps full GPU VRAM headroom
-            self.model = None
-            self.optimizer = None
-            self.distill_teacher = None
-            self.tokenizer = None
-            if torch.cuda.is_available():
-                try:
-                    torch.cuda.empty_cache()
-                except Exception:
-                    pass
+            with self.worker_lock:
+                self._release_active_model_vram()
 
             inspected = inspect_model_spec_for_upgrade(f"ollama:{clean_tag}")
             if inspected is not None:
@@ -1736,19 +1735,15 @@ if HAS_FASTAPI:
             from triune.inference import load_model_for_inference
             from triune.model.transmuter import transfer_weights_to_native_triune, transmute_hf_to_triune
 
-            prev_disk_eng = getattr(getattr(self, "model", None), "_streaming_engine", None)
-            if prev_disk_eng is not None and hasattr(prev_disk_eng, "detach"):
-                try:
-                    prev_disk_eng.detach()
-                except Exception:
-                    pass
+            with self.worker_lock:
+                self._release_active_model_vram()
 
             source_str = str(source).strip()
             mode_norm = str(mode or "early_exit").strip().lower()
             transfer_report: Dict[str, Any] = {}
 
             if mode_norm == "native_distill":
-                teacher_model, tokenizer, metadata, _, pad_id, eos_id = load_model_for_inference(
+                teacher_model, tokenizer, metadata, actual_dev, pad_id, eos_id = load_model_for_inference(
                     source_str,
                     device=self.device,
                     quantize=None,
@@ -1763,9 +1758,15 @@ if HAS_FASTAPI:
                 # Keep teacher on CPU for optional follow-up distillation steps without doubling GPU VRAM
                 self.distill_teacher = teacher_model.to("cpu") if hasattr(teacher_model, "to") else teacher_model
                 if hasattr(model, "to") and self.device.type == "cuda":
-                    model = model.to(self.device)
+                    try:
+                        model = model.to(self.device)
+                        actual_dev = self.device
+                    except torch.cuda.OutOfMemoryError:
+                        torch.cuda.empty_cache()
+                        model = model.to("cpu")
+                        actual_dev = torch.device("cpu")
             else:
-                model, tokenizer, metadata, _, pad_id, eos_id = transmute_hf_to_triune(
+                model, tokenizer, metadata, actual_dev, pad_id, eos_id = transmute_hf_to_triune(
                     source_str,
                     reflex_ratio=reflex_ratio,
                     quantize=quantize,
@@ -1781,74 +1782,90 @@ if HAS_FASTAPI:
                     "limbic_exit_layer": metadata.get("limbic_exit_layer"),
                     "num_layers": metadata.get("num_layers"),
                     "use_jev": bool(metadata.get("use_jev", use_jev)),
+                    "exits_calibrated": False,
                     "needs_distillation": False,
                 }
 
-            self.model = model
-            self.tokenizer = tokenizer
-            self._pad_id = pad_id
-            self._eos_id = eos_id
-            self.optimizer = None
-            self.active_runtime = "pytorch"
-            self.ollama_model_tag = None
-            self.active_checkpoint = Path(source_str).name or source_str
-            self.active_model_id = active_model_id or f"triune-{Path(source_str).stem or 'transmuted'}"
-            self.weights_loaded = bool(transfer_report.get("weights_transferred", True))
-            self.explicit_architecture_active = False
-            self.step = 0
-            self.total_tokens_trained = 0
-            self.history = []
-
-            text_cfg = getattr(getattr(model, "config", None), "text_config", getattr(model, "config", None))
-            num_layers = int(
-                getattr(model, "num_layers", None)
-                or getattr(text_cfg, "num_hidden_layers", getattr(text_cfg, "n_layer", 0))
-                or 0
+            ckpt_label = (
+                source_str if source_str.lower().startswith("ollama:") else (Path(source_str).name or source_str)
             )
-            hidden_dim = int(
-                getattr(model, "hidden_dim", None)
-                or getattr(text_cfg, "hidden_size", getattr(text_cfg, "n_embd", 0))
-                or 0
+            slug_base = (
+                source_str.removeprefix("ollama:")
+                if source_str.lower().startswith("ollama:")
+                else Path(source_str).stem
             )
-            num_heads = int(
-                getattr(model, "num_heads", None)
-                or getattr(text_cfg, "num_attention_heads", getattr(text_cfg, "n_head", 0))
-                or 0
-            )
-            vocab_size = int(getattr(model, "vocab_size", None) or getattr(text_cfg, "vocab_size", 0) or 0)
-            total_params = sum(p_t.numel() for p_t in model.parameters())
-            self.precision = "bf16" if self.device.type == "cuda" else "fp32"
+            with self.worker_lock:
+                self.model = model
+                self.model_device = actual_dev
+                self.tokenizer = tokenizer
+                self._pad_id = pad_id
+                self._eos_id = eos_id
+                self.optimizer = None
+                self.active_runtime = "pytorch"
+                self.ollama_model_tag = None
+                self.active_checkpoint = ckpt_label
+                self.active_model_id = active_model_id or f"triune-{slug_base or 'transmuted'}"
+                self.weights_loaded = bool(transfer_report.get("weights_transferred", True))
+                self.explicit_architecture_active = False
+                self.step = 0
+                self.total_tokens_trained = 0
+                self.history = []
 
-            if getattr(self, "neuron_scope", None) is not None:
-                try:
-                    self.neuron_scope.detach()
-                    self.neuron_scope.model = self.model
-                except Exception:
-                    pass
+                text_cfg = getattr(getattr(model, "config", None), "text_config", getattr(model, "config", None))
+                num_layers = int(
+                    getattr(model, "num_layers", None)
+                    or getattr(text_cfg, "num_hidden_layers", getattr(text_cfg, "n_layer", 0))
+                    or 0
+                )
+                hidden_dim = int(
+                    getattr(model, "hidden_dim", None)
+                    or getattr(text_cfg, "hidden_size", getattr(text_cfg, "n_embd", 0))
+                    or 0
+                )
+                num_heads = int(
+                    getattr(model, "num_heads", None)
+                    or getattr(text_cfg, "num_attention_heads", getattr(text_cfg, "n_head", 0))
+                    or 0
+                )
+                vocab_size = int(getattr(model, "vocab_size", None) or getattr(text_cfg, "vocab_size", 0) or 0)
+                total_params = sum(p_t.numel() for p_t in model.parameters())
+                self.precision = "bf16" if actual_dev.type == "cuda" else "fp32"
 
-            self.architecture_spec = {
-                "preset_id": self.active_model_id,
-                "name": source_str,
-                "tier": f"Triune Transmuted ({'Native Surgery' if mode_norm == 'native_distill' else '3-Tier Early Exit'})",
-                "num_layers": num_layers,
-                "hidden_dim": hidden_dim,
-                "num_heads": num_heads,
-                "head_dim": (hidden_dim // num_heads) if (hidden_dim and num_heads) else 0,
-                "vocab_size": vocab_size,
-                "num_experts": int(num_experts) if mode_norm == "native_distill" else 0,
-                "reflex_exit_layer": int(
-                    getattr(model, "reflex_exit_layer", transfer_report.get("reflex_exit_layer") or 1)
-                ),
-                "limbic_exit_layer": int(
-                    getattr(model, "limbic_exit_layer", transfer_report.get("limbic_exit_layer") or 2)
-                ),
-                "total_params": total_params,
-                "active_params": total_params,
-                "precision": "nvfp4" if (quantize == "nvfp4" or disk_stream) else self.precision,
-                "weights_transferred": True,
-                "transmute_mode": mode_norm,
-            }
-            self._save_persisted_session_state()
+                if getattr(self, "neuron_scope", None) is not None:
+                    try:
+                        self.neuron_scope.detach()
+                        self.neuron_scope.model = self.model
+                    except Exception:
+                        pass
+
+                self.architecture_spec = {
+                    "preset_id": self.active_model_id,
+                    "name": source_str,
+                    "tier": f"Triune Transmuted ({'Native Surgery' if mode_norm == 'native_distill' else '3-Tier Early Exit'})",
+                    "num_layers": num_layers,
+                    "hidden_dim": hidden_dim,
+                    "num_heads": num_heads,
+                    "head_dim": (hidden_dim // num_heads) if (hidden_dim and num_heads) else 0,
+                    "vocab_size": vocab_size,
+                    "num_experts": int(num_experts) if mode_norm == "native_distill" else 0,
+                    "reflex_exit_layer": int(
+                        getattr(model, "reflex_exit_layer", transfer_report.get("reflex_exit_layer") or 1)
+                    ),
+                    "limbic_exit_layer": int(
+                        getattr(model, "limbic_exit_layer", transfer_report.get("limbic_exit_layer") or 2)
+                    ),
+                    "total_params": total_params,
+                    "active_params": total_params,
+                    "precision": (
+                        "nvfp4"
+                        if (quantize == "nvfp4" or disk_stream or metadata.get("quantized_nvfp4"))
+                        else self.precision
+                    ),
+                    "device": str(actual_dev),
+                    "weights_transferred": True,
+                    "transmute_mode": mode_norm,
+                }
+                self._save_persisted_session_state()
             return {
                 "active_model_id": self.active_model_id,
                 "checkpoint": self.active_checkpoint,
@@ -2566,6 +2583,13 @@ if HAS_FASTAPI:
                 scope = self.neuron_scope
                 scope.attach(self.model)
 
+            gen_dev = next((p.device for p in self.model.parameters()), None)
+            if gen_dev is None:
+                gen_dev = next((b.device for b in self.model.buffers()), None)
+            if gen_dev is None:
+                gen_dev = self.device
+            autocast_ctx = self.model_autocast() if gen_dev.type == "cuda" else contextlib.nullcontext()
+
             if speculative and is_triune_model:
                 from triune.model.speculative import SelfSpeculativeGenerator
 
@@ -2586,7 +2610,7 @@ if HAS_FASTAPI:
                         on_text("".join(accumulated_tokens))
 
                 try:
-                    with self.model_autocast():
+                    with autocast_ctx:
                         spec_out = spec_gen.generate(
                             prompt,
                             max_new_tokens=max_new_tokens,
@@ -2604,7 +2628,7 @@ if HAS_FASTAPI:
                 if not self.weights_loaded:
                     banner = "[Notice: Model is running with initialized weights without trained checkpoint. Train this model or load weights in Checkpoints & Weights.]\n\n"
                     spec_text = f"{banner}{spec_text}"
-                vram_stats = VRAMProfiler.get_vram_stats(self.device)
+                vram_stats = VRAMProfiler.get_vram_stats(gen_dev)
                 return {
                     "text": spec_text,
                     "route": f"SPECULATIVE (K={k_draft}, acc={spec_out['acceptance_rate']:.1%})",
@@ -2623,12 +2647,12 @@ if HAS_FASTAPI:
                 }
 
             try:
-                with self.model_autocast():
+                with autocast_ctx:
                     result = generate_response(
                         self.model,
                         self.tokenizer,
                         prompt,
-                        device=self.device,
+                        device=gen_dev,
                         pad_token_id=pad_id,
                         eos_token_id=eos_id,
                         force_depth=force_depth,
@@ -7109,95 +7133,165 @@ SYSTEM \"\"\"You are Triune AI, a high-efficiency cognitive language model train
                 from triune.model.transmuter import ollama_to_hf_candidate
                 from triune.runtime.model_scanner import _is_tag_live_in_ollama, query_ollama_running_tags
 
+                # Blueprint preset IDs without downloadable weights on disk cannot execute weight transfer directly
+                blueprint_presets = {
+                    "active",
+                    "llama-3-8b",
+                    "mistral-7b",
+                    "qwen-2.5-7b",
+                    "llama-70b",
+                    "deepseek-v3",
+                    "gemma-2-9b",
+                    "triune-nano",
+                    "triune-small",
+                    "triune-base",
+                    "triune-medium",
+                    "triune-large",
+                    "triune-1.5b",
+                    "triune-3b",
+                    "triune-7b",
+                }
                 resolved_source = raw_name
                 p_src = Path(raw_name)
-                if (
-                    p_src.is_file()
-                    and p_src.suffix.lower() in {".safetensors", ".bin"}
-                    and (p_src.parent / "config.json").is_file()
+                if raw_name.lower() in blueprint_presets and not p_src.exists():
+                    return {
+                        "status": "error",
+                        "activated": False,
+                        "weights_transferred": False,
+                        "message": (
+                            f"'{raw_name}' is an architecture layout blueprint with no saved weights on disk. "
+                            "Select a local Ollama/GGUF model, Hugging Face model, or checkpoint first (or click 'Transmute & Run' for a fresh Triune skeleton)."
+                        ),
+                    }
+
+                # Native Triune checkpoints (.pt/.pth/.ckpt or standalone .safetensors) already are 3-tier Triune weights
+                if p_src.is_file() and (
+                    p_src.suffix.lower() in {".pt", ".pth", ".ckpt"}
+                    or (p_src.suffix.lower() == ".safetensors" and not (p_src.parent / "config.json").is_file())
                 ):
-                    resolved_source = str(p_src.parent)
-                elif raw_name.lower().startswith("ollama:") or p_src.suffix.lower() == ".gguf":
-                    hf_cand = ollama_to_hf_candidate(raw_name)
-                    if not hf_cand:
+                    try:
+                        loaded = await asyncio.to_thread(
+                            lambda: pytorch_state.load_model_checkpoint(p_src, restore_optimizer=False)
+                        )
+                        activated = True
+                        weights_transferred = True
+                        activation_kind = "triune_checkpoint_loaded"
+                        active_model_id = str(loaded.get("active_model") or target_active_id)
+                        summary_msg = f"Loaded native Triune checkpoint '{p_src.name}' directly into the 3-tier engine."
+                        transfer_report = {
+                            "weights_transferred": True,
+                            "transmute_mode": "native_checkpoint",
+                            "exits_calibrated": True,
+                        }
+                    except Exception as exc:
+                        return {
+                            "status": "error",
+                            "activated": False,
+                            "weights_transferred": False,
+                            "message": f"Failed to load Triune checkpoint '{raw_name}': {exc}",
+                        }
+                else:
+                    if (
+                        p_src.is_file()
+                        and p_src.suffix.lower() in {".safetensors", ".bin"}
+                        and (p_src.parent / "config.json").is_file()
+                    ):
+                        resolved_source = str(p_src.parent)
+                    elif (
+                        raw_name.lower().startswith("ollama:")
+                        or p_src.suffix.lower() == ".gguf"
+                        or (p_src.is_file() and p_src.suffix == "")
+                    ):
+                        from triune.runtime.gguf_loader import is_gguf_file, resolve_ollama_gguf_blob
+
+                        local_blob = p_src if is_gguf_file(p_src) else resolve_ollama_gguf_blob(raw_name)
+                        if local_blob is not None and local_blob.is_file():
+                            resolved_source = raw_name if raw_name.lower().startswith("ollama:") else str(local_blob)
+                        else:
+                            hf_cand = ollama_to_hf_candidate(raw_name)
+                            if not hf_cand:
+                                is_live_ol = raw_name.lower().startswith("ollama:") and _is_tag_live_in_ollama(
+                                    raw_name, query_ollama_running_tags()
+                                )
+                                return {
+                                    "status": "error",
+                                    "activated": False,
+                                    "weights_transferred": False,
+                                    "ollama_running": is_live_ol,
+                                    "message": (
+                                        f"Cannot locate local GGUF weights or HF repo for '{raw_name}'. "
+                                        + (
+                                            "Click 'Run Ollama' to chat using your live local Ollama model directly."
+                                            if is_live_ol
+                                            else "Load a local GGUF / Hugging Face / SafeTensors model for weight transfer."
+                                        )
+                                    ),
+                                }
+                            # Prefer matching locally cached HF directories discovered by the scanner before network lookup
+                            try:
+                                local_scan = await asyncio.to_thread(_discover_saved_models)
+                                cand_leaf = hf_cand.split("/")[-1].lower()
+                                for entry in local_scan.get("models", []):
+                                    if entry.get("kind") in {
+                                        "hf_cache",
+                                        "hf",
+                                        "huggingface",
+                                        "vllm",
+                                        "hermes",
+                                    } and entry.get("can_load_direct", True):
+                                        eid = str(entry.get("id") or "").lower()
+                                        if hf_cand.lower() in eid or cand_leaf in eid:
+                                            resolved_source = str(entry.get("path") or entry.get("id"))
+                                            break
+                                else:
+                                    resolved_source = hf_cand
+                            except Exception:
+                                resolved_source = hf_cand
+
+                    transfer_mode = str(getattr(req, "transfer_mode", "early_exit") or "early_exit").strip().lower()
+                    if transfer_mode not in {"early_exit", "native_distill"}:
+                        transfer_mode = "early_exit"
+
+                    try:
+                        tx_res = await asyncio.to_thread(
+                            pytorch_state.transmute_hf_model,
+                            resolved_source,
+                            reflex_ratio=reflex_ratio,
+                            mode=transfer_mode,
+                            num_experts=limbic_experts,
+                            quantize=getattr(req, "quantize", None),
+                            disk_stream=bool(getattr(req, "disk_stream", False)),
+                            use_jev=bool(
+                                getattr(req, "use_jev", True) if getattr(req, "use_jev", None) is not None else True
+                            ),
+                            active_model_id=target_active_id,
+                        )
+                        activated = True
+                        weights_transferred = bool(tx_res.get("weights_transferred", True))
+                        activation_kind = f"transferred_{transfer_mode}"
+                        active_model_id = str(tx_res.get("active_model_id") or target_active_id)
+                        transfer_report = tx_res.get("transfer_report") or {}
+                        summary_msg = (
+                            f"Transferred real weights from {resolved_source} into {active_model_id} "
+                            f"({transfer_mode}; Reflex layer {transfer_report.get('reflex_exit_layer')}, "
+                            f"Limbic layer {transfer_report.get('limbic_exit_layer')})."
+                        )
+                    except Exception as exc:
                         is_live_ol = raw_name.lower().startswith("ollama:") and _is_tag_live_in_ollama(
                             raw_name, query_ollama_running_tags()
+                        )
+                        hint = (
+                            f" Because '{raw_name}' is already running locally in Ollama, you can click 'Run Ollama' to chat directly."
+                            if is_live_ol
+                            else ""
                         )
                         return {
                             "status": "error",
                             "activated": False,
                             "weights_transferred": False,
                             "ollama_running": is_live_ol,
-                            "message": (
-                                f"Cannot map Ollama / GGUF archive '{raw_name}' to a Hugging Face SafeTensors repo automatically. "
-                                + (
-                                    "Click 'Run Ollama' to chat using your live local Ollama model directly, or load a local Hugging Face / SafeTensors directory."
-                                    if is_live_ol
-                                    else "Load a local Hugging Face / SafeTensors directory for real weight transfer."
-                                )
-                            ),
+                            "message": f"Real weight transfer failed for '{resolved_source}': {exc}.{hint}",
                         }
-                    # Prefer matching locally cached HF directories discovered by the scanner before network lookup
-                    try:
-                        local_scan = await asyncio.to_thread(_discover_saved_models)
-                        cand_leaf = hf_cand.split("/")[-1].lower()
-                        for entry in local_scan.get("models", []):
-                            if entry.get("kind") in {"hf_cache", "hf", "huggingface", "vllm", "hermes"} and entry.get(
-                                "can_load_direct", True
-                            ):
-                                eid = str(entry.get("id") or "").lower()
-                                if hf_cand.lower() in eid or cand_leaf in eid:
-                                    resolved_source = str(entry.get("path") or entry.get("id"))
-                                    break
-                        else:
-                            resolved_source = hf_cand
-                    except Exception:
-                        resolved_source = hf_cand
-
-                transfer_mode = str(getattr(req, "transfer_mode", "early_exit") or "early_exit").strip().lower()
-                if transfer_mode not in {"early_exit", "native_distill"}:
-                    transfer_mode = "early_exit"
-
-                try:
-                    tx_res = await asyncio.to_thread(
-                        pytorch_state.transmute_hf_model,
-                        resolved_source,
-                        reflex_ratio=reflex_ratio,
-                        mode=transfer_mode,
-                        num_experts=limbic_experts,
-                        quantize=getattr(req, "quantize", None),
-                        disk_stream=bool(getattr(req, "disk_stream", False)),
-                        use_jev=bool(
-                            getattr(req, "use_jev", True) if getattr(req, "use_jev", None) is not None else True
-                        ),
-                        active_model_id=target_active_id,
-                    )
-                    activated = True
-                    weights_transferred = bool(tx_res.get("weights_transferred", True))
-                    activation_kind = f"transferred_{transfer_mode}"
-                    active_model_id = str(tx_res.get("active_model_id") or target_active_id)
-                    transfer_report = tx_res.get("transfer_report") or {}
-                    summary_msg = (
-                        f"Transferred real weights from {resolved_source} into {active_model_id} "
-                        f"({transfer_mode}; Reflex layer {transfer_report.get('reflex_exit_layer')}, "
-                        f"Limbic layer {transfer_report.get('limbic_exit_layer')})."
-                    )
-                except Exception as exc:
-                    is_live_ol = raw_name.lower().startswith("ollama:") and _is_tag_live_in_ollama(
-                        raw_name, query_ollama_running_tags()
-                    )
-                    hint = (
-                        f" Because '{raw_name}' is already running locally in Ollama, you can click 'Run Ollama' to chat directly."
-                        if is_live_ol
-                        else ""
-                    )
-                    return {
-                        "status": "error",
-                        "activated": False,
-                        "weights_transferred": False,
-                        "ollama_running": is_live_ol,
-                        "message": f"Real weight transfer failed for '{resolved_source}': {exc}.{hint}",
-                    }
             else:
                 try:
                     active_model_id = target_active_id
@@ -7235,10 +7329,13 @@ SYSTEM \"\"\"You are Triune AI, a high-efficiency cognitive language model train
 
         return {
             "status": "success",
+            "message": summary_msg,
             "activated": activated,
             "weights_transferred": weights_transferred,
             "activation_kind": activation_kind,
             "active_model_id": active_model_id,
+            "checkpoint": pytorch_state.active_checkpoint if activated else None,
+            "architecture": pytorch_state.architecture_spec if activated else None,
             "transfer_report": transfer_report,
             "model_name": req.model_name,
             "source_type": source_type,
@@ -7382,6 +7479,7 @@ SYSTEM \"\"\"You are Triune AI, a high-efficiency cognitive language model train
                 k: {
                     "calls": s.calls,
                     "success_rate": round(s.success_rate, 3),
+                    "calibrated_reliability": round(s.calibrated_reliability(), 3),
                     "avg_latency_ms": round(s.avg_latency_ms, 1),
                     "learned_tips": s.learned_tips,
                 }
@@ -7397,6 +7495,30 @@ SYSTEM \"\"\"You are Triune AI, a high-efficiency cognitive language model train
         store = AgentMemoryStore()
         pref = store.remember_preference(req.key, req.value, category=req.category, priority=req.priority)
         return {"status": "success", "preference": {"key": pref.key, "value": pref.value, "category": pref.category}}
+
+    @router.delete("/v1/agents/memory/{key}")
+    async def delete_agent_memory_key(key: str) -> Dict[str, Any]:
+        """Remove a specific stored user preference from the persistent agent memory store."""
+        from triune.agents import AgentMemoryStore
+
+        store = AgentMemoryStore()
+        deleted = store.delete_preference(key)
+        return {"status": "success" if deleted else "not_found", "deleted": deleted, "key": key}
+
+    @router.post("/v1/agents/memory/clear")
+    async def clear_agent_memory_endpoint(scope: str = "preferences") -> Dict[str, Any]:
+        """Clear stored preferences, lessons, or full harness memory ('preferences' | 'lessons' | 'all')."""
+        from triune.agents import AgentMemoryStore
+
+        store = AgentMemoryStore()
+        clean_scope = scope.strip().lower()
+        if clean_scope == "lessons":
+            removed = {"lessons": store.clear_lessons()}
+        elif clean_scope == "all":
+            removed = store.clear_all()
+        else:
+            removed = {"preferences": store.clear_preferences()}
+        return {"status": "success", "scope": clean_scope, "removed": removed}
 
     @router.post("/v1/agents/persona")
     async def register_agent_persona(req: AgentPersonaRequest) -> Dict[str, Any]:
