@@ -2,17 +2,81 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import re
+import socket
 import subprocess
 import time
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List
 
 from triune.runtime.sandbox import PythonSandbox
+
+_ALLOWED_LOCAL_HTTP_PORTS: frozenset[int] = frozenset({11434, *range(8000, 8021)})
+
+
+def validate_http_url(url: str, *, allow_local_services: bool = False) -> str:
+    """Validate HTTP(S) URLs against SSRF targets (private, metadata, link-local, arbitrary loopback)."""
+    clean = str(url or "").strip()
+    parsed = urllib.parse.urlparse(clean)
+    if parsed.scheme.lower() not in {"http", "https"}:
+        raise ValueError("Only http:// and https:// URLs are permitted.")
+    if parsed.username or parsed.password:
+        raise ValueError("URLs containing embedded user credentials are not permitted.")
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError("URL is missing a valid hostname.")
+
+    port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
+    try:
+        addr_infos = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise ValueError(f"Unable to resolve hostname '{hostname}': {exc}") from exc
+
+    if not addr_infos:
+        raise ValueError(f"Hostname '{hostname}' resolved to no addresses.")
+
+    for info in addr_infos:
+        raw_ip = str(info[4][0]).split("%")[0]
+        ip = ipaddress.ip_address(raw_ip)
+        if ip.is_loopback:
+            if not (allow_local_services and port in _ALLOWED_LOCAL_HTTP_PORTS):
+                raise PermissionError(f"SSRF guard blocked loopback access to {hostname}:{port}.")
+            continue
+        if (
+            ip.is_link_local
+            or ip.is_private
+            or ip.is_multicast
+            or ip.is_reserved
+            or ip.is_unspecified
+            or not ip.is_global
+        ):
+            raise PermissionError(f"SSRF guard blocked non-public IP {ip} for host '{hostname}'.")
+
+    return clean
+
+
+class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Enforce SSRF URL validation across every HTTP redirect hop."""
+
+    def __init__(self, *, allow_local_services: bool = False, max_redirects: int = 3) -> None:
+        super().__init__()
+        self.allow_local_services = allow_local_services
+        self.max_redirects = max_redirects
+        self._hop_count = 0
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        self._hop_count += 1
+        if self._hop_count > self.max_redirects:
+            raise PermissionError("Exceeded safe HTTP redirect limit.")
+        target = urllib.parse.urljoin(req.full_url, newurl)
+        validate_http_url(target, allow_local_services=self.allow_local_services)
+        return super().redirect_request(req, fp, code, msg, headers, target)
 
 
 @dataclass
@@ -85,14 +149,21 @@ class ToolRegistry:
             for t in self._tools.values()
         ]
 
-    def execute(self, name: str, arguments: Dict[str, Any] | None = None, *, memory: Any = None) -> Dict[str, Any]:
+    def execute(
+        self,
+        name: str,
+        arguments: Dict[str, Any] | None = None,
+        *,
+        memory: Any = None,
+        context: str | None = None,
+    ) -> Dict[str, Any]:
         """Run a registered tool with timing and automatic tool-learning feedback."""
         tool = self._tools.get(name)
         t0 = time.perf_counter()
         if tool is None:
             err = f"Unknown tool '{name}'. Available: {', '.join(self._tools)}"
             if memory is not None:
-                memory.record_tool_outcome(name, success=False, latency_ms=0.0, error=err)
+                memory.record_tool_outcome(name, success=False, latency_ms=0.0, error=err, context=context)
             return {"ok": False, "result": None, "error": err, "latency_ms": 0.0}
 
         kwargs = dict(arguments or {})
@@ -104,22 +175,28 @@ class ToolRegistry:
             if is_err_dict:
                 err_msg = str(res.get("error") or res.get("message") or "Tool reported error")
                 if memory is not None:
-                    memory.record_tool_outcome(name, success=False, latency_ms=dt_ms, error=err_msg)
+                    memory.record_tool_outcome(name, success=False, latency_ms=dt_ms, error=err_msg, context=context)
                 return {"ok": False, "result": res, "error": err_msg, "latency_ms": dt_ms}
 
             if memory is not None:
-                memory.record_tool_outcome(name, success=True, latency_ms=dt_ms)
+                memory.record_tool_outcome(name, success=True, latency_ms=dt_ms, context=context)
             return {"ok": True, "result": res, "error": None, "latency_ms": dt_ms}
         except Exception as exc:
             dt_ms = round((time.perf_counter() - t0) * 1000.0, 2)
             err_msg = f"{type(exc).__name__}: {exc}"
             if memory is not None:
-                memory.record_tool_outcome(name, success=False, latency_ms=dt_ms, error=err_msg)
+                memory.record_tool_outcome(name, success=False, latency_ms=dt_ms, error=err_msg, context=context)
             return {"ok": False, "result": None, "error": err_msg, "latency_ms": dt_ms}
 
-    def format_prompt_catalog(self, memory: Any = None, preferred_tools: list[str] | None = None) -> str:
+    def format_prompt_catalog(
+        self,
+        memory: Any = None,
+        preferred_tools: list[str] | None = None,
+        *,
+        context: str | None = None,
+    ) -> str:
         """Format available tools along with empirical reliability hints and pitfalls."""
-        hints = memory.rank_tools_hint(self.names()) if memory is not None else {}
+        hints = memory.rank_tools_hint(self.names(), context=context) if memory is not None else {}
         preferred = set(preferred_tools or [])
         lines: list[str] = []
         ordered = sorted(
@@ -154,6 +231,7 @@ def build_integrated_toolbelt(
     subagent_runner: Callable[[str, str | None], Any] | None = None,
     allow_shell: bool = False,
     allow_writes: bool = True,
+    allow_local_http: bool = False,
 ) -> ToolRegistry:
     """Create a rich integrated ToolRegistry spanning filesystem, runtime, memory, skills & personas."""
     ws = Path(workspace).resolve()
@@ -347,17 +425,19 @@ def build_integrated_toolbelt(
     )
 
     def tool_http_fetch(url: str, max_chars: int = 4000) -> dict[str, Any]:
-        clean = str(url).strip()
-        if not clean.startswith(("http://", "https://")):
-            raise ValueError("Only http:// and https:// URLs are permitted.")
+        clean = validate_http_url(url, allow_local_services=allow_local_http)
         req = urllib.request.Request(clean, headers={"User-Agent": "TriuneAgentHarness/2.1"})
-        with urllib.request.urlopen(req, timeout=12) as resp:
+        opener = urllib.request.build_opener(_SafeRedirectHandler(allow_local_services=allow_local_http))
+        with opener.open(req, timeout=12) as resp:
+            final_url = getattr(resp, "url", clean) or clean
+            if final_url != clean:
+                validate_http_url(final_url, allow_local_services=allow_local_http)
             raw = resp.read(max(1024, int(max_chars) * 2)).decode("utf-8", errors="replace")
             return {"status": getattr(resp, "status", 200), "body": raw[: max(200, int(max_chars))]}
 
     reg.register(
         "http_fetch",
-        "Fetch text/JSON over HTTP GET (APIs, docs, or local Ollama/Studio endpoints).",
+        "Fetch text/JSON from SSRF-validated public HTTP(S) URLs cleanly.",
         tool_http_fetch,
         {
             "type": "object",
@@ -647,7 +727,8 @@ def build_integrated_toolbelt(
                 raise FileNotFoundError(f"Skill '{name_or_slug}' has no runnable helper.py.")
             ctx = json.loads(locals_json) if locals_json else {}
             res = sandbox.execute_code(sk.helper_code, locals_dict=ctx)
-            skills.record_outcome(sk.slug, bool(res.get("success", False)))
+            ok_exec = bool(res.get("success", False))
+            skills.record_outcome(sk.slug, ok_exec, verified=ok_exec)
             return res
 
         reg.register(

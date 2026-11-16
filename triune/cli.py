@@ -1393,7 +1393,7 @@ def main() -> None:
 
         _print_agent_status()
         render_notice(
-            "Interactive Agent REPL ready. Commands: /status, /persona <name>, /state <reflex|limbic|cortex>, /skills, /memory, /tools, /learn <note>, /exit",
+            "Interactive Agent REPL ready. Commands: /status, /persona <name>, /state <reflex|limbic|cortex>, /skills, /memory, /memory delete <key>, /memory clear, /tools, /learn <note>, /exit",
             level="info",
         )
         history: list[dict[str, str]] = []
@@ -1425,6 +1425,8 @@ def main() -> None:
                         ["/state <tier>", "Set reasoning tier: reflex | limbic | cortex"],
                         ["/skills", "List authored and auto-learned skills"],
                         ["/memory", "Show stored user wants/needs and learned lessons"],
+                        ["/memory delete <key>", "Delete a specific stored user preference"],
+                        ["/memory clear", "Clear all stored preferences and lessons"],
                         ["/tools", "Inspect learned tool reliability, avg latency & tips"],
                         ["/learn <text>", "Pin a preference or constraint into user memory"],
                         ["/clear", "Clear current turn conversation context"],
@@ -1459,6 +1461,20 @@ def main() -> None:
                             for s in sk_list
                         ],
                     )
+                continue
+            if low == "/memory clear":
+                removed = harness.memory.clear_all()
+                render_notice(
+                    f"Cleared agent memory (preferences={removed['preferences']}, lessons={removed['lessons']}, tool_stats={removed['tool_stats']}).",
+                    level="success",
+                )
+                continue
+            if low.startswith("/memory delete "):
+                target_key = text.split(None, 2)[2].strip() if len(text.split(None, 2)) >= 3 else ""
+                if target_key and harness.memory.delete_preference(target_key):
+                    render_notice(f"Deleted preference '{target_key}'.", level="success")
+                else:
+                    render_notice(f"Preference key '{target_key}' not found.", level="warn")
                 continue
             if low == "/memory":
                 pref_rows = [[p.category, p.key, p.value] for p in harness.memory.preferences.values()]

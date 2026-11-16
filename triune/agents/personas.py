@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
+
+from ._storage import atomic_write_json, load_validated_json_dict
 
 
 @dataclass
@@ -167,24 +168,42 @@ class StateController:
 
     def _load_custom_personas(self) -> None:
         path = self._custom_path()
-        if path is None or not path.is_file():
+        if path is None:
             return
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(raw, dict):
-                for key, item in raw.items():
-                    if isinstance(item, dict) and item.get("name"):
-                        self.personas[str(key).lower()] = PersonaProfile(**item)
-        except Exception:
-            pass
+        raw = load_validated_json_dict(path)
+        for key, item in raw.items():
+            if not isinstance(key, str) or not isinstance(item, dict) or not item.get("name"):
+                continue
+            depth = str(item.get("default_depth") or "limbic").lower()
+            if depth not in {"reflex", "limbic", "cortex"}:
+                depth = "limbic"
+            self.personas[key.lower()] = PersonaProfile(
+                name=str(item["name"]),
+                title=str(item.get("title") or item["name"]),
+                system_prompt=str(item.get("system_prompt") or ""),
+                default_depth=depth,
+                temperature=max(0.0, min(1.5, float(item.get("temperature", 0.4) or 0.4))),
+                preferred_tools=[str(t) for t in (item.get("preferred_tools") or []) if isinstance(t, str)],
+                traits=[str(t) for t in (item.get("traits") or []) if isinstance(t, str)],
+                custom=bool(item.get("custom", True)),
+            )
 
     def _save_custom_personas(self) -> None:
         path = self._custom_path()
         if path is None:
             return
-        path.parent.mkdir(parents=True, exist_ok=True)
         custom_only = {k: v.to_dict() for k, v in self.personas.items() if v.custom}
-        path.write_text(json.dumps(custom_only, indent=2), encoding="utf-8")
+        atomic_write_json(path, custom_only)
+
+    def delete_persona(self, name: str) -> bool:
+        """Delete a custom persona profile (built-in personas cannot be removed)."""
+        key = name.strip().lower()
+        prof = self.personas.get(key)
+        if prof is None or not prof.custom:
+            return False
+        self.personas.pop(key, None)
+        self._save_custom_personas()
+        return True
 
     def register_persona(
         self,

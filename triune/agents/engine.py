@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import re
 from dataclasses import dataclass, field
@@ -98,7 +99,7 @@ class Agent:
 
 
 class MultiAgentOrchestrator:
-    """Orchestrates sequential or harness-backed collaborative multi-agent pipelines."""
+    """Orchestrates sequential pipelines or parallel specialist fan-out across agents."""
 
     def __init__(self, harness: "AgentHarness | None" = None) -> None:
         self.agents: List[Agent] = []
@@ -119,6 +120,55 @@ class MultiAgentOrchestrator:
             prior_context = res[:1200]
         return results
 
+    def execute_parallel(
+        self,
+        goal: str,
+        *,
+        model: str | None = None,
+        max_workers: int = 4,
+    ) -> List[Dict[str, Any]]:
+        """Dispatch all registered specialist agents concurrently with isolated state per worker."""
+        if not self.agents:
+            return []
+
+        def _run_one(agent: Agent) -> Dict[str, Any]:
+            worker_harness: AgentHarness | None = None
+            if self.harness is not None:
+                worker_harness = AgentHarness(
+                    workspace=self.harness.workspace,
+                    store_dir=self.harness.store_dir,
+                    model=model or self.harness.model,
+                    allow_shell=bool(self.harness.tools.get("run_shell") is not None),
+                    allow_writes=bool(self.harness.tools.get("write_file") is not None),
+                    completion_fn=self.harness.completion_fn,
+                    providers=self.harness.providers,
+                    depth=self.harness.depth + 1,
+                )
+            output = agent.run_task(
+                f"Parallel Specialist Goal: {goal}",
+                harness=worker_harness,
+                **({"model": model} if worker_harness else {}),
+            )
+            return {"agent": agent.name, "role": agent.role, "ok": True, "output": output}
+
+        n_workers = max(1, min(int(max_workers), len(self.agents)))
+        outputs: List[Dict[str, Any] | None] = [None] * len(self.agents)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=n_workers) as pool:
+            future_map = {pool.submit(_run_one, ag): idx for idx, ag in enumerate(self.agents)}
+            for fut in concurrent.futures.as_completed(future_map):
+                idx = future_map[fut]
+                ag = self.agents[idx]
+                try:
+                    outputs[idx] = fut.result()
+                except Exception as exc:
+                    outputs[idx] = {
+                        "agent": ag.name,
+                        "role": ag.role,
+                        "ok": False,
+                        "output": f"Worker error: {exc}",
+                    }
+        return [o for o in outputs if o is not None]
+
 
 class AgentHarness:
     """Autonomous cognitive harness with adaptive personas, memory, skill creation, and tool learning."""
@@ -131,6 +181,7 @@ class AgentHarness:
         model: str | None = None,
         allow_shell: bool = False,
         allow_writes: bool = True,
+        allow_local_http: bool = False,
         completion_fn: Callable[..., Dict[str, Any]] | None = None,
         providers: ProviderManager | None = None,
         depth: int = 0,
@@ -141,6 +192,7 @@ class AgentHarness:
         self.model = model or (None if completion_fn is not None else self.providers.pick_default_model())
         self.completion_fn = completion_fn
         self.depth = depth
+        self.allow_local_http = allow_local_http
 
         self.memory = AgentMemoryStore(self.store_dir)
         self.state_controller = StateController(self.store_dir)
@@ -160,6 +212,7 @@ class AgentHarness:
             subagent_runner=subagent_runner,
             allow_shell=allow_shell,
             allow_writes=allow_writes,
+            allow_local_http=allow_local_http,
         )
 
     def _run_specialist_subagent(self, goal: str, persona: str | None = None) -> Dict[str, Any]:
@@ -170,6 +223,7 @@ class AgentHarness:
             model=self.model,
             allow_shell=bool(self.tools.get("run_shell") is not None),
             allow_writes=bool(self.tools.get("write_file") is not None),
+            allow_local_http=self.allow_local_http,
             completion_fn=self.completion_fn,
             providers=self.providers,
             depth=self.depth + 1,
@@ -212,7 +266,9 @@ class AgentHarness:
                 sk_lines.append(f"### Skill: {s.name} (`{s.slug}`)\n{s.instructions[:700]}")
             blocks.append("Activated Skills:\n" + "\n\n".join(sk_lines))
 
-        catalog = self.tools.format_prompt_catalog(self.memory, preferred_tools=prof.preferred_tools)
+        catalog = self.tools.format_prompt_catalog(
+            self.memory, preferred_tools=prof.preferred_tools, context=st.persona
+        )
         blocks.append(
             "Available Tools (use JSON action format when calling without native tool_calls):\n"
             f"{catalog}\n\n"
@@ -297,6 +353,7 @@ class AgentHarness:
         created_skills: list[str] = []
         learned_lessons: list[str] = []
         final_answer = ""
+        hit_step_budget = False
 
         for step_num in range(1, max(1, int(max_steps)) + 1):
             messages[0]["content"] = self._build_system_prompt(goal, matched_skills)
@@ -329,7 +386,7 @@ class AgentHarness:
 
                 prev_persona = self.state_controller.state.persona
                 prev_depth = self.state_controller.state.reasoning_depth
-                outcome = self.tools.execute(t_name, t_args, memory=self.memory)
+                outcome = self.tools.execute(t_name, t_args, memory=self.memory, context=prev_persona)
                 new_state = self.state_controller.adapt_after_tool(t_name, outcome["ok"], outcome["error"])
 
                 if t_name == "create_skill" and outcome["ok"] and isinstance(outcome["result"], dict):
@@ -394,14 +451,23 @@ class AgentHarness:
                 obs_text = json.dumps(obs_payload, default=str)[:4500]
                 messages.append({"role": "user", "content": f"Tool Observation:\n{obs_text}"})
         else:
+            hit_step_budget = True
             if not final_answer:
                 final_answer = (
                     "Reached maximum reasoning step budget. Partial progress was recorded in the execution trace."
                 )
 
-        # 3. Post-task reflection & self-learning
+        verified_outcome = (
+            (not hit_step_budget)
+            and bool(final_answer.strip())
+            and bool(trace)
+            and any(step["ok"] for step in trace)
+            and bool(trace[-1]["ok"])
+        )
+
+        # 3. Post-task reflection & verified self-learning
         for sk in matched_skills:
-            self.skills.record_outcome(sk.slug, bool(final_answer))
+            self.skills.record_outcome(sk.slug, bool(final_answer), verified=verified_outcome)
 
         # Automatically crystallize failure->recovery transitions into reusable lessons
         for idx in range(len(trace) - 1):
@@ -412,13 +478,14 @@ class AgentHarness:
                 learned_lessons.append(auto_les)
 
         if auto_crystallize:
-            synthesized = self.skills.auto_crystallize_from_trace(goal, trace)
+            synthesized = self.skills.auto_crystallize_from_trace(goal, trace, verified=verified_outcome)
             if synthesized is not None:
                 created_skills.append(synthesized.slug)
                 _emit("skill_synthesized", {"slug": synthesized.slug, "name": synthesized.name})
 
         return {
             "answer": final_answer,
+            "verified": verified_outcome,
             "persona": self.state_controller.state.persona,
             "reasoning_depth": self.state_controller.state.reasoning_depth,
             "state_history": list(self.state_controller.state.history),

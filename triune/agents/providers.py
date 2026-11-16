@@ -157,6 +157,53 @@ class ProviderManager:
             "Use 'ollama:<tag>', an OpenAI/Anthropic/Gemini model ID, or pass a local completion callback."
         )
 
+    @staticmethod
+    def _post_json(
+        url: str,
+        payload: Dict[str, Any],
+        *,
+        headers: Optional[Dict[str, str]] = None,
+        timeout: int = 120,
+    ) -> Dict[str, Any]:
+        req_headers = {"Content-Type": "application/json", **(headers or {})}
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers=req_headers,
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw_text = resp.read().decode("utf-8", errors="replace")
+        try:
+            parsed = json.loads(raw_text)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Provider returned non-JSON payload: {raw_text[:200]}") from exc
+        if not isinstance(parsed, dict):
+            raise RuntimeError("Provider returned unexpected non-object JSON payload.")
+        return parsed
+
+    @staticmethod
+    def _normalize_tool_calls(raw_calls: Any) -> List[Dict[str, Any]]:
+        tool_calls: List[Dict[str, Any]] = []
+        for tc in raw_calls or []:
+            if not isinstance(tc, dict):
+                continue
+            fn = tc.get("function") or {}
+            if not isinstance(fn, dict) or not fn.get("name"):
+                continue
+            raw_args = fn.get("arguments")
+            if isinstance(raw_args, str):
+                try:
+                    args = json.loads(raw_args) if raw_args.strip() else {}
+                except json.JSONDecodeError:
+                    args = {}
+            elif isinstance(raw_args, dict):
+                args = dict(raw_args)
+            else:
+                args = {}
+            tool_calls.append({"name": str(fn["name"]), "arguments": args})
+        return tool_calls
+
     def _call_ollama_chat(
         self,
         tag: str,
@@ -180,36 +227,17 @@ class ProviderManager:
         if tools:
             body["tools"] = tools
 
-        def _post(payload_dict: Dict[str, Any]) -> Dict[str, Any]:
-            req = urllib.request.Request(
-                url,
-                data=json.dumps(payload_dict).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            with urllib.request.urlopen(req, timeout=180) as resp:
-                return json.loads(resp.read().decode("utf-8", errors="replace"))
-
         try:
-            data = _post(body)
+            data = self._post_json(url, body, timeout=180)
         except Exception as exc:
             if tools and "400" in str(exc):
                 body.pop("tools", None)
-                data = _post(body)
+                data = self._post_json(url, body, timeout=180)
             else:
                 raise
 
         msg = data.get("message") or {}
-        tool_calls = []
-        for tc in msg.get("tool_calls") or []:
-            fn = tc.get("function") or {}
-            args = fn.get("arguments")
-            if isinstance(args, str):
-                try:
-                    args = json.loads(args)
-                except json.JSONDecodeError:
-                    args = {}
-            tool_calls.append({"name": fn.get("name"), "arguments": args or {}})
+        tool_calls = self._normalize_tool_calls(msg.get("tool_calls"))
         return {"content": str(msg.get("content") or ""), "tool_calls": tool_calls, "raw": data}
 
     def _call_openai_compat(
@@ -236,21 +264,14 @@ class ProviderManager:
         }
         if tools:
             payload["tools"] = tools
-        req = urllib.request.Request(
+        data = self._post_json(
             f"{base}/chat/completions",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
-            method="POST",
+            payload,
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=120,
         )
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            data = json.loads(resp.read().decode("utf-8", errors="replace"))
         msg = (data.get("choices") or [{}])[0].get("message") or {}
-        tool_calls = []
-        for tc in msg.get("tool_calls") or []:
-            fn = tc.get("function") or {}
-            raw_args = fn.get("arguments") or "{}"
-            args = json.loads(raw_args) if isinstance(raw_args, str) else dict(raw_args)
-            tool_calls.append({"name": fn.get("name"), "arguments": args})
+        tool_calls = self._normalize_tool_calls(msg.get("tool_calls"))
         return {"content": str(msg.get("content") or ""), "tool_calls": tool_calls, "raw": data}
 
     def _call_anthropic(

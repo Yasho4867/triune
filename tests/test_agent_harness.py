@@ -7,7 +7,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -19,6 +19,7 @@ from triune.agents import (
     SkillLibrary,
     StateController,
 )
+from triune.agents.tools import _SafeRedirectHandler, validate_http_url
 from triune.api.server import create_app
 
 
@@ -260,6 +261,110 @@ class TestTriuneAgentHarness(unittest.TestCase):
             self.assertEqual(rjson["status"], "success")
             self.assertEqual(rjson["persona"], "researcher")
             self.assertEqual(rjson["answer"], "All systems ready.")
+
+            # Exercise explicit memory CRUD endpoints
+            up_mem = client.post(
+                "/v1/agents/memory",
+                json={"key": "audit_test_key", "value": "prefer explicit checks", "category": "constraint"},
+            )
+            self.assertEqual(up_mem.status_code, 200)
+            del_mem = client.delete("/v1/agents/memory/audit_test_key")
+            self.assertEqual(del_mem.status_code, 200)
+            self.assertTrue(del_mem.json()["deleted"])
+
+    def test_ssrf_guard_blocks_private_metadata_and_unsafe_redirects(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            harness = AgentHarness(workspace=tmpdir, store_dir=Path(tmpdir) / "store", allow_local_http=False)
+            for bad_url in (
+                "http://169.254.169.254/latest/meta-data/",
+                "http://10.0.0.1/internal",
+                "http://192.168.1.50/router",
+                "http://127.0.0.1:22/",
+                "http://127.0.0.1:11434/api/tags",
+                "file:///etc/passwd",
+                "http://user@8.8.8.8/",
+            ):
+                res = harness.tools.execute("http_fetch", {"url": bad_url}, memory=harness.memory)
+                self.assertFalse(res["ok"], f"Expected SSRF guard to block {bad_url}")
+
+            # Local allowlist explicitly permits Ollama/Studio ports while still blocking SSH/metadata
+            self.assertEqual(
+                validate_http_url("http://127.0.0.1:11434/api/tags", allow_local_services=True),
+                "http://127.0.0.1:11434/api/tags",
+            )
+            with self.assertRaises(PermissionError):
+                validate_http_url("http://127.0.0.1:22/", allow_local_services=True)
+            with self.assertRaises(PermissionError):
+                validate_http_url("http://169.254.169.254/", allow_local_services=True)
+
+            # Redirect hops pointing to metadata IPs must fail validation
+            redir = _SafeRedirectHandler(allow_local_services=True)
+            req = MagicMock()
+            req.full_url = "https://example.com/start"
+            with self.assertRaises(PermissionError):
+                redir.redirect_request(req, None, 302, "Found", {}, "http://169.254.169.254/latest/meta-data/")
+
+    def test_memory_determinism_schema_resilience_helper_cleanup_and_parallel_orch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store_dir = Path(tmpdir) / "store"
+            mem_a = AgentMemoryStore(store_dir)
+            prefs_a = mem_a.infer_user_needs_from_prompt("I prefer clean deterministic hashing across restarts.")
+            key_a = [p.key for p in prefs_a if p.key.startswith("user_rule_")][0]
+
+            mem_b = AgentMemoryStore(Path(tmpdir) / "store_b")
+            prefs_b = mem_b.infer_user_needs_from_prompt("I prefer clean deterministic hashing across restarts.")
+            key_b = [p.key for p in prefs_b if p.key.startswith("user_rule_")][0]
+            self.assertEqual(key_a, key_b)
+
+            # Explicit delete & clear controls + corrupt JSON resilience
+            self.assertTrue(mem_a.delete_preference(key_a))
+            self.assertNotIn(key_a, mem_a.preferences)
+            (store_dir / "memory.json").write_text("{corrupt-json", encoding="utf-8")
+            mem_recovered = AgentMemoryStore(store_dir)
+            self.assertEqual(len(mem_recovered.preferences), 0)
+
+            # Stale helper.py removal when updated with helper_code=None
+            lib = SkillLibrary(store_dir / "skills")
+            sk = lib.create_skill(
+                "Quant Audit",
+                "Optimize quantized tensor memory budgets.",
+                "Run helper calculation.",
+                helper_code="x = 42\n",
+            )
+            helper_file = store_dir / "skills" / sk.slug / "helper.py"
+            self.assertTrue(helper_file.is_file())
+            lib.create_skill(
+                "Quant Audit", "Optimize quantized tensor memory budgets.", "Manual only.", helper_code=None
+            )
+            self.assertFalse(helper_file.is_file())
+
+            # Morphological TF-IDF skill retrieval + verified-only reinforcement
+            matched = lib.match_skills("optimizing quantization tensors")
+            self.assertTrue(any(s.slug == sk.slug for s in matched))
+
+            # Unverified/step-budget exhaustion must NOT credit skill successes or crystallize Auto skill
+            harness = AgentHarness(
+                workspace=tmpdir,
+                store_dir=store_dir,
+                completion_fn=lambda *_, **__: {
+                    "content": '{"thought": "looping", "action": "list_dir", "arguments": {"path": "."}}'
+                },
+            )
+            budget_res = harness.run_goal("Quant Audit check weights optimize", max_steps=2)
+            self.assertFalse(budget_res["verified"])
+            self.assertEqual(harness.skills.skills[sk.slug].uses, 1)
+            self.assertEqual(harness.skills.skills[sk.slug].successes, 0)
+            self.assertEqual(budget_res["created_skills"], [])
+
+            # Parallel multi-agent dispatch
+            orch = MultiAgentOrchestrator(harness=harness)
+            orch.add_agent(Agent(name="Alpha", role="Researcher", system_prompt="Check A"))
+            orch.add_agent(Agent(name="Beta", role="Sentinel", system_prompt="Check B"))
+            harness.completion_fn = lambda msgs, **_: {"content": f"Done: {msgs[-1]['content'][:40]}", "tool_calls": []}
+            par_res = orch.execute_parallel("Audit architecture concurrently", max_workers=2)
+            self.assertEqual(len(par_res), 2)
+            self.assertEqual([r["agent"] for r in par_res], ["Alpha", "Beta"])
+            self.assertTrue(all(r["ok"] for r in par_res))
 
 
 if __name__ == "__main__":

@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
-import json
 import re
+import shutil
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from ._storage import (
+    atomic_write_json,
+    atomic_write_text,
+    compute_tfidf_cosine_scores,
+    load_validated_json_dict,
+    tokenize_terms,
+)
 
 
 @dataclass
@@ -109,23 +117,15 @@ class SkillLibrary:
         return self.store_dir / "_skill_stats.json"
 
     def _load_stats(self) -> dict[str, dict[str, Any]]:
-        sp = self._stats_path()
-        if sp.is_file():
-            try:
-                raw = json.loads(sp.read_text(encoding="utf-8"))
-                if isinstance(raw, dict):
-                    return raw
-            except Exception:
-                pass
-        return {}
+        raw = load_validated_json_dict(self._stats_path())
+        return {str(k): v for k, v in raw.items() if isinstance(v, dict)}
 
     def _save_stats(self) -> None:
-        self.store_dir.mkdir(parents=True, exist_ok=True)
         payload = {
             slug: {"uses": s.uses, "successes": s.successes, "updated_at": s.updated_at}
             for slug, s in self.skills.items()
         }
-        self._stats_path().write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        atomic_write_json(self._stats_path(), payload)
 
     def _load_all(self) -> None:
         stats = self._load_stats()
@@ -137,9 +137,9 @@ class SkillLibrary:
                 skill = _parse_skill_md(md)
                 if skill is not None:
                     st = stats.get(skill.slug)
-                    if st:
-                        skill.uses = int(st.get("uses", 0))
-                        skill.successes = int(st.get("successes", 0))
+                    if isinstance(st, dict):
+                        skill.uses = max(0, int(st.get("uses", 0) or 0))
+                        skill.successes = max(0, int(st.get("successes", 0) or 0))
                     self.skills[skill.slug] = skill
 
     def create_skill(
@@ -153,11 +153,11 @@ class SkillLibrary:
         recommended_tools: list[str] | None = None,
         helper_code: str | None = None,
     ) -> AgentSkill:
-        """Synthesize and persist a new SKILL.md (and optional sandbox helper.py)."""
+        """Synthesize and atomically persist a SKILL.md (and sync/prune optional helper.py)."""
         slug = _slugify(name)
         trig = [t.strip().lower() for t in (triggers or []) if t.strip()]
         if not trig:
-            trig = list(dict.fromkeys(re.findall(r"[a-z0-9_]{3,}", f"{name} {description}".lower())))[:8]
+            trig = list(dict.fromkeys(tokenize_terms(f"{name} {description}", include_char_ngrams=False)))[:8]
 
         existing = self.skills.get(slug)
         skill = AgentSkill(
@@ -177,13 +177,28 @@ class SkillLibrary:
         skill_dir = self.store_dir / slug
         skill_dir.mkdir(parents=True, exist_ok=True)
         md_path = skill_dir / "SKILL.md"
-        md_path.write_text(_format_skill_md(skill), encoding="utf-8")
+        atomic_write_text(md_path, _format_skill_md(skill))
+        helper_path = skill_dir / "helper.py"
         if helper_code is not None:
-            (skill_dir / "helper.py").write_text(helper_code, encoding="utf-8")
+            atomic_write_text(helper_path, helper_code)
+        else:
+            helper_path.unlink(missing_ok=True)
         skill.source_path = str(md_path)
         self.skills[slug] = skill
         self._save_stats()
         return skill
+
+    def delete_skill(self, slug_or_name: str) -> bool:
+        """Delete a skill from the library and remove its directory if under store_dir."""
+        slug = _slugify(slug_or_name)
+        if slug not in self.skills:
+            return False
+        self.skills.pop(slug, None)
+        skill_dir = self.store_dir / slug
+        if skill_dir.is_dir():
+            shutil.rmtree(skill_dir, ignore_errors=True)
+        self._save_stats()
+        return True
 
     def evolve_skill(self, slug_or_name: str, amendment: str, *, add_tools: list[str] | None = None) -> AgentSkill:
         """Refine an existing skill cleanly with new edge cases or better steps."""
@@ -204,50 +219,67 @@ class SkillLibrary:
         )
 
     def match_skills(self, query: str, limit: int = 3) -> list[AgentSkill]:
-        """Find relevant skills whose triggers or descriptions match the user request."""
+        """Rank relevant skills via TF-IDF subword cosine similarity + explicit triggers + verified reliability."""
+        if not self.skills:
+            return []
         q_low = (query or "").lower()
-        q_words = set(re.findall(r"[a-z0-9_]{3,}", q_low))
+        q_words = set(tokenize_terms(q_low, include_char_ngrams=False))
+        skill_list = list(self.skills.values())
+        docs = [f"{s.name} {s.description} {' '.join(s.triggers)} {' '.join(s.recommended_tools)}" for s in skill_list]
+        sims = compute_tfidf_cosine_scores(query, docs)
         scored: list[tuple[float, AgentSkill]] = []
-        for s in self.skills.values():
-            trig_hits = sum(2.5 for t in s.triggers if t in q_low or t in q_words)
-            desc_words = set(re.findall(r"[a-z0-9_]{3,}", f"{s.name} {s.description}".lower()))
-            overlap = len(q_words & desc_words)
-            score = trig_hits + overlap * 0.8 + (0.3 * s.success_rate if s.uses > 0 else 0.0)
-            if trig_hits > 0 or overlap >= 2:
+        for s, sim in zip(skill_list, sims):
+            trig_hits = sum(1.5 for t in s.triggers if t in q_low or t in q_words)
+            reliability_bonus = 0.35 * ((s.successes + 1.0) / (s.uses + 2.0)) if s.uses > 0 else 0.0
+            score = sim * 3.0 + trig_hits + reliability_bonus
+            if trig_hits > 0 or sim >= 0.14:
                 scored.append((score, s))
         scored.sort(key=lambda pair: pair[0], reverse=True)
         return [s for _, s in scored[:limit]]
 
-    def record_outcome(self, slug_or_name: str, success: bool) -> None:
+    def record_outcome(self, slug_or_name: str, success: bool, *, verified: bool = False) -> None:
+        """Record skill usage; credit ``successes`` only when verified by execution checks."""
         slug = _slugify(slug_or_name)
         skill = self.skills.get(slug)
         if skill is None:
             return
         skill.uses += 1
-        if success:
+        if success and verified:
             skill.successes += 1
         skill.updated_at = time.time()
         self._save_stats()
 
-    def auto_crystallize_from_trace(self, goal: str, trace_steps: list[dict[str, Any]]) -> AgentSkill | None:
-        """Automatically turn successful multi-tool sequences into a reusable skill."""
+    def auto_crystallize_from_trace(
+        self,
+        goal: str,
+        trace_steps: list[dict[str, Any]],
+        *,
+        verified: bool = False,
+    ) -> AgentSkill | None:
+        """Turn verified, non-trivial multi-tool workflows into a reusable skill."""
+        if not verified or not trace_steps:
+            return None
+        # Do not crystallize if final recorded tool failed without recovery
+        if not trace_steps[-1].get("ok"):
+            return None
         successful_tools = [str(s.get("tool")) for s in trace_steps if s.get("success") and s.get("tool")]
         unique_tools = list(dict.fromkeys(successful_tools))
-        # Only crystallize genuinely non-trivial workflows
+        # Only crystallize genuinely non-trivial workflows with >=3 tool calls and >=2 distinct tools
         if len(successful_tools) < 3 or len(unique_tools) < 2:
             return None
-        words = [w for w in re.findall(r"[a-z0-9]+", goal.lower()) if len(w) > 2][:5]
-        if not words:
+        words = [w for w in tokenize_terms(goal, include_char_ngrams=False) if len(w) >= 3][:5]
+        if len(words) < 2:
             return None
         name = " ".join(words).title()
-        slug = _slugify(name)
+        full_name = f"Auto: {name}"
+        slug = _slugify(full_name)
         if slug in self.skills:
             return None
         steps = [f"Run `{t}` with validated workspace inputs." for t in unique_tools]
         return self.create_skill(
-            name=f"Auto: {name}",
-            description=f"Auto-learned workflow for goals matching: {goal[:100]}",
-            instructions=f"Synthesized from successful execution trace solving: `{goal}`.",
+            name=full_name,
+            description=f"Verified workflow ({' -> '.join(unique_tools)}) for goals matching: {goal[:100]}",
+            instructions=f"Synthesized from verified execution trace solving: `{goal}`.",
             triggers=words,
             steps=steps,
             recommended_tools=unique_tools,
