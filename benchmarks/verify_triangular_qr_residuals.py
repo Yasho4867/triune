@@ -34,8 +34,113 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
-import scipy.stats as stats
+try:
+    import scipy.stats as stats  # type: ignore[import-not-found]
+except ImportError:
+    stats = None  # type: ignore[assignment]
+
+
+class _PureMathStudentT:
+    """Pure-Python IEEE-754 fallback for Student-t CDF/SF/PPF when SciPy is absent."""
+
+    @staticmethod
+    def _betacf(a: float, b: float, x: float) -> float:
+        qab, qap, qam = a + b, a + 1.0, a - 1.0
+        c = 1.0
+        d = 1.0 - qab * x / qap
+        if abs(d) < 1e-300:
+            d = 1e-300
+        d = 1.0 / d
+        h = d
+        for m in range(1, 201):
+            m2 = 2 * m
+            aa = m * (b - m) * x / ((qam + m2) * (a + m2))
+            d = 1.0 + aa * d
+            d = 1e-300 if abs(d) < 1e-300 else d
+            c = 1.0 + aa / c
+            c = 1e-300 if abs(c) < 1e-300 else c
+            d = 1.0 / d
+            h *= d * c
+            aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2))
+            d = 1.0 + aa * d
+            d = 1e-300 if abs(d) < 1e-300 else d
+            c = 1.0 + aa / c
+            c = 1e-300 if abs(c) < 1e-300 else c
+            d = 1.0 / d
+            delta = d * c
+            h *= delta
+            if abs(delta - 1.0) < 3e-16:
+                break
+        return h
+
+    @classmethod
+    def _betainc(cls, a: float, b: float, x: float) -> float:
+        if x <= 0.0:
+            return 0.0
+        if x >= 1.0:
+            return 1.0
+        log_bt = math.lgamma(a + b) - math.lgamma(a) - math.lgamma(b) + a * math.log(x) + b * math.log(1.0 - x)
+        if x < (a + 1.0) / (a + b + 2.0):
+            log_val = log_bt + math.log(cls._betacf(a, b, x) / a)
+            return math.exp(log_val) if log_val > -745.0 else 0.0
+        log_val = log_bt + math.log(cls._betacf(b, a, 1.0 - x) / b)
+        comp = math.exp(log_val) if log_val > -745.0 else 0.0
+        return 1.0 - comp
+
+    @classmethod
+    def sf(cls, x: float, df: int) -> float:
+        t_val = float(x)
+        x_beta = df / (df + t_val * t_val)
+        p_tail = 0.5 * cls._betainc(0.5 * df, 0.5, x_beta)
+        return p_tail if t_val >= 0.0 else 1.0 - p_tail
+
+    @classmethod
+    def cdf(cls, x: float, df: int) -> float:
+        return cls.sf(-float(x), df=df)
+
+    @classmethod
+    def ppf(cls, q: float, df: int) -> float:
+        if q == 0.5:
+            return 0.0
+        sign = 1.0 if q > 0.5 else -1.0
+        target = q if q > 0.5 else 1.0 - q
+        lo, hi = 0.0, 1.0
+        while cls.cdf(hi, df=df) < target:
+            hi *= 2.0
+        for _ in range(80):
+            mid = 0.5 * (lo + hi)
+            if cls.cdf(mid, df=df) < target:
+                lo = mid
+            else:
+                hi = mid
+        return sign * 0.5 * (lo + hi)
+
+
+class _PureMathStats:
+    t = _PureMathStudentT
+
+    @staticmethod
+    def ttest_rel(a: list[float], b: list[float]) -> SimpleNamespace:
+        n = len(a)
+        df = n - 1
+        diffs = [float(x) - float(y) for x, y in zip(a, b)]
+        mean_d = sum(diffs) / n
+        var_d = sum((d - mean_d) ** 2 for d in diffs) / df
+        std_d = math.sqrt(var_d)
+        if std_d == 0.0:
+            return SimpleNamespace(
+                statistic=0.0 if mean_d == 0.0 else math.copysign(math.inf, mean_d),
+                pvalue=1.0 if mean_d == 0.0 else 0.0,
+            )
+        t_stat = mean_d / (std_d / math.sqrt(n))
+        p_val = 2.0 * _PureMathStudentT.sf(abs(t_stat), df=df)
+        return SimpleNamespace(statistic=t_stat, pvalue=p_val)
+
+
+if stats is None:
+    stats = _PureMathStats  # type: ignore[assignment]
 import torch
 from tokenizers import Tokenizer
 

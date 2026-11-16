@@ -152,6 +152,51 @@ class TestDiskStreamingAndUnifiedHF(unittest.TestCase):
             self.assertGreater(m.inv_freq.abs().sum().item(), 0.0)
         self.assertIs(torch.nn.Module.register_parameter, orig_reg)
 
+    def test_gguf_vectorized_cpu_and_torch_dequant_parity(self):
+        import numpy as np
+
+        from triune.runtime.gguf_loader import (
+            _BLOCK_META,
+            _GGML_Q4_0,
+            _GGML_Q4_1,
+            _GGML_Q4_K,
+            _GGML_Q5_0,
+            _GGML_Q5_K,
+            _GGML_Q6_K,
+            _GGML_Q8_0,
+            _dequantize_ggml_torch_chunk,
+            dequantize_ggml_tensor,
+        )
+
+        rng = np.random.default_rng(7)
+        devs = [torch.device("cpu")]
+        if torch.cuda.is_available():
+            devs.append(torch.device("cuda"))
+
+        for ggml_type in (_GGML_Q4_0, _GGML_Q4_1, _GGML_Q5_0, _GGML_Q8_0, _GGML_Q4_K, _GGML_Q5_K, _GGML_Q6_K):
+            blk_elems, blk_bytes = _BLOCK_META[ggml_type]
+            nb = 256
+            raw = rng.integers(0, 256, size=(nb, blk_bytes), dtype=np.uint8)
+            if ggml_type == _GGML_Q6_K:
+                raw[:, 208:210] = 0x38
+            elif ggml_type in (_GGML_Q4_1, _GGML_Q4_K, _GGML_Q5_K):
+                raw[:, :4] = 0x38
+            else:
+                raw[:, :2] = 0x38
+            if ggml_type == _GGML_Q5_0:
+                raw[0, 5] |= 0x80
+            raw_bytes = raw.tobytes()
+            dims = (64, (nb * blk_elems) // 64)
+
+            ref = dequantize_ggml_tensor(raw_bytes, dims, ggml_type, torch.float32, compute_device=None)
+            for dev in devs:
+                got = (
+                    _dequantize_ggml_torch_chunk(torch.from_numpy(raw.copy()).to(dev), ggml_type, torch.float32)
+                    .cpu()
+                    .reshape(tuple(reversed(dims)))
+                )
+                self.assertEqual(float((ref - got).abs().max().item()), 0.0)
+
     def test_disk_streamed_qlora_sft_masking_and_step(self):
         from triune.inference import generate_response, load_model_for_inference
         from triune.runtime.disk_streaming import build_nvfp4_disk_cache, load_disk_streamed_model

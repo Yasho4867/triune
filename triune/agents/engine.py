@@ -108,14 +108,19 @@ class MultiAgentOrchestrator:
     def add_agent(self, agent: Agent) -> None:
         self.agents.append(agent)
 
-    def execute_pipeline(self, goal: str, *, model: str | None = None) -> List[str]:
+    def execute_pipeline(self, goal: str, *, model: str | None = None, max_steps: int | None = None) -> List[str]:
         results = []
         prior_context = ""
         for agent in self.agents:
             prompt = f"Collaborative Goal: {goal}"
             if prior_context:
                 prompt += f"\nPrior Specialist Findings:\n{prior_context}"
-            res = agent.run_task(prompt, harness=self.harness, **({"model": model} if self.harness else {}))
+            run_kw: Dict[str, Any] = {}
+            if self.harness:
+                run_kw["model"] = model
+                if max_steps is not None:
+                    run_kw["max_steps"] = max_steps
+            res = agent.run_task(prompt, harness=self.harness, **run_kw)
             results.append(res)
             prior_context = res[:1200]
         return results
@@ -126,6 +131,7 @@ class MultiAgentOrchestrator:
         *,
         model: str | None = None,
         max_workers: int = 4,
+        max_steps: int | None = None,
     ) -> List[Dict[str, Any]]:
         """Dispatch all registered specialist agents concurrently with isolated state per worker."""
         if not self.agents:
@@ -144,10 +150,15 @@ class MultiAgentOrchestrator:
                     providers=self.harness.providers,
                     depth=self.harness.depth + 1,
                 )
+            run_kw: Dict[str, Any] = {}
+            if worker_harness:
+                run_kw["model"] = model
+                if max_steps is not None:
+                    run_kw["max_steps"] = max_steps
             output = agent.run_task(
                 f"Parallel Specialist Goal: {goal}",
                 harness=worker_harness,
-                **({"model": model} if worker_harness else {}),
+                **run_kw,
             )
             return {"agent": agent.name, "role": agent.role, "ok": True, "output": output}
 
@@ -168,6 +179,38 @@ class MultiAgentOrchestrator:
                         "output": f"Worker error: {exc}",
                     }
         return [o for o in outputs if o is not None]
+
+    def orchestrate_team(
+        self,
+        goal: str,
+        personas: List[str],
+        *,
+        mode: str = "parallel",
+        model: str | None = None,
+        max_workers: int = 4,
+        max_steps: int = 6,
+    ) -> Dict[str, Any]:
+        """Build specialist agents from persona profiles and run them in parallel or pipeline mode."""
+        known = self.harness.state_controller.personas if self.harness is not None else {}
+        selected = [p.strip().lower() for p in personas if str(p).strip()] or ["architect", "engineer", "sentinel"]
+        self.agents = []
+        for pname in selected:
+            prof = known.get(pname)
+            role = prof.title if prof is not None else pname.title()
+            sys_prompt = prof.system_prompt if prof is not None else f"Specialist perspective: {role}"
+            self.add_agent(Agent(name=pname, role=role, system_prompt=sys_prompt))
+
+        clean_mode = str(mode or "parallel").strip().lower()
+        if clean_mode == "pipeline":
+            raw_outputs = self.execute_pipeline(goal, model=model, max_steps=max_steps)
+            results = [
+                {"agent": ag.name, "role": ag.role, "ok": True, "output": out}
+                for ag, out in zip(self.agents, raw_outputs)
+            ]
+        else:
+            clean_mode = "parallel"
+            results = self.execute_parallel(goal, model=model, max_workers=max_workers, max_steps=max_steps)
+        return {"mode": clean_mode, "goal": goal, "results": results}
 
 
 class AgentHarness:

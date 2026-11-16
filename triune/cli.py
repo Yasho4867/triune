@@ -399,6 +399,19 @@ def build_cli_parser() -> argparse.ArgumentParser:
     agent_parser.add_argument(
         "--no-auto-skill", action="store_true", help="Disable automatic post-task skill synthesis"
     )
+    agent_parser.add_argument(
+        "--team",
+        default=None,
+        help="Comma-separated specialist personas for multi-agent orchestration (e.g. architect,engineer,sentinel)",
+    )
+    agent_parser.add_argument(
+        "--parallel",
+        action="store_true",
+        help="Run --team specialists concurrently via MultiAgentOrchestrator.execute_parallel",
+    )
+    agent_parser.add_argument(
+        "--max-workers", type=int, default=4, help="Max concurrent workers for --parallel team orchestration"
+    )
 
     parser._triune_subparsers = {  # type: ignore[attr-defined]
         "adapter": adapter_parser,
@@ -1368,6 +1381,38 @@ def main() -> None:
             )
 
         single_goal = args.goal or args.goal_pos
+        if single_goal and (getattr(args, "team", None) or getattr(args, "parallel", False)):
+            from triune.agents import MultiAgentOrchestrator
+
+            raw_team = getattr(args, "team", None) or "architect,engineer,sentinel"
+            team_list = [p.strip() for p in str(raw_team).split(",") if p.strip()]
+            mode = "parallel" if getattr(args, "parallel", False) else "pipeline"
+            try:
+                orch = MultiAgentOrchestrator(harness=harness)
+                summary = orch.orchestrate_team(
+                    single_goal,
+                    team_list,
+                    mode=mode,
+                    model=harness.model,
+                    max_workers=max(1, int(getattr(args, "max_workers", 4))),
+                    max_steps=max(1, int(args.max_steps)),
+                )
+                render_table(
+                    f"Multi-Agent Team Orchestration ({summary['mode'].upper()})",
+                    [
+                        ("Agent", "left", "cyan"),
+                        ("Role", "left", "white"),
+                        ("OK", "center", "green"),
+                        ("Output", "left", "white"),
+                    ],
+                    [
+                        [r["agent"], r["role"], "yes" if r["ok"] else "no", str(r["output"])[:160]]
+                        for r in summary["results"]
+                    ],
+                )
+            except Exception as exc:
+                render_notice(f"Team orchestration failed: {exc}", level="error")
+            return
         if single_goal:
             try:
                 res = harness.run_goal(

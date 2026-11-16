@@ -366,6 +366,98 @@ class TestTriuneAgentHarness(unittest.TestCase):
             self.assertEqual([r["agent"] for r in par_res], ["Alpha", "Beta"])
             self.assertTrue(all(r["ok"] for r in par_res))
 
+            seq_res = orch.orchestrate_team("Sequence check", ["architect", "sentinel"], mode="pipeline", max_steps=1)
+            self.assertEqual(seq_res["mode"], "pipeline")
+            self.assertEqual([r["agent"] for r in seq_res["results"]], ["architect", "sentinel"])
+
+    def test_orchestrate_api_cli_and_estimate_hf_endpoints(self):
+        import io
+        import json
+        import sys
+        from contextlib import redirect_stdout
+
+        from triune.api.server import create_app
+        from triune.cli import main as cli_main
+
+        client = TestClient(create_app())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # 1. /v1/resource/estimate_hf (offline synthetic config)
+            cfg_dir = Path(tmpdir) / "tiny_hf_cfg"
+            cfg_dir.mkdir(parents=True, exist_ok=True)
+            (cfg_dir / "config.json").write_text(
+                json.dumps(
+                    {
+                        "architectures": ["Qwen2ForCausalLM"],
+                        "model_type": "qwen2",
+                        "hidden_size": 128,
+                        "intermediate_size": 256,
+                        "num_hidden_layers": 2,
+                        "num_attention_heads": 4,
+                        "num_key_value_heads": 2,
+                        "vocab_size": 512,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            est_res = client.post(
+                "/v1/resource/estimate_hf",
+                json={"model": str(cfg_dir), "available_vram_gb": 8.0, "local_files_only": True},
+            )
+            self.assertEqual(est_res.status_code, 200)
+            est_data = est_res.json()
+            self.assertEqual(est_data["status"], "success")
+            self.assertEqual(est_data["layers"], 2)
+            self.assertEqual(est_data["recommended_mode"], "resident_bf16")
+
+            # 2. /v1/agents/orchestrate + CLI --team --parallel
+            with patch(
+                "triune.agents.providers.ProviderManager.complete_chat",
+                return_value={"content": '{"answer": "verified specialist output"}', "tool_calls": []},
+            ):
+                orch_res = client.post(
+                    "/v1/agents/orchestrate",
+                    json={
+                        "goal": "Check system integration",
+                        "personas": ["architect", "sentinel"],
+                        "mode": "parallel",
+                        "max_workers": 2,
+                        "max_steps": 2,
+                    },
+                )
+                self.assertEqual(orch_res.status_code, 200)
+                orch_data = orch_res.json()
+                self.assertEqual(orch_data["status"], "success")
+                self.assertEqual(orch_data["mode"], "parallel")
+                self.assertEqual([r["agent"] for r in orch_data["results"]], ["architect", "sentinel"])
+                self.assertTrue(all(r["ok"] for r in orch_data["results"]))
+
+                buf = io.StringIO()
+                with (
+                    patch.object(
+                        sys,
+                        "argv",
+                        [
+                            "triune",
+                            "agent",
+                            "--store-dir",
+                            tmpdir,
+                            "--team",
+                            "architect,engineer",
+                            "--parallel",
+                            "--max-steps",
+                            "2",
+                            "-g",
+                            "Inspect runtime pipeline",
+                        ],
+                    ),
+                    redirect_stdout(buf),
+                ):
+                    cli_main()
+                cli_out = buf.getvalue()
+                self.assertIn("architect", cli_out)
+                self.assertIn("engineer", cli_out)
+
 
 if __name__ == "__main__":
     unittest.main()

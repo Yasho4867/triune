@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import math
+import mmap
 import os
 import struct
 from pathlib import Path
@@ -259,77 +260,119 @@ def _dequantize_q8_0(raw: np.ndarray, numel: int) -> np.ndarray:
     return (qs * d).reshape(numel)
 
 
-def _dequantize_q4_k(raw: np.ndarray, numel: int) -> np.ndarray:
+def _dequantize_q4_k(raw: bytes | bytearray | memoryview, numel: int) -> np.ndarray:
     nb = numel // 256
     blocks = np.frombuffer(raw[: nb * 144], dtype=np.uint8).reshape(nb, 144)
     d = blocks[:, 0:2].view(np.float16).astype(np.float32)
     dmin = blocks[:, 2:4].view(np.float16).astype(np.float32)
-    scales = blocks[:, 4:16]
-    qs = blocks[:, 16:144]
-    sc, mn = _get_scale_min_k4(scales)
-    d_sc = d * sc  # [nb, 8]
-    m_mn = dmin * mn  # [nb, 8]
-    out = np.empty((nb, 8, 32), dtype=np.float32)
-    for c in range(4):
-        chunk = qs[:, c * 32 : (c + 1) * 32]
-        out[:, 2 * c, :] = (chunk & 0x0F).astype(np.float32) * d_sc[:, 2 * c : 2 * c + 1] - m_mn[:, 2 * c : 2 * c + 1]
-        out[:, 2 * c + 1, :] = (chunk >> 4).astype(np.float32) * d_sc[:, 2 * c + 1 : 2 * c + 2] - m_mn[
-            :, 2 * c + 1 : 2 * c + 2
-        ]
+    sc, mn = _get_scale_min_k4(blocks[:, 4:16])
+    d_sc = (d * sc).reshape(nb, 4, 2, 1)
+    m_mn = (dmin * mn).reshape(nb, 4, 2, 1)
+    qs = blocks[:, 16:144].reshape(nb, 4, 32)
+    out = np.empty((nb, 4, 2, 32), dtype=np.float32)
+    np.multiply((qs & 0x0F).astype(np.float32), d_sc[:, :, 0, :], out=out[:, :, 0, :])
+    out[:, :, 0, :] -= m_mn[:, :, 0, :]
+    np.multiply((qs >> 4).astype(np.float32), d_sc[:, :, 1, :], out=out[:, :, 1, :])
+    out[:, :, 1, :] -= m_mn[:, :, 1, :]
     return out.reshape(numel)
 
 
-def _dequantize_q5_k(raw: np.ndarray, numel: int) -> np.ndarray:
+def _dequantize_q5_k(raw: bytes | bytearray | memoryview, numel: int) -> np.ndarray:
     nb = numel // 256
     blocks = np.frombuffer(raw[: nb * 176], dtype=np.uint8).reshape(nb, 176)
     d = blocks[:, 0:2].view(np.float16).astype(np.float32)
     dmin = blocks[:, 2:4].view(np.float16).astype(np.float32)
-    scales = blocks[:, 4:16]
+    sc, mn = _get_scale_min_k4(blocks[:, 4:16])
     qh = blocks[:, 16:48]
-    qs = blocks[:, 48:176]
-    sc, mn = _get_scale_min_k4(scales)
-    d_sc = d * sc
-    m_mn = dmin * mn
-    out = np.empty((nb, 8, 32), dtype=np.float32)
-    for c in range(4):
-        chunk = qs[:, c * 32 : (c + 1) * 32]
-        u_lo = 2 * c
-        u_hi = 2 * c + 1
-        q_lo = (chunk & 0x0F) | (((qh >> u_lo) & 1) << 4)
-        q_hi = (chunk >> 4) | (((qh >> u_hi) & 1) << 4)
-        out[:, u_lo, :] = q_lo.astype(np.float32) * d_sc[:, u_lo : u_lo + 1] - m_mn[:, u_lo : u_lo + 1]
-        out[:, u_hi, :] = q_hi.astype(np.float32) * d_sc[:, u_hi : u_hi + 1] - m_mn[:, u_hi : u_hi + 1]
+    qs = blocks[:, 48:176].reshape(nb, 4, 32)
+    bits = ((qh[:, None, :] >> np.arange(8, dtype=np.uint8)[None, :, None]) & 1) << 4
+    q_pairs = np.stack([qs & 0x0F, qs >> 4], axis=2).reshape(nb, 8, 32) | bits
+    out = q_pairs.astype(np.float32) * (d * sc)[:, :, None] - (dmin * mn)[:, :, None]
     return out.reshape(numel)
 
 
-def _dequantize_q6_k(raw: np.ndarray, numel: int) -> np.ndarray:
+def _dequantize_q6_k(raw: bytes | bytearray | memoryview, numel: int) -> np.ndarray:
     nb = numel // 256
     blocks = np.frombuffer(raw[: nb * 210], dtype=np.uint8).reshape(nb, 210)
-    ql = blocks[:, 0:128]
-    qh = blocks[:, 128:192]
-    scales = blocks[:, 192:208].view(np.int8).astype(np.float32)
-    d = blocks[:, 208:210].view(np.float16).astype(np.float32)
-    out = np.empty((nb, 256), dtype=np.float32)
-    for half in range(2):
-        ql_h = ql[:, half * 64 : (half + 1) * 64]
-        qh_h = qh[:, half * 32 : (half + 1) * 32]
-        sc_h = scales[:, half * 8 : (half + 1) * 8]
-        d_sc = d * sc_h  # [nb, 8]
-        # Each sub-block of 32 splits scales by l // 16: repeat 16 times across columns 0..31
-        sc_0 = np.repeat(d_sc[:, 0:2], 16, axis=1)
-        sc_1 = np.repeat(d_sc[:, 2:4], 16, axis=1)
-        sc_2 = np.repeat(d_sc[:, 4:6], 16, axis=1)
-        sc_3 = np.repeat(d_sc[:, 6:8], 16, axis=1)
-        q1 = (((ql_h[:, 0:32] & 0x0F) | (((qh_h >> 0) & 3) << 4)).astype(np.int16) - 32).astype(np.float32)
-        q2 = (((ql_h[:, 32:64] & 0x0F) | (((qh_h >> 2) & 3) << 4)).astype(np.int16) - 32).astype(np.float32)
-        q3 = (((ql_h[:, 0:32] >> 4) | (((qh_h >> 4) & 3) << 4)).astype(np.int16) - 32).astype(np.float32)
-        q4 = (((ql_h[:, 32:64] >> 4) | (((qh_h >> 6) & 3) << 4)).astype(np.int16) - 32).astype(np.float32)
-        base = half * 128
-        out[:, base + 0 : base + 32] = q1 * sc_0
-        out[:, base + 32 : base + 64] = q2 * sc_1
-        out[:, base + 64 : base + 96] = q3 * sc_2
-        out[:, base + 96 : base + 128] = q4 * sc_3
-    return out.reshape(numel)
+    ql = blocks[:, 0:128].reshape(nb, 2, 2, 32)
+    qh = blocks[:, 128:192].reshape(nb, 2, 32)
+    scales = blocks[:, 192:208].view(np.int8).astype(np.float32).reshape(nb, 2, 4, 2, 1)
+    d = blocks[:, 208:210].view(np.float16).astype(np.float32).reshape(nb, 1, 1, 1, 1)
+    q1 = ((ql[:, :, 0] & 0x0F) | (((qh >> 0) & 3) << 4)).astype(np.int16) - 32
+    q2 = ((ql[:, :, 1] & 0x0F) | (((qh >> 2) & 3) << 4)).astype(np.int16) - 32
+    q3 = ((ql[:, :, 0] >> 4) | (((qh >> 4) & 3) << 4)).astype(np.int16) - 32
+    q4 = ((ql[:, :, 1] >> 4) | (((qh >> 6) & 3) << 4)).astype(np.int16) - 32
+    q_all = np.stack([q1, q2, q3, q4], axis=2).reshape(nb, 2, 4, 2, 16).astype(np.float32)
+    return (q_all * (d * scales)).reshape(numel)
+
+
+def _unpack_scale_min_k4_torch(scales_u8: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    nb = scales_u8.size(0)
+    s = scales_u8.to(torch.int32)
+    sc = torch.empty((nb, 8), dtype=torch.float32, device=scales_u8.device)
+    mn = torch.empty((nb, 8), dtype=torch.float32, device=scales_u8.device)
+    sc[:, 0:4] = s[:, 0:4] & 63
+    mn[:, 0:4] = s[:, 4:8] & 63
+    sc[:, 4:8] = (s[:, 8:12] & 0x0F) | ((s[:, 0:4] >> 6) << 4)
+    mn[:, 4:8] = (s[:, 8:12] >> 4) | ((s[:, 4:8] >> 6) << 4)
+    return sc, mn
+
+
+def _dequantize_ggml_torch_chunk(b: torch.Tensor, ggml_type: int, target_dtype: torch.dtype) -> torch.Tensor:
+    """Vectorized GPU/PyTorch block dequantizer matching the NumPy CPU paths bit-for-bit."""
+    nb = b.size(0)
+    dev = b.device
+    if ggml_type == _GGML_Q4_0:
+        d = b[:, :2].view(torch.float16).float()
+        qs = b[:, 2:18]
+        q = torch.cat([qs & 0x0F, qs >> 4], dim=1).float() - 8.0
+        out = q * d
+    elif ggml_type == _GGML_Q4_1:
+        d = b[:, :2].view(torch.float16).float()
+        m = b[:, 2:4].view(torch.float16).float()
+        qs = b[:, 4:20]
+        q = torch.cat([qs & 0x0F, qs >> 4], dim=1).float()
+        out = q * d + m
+    elif ggml_type == _GGML_Q5_0:
+        d = b[:, :2].view(torch.float16).float()
+        qb = b[:, 2:6].to(torch.int32)
+        qh = qb[:, 0:1] | (qb[:, 1:2] << 8) | (qb[:, 2:3] << 16) | (qb[:, 3:4] << 24)
+        qs = b[:, 6:22]
+        bits = (qh >> torch.arange(32, device=dev, dtype=torch.int32).unsqueeze(0)) & 1
+        q_lo = (qs & 0x0F).to(torch.int32) | (bits[:, :16] << 4)
+        q_hi = (qs >> 4).to(torch.int32) | (bits[:, 16:] << 4)
+        out = (torch.cat([q_lo, q_hi], dim=1).float() - 16.0) * d
+    elif ggml_type == _GGML_Q8_0:
+        d = b[:, :2].view(torch.float16).float()
+        qs = b[:, 2:34].view(torch.int8).float()
+        out = qs * d
+    elif ggml_type == _GGML_Q4_K:
+        dm = b[:, :4].view(torch.float16).float()
+        sc, mn = _unpack_scale_min_k4_torch(b[:, 4:16])
+        qs = b[:, 16:144].reshape(nb, 4, 32)
+        q_pairs = torch.stack([qs & 0x0F, qs >> 4], dim=2).reshape(nb, 8, 32).float()
+        out = q_pairs * (dm[:, 0:1] * sc).unsqueeze(-1) - (dm[:, 1:2] * mn).unsqueeze(-1)
+    elif ggml_type == _GGML_Q5_K:
+        dm = b[:, :4].view(torch.float16).float()
+        sc, mn = _unpack_scale_min_k4_torch(b[:, 4:16])
+        qh = b[:, 16:48]
+        qs = b[:, 48:176].reshape(nb, 4, 32)
+        bits = ((qh.unsqueeze(1) >> torch.arange(8, device=dev, dtype=torch.int32).view(1, 8, 1)) & 1) << 4
+        q_pairs = torch.stack([qs & 0x0F, qs >> 4], dim=2).reshape(nb, 8, 32).to(torch.int32) | bits
+        out = q_pairs.float() * (dm[:, 0:1] * sc).unsqueeze(-1) - (dm[:, 1:2] * mn).unsqueeze(-1)
+    elif ggml_type == _GGML_Q6_K:
+        ql = b[:, 0:128].reshape(nb, 2, 2, 32)
+        qh = b[:, 128:192].reshape(nb, 2, 32)
+        scales = b[:, 192:208].view(torch.int8).float().reshape(nb, 2, 4, 2, 1)
+        d = b[:, 208:210].view(torch.float16).float().reshape(nb, 1, 1, 1, 1)
+        q1 = ((ql[:, :, 0] & 0x0F) | (((qh >> 0) & 3) << 4)).to(torch.int16) - 32
+        q2 = ((ql[:, :, 1] & 0x0F) | (((qh >> 2) & 3) << 4)).to(torch.int16) - 32
+        q3 = ((ql[:, :, 0] >> 4) | (((qh >> 4) & 3) << 4)).to(torch.int16) - 32
+        q4 = ((ql[:, :, 1] >> 4) | (((qh >> 6) & 3) << 4)).to(torch.int16) - 32
+        out = torch.stack([q1, q2, q3, q4], dim=2).reshape(nb, 2, 4, 2, 16).float() * (d * scales)
+    else:
+        raise NotImplementedError(f"GGML quantization type {ggml_type} is not supported on Torch path.")
+    return out.reshape(-1).to(dtype=target_dtype)
 
 
 _BLOCK_META: dict[int, tuple[int, int]] = {
@@ -347,7 +390,12 @@ _BLOCK_META: dict[int, tuple[int, int]] = {
 
 
 def dequantize_ggml_tensor(
-    raw_bytes: bytes, dims: tuple[int, ...], ggml_type: int, target_dtype: torch.dtype
+    raw_bytes: bytes | bytearray | memoryview,
+    dims: tuple[int, ...],
+    ggml_type: int,
+    target_dtype: torch.dtype,
+    *,
+    compute_device: torch.device | None = None,
 ) -> torch.Tensor:
     """Dequantize a GGUF tensor buffer and return a PyTorch tensor shaped ``tuple(reversed(dims))``."""
     numel = 1
@@ -356,14 +404,36 @@ def dequantize_ggml_tensor(
     pt_shape = tuple(reversed(dims))
 
     if ggml_type == _GGML_F32:
-        arr = np.frombuffer(raw_bytes[: numel * 4], dtype="<f4").copy()
+        arr = np.array(np.frombuffer(raw_bytes[: numel * 4], dtype="<f4"), copy=True)
         return torch.from_numpy(arr).reshape(pt_shape).to(dtype=target_dtype)
     if ggml_type == _GGML_F16:
-        arr = np.frombuffer(raw_bytes[: numel * 2], dtype="<f2").copy()
+        arr = np.array(np.frombuffer(raw_bytes[: numel * 2], dtype="<f2"), copy=True)
         return torch.from_numpy(arr).reshape(pt_shape).to(dtype=target_dtype)
     if ggml_type == _GGML_BF16:
-        raw_u16 = torch.from_numpy(np.frombuffer(raw_bytes[: numel * 2], dtype="<u2").copy())
+        raw_u16 = torch.from_numpy(np.array(np.frombuffer(raw_bytes[: numel * 2], dtype="<u2"), copy=True))
         return raw_u16.view(torch.bfloat16).reshape(pt_shape).to(dtype=target_dtype)
+
+    if ggml_type not in _BLOCK_META:
+        raise NotImplementedError(f"GGML quantization type {ggml_type} is not yet supported for direct dequantization.")
+
+    blk_elems, blk_bytes = _BLOCK_META[ggml_type]
+    if compute_device is not None and compute_device.type == "cuda" and numel >= 65536 and torch.cuda.is_available():
+        try:
+            nb_total = numel // blk_elems
+            # Bound temporary CUDA scratch VRAM (<128 MB) via block chunking even for huge embeddings
+            chunk_blocks = 65536 if blk_elems == 256 else 524288
+            blocks_np = np.frombuffer(raw_bytes[: nb_total * blk_bytes], dtype=np.uint8).reshape(nb_total, blk_bytes)
+            dst = torch.empty(numel, dtype=target_dtype, device="cpu")
+            for b_start in range(0, nb_total, chunk_blocks):
+                b_end = min(b_start + chunk_blocks, nb_total)
+                chunk_u8 = torch.from_numpy(np.array(blocks_np[b_start:b_end], copy=True)).to(
+                    compute_device, non_blocking=False
+                )
+                deq_chunk = _dequantize_ggml_torch_chunk(chunk_u8, ggml_type, target_dtype)
+                dst[b_start * blk_elems : b_end * blk_elems].copy_(deq_chunk.cpu())
+            return dst.reshape(pt_shape)
+        except Exception:
+            pass
 
     if ggml_type == _GGML_Q4_0:
         f32 = _dequantize_q4_0(raw_bytes, numel)
@@ -385,7 +455,15 @@ def dequantize_ggml_tensor(
     return torch.from_numpy(f32).reshape(pt_shape).to(dtype=target_dtype)
 
 
-def _read_gguf_tensor(f, data_start: int, info: dict[str, Any], target_dtype: torch.dtype) -> torch.Tensor:
+def _read_gguf_tensor(
+    f,
+    data_start: int,
+    info: dict[str, Any],
+    target_dtype: torch.dtype,
+    *,
+    mm: mmap.mmap | None = None,
+    compute_device: torch.device | None = None,
+) -> torch.Tensor:
     dims = info["dims"]
     ggml_type = info["ggml_type"]
     numel = 1
@@ -395,9 +473,18 @@ def _read_gguf_tensor(f, data_start: int, info: dict[str, Any], target_dtype: to
         raise NotImplementedError(f"Unsupported GGML tensor type: {ggml_type}")
     blk_elems, blk_bytes = _BLOCK_META[ggml_type]
     n_bytes = (numel // blk_elems) * blk_bytes
-    f.seek(data_start + info["offset"])
+    offset = data_start + info["offset"]
+    if mm is not None:
+        mv = memoryview(mm)
+        try:
+            return dequantize_ggml_tensor(
+                mv[offset : offset + n_bytes], dims, ggml_type, target_dtype, compute_device=compute_device
+            )
+        finally:
+            mv.release()
+    f.seek(offset)
     raw = f.read(n_bytes)
-    return dequantize_ggml_tensor(raw, dims, ggml_type, target_dtype)
+    return dequantize_ggml_tensor(raw, dims, ggml_type, target_dtype, compute_device=compute_device)
 
 
 def build_hf_tokenizer_from_gguf(meta: dict[str, Any]):
@@ -692,70 +779,106 @@ def load_gguf_hf_model(
             p_dst.copy_(tensor.to(dtype=p_dst.dtype))
 
     with open(p, "rb") as f:
-        if "token_embd.weight" in tensors_idx:
-            _assign(
-                "model.embed_tokens.weight",
-                _read_gguf_tensor(f, data_start, tensors_idx["token_embd.weight"], target_dtype),
-            )
-        if has_output_head and "lm_head.weight" in param_map:
-            _assign("lm_head.weight", _read_gguf_tensor(f, data_start, tensors_idx["output.weight"], target_dtype))
-        elif not has_output_head and "lm_head.weight" in param_map and "model.embed_tokens.weight" in param_map:
-            with torch.no_grad():
-                param_map["lm_head.weight"].copy_(param_map["model.embed_tokens.weight"])
+        mm: mmap.mmap | None = None
+        try:
+            if p.stat().st_size > 0:
+                mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+        except Exception:
+            mm = None
+        try:
+            if "token_embd.weight" in tensors_idx:
+                _assign(
+                    "model.embed_tokens.weight",
+                    _read_gguf_tensor(
+                        f,
+                        data_start,
+                        tensors_idx["token_embd.weight"],
+                        target_dtype,
+                        mm=mm,
+                        compute_device=target_dev,
+                    ),
+                )
+            if has_output_head and "lm_head.weight" in param_map:
+                _assign(
+                    "lm_head.weight",
+                    _read_gguf_tensor(
+                        f,
+                        data_start,
+                        tensors_idx["output.weight"],
+                        target_dtype,
+                        mm=mm,
+                        compute_device=target_dev,
+                    ),
+                )
+            elif not has_output_head and "lm_head.weight" in param_map and "model.embed_tokens.weight" in param_map:
+                with torch.no_grad():
+                    param_map["lm_head.weight"].copy_(param_map["model.embed_tokens.weight"])
 
-        if "output_norm.weight" in tensors_idx:
-            norm_t = _read_gguf_tensor(f, data_start, tensors_idx["output_norm.weight"], torch.float32)
-            _assign("model.norm.weight", (norm_t - 1.0) if is_gemma_norm else norm_t)
+            if "output_norm.weight" in tensors_idx:
+                norm_t = _read_gguf_tensor(
+                    f, data_start, tensors_idx["output_norm.weight"], torch.float32, mm=mm, compute_device=None
+                )
+                _assign("model.norm.weight", (norm_t - 1.0) if is_gemma_norm else norm_t)
 
-        for i in range(n_layers):
-            gguf_to_hf = {
-                f"blk.{i}.attn_norm.weight": (f"model.layers.{i}.input_layernorm.weight", is_gemma_norm, None),
-                f"blk.{i}.post_attention_norm.weight": (
-                    f"model.layers.{i}.post_attention_layernorm.weight",
-                    is_gemma_norm,
-                    None,
-                ),
-                f"blk.{i}.ffn_norm.weight": (
-                    f"model.layers.{i}.pre_feedforward_layernorm.weight"
-                    if f"model.layers.{i}.pre_feedforward_layernorm.weight" in param_map
-                    else f"model.layers.{i}.post_attention_layernorm.weight",
-                    is_gemma_norm,
-                    None,
-                ),
-                f"blk.{i}.post_ffw_norm.weight": (
-                    f"model.layers.{i}.post_feedforward_layernorm.weight",
-                    is_gemma_norm,
-                    None,
-                ),
-                f"blk.{i}.attn_q_norm.weight": (f"model.layers.{i}.self_attn.q_norm.weight", is_gemma_norm, None),
-                f"blk.{i}.attn_k_norm.weight": (f"model.layers.{i}.self_attn.k_norm.weight", is_gemma_norm, None),
-                f"blk.{i}.attn_q.weight": (
-                    f"model.layers.{i}.self_attn.q_proj.weight",
-                    False,
-                    n_heads if need_llama_unperm else None,
-                ),
-                f"blk.{i}.attn_k.weight": (
-                    f"model.layers.{i}.self_attn.k_proj.weight",
-                    False,
-                    n_kv_heads if need_llama_unperm else None,
-                ),
-                f"blk.{i}.attn_v.weight": (f"model.layers.{i}.self_attn.v_proj.weight", False, None),
-                f"blk.{i}.attn_output.weight": (f"model.layers.{i}.self_attn.o_proj.weight", False, None),
-                f"blk.{i}.attn_q.bias": (f"model.layers.{i}.self_attn.q_proj.bias", False, None),
-                f"blk.{i}.attn_k.bias": (f"model.layers.{i}.self_attn.k_proj.bias", False, None),
-                f"blk.{i}.attn_v.bias": (f"model.layers.{i}.self_attn.v_proj.bias", False, None),
-                f"blk.{i}.ffn_gate.weight": (f"model.layers.{i}.mlp.gate_proj.weight", False, None),
-                f"blk.{i}.ffn_up.weight": (f"model.layers.{i}.mlp.up_proj.weight", False, None),
-                f"blk.{i}.ffn_down.weight": (f"model.layers.{i}.mlp.down_proj.weight", False, None),
-            }
-            for g_key, (hf_key, sub_one, unperm_h) in gguf_to_hf.items():
-                if g_key in tensors_idx and hf_key in param_map:
-                    t = _read_gguf_tensor(f, data_start, tensors_idx[g_key], torch.float32 if sub_one else target_dtype)
-                    if sub_one:
-                        t = t - 1.0
-                    if unperm_h is not None:
-                        t = _unpermute_llama_qk(t, unperm_h)
-                    _assign(hf_key, t)
+            for i in range(n_layers):
+                gguf_to_hf = {
+                    f"blk.{i}.attn_norm.weight": (f"model.layers.{i}.input_layernorm.weight", is_gemma_norm, None),
+                    f"blk.{i}.post_attention_norm.weight": (
+                        f"model.layers.{i}.post_attention_layernorm.weight",
+                        is_gemma_norm,
+                        None,
+                    ),
+                    f"blk.{i}.ffn_norm.weight": (
+                        f"model.layers.{i}.pre_feedforward_layernorm.weight"
+                        if f"model.layers.{i}.pre_feedforward_layernorm.weight" in param_map
+                        else f"model.layers.{i}.post_attention_layernorm.weight",
+                        is_gemma_norm,
+                        None,
+                    ),
+                    f"blk.{i}.post_ffw_norm.weight": (
+                        f"model.layers.{i}.post_feedforward_layernorm.weight",
+                        is_gemma_norm,
+                        None,
+                    ),
+                    f"blk.{i}.attn_q_norm.weight": (f"model.layers.{i}.self_attn.q_norm.weight", is_gemma_norm, None),
+                    f"blk.{i}.attn_k_norm.weight": (f"model.layers.{i}.self_attn.k_norm.weight", is_gemma_norm, None),
+                    f"blk.{i}.attn_q.weight": (
+                        f"model.layers.{i}.self_attn.q_proj.weight",
+                        False,
+                        n_heads if need_llama_unperm else None,
+                    ),
+                    f"blk.{i}.attn_k.weight": (
+                        f"model.layers.{i}.self_attn.k_proj.weight",
+                        False,
+                        n_kv_heads if need_llama_unperm else None,
+                    ),
+                    f"blk.{i}.attn_v.weight": (f"model.layers.{i}.self_attn.v_proj.weight", False, None),
+                    f"blk.{i}.attn_output.weight": (f"model.layers.{i}.self_attn.o_proj.weight", False, None),
+                    f"blk.{i}.attn_q.bias": (f"model.layers.{i}.self_attn.q_proj.bias", False, None),
+                    f"blk.{i}.attn_k.bias": (f"model.layers.{i}.self_attn.k_proj.bias", False, None),
+                    f"blk.{i}.attn_v.bias": (f"model.layers.{i}.self_attn.v_proj.bias", False, None),
+                    f"blk.{i}.ffn_gate.weight": (f"model.layers.{i}.mlp.gate_proj.weight", False, None),
+                    f"blk.{i}.ffn_up.weight": (f"model.layers.{i}.mlp.up_proj.weight", False, None),
+                    f"blk.{i}.ffn_down.weight": (f"model.layers.{i}.mlp.down_proj.weight", False, None),
+                }
+                for g_key, (hf_key, sub_one, unperm_h) in gguf_to_hf.items():
+                    if g_key in tensors_idx and hf_key in param_map:
+                        t = _read_gguf_tensor(
+                            f,
+                            data_start,
+                            tensors_idx[g_key],
+                            torch.float32 if sub_one else target_dtype,
+                            mm=mm,
+                            compute_device=target_dev if not sub_one else None,
+                        )
+                        if sub_one:
+                            t = t - 1.0
+                        if unperm_h is not None:
+                            t = _unpermute_llama_qk(t, unperm_h)
+                        _assign(hf_key, t)
+        finally:
+            if mm is not None:
+                mm.close()
 
     # Reinitialize non-persistent buffers wiped by meta + to_empty() (Gemma3 dual sliding/full RoPE, standard RoPE, embed_scale)
     for parent in model.modules():

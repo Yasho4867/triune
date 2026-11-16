@@ -4592,6 +4592,29 @@ if HAS_FASTAPI:
             "recommended_precision": estimate.recommended_precision,
         }
 
+    class HFEstimateRequest(BaseModel):
+        model: str
+        available_vram_gb: Optional[float] = None
+        available_ram_gb: Optional[float] = None
+        local_files_only: bool = False
+
+    @router.post("/v1/resource/estimate_hf")
+    async def estimate_hf_resource_budget(req: HFEstimateRequest) -> Dict[str, Any]:
+        """Inspect a Hugging Face model config with zero weight download and recommend Triune execution mode."""
+        from triune.runtime.memory_planner import MemoryPlanner
+
+        try:
+            plan = await asyncio.to_thread(
+                MemoryPlanner.estimate_hf_model,
+                req.model,
+                available_vram_gb=req.available_vram_gb,
+                available_ram_gb=req.available_ram_gb,
+                local_files_only=bool(req.local_files_only),
+            )
+            return {"status": "success", **plan}
+        except Exception as exc:
+            return {"status": "error", "message": str(exc)}
+
     @router.post("/v1/resource/assess")
     async def assess_resource_feasibility(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Evaluate VRAM feasibility, safe headroom, and auto-fit recommendations via DynamicResourceManager."""
@@ -6535,6 +6558,15 @@ if HAS_FASTAPI:
         max_steps: int = 8
         allow_writes: bool = False
 
+    class AgentOrchestrateRequest(BaseModel):
+        goal: str
+        personas: List[str] = ["architect", "engineer", "sentinel"]
+        mode: str = "parallel"
+        max_workers: int = 4
+        max_steps: int = 6
+        model: Optional[str] = None
+        allow_writes: bool = False
+
     class AgentMemoryRequest(BaseModel):
         key: str
         value: str
@@ -7538,34 +7570,31 @@ SYSTEM \"\"\"You are Triune AI, a high-efficiency cognitive language model train
         st = ctrl.shift(persona=req.name, reasoning_depth=req.default_depth)
         return {"status": "success", "state": {"persona": st.persona, "reasoning_depth": st.reasoning_depth}}
 
+    def _resolve_agent_backend(req_model: Optional[str]) -> tuple[Optional[str], Optional[Any]]:
+        if not req_model and getattr(pytorch_state, "weights_loaded", False):
+            if getattr(pytorch_state, "active_runtime", "pytorch") == "ollama" and pytorch_state.ollama_model_tag:
+                return f"ollama:{pytorch_state.ollama_model_tag}", None
+
+            def _local_pt_completion(messages, **_kwargs):
+                prompt_txt = "\n\n".join(f"{m['role']}: {m['content']}" for m in messages[-6:])
+                with pytorch_state.worker_lock:
+                    res = pytorch_state.generate_text(
+                        prompt_txt,
+                        max_new_tokens=256,
+                        temperature=float(_kwargs.get("temperature", 0.35)),
+                        prompt_is_formatted=False,
+                    )
+                return {"content": res["text"], "tool_calls": []}
+
+            return pytorch_state.active_model_id, _local_pt_completion
+        return req_model, None
+
     @router.post("/v1/agents/run")
     async def run_agent_harness_endpoint(req: AgentRunRequest) -> Dict[str, Any]:
         """Execute an autonomous AgentHarness reasoning & tool-use loop for a goal."""
         from triune.agents import AgentHarness
 
-        # If local PyTorch weights are loaded and no explicit external model was passed, hook local engine
-        local_completion = None
-        if not req.model and getattr(pytorch_state, "weights_loaded", False):
-            if getattr(pytorch_state, "active_runtime", "pytorch") == "ollama" and pytorch_state.ollama_model_tag:
-                chosen_model = f"ollama:{pytorch_state.ollama_model_tag}"
-            else:
-                chosen_model = pytorch_state.active_model_id
-
-                def _local_pt_completion(messages, **_kwargs):
-                    prompt_txt = "\n\n".join(f"{m['role']}: {m['content']}" for m in messages[-6:])
-                    with pytorch_state.worker_lock:
-                        res = pytorch_state.generate_text(
-                            prompt_txt,
-                            max_new_tokens=256,
-                            temperature=float(_kwargs.get("temperature", 0.35)),
-                            prompt_is_formatted=False,
-                        )
-                    return {"content": res["text"], "tool_calls": []}
-
-                local_completion = _local_pt_completion
-        else:
-            chosen_model = req.model
-
+        chosen_model, local_completion = _resolve_agent_backend(req.model)
         harness = AgentHarness(
             workspace=".",
             model=chosen_model,
@@ -7593,6 +7622,34 @@ SYSTEM \"\"\"You are Triune AI, a high-efficiency cognitive language model train
                 auto_depth=auto_depth,
             )
             return {"status": "success", **result}
+        except Exception as exc:
+            return {"status": "error", "message": str(exc)}
+
+    @router.post("/v1/agents/orchestrate")
+    async def orchestrate_agent_team_endpoint(req: AgentOrchestrateRequest) -> Dict[str, Any]:
+        """Dispatch a parallel or sequential specialist team via MultiAgentOrchestrator."""
+        from triune.agents import AgentHarness, MultiAgentOrchestrator
+
+        chosen_model, local_completion = _resolve_agent_backend(req.model)
+        harness = AgentHarness(
+            workspace=".",
+            model=chosen_model,
+            allow_shell=False,
+            allow_writes=bool(req.allow_writes),
+            completion_fn=local_completion,
+        )
+        orchestrator = MultiAgentOrchestrator(harness=harness)
+        try:
+            summary = await asyncio.to_thread(
+                orchestrator.orchestrate_team,
+                req.goal,
+                list(req.personas),
+                mode=req.mode,
+                model=chosen_model,
+                max_workers=max(1, min(8, int(req.max_workers))),
+                max_steps=max(1, min(16, int(req.max_steps))),
+            )
+            return {"status": "success", **summary}
         except Exception as exc:
             return {"status": "error", "message": str(exc)}
 

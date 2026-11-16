@@ -485,9 +485,16 @@ def test_benchmark_config_validation_and_scientific_pvalues():
     assert format_p_value(0.0200) == "0.0200"
 
     # 4. Verify raw IEEE-754 float64 precision is preserved without 6-digit string rounding
-    import scipy.stats as stats
+    from benchmarks.verify_triangular_qr_residuals import _PureMathStats
 
-    raw_expected_p = float(stats.ttest_rel(vals_tri, vals_adm).pvalue)
+    pure_p = float(_PureMathStats.ttest_rel(vals_tri, vals_adm).pvalue)
+    try:
+        import scipy.stats as stats
+
+        raw_expected_p = float(stats.ttest_rel(vals_tri, vals_adm).pvalue)
+        assert abs(pure_p - raw_expected_p) / max(raw_expected_p, 1e-300) < 1e-11
+    except ImportError:
+        raw_expected_p = pure_p
     assert stats_out["p_value"] == raw_expected_p, (
         f"p_value must preserve full IEEE-754 float64 precision ({raw_expected_p!r}), got {stats_out['p_value']!r}"
     )

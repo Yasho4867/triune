@@ -142,18 +142,23 @@ def build_posix(compiler: str, target_so: Path) -> bool:
 
     OPS_DIR.mkdir(parents=True, exist_ok=True)
 
+    arch = platform.machine().lower()
     cmd = [
         compiler,
         "-O3",
         "-shared",
         "-fPIC",
-        "-mavx2",
-        "-mfma",
-        f"-I{include_dir}",
-        str(engine_cpp),
-        "-o",
-        str(target_so),
     ]
+    if arch in ("x86_64", "amd64"):
+        cmd.extend(["-mavx2", "-mfma"])
+    cmd.extend(
+        [
+            f"-I{include_dir}",
+            str(engine_cpp),
+            "-o",
+            str(target_so),
+        ]
+    )
     if platform.system() != "Darwin":
         cmd.extend(["-ldl", "-lpthread"])
 
