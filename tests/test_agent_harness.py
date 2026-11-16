@@ -410,15 +410,19 @@ class TestTriuneAgentHarness(unittest.TestCase):
             self.assertEqual(est_data["layers"], 2)
             self.assertEqual(est_data["recommended_mode"], "resident_bf16")
 
-            # 2. /v1/agents/orchestrate + CLI --team --parallel
-            with patch(
-                "triune.agents.providers.ProviderManager.complete_chat",
-                return_value={"content": '{"answer": "verified specialist output"}', "tool_calls": []},
+            # 2. /v1/agents/orchestrate + CLI --team --parallel (even with no host Ollama/BYOK)
+            with (
+                patch("triune.agents.providers.ProviderManager.pick_default_model", return_value=None),
+                patch(
+                    "triune.agents.providers.ProviderManager.complete_chat",
+                    return_value={"content": '{"answer": "verified specialist output"}', "tool_calls": []},
+                ),
             ):
                 orch_res = client.post(
                     "/v1/agents/orchestrate",
                     json={
                         "goal": "Check system integration",
+                        "model": "ollama:gemma3:4b",
                         "personas": ["architect", "sentinel"],
                         "mode": "parallel",
                         "max_workers": 2,
@@ -440,6 +444,8 @@ class TestTriuneAgentHarness(unittest.TestCase):
                         [
                             "triune",
                             "agent",
+                            "--model",
+                            "ollama:gemma3:4b",
                             "--store-dir",
                             tmpdir,
                             "--team",
