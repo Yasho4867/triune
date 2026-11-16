@@ -75,8 +75,9 @@ def main() -> None:
 
     # 3. Chat command
     chat_parser = subparsers.add_parser(
-        "chat", help="Interactive terminal chat session with dynamic exit depth routing"
+        "chat", help="Interactive terminal chat session with Triune or Hugging Face models"
     )
+    chat_parser.add_argument("--model", default=None, help="HF model repo ID, local HF dir, or NVFP4 disk cache")
     chat_parser.add_argument("--checkpoint", default="checkpoints_full/best.pt", help="Model checkpoint path")
     chat_parser.add_argument("--tokenizer", default="triune_tokenizer.json", help="Tokenizer path")
     chat_parser.add_argument(
@@ -84,26 +85,40 @@ def main() -> None:
     )
     chat_parser.add_argument("--temperature", type=float, default=0.7, help="Sampling temperature")
     chat_parser.add_argument("--repetition-penalty", type=float, default=1.1, help="Repetition penalty")
-    chat_parser.add_argument("--max-tokens", type=int, default=100, help="Maximum generated tokens")
+    chat_parser.add_argument(
+        "--max-tokens", "--max-new-tokens", dest="max_tokens", type=int, default=100, help="Maximum generated tokens"
+    )
     chat_parser.add_argument(
         "--speculative", action="store_true", help="Enable Reflex-to-Cortex self-speculative decoding"
     )
     chat_parser.add_argument(
         "--k-draft", type=int, default=3, help="Draft tokens per cycle for speculative decoding (default: 3)"
     )
+    chat_parser.add_argument("--nvfp4", action="store_true", help="Quantize linear weights to Hadamard NVFP4")
+    chat_parser.add_argument("--disk-stream", action="store_true", help="Stream NVFP4 layers directly from NVMe disk")
+    chat_parser.add_argument("--disk-cache", default=None, help="NVFP4 disk cache directory")
+    chat_parser.add_argument("--device", default=None, help="Target device (cuda / cpu)")
 
     # 4. Infer / Generate command
     infer_parser = subparsers.add_parser(
         "infer",
         aliases=["inference", "generate"],
-        help="Run high-performance streaming inference with exit depth routing & live telemetry",
+        help="Run high-performance streaming inference with Triune or Hugging Face models",
     )
     infer_parser.add_argument("prompt_pos", nargs="?", default=None, help="Inference prompt text (positional)")
     infer_parser.add_argument("-p", "--prompt", default=None, help="Inference prompt text")
+    infer_parser.add_argument("--model", default=None, help="HF model repo ID, local HF dir, or NVFP4 disk cache")
     infer_parser.add_argument("--checkpoint", default="checkpoints_full/best.pt", help="Model checkpoint path")
     infer_parser.add_argument("--tokenizer", default="triune_tokenizer.json", help="Tokenizer path")
     infer_parser.add_argument("--adapter", default=None, help="LoRA adapter directory or safetensors path (optional)")
-    infer_parser.add_argument("--max-tokens", type=int, default=100, help="Maximum generated tokens (default: 100)")
+    infer_parser.add_argument(
+        "--max-tokens",
+        "--max-new-tokens",
+        dest="max_tokens",
+        type=int,
+        default=100,
+        help="Maximum generated tokens (default: 100)",
+    )
     infer_parser.add_argument("--temperature", type=float, default=0.7, help="Sampling temperature (default: 0.7)")
     infer_parser.add_argument("--top-k", type=int, default=50, help="Top-k filtering (default: 50)")
     infer_parser.add_argument("--repetition-penalty", type=float, default=1.1, help="Repetition penalty (default: 1.1)")
@@ -113,27 +128,53 @@ def main() -> None:
         choices=("auto", "reflex", "limbic", "cortex"),
         help="Exit depth routing (default: auto)",
     )
+    infer_parser.add_argument("--nvfp4", action="store_true", help="Quantize linear weights to Hadamard NVFP4")
+    infer_parser.add_argument("--disk-stream", action="store_true", help="Stream NVFP4 layers directly from NVMe disk")
+    infer_parser.add_argument("--disk-cache", default=None, help="NVFP4 disk cache directory")
+    infer_parser.add_argument(
+        "--quantize-lm-head", action="store_true", help="Also pack lm_head into NVFP4 for tight VRAM"
+    )
     infer_parser.add_argument("--device", default=None, help="Target device (cuda / cpu)")
     infer_parser.add_argument("--no-stream", action="store_true", help="Disable live token streaming")
 
     # 5. Fine-Tuning command
     finetune_parser = subparsers.add_parser(
-        "finetune", help="Fine-tune Triune models with LoRA or QLoRA parameter-efficient adaptation"
+        "finetune", help="Fine-tune Triune or Hugging Face models with LoRA / NVFP4 QLoRA & layer streaming"
     )
-    finetune_parser.add_argument("--dataset", default="data/fineweb_sample.jsonl", help="Dataset path (.jsonl or .csv)")
+    finetune_parser.add_argument(
+        "--model", default=None, help="HF model repo ID, local HF dir, NVFP4 disk cache, or Triune preset"
+    )
+    finetune_parser.add_argument("--dataset", default="data/fineweb_sample.jsonl", help="Dataset path or HF dataset ID")
+    finetune_parser.add_argument("--dataset-split", default="train", help="Dataset split when using HF Hub datasets")
+    finetune_parser.add_argument("--max-samples", type=int, default=2000, help="Max streaming samples from HF dataset")
     finetune_parser.add_argument("--checkpoint", default=None, help="Base model checkpoint path (optional)")
     finetune_parser.add_argument("--rank", type=int, default=16, help="LoRA rank dimension r (default: 16)")
     finetune_parser.add_argument("--alpha", type=float, default=32.0, help="LoRA alpha scaling (default: 32.0)")
     finetune_parser.add_argument("--epochs", type=int, default=3, help="Number of training epochs (default: 3)")
     finetune_parser.add_argument("--lr", type=float, default=2e-4, help="Learning rate (default: 2e-4)")
-    finetune_parser.add_argument("--batch-size", type=int, default=4, help="Batch size per step (default: 4)")
+    finetune_parser.add_argument("--batch-size", type=int, default=4, help="Micro-batch size per step (default: 4)")
+    finetune_parser.add_argument("--seq-len", type=int, default=256, help="Sequence length (default: 256)")
+    finetune_parser.add_argument("--grad-accum", type=int, default=1, help="Gradient accumulation steps (default: 1)")
     finetune_parser.add_argument("--max-steps", type=int, default=None, help="Maximum training steps (optional)")
     finetune_parser.add_argument(
         "--output-dir", default="checkpoints/adapters/lora_finetuned", help="Output directory for adapter weights"
     )
     finetune_parser.add_argument(
-        "--quantization", default="4-bit NF4", help="Quantization precision (default: 4-bit NF4)"
+        "--quantization", default="4-bit NF4", help="Quantization precision (e.g. '4-bit NVFP4', 'BF16')"
     )
+    finetune_parser.add_argument("--qlora", action="store_true", help="Enable true packed 4-bit NVFP4 base QLoRA")
+    finetune_parser.add_argument("--stream", action="store_true", help="Enable RAM-to-VRAM LayerStreamingEngine")
+    finetune_parser.add_argument(
+        "--stream-chunk", type=int, default=1, help="Layer chunk size for LayerStreamingEngine"
+    )
+    finetune_parser.add_argument(
+        "--disk-stream", action="store_true", help="Enable NVMe NVFP4 shard streaming (14B-27B+)"
+    )
+    finetune_parser.add_argument("--disk-cache", default=None, help="NVFP4 disk cache directory")
+    finetune_parser.add_argument(
+        "--quantize-lm-head", action="store_true", help="Pack lm_head into NVFP4 in disk cache"
+    )
+    finetune_parser.add_argument("--checkpointing", action="store_true", help="Enable activation checkpointing")
 
     # 5. Adapter Management command
     adapter_parser = subparsers.add_parser("adapter", help="Manage LoRA/QLoRA adapters (list, merge, export)")
@@ -210,8 +251,21 @@ def main() -> None:
     subparsers.add_parser("gpucheck", help="Print CUDA hardware and driver diagnostics")
 
     # 11. Memory Plan command
-    mem_parser = subparsers.add_parser("plan-memory", help="Estimate VRAM budget for target GPU")
-    mem_parser.add_argument("--vram-gb", type=float, default=8.0, help="Target VRAM in GB")
+    mem_parser = subparsers.add_parser("plan-memory", help="Estimate VRAM/RAM budget for Triune or Hugging Face models")
+    mem_parser.add_argument("--vram-gb", type=float, default=None, help="Target VRAM in GB (default: auto-detect)")
+    mem_parser.add_argument("--model", default=None, help="Optional HF model ID or local HF directory to plan for")
+
+    # 11b. Cache NVFP4 shards for NVMe streaming
+    cache_parser = subparsers.add_parser(
+        "cache-nvfp4", help="Pack an HF Safetensors model layer-by-layer into an NVMe NVFP4 cache (~0.625 B/param)"
+    )
+    cache_parser.add_argument("--model", required=True, help="HF repo ID or local model directory with safetensors")
+    cache_parser.add_argument(
+        "--out", "--cache-dir", "--output", dest="out", default=None, help="Output cache directory"
+    )
+    cache_parser.add_argument("--no-hadamard", action="store_true", help="Disable FWHT-16 outlier rotation")
+    cache_parser.add_argument("--quantize-lm-head", action="store_true", help="Also pack lm_head into NVFP4")
+    cache_parser.add_argument("--force", action="store_true", help="Rebuild cache even if manifest exists")
 
     # 12. Install / Setup command
     install_parser = subparsers.add_parser(
@@ -303,12 +357,22 @@ def main() -> None:
             "--max_new_tokens",
             str(args.max_tokens),
         ]
+        if getattr(args, "model", None):
+            chat_args.extend(["--model", args.model])
         if args.adapter:
             chat_args.extend(["--adapter", args.adapter])
         if getattr(args, "speculative", False):
             chat_args.append("--speculative")
         if getattr(args, "k_draft", None):
             chat_args.extend(["--k-draft", str(args.k_draft)])
+        if getattr(args, "nvfp4", False):
+            chat_args.append("--nvfp4")
+        if getattr(args, "disk_stream", False):
+            chat_args.append("--disk-stream")
+        if getattr(args, "disk_cache", None):
+            chat_args.extend(["--disk-cache", args.disk_cache])
+        if getattr(args, "device", None):
+            chat_args.extend(["--device", args.device])
         chat_main(chat_args)
 
     elif args.command in ("infer", "inference", "generate"):
@@ -319,24 +383,43 @@ def main() -> None:
 
         import torch
 
-        from triune.inference import generate_response, load_checkpoint_model
+        from triune.inference import generate_response, load_checkpoint_model, load_model_for_inference
 
         depth_map = {"auto": None, "reflex": 0, "limbic": 1, "cortex": 2}
         force_depth = depth_map.get(args.depth)
+        source = getattr(args, "model", None) or args.checkpoint
 
         print(f"\n{_bold('Triune High-Performance Inference Engine')}")
-        print(f"  Checkpoint  : {args.checkpoint}")
+        print(f"  Model Source: {source}")
         print(f"  Target Route: {args.depth.upper()} | Temp: {args.temperature} | Max Tokens: {args.max_tokens}")
         if args.adapter:
             print(f"  LoRA Adapter: {args.adapter}")
 
         load_t0 = time.perf_counter()
-        model, tokenizer, _, device, pad_id, eos_id = load_checkpoint_model(
-            args.checkpoint,
-            args.tokenizer,
-            adapter_path=args.adapter,
-            device=args.device,
+        use_unified = bool(
+            getattr(args, "model", None)
+            or getattr(args, "nvfp4", False)
+            or getattr(args, "disk_stream", False)
+            or Path(source).is_dir()
         )
+        if use_unified:
+            model, tokenizer, _, device, pad_id, eos_id = load_model_for_inference(
+                source,
+                args.tokenizer,
+                adapter_path=args.adapter,
+                device=args.device,
+                quantize="nvfp4" if getattr(args, "nvfp4", False) else None,
+                disk_stream=getattr(args, "disk_stream", False),
+                disk_cache_dir=getattr(args, "disk_cache", None),
+                quantize_lm_head=getattr(args, "quantize_lm_head", False),
+            )
+        else:
+            model, tokenizer, _, device, pad_id, eos_id = load_checkpoint_model(
+                args.checkpoint,
+                args.tokenizer,
+                adapter_path=args.adapter,
+                device=args.device,
+            )
         load_time = time.perf_counter() - load_t0
 
         stream = not args.no_stream
@@ -370,6 +453,8 @@ def main() -> None:
             on_text=_on_text if stream else None,
             return_info=True,
         )
+        if getattr(model, "_streaming_engine", None) is not None:
+            model._streaming_engine.detach()
 
         if not stream:
             print(res["text"])
@@ -398,14 +483,29 @@ def main() -> None:
         import torch
 
         from triune.configs import build_config
-        from triune.inference import load_checkpoint_model
+        from triune.inference import load_checkpoint_model, load_model_for_inference
         from triune.model import build_model
         from triune.trainer.finetune import LoRAConfig, TriuneFineTuner
 
         print(
             f"\n[Triune CLI] Initializing Fine-Tuning Session (rank={args.rank}, alpha={args.alpha}, epochs={args.epochs})"
         )
-        if args.checkpoint and Path(args.checkpoint).is_file():
+        tokenizer = None
+        if getattr(args, "model", None):
+            print(f"[Triune CLI] Loading model source: {args.model}")
+            quant = "nvfp4" if args.qlora else None
+            model, tokenizer, _, device, _, _ = load_model_for_inference(
+                args.model,
+                device=None,
+                quantize=quant,
+                disk_stream=args.disk_stream,
+                disk_cache_dir=args.disk_cache,
+                quantize_lm_head=getattr(args, "quantize_lm_head", False),
+            )
+            # Load raw HF tokenizer if wrapped
+            if hasattr(tokenizer, "hf"):
+                tokenizer = tokenizer.hf
+        elif args.checkpoint and Path(args.checkpoint).is_file():
             print(f"[Triune CLI] Loading base weights from checkpoint: {args.checkpoint}")
             model, tokenizer, _, device, _, _ = load_checkpoint_model(args.checkpoint)
         else:
@@ -417,9 +517,17 @@ def main() -> None:
         lora_cfg = LoRAConfig(
             rank=args.rank,
             alpha=args.alpha,
-            quantization=args.quantization,
+            use_qlora=bool(args.qlora),
+            quantization=("4-bit NVFP4" if args.qlora else args.quantization),
+            quantize_base=(True if args.qlora else None),
         )
-        tuner = TriuneFineTuner(model, lora_cfg)
+        tuner = TriuneFineTuner(
+            model,
+            lora_cfg,
+            tokenizer=tokenizer,
+            model_name_or_path=getattr(args, "model", None),
+            adapter_device=device,
+        )
         trainable = tuner.count_trainable_parameters()
         total_p = sum(p.numel() for p in model.parameters())
         print(f"[Triune CLI] Model ready: {trainable:,} trainable adapter params ({total_p:,} total)")
@@ -432,16 +540,30 @@ def main() -> None:
                     f"  [Step {step}/{total_s} ({pct}%)] Loss: {loss_val:.4f} | LM Loss: {lm_loss_val:.4f}", flush=True
                 )
 
-        res = tuner.fit(
-            dataset_path=args.dataset,
-            output_dir=args.output_dir,
-            epochs=args.epochs,
-            batch_size=args.batch_size,
-            lr=args.lr,
-            max_steps=args.max_steps,
-            on_step=_cli_on_step,
-        )
-        print(f"[Triune CLI] Fine-tuning finished! Final Loss: {res['final_loss']} -> Saved to: {res['output_dir']}\n")
+        try:
+            res = tuner.fit(
+                dataset_path=args.dataset,
+                output_dir=args.output_dir,
+                epochs=args.epochs,
+                batch_size=args.batch_size,
+                seq_len=args.seq_len,
+                lr=args.lr,
+                max_steps=args.max_steps,
+                on_step=_cli_on_step,
+                tokenizer=tokenizer,
+                dataset_split=args.dataset_split,
+                max_samples=args.max_samples,
+                grad_accum_steps=args.grad_accum,
+                stream_layers=bool(args.stream and not args.disk_stream),
+                stream_chunk_size=args.stream_chunk,
+                gradient_checkpointing=bool(args.checkpointing),
+            )
+            print(
+                f"[Triune CLI] Fine-tuning finished! Final Loss: {res['final_loss']} -> Saved to: {res['output_dir']}\n"
+            )
+        finally:
+            if getattr(model, "_streaming_engine", None) is not None:
+                model._streaming_engine.detach()
 
     elif args.command == "adapter":
         from triune.trainer.finetune import export_adapter, list_adapters, merge_adapter_checkpoint
@@ -590,15 +712,51 @@ def main() -> None:
         from triune.configs import build_config
         from triune.runtime import MemoryPlanner
 
-        config = build_config({})
-        plan = MemoryPlanner.estimate_vram(config, target_vram_gb=args.vram_gb)
-        print("[Triune] VRAM Memory Plan Estimate:")
-        print(f"   Parameters: {plan.total_params:,} ({plan.param_memory_gb} GB)")
-        print(f"   Optimizer State: {plan.optimizer_memory_gb} GB")
-        print(f"   Activation Memory: {plan.activation_memory_gb} GB")
-        print(f"   Recommended Batch Size: {plan.recommended_batch_size}")
-        print(f"   Recommended Grad Accum: {plan.recommended_grad_accum}")
-        print(f"   Recommended Precision: {plan.recommended_precision}")
+        if getattr(args, "model", None):
+            hf_plan = MemoryPlanner.estimate_hf_model(args.model, available_vram_gb=args.vram_gb)
+            print(f"\n[Triune] Hardware Plan for {hf_plan['model']}:")
+            print(
+                f"   Parameters            : {hf_plan['total_params']:,} ({hf_plan['layers']}L, hidden={hf_plan['hidden_size']}, vocab={hf_plan['vocab_size']:,})"
+            )
+            print(f"   BF16 Weights          : {hf_plan['bf16_weights_gb']} GB")
+            print(
+                f"   NVFP4 Cache (SSD/VRAM): {hf_plan['nvfp4_disk_cache_gb']} GB (~{hf_plan['per_layer_nvfp4_mb']} MB/layer; lm_head-quantized={hf_plan['nvfp4_quant_lmhead_cache_gb']} GB)"
+            )
+            print(
+                f"   System Hardware       : {hf_plan['available_vram_gb']} GB VRAM | {hf_plan['host_ram_gb']} GB Host RAM"
+            )
+            print(f"   Recommended Mode      : {hf_plan['recommended_mode']}\n")
+        else:
+            config = build_config({})
+            plan = MemoryPlanner.estimate_vram(config, target_vram_gb=args.vram_gb or 8.0)
+            print("[Triune] VRAM Memory Plan Estimate:")
+            print(f"   Parameters: {plan.total_params:,} ({plan.param_memory_gb} GB)")
+            print(f"   Optimizer State: {plan.optimizer_memory_gb} GB")
+            print(f"   Activation Memory: {plan.activation_memory_gb} GB")
+            print(f"   Recommended Batch Size: {plan.recommended_batch_size}")
+            print(f"   Recommended Grad Accum: {plan.recommended_grad_accum}")
+            print(f"   Recommended Precision: {plan.recommended_precision}")
+
+    elif args.command == "cache-nvfp4":
+        import json
+
+        from triune.runtime.disk_streaming import build_nvfp4_disk_cache
+
+        print(f"[Triune CLI] Packing HF Safetensors -> NVFP4 disk cache for: {args.model}")
+        cache_path = build_nvfp4_disk_cache(
+            args.model,
+            cache_dir=args.out,
+            hadamard=(not args.no_hadamard),
+            quantize_lm_head=bool(args.quantize_lm_head),
+            force=bool(args.force),
+        )
+        manifest = json.loads((cache_path / "manifest.json").read_text(encoding="utf-8"))
+        raw_mb = manifest["raw_bytes"] / (1024 * 1024)
+        packed_mb = manifest["packed_bytes"] / (1024 * 1024)
+        print(
+            f"[Triune CLI] Ready at {cache_path}\n"
+            f"   Layers: {manifest['num_layers']} | Size: {raw_mb:.1f} MB -> {packed_mb:.1f} MB ({manifest['compression_ratio']}x compression)\n"
+        )
 
     elif args.command == "install":
         import subprocess

@@ -1072,6 +1072,15 @@ if HAS_FASTAPI:
             """Rebuild TriuneTransformer architecture and optimizer using canonical ModelSpec."""
             from triune.model.base import build_model_from_spec, get_model_spec
 
+            if getattr(getattr(self, "tokenizer", None), "hf", None) is not None:
+                self.tokenizer = None
+            prev_disk_eng = getattr(getattr(self, "model", None), "_streaming_engine", None)
+            if prev_disk_eng is not None and hasattr(prev_disk_eng, "detach"):
+                try:
+                    prev_disk_eng.detach()
+                except Exception:
+                    pass
+
             p_id = preset_id or getattr(self, "active_model_id", "triune-small") or "triune-small"
             spec_overrides = {
                 k: kwargs[k]
@@ -1301,6 +1310,14 @@ if HAS_FASTAPI:
             precision_override: Optional[str] = None,
         ) -> Dict[str, Any]:
             """Load a checkpoint only after matching the model architecture and validating every weight."""
+            if getattr(getattr(self, "tokenizer", None), "hf", None) is not None:
+                self.tokenizer = None
+            prev_disk_eng = getattr(getattr(self, "model", None), "_streaming_engine", None)
+            if prev_disk_eng is not None and hasattr(prev_disk_eng, "detach"):
+                try:
+                    prev_disk_eng.detach()
+                except Exception:
+                    pass
             p = Path(checkpoint_path).resolve()
             if not p.is_file():
                 raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
@@ -1464,6 +1481,97 @@ if HAS_FASTAPI:
                 "exit_usage": exit_usage_dict,
                 "target_exit_distribution": self._get_target_exit_distribution(),
                 "throughput": self._get_current_throughput(),
+                "architecture": self.architecture_spec,
+                "active_model": self.active_model_id,
+            }
+
+        def load_hf_model(
+            self,
+            model_source: str | Path,
+            *,
+            nvfp4: bool = False,
+            disk_stream: bool = False,
+            quantize_lm_head: bool = False,
+            disk_cache_dir: Optional[str] = None,
+            local_files_only: bool = False,
+        ) -> Dict[str, Any]:
+            """Load a Hugging Face repo, local CausalLM directory, or NVFP4 disk cache."""
+            from triune.inference import load_model_for_inference
+
+            for eng_attr in ("_streaming_engine", "_disk_streaming_engine"):
+                prev_eng = getattr(getattr(self, "model", None), eng_attr, None)
+                if prev_eng is not None and hasattr(prev_eng, "detach"):
+                    try:
+                        prev_eng.detach()
+                    except Exception:
+                        pass
+            if getattr(self, "neuron_scope", None) is not None:
+                try:
+                    self.neuron_scope.detach()
+                except Exception:
+                    pass
+
+            self.optimizer = None
+            self.active_adapter = None
+            self.active_finetuner = None
+            self.streaming_engine = None
+            self.is_training = False
+
+            quant_mode = "nvfp4" if (nvfp4 and not disk_stream) else None
+            model, tok, metadata, dev, pad_id, _eos_id = load_model_for_inference(
+                model_source,
+                device=self.device,
+                quantize=quant_mode,
+                disk_stream=disk_stream,
+                disk_cache_dir=disk_cache_dir,
+                quantize_lm_head=quantize_lm_head,
+                local_files_only=local_files_only,
+            )
+            self.model = model
+            self.tokenizer = tok
+            self.pad_token_id = int(pad_id)
+            source_str = str(model_source)
+            self.active_checkpoint = Path(source_str).name or source_str
+            self.active_model_id = source_str
+            self.weights_loaded = True
+            self.step = 0
+            self.total_tokens_trained = 0
+            self.history = []
+
+            hf_cfg = getattr(model, "config", None)
+            num_layers = int(getattr(hf_cfg, "num_hidden_layers", getattr(hf_cfg, "n_layer", 0)) or 0)
+            hidden_dim = int(getattr(hf_cfg, "hidden_size", getattr(hf_cfg, "n_embd", 0)) or 0)
+            num_heads = int(getattr(hf_cfg, "num_attention_heads", getattr(hf_cfg, "n_head", 0)) or 0)
+            vocab_size = int(getattr(hf_cfg, "vocab_size", 0) or 0)
+            head_dim = (hidden_dim // num_heads) if (hidden_dim and num_heads) else 0
+            # Triton NVFP4 kernels operate natively under BF16/FP32 autocast rather than TE FP4BlockScaling.
+            self.precision = "bf16" if self.device.type == "cuda" else "fp32"
+            if not hasattr(model, "init_cache"):
+                model._is_external_hf = True
+            self.architecture_spec = {
+                "preset_id": source_str,
+                "name": source_str,
+                "tier": "HF NVFP4 Disk-Stream" if disk_stream else ("HF NVFP4" if nvfp4 else "HF CausalLM"),
+                "num_layers": num_layers,
+                "hidden_dim": hidden_dim,
+                "num_heads": num_heads,
+                "head_dim": head_dim,
+                "vocab_size": vocab_size,
+                "num_experts": 0,
+                "precision": "nvfp4" if (nvfp4 or disk_stream) else self.precision,
+                "disk_stream": bool(disk_stream or (Path(source_str) / "manifest.json").is_file()),
+                "nvfp4": bool(nvfp4 or disk_stream),
+                "metadata": {k: str(v) for k, v in (metadata or {}).items() if k != "streaming_engine"},
+            }
+            self._save_persisted_session_state()
+            return {
+                "checkpoint": self.active_checkpoint,
+                "step": 0,
+                "tokens_trained": 0,
+                "loss": None,
+                "exit_usage": None,
+                "target_exit_distribution": None,
+                "throughput": 0,
                 "architecture": self.architecture_spec,
                 "active_model": self.active_model_id,
             }
@@ -2166,13 +2274,18 @@ if HAS_FASTAPI:
             if pad_id is None:
                 pad_id = self.pad_token_id
 
-            from triune.runtime.neuron_scope import NeuronScope
+            is_triune_model = bool(hasattr(self.model, "init_cache") or getattr(self.model, "_is_triune", False))
+            neuron_snapshot: Dict[str, Any] = {}
+            scope = None
+            if is_triune_model:
+                from triune.runtime.neuron_scope import NeuronScope
 
-            if getattr(self, "neuron_scope", None) is None:
-                self.neuron_scope = NeuronScope(self.model)
-            self.neuron_scope.attach(self.model)
+                if getattr(self, "neuron_scope", None) is None:
+                    self.neuron_scope = NeuronScope(self.model)
+                scope = self.neuron_scope
+                scope.attach(self.model)
 
-            if speculative:
+            if speculative and is_triune_model:
                 from triune.model.speculative import SelfSpeculativeGenerator
 
                 t_spec_start = time.perf_counter()
@@ -2199,10 +2312,12 @@ if HAS_FASTAPI:
                             on_token=_spec_on_tok if on_text else None,
                         )
                 except BaseException:
-                    self.neuron_scope.detach(clear=False)
+                    if scope is not None:
+                        scope.detach(clear=False)
                     raise
-                neuron_snapshot = self.neuron_scope.get_snapshot()
-                self.neuron_scope.detach(clear=False)
+                if scope is not None:
+                    neuron_snapshot = scope.get_snapshot()
+                    scope.detach(clear=False)
                 spec_dt_ms = round((time.perf_counter() - t_spec_start) * 1000, 1)
                 spec_text = sanitize_text(str(spec_out["text"]))
                 if not self.weights_loaded:
@@ -2247,7 +2362,8 @@ if HAS_FASTAPI:
                         cache=cache,
                     )
             except BaseException:
-                self.neuron_scope.detach(clear=False)
+                if scope is not None:
+                    scope.detach(clear=False)
                 raise
             generated_text = sanitize_text(str(result["text"]))
             if not self.weights_loaded:
@@ -2256,10 +2372,10 @@ if HAS_FASTAPI:
             vram_stats = VRAMProfiler.get_vram_stats(self.device)
             route_str = str(result.get("route", "Cortex")).upper()
             tier_idx = 0 if "REFLEX" in route_str else (1 if "LIMBIC" in route_str else 2)
-            if getattr(self, "neuron_scope", None) is not None:
-                self.neuron_scope.record_routing(tier_idx)
-            neuron_snapshot = self.neuron_scope.get_snapshot()
-            self.neuron_scope.detach(clear=False)
+            if scope is not None:
+                scope.record_routing(tier_idx)
+                neuron_snapshot = scope.get_snapshot()
+                scope.detach(clear=False)
             return {
                 "text": generated_text,
                 "route": result["route"],
@@ -2301,6 +2417,10 @@ if HAS_FASTAPI:
                 return
             if getattr(self.device, "type", None) != "cuda" or not self.weights_loaded:
                 self.inference_warmup_status = "skipped"
+                return
+            eng = getattr(self.model, "_streaming_engine", None)
+            if eng is not None and "Disk" in type(eng).__name__:
+                self.inference_warmup_status = "ready"
                 return
             with self._inference_warmup_lock:
                 if self.inference_warmup_status in {"queued", "warming", "ready", "disabled"}:
@@ -2492,6 +2612,11 @@ if HAS_FASTAPI:
         def step_once(self) -> Dict[str, Any]:
             if not HAS_TORCH or TriuneTransformer is None:
                 raise RuntimeError("PyTorch is unavailable; this process can display Studio but cannot train.")
+
+            if getattr(self.model, "_is_external_hf", False):
+                raise RuntimeError(
+                    "Active model is an external Hugging Face CausalLM. Use /v1/finetune/start for LoRA/QLoRA fine-tuning."
+                )
 
             self.lazy_init_model()
             if not self.data_chunks and not self.is_streaming_hf:
@@ -2725,6 +2850,13 @@ if HAS_FASTAPI:
         max_steps: Optional[int] = None
         quantization: str = "4-bit NF4"
         adapter_name: Optional[str] = None
+        model_name_or_path: Optional[str] = None
+        seq_len: Optional[int] = None
+        grad_accum_steps: int = 1
+        stream_layers: bool = False
+        disk_stream: bool = False
+        nvfp4: bool = False
+        max_samples: int = 2000
 
     class AdapterExportRequest(BaseModel):
         adapter_path: Optional[str] = None
@@ -2961,10 +3093,15 @@ if HAS_FASTAPI:
                 and (m.get("content") or "").strip().startswith("You are Triune, a helpful")
             )
         ]
+        is_triune_model = bool(
+            pytorch_state.model is None
+            or hasattr(pytorch_state.model, "init_cache")
+            or getattr(pytorch_state.model, "_is_triune", False)
+        )
         session_id = req.session_id or req.user
         cached_cache = None
         prompt_is_formatted = False
-        if session_id:
+        if session_id and is_triune_model:
             cached_session = srsm.get_session_cache(session_id, pytorch_state.device)
             if cached_session is not None:
                 cached_cache, cached_depth = cached_session
@@ -2974,7 +3111,23 @@ if HAS_FASTAPI:
                 prompt_is_formatted = True
 
         if cached_cache is None:
-            if len(chat_messages) > 1:
+            tok_ref = getattr(pytorch_state, "tokenizer", None)
+            if (
+                not is_triune_model
+                and tok_ref is not None
+                and hasattr(tok_ref, "apply_chat_template")
+                and getattr(tok_ref, "chat_template", None)
+            ):
+                try:
+                    effective_prompt = tok_ref.apply_chat_template(
+                        chat_messages or req.messages,
+                        tokenize=False,
+                        add_generation_prompt=True,
+                    )
+                    prompt_is_formatted = True
+                except Exception:
+                    effective_prompt = user_prompt
+            elif len(chat_messages) > 1:
                 turns = []
                 for m in chat_messages:
                     role = (m.get("role") or "user").strip().capitalize()
@@ -3022,7 +3175,7 @@ if HAS_FASTAPI:
                         k_draft=int(getattr(req, "k_draft", 3)),
                         cache=cached_cache,
                     )
-                    if session_id and res.get("cache") is not None:
+                    if session_id and is_triune_model and res.get("cache") is not None:
                         route_name = str(res.get("route", "")).upper()
                         tier_code = 0 if "REFLEX" in route_name else (1 if "LIMBIC" in route_name else 2)
                         srsm.update_session_cache(session_id, res["cache"], depth=tier_code)
@@ -3253,7 +3406,17 @@ if HAS_FASTAPI:
 
         async def _run_finetune_job():
             try:
-                pytorch_state.lazy_init_model()
+                if req.model_name_or_path:
+                    await asyncio.to_thread(
+                        pytorch_state.load_hf_model,
+                        req.model_name_or_path,
+                        nvfp4=bool(req.nvfp4),
+                        disk_stream=bool(req.disk_stream),
+                    )
+                else:
+                    pytorch_state.lazy_init_model()
+                if pytorch_state.tokenizer is None:
+                    pytorch_state.load_tokenizer()
                 # Detach any previous adapter first
                 if getattr(pytorch_state, "active_finetuner", None) is not None:
                     pytorch_state.active_finetuner.detach_lora()
@@ -3263,16 +3426,25 @@ if HAS_FASTAPI:
                     rank=req.lora_rank,
                     alpha=req.lora_alpha,
                     quantization=req.quantization,
+                    quantize_base=True if (req.nvfp4 or req.disk_stream) else None,
                 )
-                finetuner = TriuneFineTuner(pytorch_state.model, cfg)
+                finetuner = TriuneFineTuner(
+                    pytorch_state.model,
+                    cfg,
+                    tokenizer=pytorch_state.tokenizer,
+                    model_name_or_path=getattr(pytorch_state, "active_model_id", None),
+                )
                 finetune_state["trainable_params"] = finetuner.count_trainable_parameters()
 
                 dpath = req.dataset_path
-                if not Path(dpath).is_file():
+                if not Path(dpath).is_file() and "/" not in str(dpath):
                     for cand in ("data/fineweb_sample.jsonl", "data/finetune.jsonl"):
                         if Path(cand).is_file():
                             dpath = cand
                             break
+
+                is_hf_tok = getattr(pytorch_state.tokenizer, "hf", None) is not None
+                effective_seq = req.seq_len if req.seq_len is not None else (512 if is_hf_tok else 64)
 
                 def _on_step(cur_step: int, total_s: int, cur_loss: float, lm_loss_val: float):
                     finetune_state["step"] = cur_step
@@ -3285,10 +3457,15 @@ if HAS_FASTAPI:
                     output_dir=out_dir,
                     epochs=req.epochs,
                     batch_size=req.batch_size,
+                    seq_len=effective_seq,
                     lr=req.lr,
                     max_steps=req.max_steps,
                     on_step=_on_step,
                     cancel_event=finetune_cancel_event,
+                    tokenizer=pytorch_state.tokenizer,
+                    max_samples=req.max_samples,
+                    grad_accum_steps=req.grad_accum_steps,
+                    stream_layers=req.stream_layers,
                 )
 
                 if finetune_cancel_event.is_set():
@@ -4975,6 +5152,10 @@ if HAS_FASTAPI:
 
     class ModelLoadRequest(BaseModel):
         checkpoint_path: str
+        nvfp4: bool = False
+        disk_stream: bool = False
+        quantize_lm_head: bool = False
+        disk_cache_dir: Optional[str] = None
 
     class CheckpointActionRequest(BaseModel):
         checkpoint_path: str
@@ -5363,17 +5544,35 @@ if HAS_FASTAPI:
 
     @router.post("/v1/models/load")
     async def load_model_checkpoint_endpoint(req: ModelLoadRequest) -> Dict[str, Any]:
-        """Load local PyTorch checkpoint into active inference and training engine."""
+        """Load local PyTorch checkpoint, HF model directory/repo, or NVFP4 disk cache."""
         if not HAS_TORCH:
             return {"status": "error", "message": "PyTorch not available in current environment."}
         if pytorch_state.is_training:
             raise HTTPException(status_code=409, detail="Pause training before replacing the active model weights.")
-        p = Path(req.checkpoint_path).resolve()
-        if not p.is_file():
-            return {"status": "error", "message": f"Checkpoint file not found: {req.checkpoint_path}"}
+        raw_source = str(req.checkpoint_path).strip()
+        p = Path(raw_source).resolve()
         allowed_exts = {".pt", ".bin", ".safetensors", ".ckpt"}
-        if p.suffix.lower() not in allowed_exts:
-            return {"status": "error", "message": f"Security restriction: disallowed checkpoint format {p.suffix}"}
+        is_hf_dir = p.is_dir() and ((p / "config.json").is_file() or (p / "manifest.json").is_file())
+        is_hf_repo = (
+            not p.exists()
+            and "/" in raw_source
+            and not Path(raw_source).is_absolute()
+            and "\\" not in raw_source
+            and Path(raw_source).suffix.lower() not in {".pt", ".bin", ".safetensors", ".ckpt", ".py", ".txt", ".json"}
+        )
+
+        if p.is_file():
+            if p.suffix.lower() not in allowed_exts:
+                return {"status": "error", "message": f"Security restriction: disallowed checkpoint format {p.suffix}"}
+        elif not (is_hf_dir or is_hf_repo):
+            if p.exists() and not p.is_file():
+                return {
+                    "status": "error",
+                    "message": f"Directory does not look like a Hugging Face or NVFP4 cache model (missing config.json/manifest.json): {req.checkpoint_path}",
+                }
+            return {"status": "error", "message": f"Checkpoint file not found: {req.checkpoint_path}"}
+
+        source_label = p.name if (p.is_file() or is_hf_dir) else raw_source
         try:
 
             def _load_checkpoint_safely() -> Dict[str, Any]:
@@ -5382,15 +5581,21 @@ if HAS_FASTAPI:
                         raise RuntimeError(
                             "Training started while the checkpoint was being selected; pause it and retry."
                         )
+                    if is_hf_dir or is_hf_repo:
+                        return pytorch_state.load_hf_model(
+                            p if is_hf_dir else raw_source,
+                            nvfp4=bool(req.nvfp4),
+                            disk_stream=bool(req.disk_stream),
+                            quantize_lm_head=bool(req.quantize_lm_head),
+                            disk_cache_dir=req.disk_cache_dir,
+                        )
                     return pytorch_state.load_model_checkpoint(p)
 
             restored = await asyncio.to_thread(_load_checkpoint_safely)
             pytorch_state.schedule_cuda_inference_warmup()
             restored_tokens = restored["tokens_trained"]
             tokens_fmt = _format_tokens(restored_tokens)
-            log_msg = (
-                f"[CHECKPOINT] Loaded {p.name} into {restored['active_model']} (step {restored['step']}, {tokens_fmt})."
-            )
+            log_msg = f"[CHECKPOINT] Loaded {source_label} into {restored['active_model']} (step {restored['step']}, {tokens_fmt})."
             pytorch_state.logs.insert(0, log_msg)
 
             try:
@@ -5404,7 +5609,7 @@ if HAS_FASTAPI:
                             "exit_usage": restored.get("exit_usage", pytorch_state._get_current_exit_usage()),
                             "target_exit_distribution": pytorch_state._get_target_exit_distribution(),
                             "tokens_trained": restored_tokens,
-                            "active_checkpoint": p.name,
+                            "active_checkpoint": source_label,
                             "active_model": restored["active_model"],
                             "architecture": restored["architecture"],
                             "history": pytorch_state.history,
@@ -5422,7 +5627,7 @@ if HAS_FASTAPI:
                 "throughput": restored.get("throughput", pytorch_state._get_current_throughput()),
                 "exit_usage": restored.get("exit_usage", pytorch_state._get_current_exit_usage()),
                 "target_exit_distribution": pytorch_state._get_target_exit_distribution(),
-                "checkpoint": p.name,
+                "checkpoint": source_label,
                 "tokens_trained": restored_tokens,
                 "tokens_formatted": tokens_fmt,
                 "active_model": restored["active_model"],
@@ -7116,6 +7321,7 @@ SYSTEM \"\"\"You are Triune AI, a high-efficiency cognitive language model train
 
         if scope is not None:
             snap = scope.get_snapshot()
+            snap["num_layers"] = num_layers
             snap["graphics_interop"] = graphics_interop
             snap["cuda_active"] = has_cuda
             snap["graphics_api"] = "Canvas 2D"

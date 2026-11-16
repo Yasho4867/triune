@@ -591,6 +591,36 @@ class TestKernelSuite(unittest.TestCase):
         self.assertEqual(logits.shape, (2, 5, 64))
         self.assertTrue(torch.isfinite(logits).all())
 
+    def test_nvfp4_autograd_input_grad_and_empty_skeleton(self):
+        from triune.kernels import NVFP4Linear, fwht_16, nvfp4_dequantize
+
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
+        skel = NVFP4Linear.empty_skeleton(64, 32, bias=True, hadamard=True, dtype=dtype)
+        self.assertEqual(skel.packed_weight.numel(), 0)
+        self.assertEqual(skel.scale.numel(), 0)
+        self.assertTrue(skel.hadamard)
+        self.assertIsNotNone(skel.bias)
+        self.assertEqual(skel.bias.numel(), 0)
+
+        for hadamard in (False, True):
+            for m_tok, k_in, n_out in [(1, 64, 32), (8, 64, 48), (64, 64, 32)]:
+                lin = nn.Linear(k_in, n_out, bias=True, device=device, dtype=dtype)
+                nv = NVFP4Linear.from_linear(lin, hadamard=hadamard).to(device=device)
+                x = torch.randn(m_tok, k_in, device=device, dtype=dtype, requires_grad=True)
+                out = nv(x)
+                (gx,) = torch.autograd.grad(out.sum(), (x,))
+
+                x_ref = x.detach().clone().requires_grad_(True)
+                w_ref = nvfp4_dequantize(nv.packed_weight, nv.scale, dtype=dtype)
+                if hadamard:
+                    w_ref = fwht_16(w_ref)
+                out_ref = torch.nn.functional.linear(x_ref, w_ref, nv.bias.to(dtype=dtype))
+                (gx_ref,) = torch.autograd.grad(out_ref.sum(), (x_ref,))
+
+                tol = 8e-2 if dtype == torch.bfloat16 else 1e-4
+                torch.testing.assert_close(gx, gx_ref, atol=tol, rtol=tol)
+
 
 if __name__ == "__main__":
     unittest.main()

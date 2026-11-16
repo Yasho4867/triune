@@ -335,6 +335,10 @@ if is_triton_available():
             return dx.reshape(orig_shape), d_residual, dw, None
 
 
+def _is_ckpt_early_stop(exc: BaseException) -> bool:
+    return type(exc).__name__ == "_StopRecomputationError"
+
+
 def fast_rmsnorm(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
     """Dispatches to fused persistent Triton kernel for wide hidden autograd, native PyTorch 2.4+, or fallback."""
     w = weight.to(x.dtype) if weight.dtype != x.dtype else weight
@@ -342,15 +346,17 @@ def fast_rmsnorm(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-6) -> to
     if needs_grad and is_turbo_mode_enabled() and is_triton_available() and x.is_cuda and x.size(-1) >= 1024:
         try:
             return _FastRMSNormFunction.apply(x, w, eps)
-        except Exception:
-            pass
+        except Exception as exc:
+            if _is_ckpt_early_stop(exc):
+                raise
     if hasattr(torch.nn.functional, "rms_norm"):
         return torch.nn.functional.rms_norm(x, (x.size(-1),), weight=w, eps=eps)
     if is_turbo_mode_enabled() and is_triton_available() and x.is_cuda:
         try:
             return _FastRMSNormFunction.apply(x, w, eps)
-        except Exception:
-            pass
+        except Exception as exc:
+            if _is_ckpt_early_stop(exc):
+                raise
 
     return (x.float() * torch.rsqrt(x.float().pow(2).mean(-1, keepdim=True) + eps)).to(x.dtype) * w
 
@@ -370,8 +376,9 @@ def fast_fused_add_rmsnorm(
     if is_turbo_mode_enabled() and is_triton_available() and x.is_cuda:
         try:
             return _FusedAddRMSNormFunction.apply(x, residual, w, eps)
-        except Exception:
-            pass
+        except Exception as exc:
+            if _is_ckpt_early_stop(exc):
+                raise
 
     res_out = x + residual if residual is not None else x
     normed = fast_rmsnorm(res_out, w, eps=eps)

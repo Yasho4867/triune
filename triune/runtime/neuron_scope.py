@@ -82,10 +82,12 @@ class NeuronScope:
                 active_tier = int(dc.view(-1)[0].item())
 
         tier_names = {0: "Reflex", 1: "Limbic", 2: "Cortex"}
+        cfg_layers = getattr(getattr(self.model, "config", None), "num_hidden_layers", None)
+        model_layers = getattr(self.model, "num_layers", cfg_layers)
         return {
             "layers": layer_heatmaps,
             "layer_bins": layer_bins,
-            "num_layers": int(getattr(self.model, "num_layers", len(layer_bins) or 8)),
+            "num_layers": int(model_layers if model_layers is not None else (len(layer_bins) or 8)),
             "router_history": self.router_decisions[-16:],
             "active_tier": active_tier,
             "active_tier_name": tier_names.get(active_tier, "Reflex"),

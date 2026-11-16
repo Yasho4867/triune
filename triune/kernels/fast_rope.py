@@ -173,8 +173,9 @@ def fast_rope(
             sin_2d = sin.reshape(-1, sin.size(-1))
             if cos_2d.size(0) >= T and cos_2d.size(1) >= half_d:
                 return _FastRoPEFunction.apply(q, k, cos, sin)
-        except Exception:
-            pass
+        except Exception as exc:
+            if type(exc).__name__ == "_StopRecomputationError":
+                raise
 
     # Vectorized PyTorch Fast Execution Fallback
     cos = cos.to(dtype=q.dtype, device=q.device)

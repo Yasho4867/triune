@@ -32,6 +32,7 @@ class StreamingConfig:
     pin_memory: Optional[bool] = None  # None = auto-detect based on host RAM
     async_prefetch: bool = True
     fp8_weights: bool = False
+    fp4_weights: bool = False
     grad_clip: float = 1.0
     instant_optimizer: bool = True
     layers_path: Optional[str] = None
@@ -166,11 +167,10 @@ class LayerStreamingEngine:
         if layers_path is not None:
             self.config.layers_path = layers_path
 
-        if self.config.chunk_size > 1:
-            raise NotImplementedError(
-                f"StreamingConfig.chunk_size > 1 (got {self.config.chunk_size}) is not implemented. "
-                "Layer-wise streaming strictly executes chunk_size=1."
-            )
+        chunk_sz = int(getattr(self.config, "chunk_size", 1) or 1)
+        if chunk_sz < 1:
+            raise ValueError(f"StreamingConfig.chunk_size must be >= 1, got {chunk_sz}")
+        self._chunk_size = chunk_sz
 
         self.optimizer = optimizer
         self.is_attached = False
@@ -178,16 +178,157 @@ class LayerStreamingEngine:
         self.prefetch_stream: Optional[torch.cuda.Stream] = None
         self.d2h_stream: Optional[torch.cuda.Stream] = None
         all_layers: list[nn.Module] = self._resolve_layers()
-        res_count = (
-            max(0, min(len(all_layers), int(getattr(self.config, "resident_gpu_layers", 0) or 0)))
-            if self.device.type == "cuda"
-            else 0
-        )
+        raw_res = int(getattr(self.config, "resident_gpu_layers", 0) or 0)
+        if self.device.type != "cuda" or not all_layers:
+            res_count = 0
+        elif raw_res < 0:
+            res_count = self._compute_auto_resident_layers(all_layers)
+        else:
+            res_count = max(0, min(len(all_layers), raw_res))
         self.all_layers: list[nn.Module] = all_layers
         self.resident_layers: list[nn.Module] = all_layers[:res_count]
         self.layers: list[nn.Module] = all_layers[res_count:]
+        self._layer_chunks: list[list[nn.Module]] = [
+            self.layers[i : i + self._chunk_size] for i in range(0, len(self.layers), self._chunk_size)
+        ]
         self.caps = PrecisionCapabilities.detect(self.device)
         self.stager: Optional[ParameterStager] = None
+
+    def _compute_auto_resident_layers(self, all_layers: list[nn.Module]) -> int:
+        """Heuristically keeps initial layers on GPU while leaving safe streaming + activation headroom."""
+        if not all_layers or self.device.type != "cuda":
+            return 0
+        try:
+            free_bytes, _total_bytes = torch.cuda.mem_get_info(self.device)
+        except Exception:
+            return 0
+        sample_bytes = sum(
+            t.numel() * t.element_size() for t in list(all_layers[0].parameters()) + list(all_layers[0].buffers())
+        )
+        if sample_bytes <= 0:
+            return 0
+        # Reserve room for root embeddings/heads (~512MB), 2 active+prefetch chunks, and activations (~1.5GB)
+        reserve = max(int(2.0 * (1024**3)), 2 * self._chunk_size * sample_bytes + int(1.0 * (1024**3)))
+        avail = max(0, free_bytes - reserve)
+        return max(0, min(len(all_layers), int(avail // max(1, sample_bytes))))
+
+    def _chunk_for_layer_idx(self, idx: int) -> tuple[int, int, int]:
+        """Returns (chunk_idx, start_layer_idx, end_layer_idx) for streamed layer index `idx`."""
+        c_idx = idx // self._chunk_size
+        start = c_idx * self._chunk_size
+        end = min(len(self.layers), start + self._chunk_size) - 1
+        return c_idx, start, end
+
+    def _stage_chunk_forward(self, idx: int, use_hw_fp8: bool) -> None:
+        c_idx, start, end = self._chunk_for_layer_idx(idx)
+        chunk_layers = self._layer_chunks[c_idx]
+        lead = chunk_layers[0]
+        if getattr(lead, "_chunk_active", False):
+            # Ensure target layer specifically holds its staged tensor (e.g. partial forward path)
+            layer = self.layers[idx]
+            has_staged = any(
+                (self.stager.buffers.get(id(t)) is not None and self.stager.buffers[id(t)].gpu_tensor is not None)
+                for t in list(layer.parameters()) + list(layer.buffers())
+            )
+            if has_staged or not list(layer.parameters()):
+                return
+        if getattr(lead, "_is_prefetched", False):
+            if self.prefetch_stream is not None and self.device.type == "cuda":
+                torch.cuda.current_stream().wait_stream(self.prefetch_stream)
+            for cl in chunk_layers:
+                self.stager.apply_staged_tensors(cl)
+                cl._is_prefetched = False
+                cl._chunk_active = True
+        else:
+            for cl in chunk_layers:
+                self.stager.stage_layer(
+                    cl,
+                    stream=None,
+                    target_dtype=None,
+                    use_hardware_fp8=use_hw_fp8,
+                    _from_backward=False,
+                )
+                self.stager.apply_staged_tensors(cl)
+                cl._chunk_active = True
+
+        # Prefetch the next chunk once when entering the first layer (or chunk) in forward
+        next_c = c_idx + 1
+        if self.prefetch_stream is not None and next_c < len(self._layer_chunks):
+            next_chunk = self._layer_chunks[next_c]
+            if not getattr(next_chunk[0], "_is_prefetched", False) and not getattr(
+                next_chunk[0], "_chunk_active", False
+            ):
+                for nl in next_chunk:
+                    self.stager.stage_layer(
+                        nl,
+                        stream=self.prefetch_stream,
+                        target_dtype=None,
+                        use_hardware_fp8=use_hw_fp8,
+                        _from_backward=False,
+                    )
+                    nl._is_prefetched = True
+
+    def _release_chunk_forward(self, idx: int) -> None:
+        c_idx, _start, end = self._chunk_for_layer_idx(idx)
+        if idx != end:
+            return
+        for cl in self._layer_chunks[c_idx]:
+            self.stager.release_layer(cl)
+            cl._chunk_active = False
+
+    def _stage_chunk_backward(self, idx: int, use_hw_fp8: bool) -> None:
+        c_idx, _start, _end = self._chunk_for_layer_idx(idx)
+        chunk_layers = self._layer_chunks[c_idx]
+        lead = chunk_layers[0]
+        if getattr(self.layers[idx], "_is_bwd_staged", False):
+            return
+        if getattr(lead, "_is_bwd_prefetched", False):
+            if self.prefetch_stream is not None and self.device.type == "cuda":
+                torch.cuda.current_stream().wait_stream(self.prefetch_stream)
+            for cl in chunk_layers:
+                self.stager.apply_staged_tensors(cl)
+                cl._is_bwd_prefetched = False
+                cl._is_bwd_staged = True
+        else:
+            for cl in chunk_layers:
+                if not getattr(cl, "_is_bwd_staged", False):
+                    self.stager.stage_layer(
+                        cl,
+                        stream=None,
+                        target_dtype=None,
+                        use_hardware_fp8=use_hw_fp8,
+                        _from_backward=True,
+                    )
+                    self.stager.apply_staged_tensors(cl)
+                    cl._is_bwd_staged = True
+
+        prev_c = c_idx - 1
+        if self.prefetch_stream is not None and prev_c >= 0:
+            prev_chunk = self._layer_chunks[prev_c]
+            if not getattr(prev_chunk[0], "_is_bwd_prefetched", False) and not getattr(
+                prev_chunk[0], "_is_bwd_staged", False
+            ):
+                for pl in prev_chunk:
+                    self.stager.stage_layer(
+                        pl,
+                        stream=self.prefetch_stream,
+                        target_dtype=None,
+                        use_hardware_fp8=use_hw_fp8,
+                        _from_backward=True,
+                    )
+                    pl._is_bwd_prefetched = True
+
+    def _release_chunk_backward(self, idx: int) -> None:
+        c_idx, start, _end = self._chunk_for_layer_idx(idx)
+        layer = self.layers[idx]
+        layer._in_backward = False
+        layer._pending_bwd_count = max(0, getattr(layer, "_pending_bwd_count", 1) - 1)
+        if idx != start:
+            return
+        for cl in self._layer_chunks[c_idx]:
+            cl._is_bwd_staged = False
+            cl._chunk_active = False
+            self.stager.release_layer(cl, clear_snapshot=(getattr(cl, "_pending_bwd_count", 0) == 0))
 
     def _stage_param_tensor(self, p: nn.Parameter) -> torch.Tensor:
         """Adapts parameter staging through ParameterStager."""
@@ -410,6 +551,7 @@ class LayerStreamingEngine:
             prefetch_stream=self.prefetch_stream,
             d2h_stream=self.d2h_stream,
             use_fp8=self.config.fp8_weights,
+            use_fp4=getattr(self.config, "fp4_weights", False),
             capture_forward_snapshots=getattr(self.config, "capture_forward_snapshots", True),
         )
         for layer in self.layers:
@@ -507,36 +649,8 @@ class LayerStreamingEngine:
                 def bwd_pre_hook(module, grad_output):
                     try:
                         l._in_backward = True
-                        target_dtype = None
                         use_hw_fp8 = self.caps.native_scaled_mm and self.config.fp8_weights
-                        if getattr(l, "_is_bwd_prefetched", False):
-                            if prefetch_stream is not None and dev.type == "cuda":
-                                torch.cuda.current_stream().wait_stream(prefetch_stream)
-                            self.stager.apply_staged_tensors(l)
-                            l._is_bwd_prefetched = False
-                            l._is_bwd_staged = True
-                        else:
-                            self.stager.stage_layer(
-                                l,
-                                stream=None,
-                                target_dtype=target_dtype,
-                                use_hardware_fp8=use_hw_fp8,
-                                _from_backward=True,
-                            )
-                            self.stager.apply_staged_tensors(l)
-                            l._is_bwd_staged = True
-
-                        if prefetch_stream is not None and b_idx > 0:
-                            prev_layer = self.layers[b_idx - 1]
-                            if not getattr(prev_layer, "_is_bwd_prefetched", False):
-                                self.stager.stage_layer(
-                                    prev_layer,
-                                    stream=prefetch_stream,
-                                    target_dtype=target_dtype,
-                                    use_hardware_fp8=use_hw_fp8,
-                                    _from_backward=True,
-                                )
-                                prev_layer._is_bwd_prefetched = True
+                        self._stage_chunk_backward(b_idx, use_hw_fp8)
                     except Exception:
                         l._in_backward = False
                         l._is_bwd_staged = False
@@ -547,16 +661,13 @@ class LayerStreamingEngine:
 
             self._hooks.append(layer.register_full_backward_pre_hook(make_bwd_pre_hook(layer, idx)))
 
-            def make_bwd_post_hook(l: nn.Module):
+            def make_bwd_post_hook(b_idx: int):
                 def bwd_post_hook(module, grad_input, grad_output):
-                    l._in_backward = False
-                    l._is_bwd_staged = False
-                    l._pending_bwd_count = max(0, getattr(l, "_pending_bwd_count", 1) - 1)
-                    self.stager.release_layer(l, clear_snapshot=(l._pending_bwd_count == 0))
+                    self._release_chunk_backward(b_idx)
 
                 return bwd_post_hook
 
-            self._hooks.append(layer.register_full_backward_hook(make_bwd_post_hook(layer)))
+            self._hooks.append(layer.register_full_backward_hook(make_bwd_post_hook(idx)))
 
         # 7. Forward execution path
         if self.layers:
@@ -600,35 +711,12 @@ class LayerStreamingEngine:
                     ):
                         x = x.detach().requires_grad_(True)
 
-                    if getattr(layer, "_is_prefetched", False) and not in_bwd:
-                        if prefetch_stream is not None and dev.type == "cuda":
-                            torch.cuda.current_stream().wait_stream(prefetch_stream)
-                        self.stager.apply_staged_tensors(layer)
-                        layer._is_prefetched = False
+                    use_hw_fp8 = self.caps.native_scaled_mm and self.config.fp8_weights
+                    if in_bwd:
+                        if not getattr(layer, "_is_bwd_staged", False):
+                            self._stage_chunk_backward(idx, use_hw_fp8)
                     else:
-                        target_dtype = None
-                        use_hw_fp8 = self.caps.native_scaled_mm and self.config.fp8_weights
-                        self.stager.stage_layer(
-                            layer,
-                            stream=None,
-                            target_dtype=target_dtype,
-                            use_hardware_fp8=use_hw_fp8,
-                            _from_backward=in_bwd,
-                        )
-                        self.stager.apply_staged_tensors(layer)
-
-                    if not in_bwd and prefetch_stream is not None and idx is not None and idx + 1 < num_layers:
-                        next_layer = self.layers[idx + 1]
-                        target_dtype = None
-                        use_hw_fp8 = self.caps.native_scaled_mm and self.config.fp8_weights
-                        self.stager.stage_layer(
-                            next_layer,
-                            stream=prefetch_stream,
-                            target_dtype=target_dtype,
-                            use_hardware_fp8=use_hw_fp8,
-                            _from_backward=False,
-                        )
-                        next_layer._is_prefetched = True
+                        self._stage_chunk_forward(idx, use_hw_fp8)
 
                     try:
                         out = orig_forward_block(
@@ -644,7 +732,7 @@ class LayerStreamingEngine:
                         )
                     finally:
                         if not getattr(layer, "_in_backward", False):
-                            self.stager.release_layer(layer)
+                            self._release_chunk_forward(idx)
                     return out
 
                 if getattr(self.config, "activation_checkpointing", True):
@@ -729,35 +817,12 @@ class LayerStreamingEngine:
                             in_bwd = getattr(l, "_in_backward", False)
                             if torch.is_grad_enabled() and not in_bwd:
                                 l._pending_bwd_count = getattr(l, "_pending_bwd_count", 0) + 1
-                            if getattr(l, "_is_prefetched", False) and not in_bwd:
-                                if prefetch_stream is not None and dev.type == "cuda":
-                                    torch.cuda.current_stream().wait_stream(prefetch_stream)
-                                self.stager.apply_staged_tensors(l)
-                                l._is_prefetched = False
+                            use_hw_fp8 = self.caps.native_scaled_mm and self.config.fp8_weights
+                            if in_bwd:
+                                if not getattr(l, "_is_bwd_staged", False):
+                                    self._stage_chunk_backward(i, use_hw_fp8)
                             else:
-                                target_dtype = None
-                                use_hw_fp8 = self.caps.native_scaled_mm and self.config.fp8_weights
-                                self.stager.stage_layer(
-                                    l,
-                                    stream=None,
-                                    target_dtype=target_dtype,
-                                    use_hardware_fp8=use_hw_fp8,
-                                    _from_backward=in_bwd,
-                                )
-                                self.stager.apply_staged_tensors(l)
-
-                            if not in_bwd and prefetch_stream is not None and i + 1 < num_layers:
-                                next_layer = self.layers[i + 1]
-                                target_dtype = None
-                                use_hw_fp8 = self.caps.native_scaled_mm and self.config.fp8_weights
-                                self.stager.stage_layer(
-                                    next_layer,
-                                    stream=prefetch_stream,
-                                    target_dtype=target_dtype,
-                                    use_hardware_fp8=use_hw_fp8,
-                                    _from_backward=False,
-                                )
-                                next_layer._is_prefetched = True
+                                self._stage_chunk_forward(i, use_hw_fp8)
 
                             new_args = (
                                 tuple(a.to(dev) if isinstance(a, torch.Tensor) and a.device != dev else a for a in args)
@@ -787,18 +852,20 @@ class LayerStreamingEngine:
 
                     self._hooks.append(layer.register_forward_pre_hook(make_fwd_pre_hook(layer, idx), with_kwargs=True))
 
-                    def make_fwd_post_hook(l: nn.Module):
+                    def make_fwd_post_hook(l: nn.Module, i: int):
                         def fwd_post_hook(module, args, output):
                             if not getattr(l, "_in_backward", False):
-                                self.stager.release_layer(l)
+                                self._release_chunk_forward(i)
                             return output
 
                         return fwd_post_hook
 
                     try:
-                        self._hooks.append(layer.register_forward_hook(make_fwd_post_hook(layer), always_call=True))
+                        self._hooks.append(
+                            layer.register_forward_hook(make_fwd_post_hook(layer, idx), always_call=True)
+                        )
                     except TypeError:
-                        self._hooks.append(layer.register_forward_hook(make_fwd_post_hook(layer)))
+                        self._hooks.append(layer.register_forward_hook(make_fwd_post_hook(layer, idx)))
 
                     if getattr(self.config, "activation_checkpointing", True):
                         from triune.model.config import (
@@ -855,9 +922,10 @@ class LayerStreamingEngine:
             def make_model_forward_hook():
                 def model_forward_hook(module, args, output):
                     for l in self.layers:
-                        if getattr(l, "_is_prefetched", False):
+                        if getattr(l, "_is_prefetched", False) or getattr(l, "_chunk_active", False):
                             self.stager.release_layer(l)
                             l._is_prefetched = False
+                            l._chunk_active = False
                     return output
 
                 return model_forward_hook
@@ -890,6 +958,7 @@ class LayerStreamingEngine:
         for layer in self.layers:
             layer._pending_bwd_count = 0
             layer._is_bwd_staged = False
+            layer._chunk_active = False
             if hasattr(layer, "_is_prefetched"):
                 layer._is_prefetched = False
             if hasattr(layer, "_is_bwd_prefetched"):
@@ -968,6 +1037,8 @@ class LayerStreamingEngine:
                 delattr(layer, "_is_bwd_staged")
             if hasattr(layer, "_pending_bwd_count"):
                 delattr(layer, "_pending_bwd_count")
+            if hasattr(layer, "_chunk_active"):
+                delattr(layer, "_chunk_active")
             if hasattr(layer, "_is_prefetched"):
                 delattr(layer, "_is_prefetched")
             if hasattr(layer, "_is_bwd_prefetched"):
@@ -1179,6 +1250,8 @@ def enable_layer_streaming(
     pin_memory: Optional[bool] = None,
     async_prefetch: bool = True,
     fp8_weights: bool = False,
+    fp4_weights: bool = False,
+    resident_gpu_layers: int = 0,
     capture_forward_snapshots: bool = True,
     optimizer: Optional[Any] = None,
     activation_checkpointing: bool = True,
@@ -1197,6 +1270,8 @@ def enable_layer_streaming(
         pin_memory=pin_memory,
         async_prefetch=async_prefetch,
         fp8_weights=fp8_weights,
+        fp4_weights=fp4_weights,
+        resident_gpu_layers=resident_gpu_layers,
         capture_forward_snapshots=capture_forward_snapshots,
         activation_checkpointing=activation_checkpointing,
     )
@@ -1221,6 +1296,8 @@ def apply_layer_streaming_if_requested(
         pin_memory=config.get("streaming_pin_memory", None),
         async_prefetch=config.get("streaming_prefetch", True),
         fp8_weights=config.get("streaming_fp8_weights", False),
+        fp4_weights=config.get("streaming_fp4_weights", False),
+        resident_gpu_layers=config.get("streaming_resident_gpu_layers", 0),
         grad_clip=config.get("grad_clip", 1.0),
         instant_optimizer=True,
         capture_forward_snapshots=config.get("streaming_capture_forward_snapshots", True),

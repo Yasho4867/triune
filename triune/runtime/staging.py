@@ -29,6 +29,7 @@ class StagingBuffer:
         True  # Mode 1 (True: immediate with snapshots) vs Mode 2 (False: deferred zero-snapshot)
     )
     is_buffer: bool = False
+    read_only: bool = False
 
     @property
     def cpu_master_bytes(self) -> int:
@@ -99,7 +100,7 @@ class StagingBuffer:
 
     def release_gpu(self, clear_snapshot: bool = False, keep_snapshot_on_param: bool = False) -> None:
         """Releases the temporary GPU execution tensor and restores snapshot or CPU master."""
-        if self.is_buffer and not clear_snapshot and self.gpu_tensor is not None:
+        if self.is_buffer and not self.read_only and not clear_snapshot and self.gpu_tensor is not None:
             if self.event is not None:
                 self.event.synchronize()
                 self.event = None
@@ -223,7 +224,7 @@ class FP8StagingBuffer(StagingBuffer):
 
     def release_gpu(self, clear_snapshot: bool = False, keep_snapshot_on_param: bool = False) -> None:
         """Releases temporary GPU execution tensors and scale metadata, restoring snapshot or CPU master."""
-        if self.is_buffer and not clear_snapshot and self.gpu_tensor is not None:
+        if self.is_buffer and not self.read_only and not clear_snapshot and self.gpu_tensor is not None:
             if self.event is not None:
                 self.event.synchronize()
                 self.event = None
@@ -412,6 +413,26 @@ class ParameterStager:
                     param=p, cpu_master=master, capture_forward_snapshots=self.capture_forward_snapshots
                 )
 
+        for sub in module.modules():
+            sub_cls = type(sub).__name__
+            for b_name, b in sub.named_buffers(recurse=False):
+                b_id = id(b)
+                if b_id not in self.buffers:
+                    master = b.data if not hasattr(b, "_cpu_data") else b._cpu_data
+                    b._cpu_data = master
+                    is_ro = bool(
+                        getattr(b, "_triune_immutable_buffer", False)
+                        or (sub_cls == "NVFP4Linear" and b_name in ("packed_weight", "scale"))
+                        or b_name in ("inv_freq", "original_inv_freq", "causal_mask")
+                    )
+                    self.buffers[b_id] = StagingBuffer(
+                        param=b,
+                        cpu_master=master,
+                        capture_forward_snapshots=self.capture_forward_snapshots,
+                        is_buffer=True,
+                        read_only=is_ro,
+                    )
+
         for b in module.buffers():
             b_id = id(b)
             if b_id not in self.buffers:
@@ -422,6 +443,7 @@ class ParameterStager:
                     cpu_master=master,
                     capture_forward_snapshots=self.capture_forward_snapshots,
                     is_buffer=True,
+                    read_only=bool(getattr(b, "_triune_immutable_buffer", False)),
                 )
 
         if register_backward_hooks and not getattr(module, "_stager_hooks_registered", False):
@@ -541,11 +563,13 @@ class ParameterStager:
         for p in list(layer.parameters()) + list(layer.buffers()):
             buf = self.buffers.get(id(p))
             if buf is not None:
-                if buf.gpu_tensor is not None:
-                    d2h_bytes = buf.gpu_tensor.numel() * buf.gpu_tensor.element_size()
-                    self.telemetry["d2h_sync_transfers"] += 1
-                    self.telemetry["d2h_bytes_transferred"] += d2h_bytes
-                buf.sync_to_cpu()
+                should_sync = (not buf.read_only) and (buf.is_buffer or getattr(p, "requires_grad", True))
+                if should_sync:
+                    if buf.gpu_tensor is not None:
+                        d2h_bytes = buf.gpu_tensor.numel() * buf.gpu_tensor.element_size()
+                        self.telemetry["d2h_sync_transfers"] += 1
+                        self.telemetry["d2h_bytes_transferred"] += d2h_bytes
+                    buf.sync_to_cpu()
                 buf.release_gpu(clear_snapshot=True)
             self._clear_quant_metadata(p)
             if hasattr(p, "_cpu_data"):

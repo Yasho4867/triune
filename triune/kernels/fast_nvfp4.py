@@ -161,10 +161,11 @@ if is_triton_available():
         stride_om,
         stride_on,
         HAS_BIAS: tl.constexpr,
+        HADAMARD: tl.constexpr,
         BLOCK_N: tl.constexpr,
         HALF_K: tl.constexpr,
     ):
-        """Fused W4A16 dequant-dot kernel specialized for decode & small M (zero BF16 weight allocation)."""
+        """Fused W4A16 dequant-dot kernel with optional in-register FWHT-16 (zero BF16 weight allocation)."""
         pid_n = tl.program_id(0)
         pid_m = tl.program_id(1)
         if pid_m >= M:
@@ -177,6 +178,8 @@ if is_triton_available():
 
         x_row_ptr = X_ptr + pid_m * stride_xm
         acc = tl.zeros((BLOCK_N,), dtype=tl.float32)
+        N_GRP: tl.constexpr = HALF_K // 8
+        k_flat = tl.arange(0, 2 * HALF_K)
 
         for k_byte in range(0, half_k_total, HALF_K):
             j_offs = k_byte + tl.arange(0, HALF_K)
@@ -197,16 +200,22 @@ if is_triton_available():
             w0 = _decode_e2m1(p_bytes & 0x0F) * scales
             w1 = _decode_e2m1((p_bytes >> 4) & 0x0F) * scales
 
-            x_even = tl.load(
-                x_row_ptr + (j_offs * 2) * stride_xk,
-                mask=(j_offs * 2) < K,
+            k_idx = k_byte * 2 + k_flat
+            x_k = tl.load(
+                x_row_ptr + k_idx * stride_xk,
+                mask=k_idx < K,
                 other=0.0,
             ).to(tl.float32)
-            x_odd = tl.load(
-                x_row_ptr + (j_offs * 2 + 1) * stride_xk,
-                mask=(j_offs * 2 + 1) < K,
-                other=0.0,
-            ).to(tl.float32)
+            x_u = tl.reshape(x_k, (N_GRP, 8, 2))
+            if HADAMARD:
+                for _ in range(4):
+                    a, b = tl.split(x_u)
+                    x_u = tl.join(a + b, a - b)
+                    x_u = tl.reshape(tl.permute(x_u, (0, 2, 1)), (N_GRP, 8, 2))
+                x_u = x_u * 0.25
+            xe, xo = tl.split(x_u)
+            x_even = tl.reshape(xe, (HALF_K,))
+            x_odd = tl.reshape(xo, (HALF_K,))
 
             acc += tl.sum(w0 * x_even[None, :] + w1 * x_odd[None, :], axis=1)
 
@@ -239,13 +248,14 @@ if is_triton_available():
         stride_om,
         stride_on,
         HAS_BIAS: tl.constexpr,
+        HADAMARD: tl.constexpr,
         IS_FP32: tl.constexpr,
         BLOCK_M: tl.constexpr,
         BLOCK_N: tl.constexpr,
         HALF_K: tl.constexpr,
         GROUP_M: tl.constexpr,
     ):
-        """Fused W4A16 Tensor-Core GEMM decoding E2M1 nibbles in registers via even/odd K split."""
+        """Fused W4A16 Tensor-Core GEMM with optional in-register FWHT-16 and even/odd nibble split."""
         pid = tl.program_id(0)
         num_pid_m = tl.cdiv(M, BLOCK_M)
         num_pid_n = tl.cdiv(N, BLOCK_N)
@@ -264,6 +274,8 @@ if is_triton_available():
         half_k_total = K // 2
         scale_k_total = K // 16
         acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+        N_GRP: tl.constexpr = HALF_K // 8
+        k_flat = tl.arange(0, 2 * HALF_K)
 
         for k_byte in range(0, half_k_total, HALF_K):
             j_offs = k_byte + tl.arange(0, HALF_K)
@@ -284,20 +296,26 @@ if is_triton_available():
             w0 = _decode_e2m1(p_bytes & 0x0F) * scales
             w1 = _decode_e2m1((p_bytes >> 4) & 0x0F) * scales
 
-            x_even = tl.load(
-                X_ptr + m_offs[:, None] * stride_xm + (j_offs[None, :] * 2) * stride_xk,
-                mask=m_mask[:, None] & ((j_offs[None, :] * 2) < K),
+            k_idx = k_byte * 2 + k_flat
+            x_k = tl.load(
+                X_ptr + m_offs[:, None] * stride_xm + k_idx[None, :] * stride_xk,
+                mask=m_mask[:, None] & (k_idx[None, :] < K),
                 other=0.0,
-            )
-            x_odd = tl.load(
-                X_ptr + m_offs[:, None] * stride_xm + (j_offs[None, :] * 2 + 1) * stride_xk,
-                mask=m_mask[:, None] & ((j_offs[None, :] * 2 + 1) < K),
-                other=0.0,
-            )
+            ).to(tl.float32)
+            x_u = tl.reshape(x_k, (BLOCK_M, N_GRP, 8, 2))
+            if HADAMARD:
+                for _ in range(4):
+                    a, b = tl.split(x_u)
+                    x_u = tl.join(a + b, a - b)
+                    x_u = tl.reshape(tl.permute(x_u, (0, 1, 3, 2)), (BLOCK_M, N_GRP, 8, 2))
+                x_u = x_u * 0.25
+            xe, xo = tl.split(x_u)
+            x_even = tl.reshape(xe, (BLOCK_M, HALF_K))
+            x_odd = tl.reshape(xo, (BLOCK_M, HALF_K))
 
             if IS_FP32:
-                acc = tl.dot(x_even.to(tl.float32), tl.trans(w0), acc, input_precision="ieee")
-                acc = tl.dot(x_odd.to(tl.float32), tl.trans(w1), acc, input_precision="ieee")
+                acc = tl.dot(x_even, tl.trans(w0), acc, input_precision="ieee")
+                acc = tl.dot(x_odd, tl.trans(w1), acc, input_precision="ieee")
             else:
                 acc = tl.dot(x_even.to(X_ptr.dtype.element_ty), tl.trans(w0.to(X_ptr.dtype.element_ty)), acc)
                 acc = tl.dot(x_odd.to(X_ptr.dtype.element_ty), tl.trans(w1.to(X_ptr.dtype.element_ty)), acc)
@@ -408,15 +426,13 @@ def nvfp4_linear(
     hadamard: bool = False,
 ) -> torch.Tensor:
     """Fused W4A16 linear projection over packed NVFP4 weights (without full HBM dequant allocation)."""
-    x_in = fwht_16(x) if hadamard else x
-    orig_shape = x_in.shape
+    orig_shape = x.shape
     k = orig_shape[-1]
     n = packed_weight.size(0)
-    x_2d = x_in.reshape(-1, k)
+    x_2d = x.reshape(-1, k)
     m = x_2d.size(0)
     if m == 0:
-        out = torch.empty((*orig_shape[:-1], n), device=x.device, dtype=x.dtype)
-        return out
+        return torch.empty((*orig_shape[:-1], n), device=x.device, dtype=x.dtype)
 
     if (
         is_turbo_mode_enabled()
@@ -425,6 +441,18 @@ def nvfp4_linear(
         and packed_weight.is_cuda
         and x_2d.dtype in (torch.bfloat16, torch.float16, torch.float32)
     ):
+        # For large prefill GEMMs where a transient layer dequant buffer comfortably fits in VRAM,
+        # Triton dequant + cuBLAS Tensor Cores runs ~2.5x faster than custom register unpacking.
+        if m >= 64 and n * k >= 524288 and x.dtype in (torch.bfloat16, torch.float16):
+            try:
+                free_bytes = torch.cuda.mem_get_info(x.device)[0]
+            except Exception:
+                free_bytes = 0
+            if free_bytes > n * k * x.element_size() * 4:
+                x_in = fwht_16(x) if hadamard else x
+                w_deq = nvfp4_dequantize(packed_weight, scale, dtype=x.dtype)
+                return torch.nn.functional.linear(x_in, w_deq, bias.to(dtype=x.dtype) if bias is not None else None)
+
         x_contig = x_2d.contiguous()
         p_contig = packed_weight.contiguous()
         s_contig = scale.contiguous()
@@ -453,6 +481,7 @@ def nvfp4_linear(
                 out_2d.stride(0),
                 out_2d.stride(1),
                 HAS_BIAS=has_bias,
+                HADAMARD=hadamard,
                 BLOCK_N=block_n,
                 HALF_K=64,
                 num_warps=4,
@@ -479,6 +508,7 @@ def nvfp4_linear(
                 out_2d.stride(0),
                 out_2d.stride(1),
                 HAS_BIAS=has_bias,
+                HADAMARD=hadamard,
                 IS_FP32=(x.dtype == torch.float32),
                 BLOCK_M=block_m,
                 BLOCK_N=block_n,
@@ -489,8 +519,41 @@ def nvfp4_linear(
             )
         return out_2d.reshape(*orig_shape[:-1], n)
 
+    x_in = fwht_16(x) if hadamard else x
     w_deq = nvfp4_dequantize(packed_weight, scale, dtype=x.dtype)
     return torch.nn.functional.linear(x_in, w_deq, bias.to(dtype=x.dtype) if bias is not None else None)
+
+
+class _NVFP4FrozenBaseFn(torch.autograd.Function):
+    """Autograd-compatible forward/backward over frozen 4-bit NVFP4 weights (for QLoRA training)."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        x: torch.Tensor,
+        packed_weight: torch.Tensor,
+        scale: torch.Tensor,
+        bias: torch.Tensor | None,
+        hadamard: bool,
+    ) -> torch.Tensor:
+        ctx.save_for_backward(packed_weight, scale, bias)
+        ctx.hadamard = hadamard
+        return nvfp4_linear(x, packed_weight, scale, bias=bias, hadamard=hadamard)
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor):
+        packed_weight, scale, bias = ctx.saved_tensors
+        grad_x = None
+        grad_bias = None
+        if ctx.needs_input_grad[0]:
+            w_deq = nvfp4_dequantize(packed_weight, scale, dtype=grad_output.dtype)
+            gx = grad_output.reshape(-1, grad_output.shape[-1]) @ w_deq
+            if ctx.hadamard:
+                gx = fwht_16(gx)
+            grad_x = gx.reshape(*grad_output.shape[:-1], w_deq.size(1))
+        if bias is not None and ctx.needs_input_grad[3]:
+            grad_bias = grad_output.reshape(-1, grad_output.shape[-1]).sum(dim=0).to(dtype=bias.dtype)
+        return grad_x, None, None, grad_bias, None
 
 
 class _NVFP4MatmulFn(torch.autograd.Function):
@@ -560,6 +623,30 @@ class NVFP4Linear(nn.Module):
         else:
             self.register_parameter("bias", None)
 
+    @classmethod
+    def empty_skeleton(
+        cls,
+        in_features: int,
+        out_features: int,
+        bias: bool = False,
+        dtype: torch.dtype = torch.bfloat16,
+        hadamard: bool = False,
+    ) -> NVFP4Linear:
+        """Creates an unallocated NVFP4Linear placeholder for zero-RAM disk/meta streaming."""
+        mod = cls.__new__(cls)
+        nn.Module.__init__(mod)
+        mod.in_features = in_features
+        mod.out_features = out_features
+        mod.dtype = dtype
+        mod.hadamard = hadamard
+        mod.register_buffer("packed_weight", torch.empty(0, dtype=torch.uint8))
+        mod.register_buffer("scale", torch.empty(0, dtype=torch.bfloat16))
+        if bias:
+            mod.register_parameter("bias", nn.Parameter(torch.empty(0, dtype=dtype), requires_grad=False))
+        else:
+            mod.register_parameter("bias", None)
+        return mod
+
     @property
     def weight(self) -> torch.Tensor:
         w = nvfp4_dequantize(self.packed_weight, self.scale, dtype=self.dtype)
@@ -588,4 +675,6 @@ class NVFP4Linear(nn.Module):
         return mod
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if torch.is_grad_enabled() and (x.requires_grad or (self.bias is not None and self.bias.requires_grad)):
+            return _NVFP4FrozenBaseFn.apply(x, self.packed_weight, self.scale, self.bias, self.hadamard)
         return nvfp4_linear(x, self.packed_weight, self.scale, bias=self.bias, hadamard=self.hadamard)

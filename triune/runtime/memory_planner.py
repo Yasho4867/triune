@@ -172,3 +172,83 @@ class MemoryPlanner:
             recommended_checkpointing=checkpointing,
             recommended_precision=recommended_precision,
         )
+
+    @staticmethod
+    def estimate_hf_model(
+        model_id_or_dir: str,
+        *,
+        available_vram_gb: float | None = None,
+        available_ram_gb: float | None = None,
+        local_files_only: bool = False,
+    ) -> dict:
+        """Inspect a Hugging Face AutoConfig (zero weight download) and recommend Triune execution mode."""
+        from transformers import AutoConfig
+
+        if local_files_only:
+            cfg = AutoConfig.from_pretrained(str(model_id_or_dir), local_files_only=True)
+        else:
+            try:
+                cfg = AutoConfig.from_pretrained(str(model_id_or_dir), local_files_only=True)
+            except Exception:
+                cfg = AutoConfig.from_pretrained(str(model_id_or_dir))
+
+        vocab = int(getattr(cfg, "vocab_size", 32000))
+        hidden = int(getattr(cfg, "hidden_size", 1024))
+        layers = int(getattr(cfg, "num_hidden_layers", 24))
+        inter = int(getattr(cfg, "intermediate_size", hidden * 4))
+        n_heads = int(getattr(cfg, "num_attention_heads", max(1, hidden // 64)))
+        n_kv = int(getattr(cfg, "num_key_value_heads", n_heads))
+        head_dim = int(getattr(cfg, "head_dim", hidden // max(1, n_heads)))
+        tied = bool(getattr(cfg, "tie_word_embeddings", False))
+
+        # Per-layer param formula for standard GQA + SwiGLU Transformers
+        attn_p = hidden * (n_heads * head_dim) + 2 * hidden * (n_kv * head_dim) + (n_heads * head_dim) * hidden
+        mlp_p = 3 * hidden * inter  # gate, up, down (or 2x non-gated)
+        per_layer_p = attn_p + mlp_p + 2 * hidden
+        root_p = vocab * hidden * (1 if tied else 2) + hidden
+        total_params = root_p + layers * per_layer_p
+
+        bf16_gb = (total_params * 2.0) / (1024**3)
+        nvfp4_gb = (root_p * 2.0 + layers * per_layer_p * 0.625) / (1024**3)
+        nvfp4_quant_head_gb = (
+            vocab * hidden * 2.0 + (0 if tied else vocab * hidden * 0.625) + layers * per_layer_p * 0.625
+        ) / (1024**3)
+        per_layer_nvfp4_mb = (per_layer_p * 0.625) / (1024**2)
+
+        if available_vram_gb is None and torch.cuda.is_available():
+            available_vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+        vram_gb = float(available_vram_gb or 8.0)
+
+        if available_ram_gb is None:
+            try:
+                import psutil
+
+                available_ram_gb = psutil.virtual_memory().total / (1024**3)
+            except Exception:
+                available_ram_gb = 16.0
+        ram_gb = float(available_ram_gb)
+
+        if bf16_gb + 1.5 <= vram_gb:
+            mode = "resident_bf16"
+        elif nvfp4_gb + 1.2 <= vram_gb:
+            mode = "resident_nvfp4"
+        elif bf16_gb <= ram_gb * 0.65:
+            mode = "ram_layer_streaming"
+        else:
+            mode = "disk_nvfp4_streaming"
+
+        return {
+            "model": str(model_id_or_dir),
+            "total_params": total_params,
+            "layers": layers,
+            "hidden_size": hidden,
+            "vocab_size": vocab,
+            "tied_embeddings": tied,
+            "bf16_weights_gb": round(bf16_gb, 2),
+            "nvfp4_disk_cache_gb": round(nvfp4_gb, 2),
+            "nvfp4_quant_lmhead_cache_gb": round(nvfp4_quant_head_gb, 2),
+            "per_layer_nvfp4_mb": round(per_layer_nvfp4_mb, 1),
+            "available_vram_gb": round(vram_gb, 2),
+            "host_ram_gb": round(ram_gb, 2),
+            "recommended_mode": mode,
+        }

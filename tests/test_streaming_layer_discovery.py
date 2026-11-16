@@ -71,19 +71,33 @@ class TestStreamingLayerDiscovery(unittest.TestCase):
             LayerStreamingEngine(model, device=self.device, config=cfg)
         self.assertIn("Specified layers_path", str(ctx.exception))
 
-    def test_chunk_size_greater_than_one_raises_not_implemented(self):
-        """chunk_size > 1 raises NotImplementedError as specified by design."""
+    def test_chunk_size_greater_than_one_runs_windowed_chunks(self):
+        """chunk_size > 1 partitions layers into fixed-size staging windows and runs cleanly."""
 
         class DummyTransformer(nn.Module):
             def __init__(self):
                 super().__init__()
                 self.layers = nn.ModuleList([nn.Linear(16, 16) for _ in range(4)])
 
+            def forward(self, x):
+                for layer in self.layers:
+                    x = layer(x)
+                return x
+
         model = DummyTransformer()
-        cfg = StreamingConfig(enabled=True, chunk_size=2)
-        with self.assertRaises(NotImplementedError) as ctx:
-            LayerStreamingEngine(model, device=self.device, config=cfg)
-        self.assertIn("chunk_size > 1", str(ctx.exception))
+        cfg = StreamingConfig(enabled=True, chunk_size=2, activation_checkpointing=False)
+        engine = LayerStreamingEngine(model, device=self.device, config=cfg)
+        try:
+            self.assertEqual(engine._chunk_for_layer_idx(0), (0, 0, 1))
+            self.assertEqual(engine._chunk_for_layer_idx(1), (0, 0, 1))
+            self.assertEqual(engine._chunk_for_layer_idx(2), (1, 2, 3))
+            engine.attach()
+            x = torch.randn(2, 16, device=self.device, requires_grad=True)
+            loss = model(x).sum()
+            loss.backward()
+            self.assertTrue(torch.isfinite(loss))
+        finally:
+            engine.detach()
 
 
 if __name__ == "__main__":
