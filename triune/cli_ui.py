@@ -43,11 +43,17 @@ def is_tty() -> bool:
 
 
 def _terminal_width() -> int:
+    if not is_tty():
+        try:
+            cols = shutil.get_terminal_size(fallback=(140, 30)).columns
+            return max(140, int(cols))
+        except Exception:
+            return 140
     try:
         cols = shutil.get_terminal_size(fallback=(104, 30)).columns
-        return max(72, min(124, int(cols)))
+        return max(72, min(140, int(cols)))
     except Exception:
-        return 100
+        return 104
 
 
 def _make_render_console(width: int | None = None, capture: bool = True) -> tuple[Any, io.StringIO]:
