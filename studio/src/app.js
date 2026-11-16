@@ -3799,7 +3799,10 @@
     const [windowWidth, setWindowWidth] = useState(typeof window !== 'undefined' ? window.innerWidth : 1200);
     const [nodeCatalog, setNodeCatalog] = useState(BUILTIN_NODE_CATALOG);
 
-    const [upgradeModelName, setUpgradeModelName] = useState('active');
+    const [upgradeModelName, setUpgradeModelName] = useState('llama-3-8b');
+    const [customUpgradePath, setCustomUpgradePath] = useState('');
+    const [savedModels, setSavedModels] = useState([]);
+    const [isLoadingSavedModel, setIsLoadingSavedModel] = useState(false);
     const [upgradeSourceType, setUpgradeSourceType] = useState('dense_transformer');
     const [upgradeReflexRatio, setUpgradeReflexRatio] = useState(0.25);
     const [upgradeLimbicExperts, setUpgradeLimbicExperts] = useState(8);
@@ -4088,7 +4091,13 @@
     };
 
     const handleUpgradeModel = async (customName = null, applyAsActive = false) => {
-      const targetModel = customName || upgradeModelName;
+      const targetModel = (customName && customName !== '__custom__')
+        ? customName
+        : (upgradeModelName === '__custom__' ? customUpgradePath.trim() : upgradeModelName);
+      if (!targetModel) {
+        showToast('Select a saved model or enter a model path / Hugging Face repo ID first.');
+        return;
+      }
       setIsUpgradingModel(true);
       try {
         const res = await apiFetch('/v1/models/upgrade_to_triune', {
@@ -4113,6 +4122,8 @@
           if (applyAsActive) {
             const nextActiveId = data.active_model_id || `triune-${targetModel}`;
             setActiveModel(nextActiveId);
+            setWeightsLoaded(false);
+            setActiveCheckpointName(null);
             try {
               window.localStorage.setItem('triune.studio.activeModel', nextActiveId);
             } catch (_) {}
@@ -4128,6 +4139,52 @@
         showToast(`Transmutation error: ${err.message}`);
       } finally {
         setIsUpgradingModel(false);
+      }
+    };
+
+    const handleLoadSavedModel = async (modelTarget, opts = {}) => {
+      if (!modelTarget) return;
+      setIsLoadingSavedModel(true);
+      const modeLabel = opts.diskStream ? 'NVFP4 Disk-Stream' : (opts.nvfp4 ? 'NVFP4' : 'Standard');
+      showToast(`Loading ${modelTarget} (${modeLabel})...`);
+      try {
+        const res = await apiFetch('/v1/models/load', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            checkpoint_path: modelTarget,
+            nvfp4: Boolean(opts.nvfp4),
+            disk_stream: Boolean(opts.diskStream),
+          })
+        });
+        const data = await res.json();
+        if (res.ok && data.status === 'success') {
+          showToast(data.message || `Loaded ${modelTarget}`);
+          if (data.active_model) setActiveModel(data.active_model);
+          setWeightsLoaded(Boolean(data.weights_loaded));
+          if (data.checkpoint) setActiveCheckpointName(data.checkpoint);
+          if (data.step !== undefined) {
+            const restoredTok = data.tokens_trained !== undefined ? data.tokens_trained : (data.step * 1024);
+            setMetrics(prev => ({ ...prev, step: data.step, tokens_trained: restoredTok }));
+            setDatasetInfo(prev => ({ ...prev, total_tokens: restoredTok }));
+          }
+          if (data.architecture) {
+            setDatasetInfo(prev => ({
+              ...prev,
+              num_layers: data.architecture.num_layers || prev.num_layers,
+              hidden_dim: data.architecture.hidden_dim || prev.hidden_dim,
+              num_heads: data.architecture.num_heads || prev.num_heads,
+              num_experts: data.architecture.num_experts || 0
+            }));
+          }
+          refreshNeuronScope();
+        } else {
+          showToast(data.message || `Failed to load ${modelTarget}`);
+        }
+      } catch (err) {
+        showToast(`Load error: ${err.message}`);
+      } finally {
+        setIsLoadingSavedModel(false);
       }
     };
 
@@ -5789,6 +5846,18 @@
       }
     };
 
+    const fetchSavedModels = async () => {
+      try {
+        const res = await apiFetch('/v1/models');
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.saved_models)) {
+            setSavedModels(data.saved_models);
+          }
+        }
+      } catch (err) {}
+    };
+
     // On-Mount Initialization & Automatic Update Check on Startup
     useEffect(() => {
       fetchSystemScan();
@@ -5797,6 +5866,7 @@
       fetchInstalledModules();
       fetchDatasets();
       fetchCheckpoints();
+      fetchSavedModels();
       fetchAvailableAdapters();
       searchMarketplace('', 'all');
       checkModuleUpdates();
@@ -9419,7 +9489,7 @@
             !sidebarCollapsed && e('span', { className: 'nav-label' }, 'System & Hardware'),
             !sidebarCollapsed && e('span', { className: 'nav-badge' }, systemDiagnostics.cuda_available ? 'CUDA' : 'CPU')
           ),
-          e('button', { className: `nav-item ${activeTab === 'models' ? 'active' : ''}`, title: 'Model Zoo & Exporters', onClick: () => setActiveTab('models') },
+          e('button', { className: `nav-item ${activeTab === 'models' ? 'active' : ''}`, title: 'Model Zoo & Exporters', onClick: () => { setActiveTab('models'); fetchSavedModels(); fetchCheckpoints(); } },
             e('span', { className: 'nav-icon' }, renderIcon('models', 17)),
             !sidebarCollapsed && e('span', { className: 'nav-label' }, 'Model Zoo & Exporters')
           ),
@@ -12379,6 +12449,17 @@
                                         }, isActive ? 'Active' : [renderIcon('download', 11, { marginRight: '4px' }), 'Load']),
                                         e('button', {
                                           className: 'btn-sec',
+                                          style: { padding: '3px 7px', fontSize: '11px', color: 'var(--primary)', fontWeight: 600 },
+                                          title: 'Select this saved checkpoint in Universal Model Upgrader',
+                                          onClick: () => {
+                                            setUpgradeModelName(c.path);
+                                            setActiveTab('models');
+                                            fetchSavedModels();
+                                            handleUpgradeModel(c.path, false);
+                                          }
+                                        }, [renderIcon('branch', 11, { marginRight: '3px' }), 'Upgrade']),
+                                        e('button', {
+                                          className: 'btn-sec',
                                           style: { padding: '3px 7px', fontSize: '11px', color: 'var(--text-main)' },
                                           title: 'Export this checkpoint as SafeTensors',
                                           onClick: () => handleExportCheckpoint(c.path)
@@ -12453,74 +12534,152 @@
                   'Performance not benchmarked'
                 )
               ),
-              e('div', { className: 'transmutation-controls-grid' },
-                e('div', { className: 'transmutation-form-field' },
-                  e('label', { className: 'transmutation-label' }, 'Target Dense Model'),
-                  e('select', {
-                    value: upgradeModelName,
-                    onChange: ev => setUpgradeModelName(ev.target.value),
-                    className: 'transmutation-select'
-                  },
-                    UPGRADEABLE_MODELS.map(m => e('option', { key: m.id, value: m.id }, m.desc))
+              (() => {
+                const seenIds = new Set();
+                const savedUpgradeList = [];
+                (savedModels || []).forEach(m => {
+                  const sid = m.id || m.path;
+                  if (sid && !seenIds.has(sid)) {
+                    seenIds.add(sid);
+                    savedUpgradeList.push(m);
+                  }
+                });
+                (checkpoints || []).forEach(c => {
+                  const cid = c.path || c.id;
+                  if (cid && !seenIds.has(cid)) {
+                    seenIds.add(cid);
+                    savedUpgradeList.push({
+                      id: cid,
+                      name: c.filename || cid,
+                      path: c.path || cid,
+                      kind: 'checkpoint',
+                      has_weights: true,
+                      description: `Checkpoint: ${c.filename || cid}${c.size_formatted ? ` (${c.size_formatted})` : ''}`
+                    });
+                  }
+                });
+                const selectedSavedObj = savedUpgradeList.find(m => m.id === upgradeModelName || m.path === upgradeModelName);
+                return e('div', null,
+                  e('div', { className: 'transmutation-controls-grid' },
+                    e('div', { className: 'transmutation-form-field' },
+                      e('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px' } },
+                        e('label', { className: 'transmutation-label' }, `Target Saved Model or Preset (${savedUpgradeList.length} Saved)`),
+                        e('button', {
+                          type: 'button',
+                          className: 'btn-sec',
+                          style: { padding: '2px 7px', fontSize: '11px' },
+                          title: 'Rescan checkpoints, NVFP4 caches, and Hugging Face cache',
+                          onClick: () => { fetchSavedModels(); fetchCheckpoints(); }
+                        }, [renderIcon('refresh', 11, { marginRight: '3px' }), 'Scan'])
+                      ),
+                      e('select', {
+                        value: upgradeModelName,
+                        onChange: ev => setUpgradeModelName(ev.target.value),
+                        className: 'transmutation-select'
+                      },
+                        savedUpgradeList.length > 0 && e('optgroup', { label: 'Saved Models, Checkpoints & HF Cache' },
+                          savedUpgradeList.map(m => e('option', { key: `saved:${m.id}`, value: m.id }, m.description || m.name || m.id))
+                        ),
+                        e('optgroup', { label: 'Architecture Presets' },
+                          UPGRADEABLE_MODELS.map(m => e('option', { key: m.id, value: m.id }, m.desc))
+                        ),
+                        e('option', { value: '__custom__' }, 'Custom Local Path or HF Repo ID…')
+                      ),
+                      upgradeModelName === '__custom__' && e('input', {
+                        type: 'text',
+                        className: 'ckpt-input',
+                        style: { marginTop: '6px', width: '100%' },
+                        placeholder: 'e.g. checkpoints/model.pt, C:\\models\\qwen27b, or Qwen/Qwen2.5-7B-Instruct',
+                        value: customUpgradePath,
+                        onChange: ev => setCustomUpgradePath(ev.target.value)
+                      }),
+                      (selectedSavedObj || (upgradeModelName === '__custom__' && customUpgradePath.trim())) && e('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '6px' } },
+                        (() => {
+                          const targetId = selectedSavedObj ? selectedSavedObj.id : customUpgradePath.trim();
+                          const isCache = selectedSavedObj && selectedSavedObj.kind === 'nvfp4_cache';
+                          const noWeights = Boolean(selectedSavedObj && selectedSavedObj.has_weights === false);
+                          const isHfOrCustom = !selectedSavedObj || selectedSavedObj.kind === 'hf_local' || selectedSavedObj.kind === 'hf_cache';
+                          return [
+                            e('button', {
+                              key: 'load-std',
+                              type: 'button',
+                              className: 'btn-sec',
+                              style: { padding: '3px 8px', fontSize: '11px', color: 'var(--accent-sage)', fontWeight: 600 },
+                              disabled: isLoadingSavedModel || noWeights,
+                              title: noWeights ? 'Only config.json cached; download weights first to load' : 'Load saved model directly into inference engine',
+                              onClick: () => handleLoadSavedModel(targetId, { nvfp4: Boolean(isCache), diskStream: Boolean(isCache) })
+                            }, isCache ? 'Load NVFP4 Disk-Stream' : 'Load Saved Weights'),
+                            isHfOrCustom && !noWeights && e('button', {
+                              key: 'load-nvfp4-stream',
+                              type: 'button',
+                              className: 'btn-sec',
+                              style: { padding: '3px 8px', fontSize: '11px', color: 'var(--primary)', fontWeight: 600 },
+                              disabled: isLoadingSavedModel,
+                              onClick: () => handleLoadSavedModel(targetId, { nvfp4: true, diskStream: true })
+                            }, 'Stream in NVFP4')
+                          ];
+                        })()
+                      )
+                    ),
+                    e('div', { className: 'transmutation-form-field' },
+                      e('label', { className: 'transmutation-label' }, `Reflex Ratio: ${Math.round(upgradeReflexRatio * 100)}%`),
+                      e('input', {
+                        type: 'range',
+                        min: 0.10,
+                        max: 0.50,
+                        step: 0.05,
+                        value: upgradeReflexRatio,
+                        onChange: ev => setUpgradeReflexRatio(parseFloat(ev.target.value)),
+                        className: 'chat-param-slider'
+                      })
+                    ),
+                    e('div', { className: 'transmutation-form-field' },
+                      e('label', { className: 'transmutation-label' }, 'Limbic Experts (MoE)'),
+                      e('select', {
+                        value: upgradeLimbicExperts,
+                        onChange: ev => setUpgradeLimbicExperts(parseInt(ev.target.value, 10)),
+                        className: 'transmutation-select'
+                      },
+                        e('option', { value: 4 }, '4 Experts (Top-2 Active)'),
+                        e('option', { value: 8 }, '8 Experts (Top-2 Active)'),
+                        e('option', { value: 16 }, '16 Experts (Top-2 Active)'),
+                        e('option', { value: 32 }, '32 Experts (Top-2 Active)')
+                      )
+                    ),
+                    e('div', { className: 'transmutation-form-field' },
+                      e('label', { className: 'transmutation-label' }, 'Cortex Linear Attn (GLA)'),
+                      e('label', { style: { display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', height: '34px', fontFamily: 'var(--font-mono)', fontSize: '12px', color: 'var(--text-main)' } },
+                        e('input', {
+                          type: 'checkbox',
+                          checked: upgradeCortexGla,
+                          onChange: ev => setUpgradeCortexGla(ev.target.checked)
+                        }),
+                        'Enable O(S) GLA'
+                      )
+                    ),
+                    e('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' } },
+                      e('button', {
+                        className: 'btn-transmute-action',
+                        onClick: () => handleUpgradeModel(upgradeModelName, false),
+                        disabled: isUpgradingModel
+                      }, [
+                        renderIcon('bolt', 13, { marginRight: '4px' }),
+                        isUpgradingModel ? 'Transmuting Layers…' : '1-Click Transmute'
+                      ]),
+                      e('button', {
+                        className: 'btn-transmute-action',
+                        style: { background: 'var(--accent-olive)', color: '#fff' },
+                        onClick: () => handleUpgradeModel(upgradeModelName, true),
+                        disabled: isUpgradingModel,
+                        title: 'Transmute layers and activate as active model in engine'
+                      }, [
+                        renderIcon('bolt', 13, { marginRight: '4px' }),
+                        isUpgradingModel ? 'Transmuting & Activating…' : 'Transmute & Run'
+                      ])
+                    )
                   )
-                ),
-                e('div', { className: 'transmutation-form-field' },
-                  e('label', { className: 'transmutation-label' }, `Reflex Ratio: ${Math.round(upgradeReflexRatio * 100)}%`),
-                  e('input', {
-                    type: 'range',
-                    min: 0.10,
-                    max: 0.50,
-                    step: 0.05,
-                    value: upgradeReflexRatio,
-                    onChange: ev => setUpgradeReflexRatio(parseFloat(ev.target.value)),
-                    className: 'chat-param-slider'
-                  })
-                ),
-                e('div', { className: 'transmutation-form-field' },
-                  e('label', { className: 'transmutation-label' }, 'Limbic Experts (MoE)'),
-                  e('select', {
-                    value: upgradeLimbicExperts,
-                    onChange: ev => setUpgradeLimbicExperts(parseInt(ev.target.value, 10)),
-                    className: 'transmutation-select'
-                  },
-                    e('option', { value: 4 }, '4 Experts (Top-2 Active)'),
-                    e('option', { value: 8 }, '8 Experts (Top-2 Active)'),
-                    e('option', { value: 16 }, '16 Experts (Top-2 Active)'),
-                    e('option', { value: 32 }, '32 Experts (Top-2 Active)')
-                  )
-                ),
-                e('div', { className: 'transmutation-form-field' },
-                  e('label', { className: 'transmutation-label' }, 'Cortex Linear Attn (GLA)'),
-                  e('label', { style: { display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', height: '34px', fontFamily: 'var(--font-mono)', fontSize: '12px', color: 'var(--text-main)' } },
-                    e('input', {
-                      type: 'checkbox',
-                      checked: upgradeCortexGla,
-                      onChange: ev => setUpgradeCortexGla(ev.target.checked)
-                    }),
-                    'Enable O(S) GLA'
-                  )
-                ),
-                e('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' } },
-                  e('button', {
-                    className: 'btn-transmute-action',
-                    onClick: () => handleUpgradeModel(upgradeModelName, false),
-                    disabled: isUpgradingModel
-                  }, [
-                    renderIcon('bolt', 13, { marginRight: '4px' }),
-                    isUpgradingModel ? 'Transmuting Layers…' : '1-Click Transmute'
-                  ]),
-                  e('button', {
-                    className: 'btn-transmute-action',
-                    style: { background: 'var(--accent-olive)', color: '#fff' },
-                    onClick: () => handleUpgradeModel(upgradeModelName, true),
-                    disabled: isUpgradingModel,
-                    title: 'Transmute layers and activate as active model in engine'
-                  }, [
-                    renderIcon('bolt', 13, { marginRight: '4px' }),
-                    isUpgradingModel ? 'Transmuting & Activating…' : 'Transmute & Run'
-                  ])
-                )
-              ),
+                );
+              })(),
               upgradeResult && e('div', null,
                 e('div', { className: 'transmutation-kpi-grid' },
                   e('div', { className: 'transmutation-kpi-tile' },

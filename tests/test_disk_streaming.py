@@ -444,6 +444,70 @@ class TestDiskStreamingAndUnifiedHF(unittest.TestCase):
             elif session_file.is_file():
                 session_file.unlink()
 
+    def test_studio_saved_models_discovery_and_upgrade(self):
+        from fastapi.testclient import TestClient
+
+        from triune.api.server import create_app
+        from triune.model.transformer import TriuneTransformer
+        from triune.runtime.disk_streaming import build_nvfp4_disk_cache
+
+        client_kwargs = {}
+        if "client" in inspect.signature(TestClient).parameters:
+            client_kwargs["client"] = ("127.0.0.1", 43210)
+        client = TestClient(create_app(), **client_kwargs)
+
+        res_list = client.get("/v1/models")
+        self.assertEqual(res_list.status_code, 200)
+        list_data = res_list.json()
+        self.assertIn("saved_models", list_data)
+        saved_ids = {m["id"] for m in list_data["saved_models"]}
+        self.assertFalse(any("lora_adapter" in mid.lower() for mid in saved_ids))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            hf_dir = _create_synthetic_qwen2_dir(tmp_path / "saved_hf_qwen2")
+            cache_dir = build_nvfp4_disk_cache(
+                hf_dir,
+                cache_dir=tmp_path / "saved_nvfp4_cache",
+                hadamard=True,
+                quantize_lm_head=False,
+                local_files_only=True,
+            )
+            pt_path = tmp_path / "saved_triune.pt"
+            tiny_m = TriuneTransformer(
+                vocab_size=64,
+                hidden_dim=64,
+                num_layers=4,
+                num_heads=2,
+                head_dim=32,
+                num_experts=2,
+                router_prefix_layers=1,
+                reflex_exit_layer=2,
+                limbic_exit_layer=3,
+            )
+            torch.save({"model_state": tiny_m.state_dict(), "config": {"num_layers": 4, "hidden_dim": 64}}, pt_path)
+
+            for target, exp_layers, exp_dim in [
+                (str(hf_dir), 2, 64),
+                (str(cache_dir), 2, 64),
+                (str(pt_path), 4, 64),
+            ]:
+                up_res = client.post(
+                    "/v1/models/upgrade_to_triune",
+                    json={"model_name": target, "reflex_ratio": 0.25, "limbic_experts": 4, "apply_as_active": False},
+                )
+                self.assertEqual(up_res.status_code, 200)
+                up_json = up_res.json()
+                self.assertEqual(up_json["status"], "success")
+                self.assertEqual(len(up_json["layer_mapping"]), exp_layers)
+                self.assertEqual(up_json["tier_summary"]["hidden_dim"], exp_dim)
+
+        app_js = Path("studio/src/app.js").read_text(encoding="utf-8")
+        self.assertIn("Saved Models, Checkpoints & HF Cache", app_js)
+        self.assertIn("fetchSavedModels", app_js)
+        self.assertIn("handleLoadSavedModel", app_js)
+        self.assertIn("useState('llama-3-8b')", app_js)
+
 
 if __name__ == "__main__":
     unittest.main()
