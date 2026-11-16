@@ -3803,6 +3803,12 @@
     const [customUpgradePath, setCustomUpgradePath] = useState('');
     const [savedModels, setSavedModels] = useState([]);
     const [isLoadingSavedModel, setIsLoadingSavedModel] = useState(false);
+    const [showModelScannerModal, setShowModelScannerModal] = useState(false);
+    const [isScanningModels, setIsScanningModels] = useState(false);
+    const [scanExtraPath, setScanExtraPath] = useState('');
+    const [scannerSourceFilter, setScannerSourceFilter] = useState('all');
+    const [scannerSearch, setScannerSearch] = useState('');
+    const [scannerSummary, setScannerSummary] = useState({ counts_by_source: {}, scanned_roots: [], scan_ms: 0 });
     const [upgradeSourceType, setUpgradeSourceType] = useState('dense_transformer');
     const [upgradeReflexRatio, setUpgradeReflexRatio] = useState(0.25);
     const [upgradeLimbicExperts, setUpgradeLimbicExperts] = useState(8);
@@ -5854,8 +5860,47 @@
           if (Array.isArray(data.saved_models)) {
             setSavedModels(data.saved_models);
           }
+          if (data.counts_by_source || data.scanned_roots) {
+            setScannerSummary(prev => ({
+              ...prev,
+              counts_by_source: data.counts_by_source || prev.counts_by_source,
+              scanned_roots: data.scanned_roots || prev.scanned_roots
+            }));
+          }
         }
       } catch (err) {}
+    };
+
+    const handleScanPcModels = async (customDirs = null) => {
+      const dirs = Array.isArray(customDirs)
+        ? customDirs
+        : (scanExtraPath.trim() ? scanExtraPath.split(';').map(s => s.trim()).filter(Boolean) : []);
+      setIsScanningModels(true);
+      try {
+        const res = await apiFetch('/v1/models/scan', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ extra_paths: dirs, include_wsl: true, max_depth: 4 })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.models)) {
+            setSavedModels(data.models);
+          }
+          setScannerSummary({
+            counts_by_source: data.counts_by_source || {},
+            scanned_roots: data.scanned_roots || [],
+            scan_ms: data.scan_ms || 0
+          });
+          showToast(`PC Scan complete: ${(data.models || []).length} models discovered (${data.scan_ms || 0}ms).`);
+        } else {
+          showToast('PC model scan failed');
+        }
+      } catch (err) {
+        showToast(`Scan error: ${err.message}`);
+      } finally {
+        setIsScanningModels(false);
+      }
     };
 
     // On-Mount Initialization & Automatic Update Check on Startup
@@ -9768,43 +9813,109 @@
               }, 'Purge')
             ),
 
-            // Model Selector Dropdown
-            e('div', {
-              className: 'pill',
-              style: { display: 'inline-flex', alignItems: 'center', gap: '5px', borderColor: 'var(--border-glow)', padding: '2px 8px' },
-              title: 'Select Active Architecture or Model Preset'
-            },
-              renderIcon('models', 13, { color: 'var(--primary)' }),
-              e('select', {
-                value: activeModel,
-                onChange: ev => {
-                  const val = ev.target.value;
-                  if (val.startsWith('triune-')) handleSelectModelPreset(val);
-                  else { setActiveModel(val); showToast(`Active BYOK Model: ${val}`); }
+            // Model Selector & PC Scanner Loading Menu
+            (() => {
+              const localLoadable = (savedModels || []).filter(m => !['ollama', 'gguf'].includes(m.source) && m.kind !== 'gguf' && m.kind !== 'ollama');
+              const ollamaAndGguf = (savedModels || []).filter(m => ['ollama', 'gguf'].includes(m.source) || ['ollama', 'gguf'].includes(m.kind));
+              const isKnownOpt = MODEL_PRESETS.some(p => p.id === activeModel)
+                || ['gpt-4o-mini', 'claude-3-5-sonnet-latest', 'gemini-2.5-flash'].includes(activeModel)
+                || (savedModels || []).some(m => m.id === activeModel);
+              return e('div', { style: { display: 'inline-flex', alignItems: 'center', gap: '4px' } },
+                e('div', {
+                  className: 'pill',
+                  style: { display: 'inline-flex', alignItems: 'center', gap: '5px', borderColor: 'var(--border-glow)', padding: '2px 8px' },
+                  title: 'Select or Load Active Model (Triune, Saved Checkpoints, HF, vLLM, Hermes, Ollama)'
                 },
-                style: {
-                  background: 'transparent',
-                  border: 'none',
-                  color: 'var(--text-main)',
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: '11px',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                  outline: 'none',
-                  paddingRight: '4px'
-                }
-              },
-                MODEL_PRESETS.map(p => e('option', { key: p.id, value: p.id, style: { background: 'var(--bg-card)', color: 'var(--text-main)' } }, p.name)),
-                !MODEL_PRESETS.some(p => p.id === activeModel) && !['gpt-4o-mini', 'claude-3-5-sonnet-latest', 'gemini-2.5-flash'].includes(activeModel) && e('option', {
-                  key: activeModel,
-                  value: activeModel,
-                  style: { background: 'var(--bg-card)', color: 'var(--accent-sage)', fontWeight: 700 }
-                }, `${activeModel.toUpperCase()} (Active Transmuted)`),
-                e('option', { value: 'gpt-4o-mini', style: { background: 'var(--bg-card)', color: 'var(--text-main)' } }, 'GPT-4o Mini (BYOK)'),
-                e('option', { value: 'claude-3-5-sonnet-latest', style: { background: 'var(--bg-card)', color: 'var(--text-main)' } }, 'Claude 3.5 Sonnet (BYOK)'),
-                e('option', { value: 'gemini-2.5-flash', style: { background: 'var(--bg-card)', color: 'var(--text-main)' } }, 'Gemini 2.5 Flash (BYOK)')
-              )
-            ),
+                  renderIcon('models', 13, { color: 'var(--primary)' }),
+                  e('select', {
+                    value: activeModel,
+                    onChange: ev => {
+                      const val = ev.target.value;
+                      if (val === '__scan_pc__') {
+                        setShowModelScannerModal(true);
+                        handleScanPcModels();
+                        return;
+                      }
+                      if (MODEL_PRESETS.some(p => p.id === val)) {
+                        handleSelectModelPreset(val);
+                        return;
+                      }
+                      if (['gpt-4o-mini', 'claude-3-5-sonnet-latest', 'gemini-2.5-flash'].includes(val)) {
+                        setActiveModel(val);
+                        showToast(`Active BYOK Model: ${val}`);
+                        return;
+                      }
+                      const found = (savedModels || []).find(m => m.id === val);
+                      if (found && (found.can_load_direct === false || found.has_weights === false || ['ollama', 'gguf'].includes(found.kind) || ['ollama', 'gguf'].includes(found.source))) {
+                        setUpgradeModelName(val);
+                        setActiveTab('models');
+                        handleUpgradeModel(val, false);
+                        showToast(`Selected ${found.name || val} in Universal Upgrader — click Transmute & Run or inspect layers.`);
+                        return;
+                      }
+                      handleLoadSavedModel(val, {
+                        nvfp4: Boolean(found && (found.kind === 'nvfp4_cache' || found.kind === 'hf_cache' || found.source === 'vllm' || found.source === 'hermes')),
+                        diskStream: Boolean(found && found.kind === 'nvfp4_cache')
+                      });
+                    },
+                    style: {
+                      background: 'transparent',
+                      border: 'none',
+                      color: 'var(--text-main)',
+                      fontFamily: 'var(--font-mono)',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      outline: 'none',
+                      paddingRight: '4px',
+                      maxWidth: '240px'
+                    }
+                  },
+                    !isKnownOpt && e('option', {
+                      key: activeModel,
+                      value: activeModel,
+                      style: { background: 'var(--bg-card)', color: 'var(--accent-sage)', fontWeight: 700 }
+                    }, `${String(activeModel).toUpperCase()} (Active)`),
+                    e('optgroup', { label: 'Triune Presets', style: { background: 'var(--bg-card)', color: 'var(--text-main)' } },
+                      MODEL_PRESETS.map(p => e('option', { key: p.id, value: p.id, style: { background: 'var(--bg-card)', color: 'var(--text-main)' } }, p.name))
+                    ),
+                    localLoadable.length > 0 && e('optgroup', { label: 'Saved Models (HF / vLLM / Hermes / NVFP4 / Ckpt)', style: { background: 'var(--bg-card)', color: 'var(--text-main)' } },
+                      localLoadable.map(m => e('option', { key: `hdr:${m.id}`, value: m.id, style: { background: 'var(--bg-card)', color: 'var(--text-main)' } }, m.description || m.name || m.id))
+                    ),
+                    ollamaAndGguf.length > 0 && e('optgroup', { label: 'Ollama & GGUF (Transmute)', style: { background: 'var(--bg-card)', color: 'var(--text-main)' } },
+                      ollamaAndGguf.map(m => e('option', { key: `hdr-ol:${m.id}`, value: m.id, style: { background: 'var(--bg-card)', color: 'var(--text-main)' } }, m.description || m.name || m.id))
+                    ),
+                    e('optgroup', { label: 'BYOK Cloud APIs', style: { background: 'var(--bg-card)', color: 'var(--text-main)' } },
+                      e('option', { value: 'gpt-4o-mini', style: { background: 'var(--bg-card)', color: 'var(--text-main)' } }, 'GPT-4o Mini (BYOK)'),
+                      e('option', { value: 'claude-3-5-sonnet-latest', style: { background: 'var(--bg-card)', color: 'var(--text-main)' } }, 'Claude 3.5 Sonnet (BYOK)'),
+                      e('option', { value: 'gemini-2.5-flash', style: { background: 'var(--bg-card)', color: 'var(--text-main)' } }, 'Gemini 2.5 Flash (BYOK)')
+                    ),
+                    e('option', { value: '__scan_pc__', style: { background: 'var(--bg-card)', color: 'var(--primary)', fontWeight: 700 } }, 'Scan PC for Models (Ollama / HF / vLLM / Hermes)…')
+                  )
+                ),
+                e('button', {
+                  type: 'button',
+                  className: 'pill',
+                  onClick: () => {
+                    setShowModelScannerModal(true);
+                    handleScanPcModels();
+                  },
+                  title: 'Scan PC across Ollama, Hugging Face, vLLM, Hermes, LM Studio, and checkpoints',
+                  style: {
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    cursor: 'pointer',
+                    background: 'var(--primary-glow)',
+                    borderColor: 'var(--border-glow)',
+                    color: 'var(--primary)',
+                    fontWeight: 700,
+                    fontSize: '11px',
+                    padding: '3px 9px'
+                  }
+                }, [renderIcon('search', 11), isScanningModels ? 'Scanning…' : `Scan PC (${savedModels.length})`])
+              );
+            })(),
             e('span', { className: 'pill' }, `Precision: ${trainPrecision || precision}`)
           )
         ),
@@ -12568,9 +12679,9 @@
                           type: 'button',
                           className: 'btn-sec',
                           style: { padding: '2px 7px', fontSize: '11px' },
-                          title: 'Rescan checkpoints, NVFP4 caches, and Hugging Face cache',
-                          onClick: () => { fetchSavedModels(); fetchCheckpoints(); }
-                        }, [renderIcon('refresh', 11, { marginRight: '3px' }), 'Scan'])
+                          title: 'Scan PC across Ollama, Hugging Face, vLLM, Hermes, LM Studio, and checkpoints',
+                          onClick: () => { setShowModelScannerModal(true); handleScanPcModels(); }
+                        }, [renderIcon('search', 11, { marginRight: '3px' }), 'Scan PC'])
                       ),
                       e('select', {
                         value: upgradeModelName,
@@ -12598,7 +12709,16 @@
                           const targetId = selectedSavedObj ? selectedSavedObj.id : customUpgradePath.trim();
                           const isCache = selectedSavedObj && selectedSavedObj.kind === 'nvfp4_cache';
                           const noWeights = Boolean(selectedSavedObj && selectedSavedObj.has_weights === false);
-                          const isHfOrCustom = !selectedSavedObj || selectedSavedObj.kind === 'hf_local' || selectedSavedObj.kind === 'hf_cache';
+                          const isGgufOrOllama = Boolean(selectedSavedObj && (selectedSavedObj.can_load_direct === false || ['ollama', 'gguf'].includes(selectedSavedObj.kind) || ['ollama', 'gguf'].includes(selectedSavedObj.source)));
+                          const isHfOrCustom = !selectedSavedObj || ['hf_local', 'hf_cache', 'vllm', 'hermes'].includes(selectedSavedObj.kind) || ['huggingface', 'vllm', 'hermes'].includes(selectedSavedObj.source);
+                          if (isGgufOrOllama) {
+                            return [
+                              e('span', {
+                                key: 'gguf-note',
+                                style: { fontSize: '11px', color: 'var(--text-muted)', fontStyle: 'italic' }
+                              }, 'Ollama/GGUF binary detected — click 1-Click Transmute or Transmute & Run above.')
+                            ];
+                          }
                           return [
                             e('button', {
                               key: 'load-std',
@@ -14013,7 +14133,223 @@
               }, 'Save System Configuration')
             )
           )
-        )
+        ),
+
+        // Global PC Model Scanner Modal (Ollama / Hugging Face / vLLM / Hermes / LM Studio / Checkpoints)
+        showModelScannerModal && (() => {
+          const allModels = savedModels || [];
+          const filterSrcs = ['all', 'ollama', 'huggingface', 'vllm', 'hermes', 'lmstudio', 'nvfp4_cache', 'checkpoint', 'gguf'];
+          const qLow = (scannerSearch || '').trim().toLowerCase();
+          const filtered = allModels.filter(m => {
+            const srcOk = scannerSourceFilter === 'all' || m.source === scannerSourceFilter || m.kind === scannerSourceFilter;
+            if (!srcOk) return false;
+            if (!qLow) return true;
+            const hay = `${m.name || ''} ${m.id || ''} ${m.path || ''} ${m.description || ''}`.toLowerCase();
+            return hay.includes(qLow);
+          });
+          return e('div', {
+            role: 'dialog',
+            'aria-modal': 'true',
+            'aria-label': 'PC Model Scanner',
+            onClick: ev => { if (ev.target === ev.currentTarget) setShowModelScannerModal(false); },
+            style: {
+              position: 'fixed',
+              inset: 0,
+              zIndex: 9999,
+              background: 'rgba(10, 12, 16, 0.72)',
+              backdropFilter: 'blur(6px)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '24px'
+            }
+          },
+            e('div', {
+              style: {
+                width: 'min(960px, 96vw)',
+                maxHeight: '86vh',
+                display: 'flex',
+                flexDirection: 'column',
+                background: 'var(--bg-card)',
+                border: '1px solid var(--border-color)',
+                borderRadius: '12px',
+                boxShadow: '0 24px 64px rgba(0,0,0,0.45)',
+                overflow: 'hidden'
+              }
+            },
+              e('div', {
+                style: {
+                  padding: '16px 20px',
+                  borderBottom: '1px solid var(--border-color)',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: '12px'
+                }
+              },
+                e('div', null,
+                  e('h3', { style: { margin: 0, fontFamily: 'var(--font-heading)', fontSize: '18px', display: 'flex', alignItems: 'center', gap: '8px' } }, [
+                    renderIcon('search', 17, { color: 'var(--primary)' }),
+                    'PC Model Scanner & Universal Transmuter'
+                  ]),
+                  e('p', { style: { margin: '4px 0 0 0', fontSize: '12px', color: 'var(--text-muted)' } },
+                    `Found ${allModels.length} model(s) across ${(scannerSummary.scanned_roots || []).length} PC root(s) in ${scannerSummary.scan_ms || 0}ms (Ollama, Hugging Face, vLLM, Hermes, LM Studio, Checkpoints).`
+                  )
+                ),
+                e('button', {
+                  type: 'button',
+                  className: 'btn-sec',
+                  style: { padding: '5px 12px', fontSize: '13px', fontWeight: 700 },
+                  onClick: () => setShowModelScannerModal(false)
+                }, 'Close ×')
+              ),
+              e('div', { style: { padding: '14px 20px', borderBottom: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '10px', background: 'var(--bg-surface)' } },
+                e('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' } },
+                  e('input', {
+                    type: 'text',
+                    className: 'ckpt-input',
+                    style: { flex: '1 1 220px' },
+                    placeholder: 'Filter discovered models (e.g. qwen, gemma, hermes, llama)...',
+                    value: scannerSearch,
+                    onChange: ev => setScannerSearch(ev.target.value)
+                  }),
+                  e('input', {
+                    type: 'text',
+                    className: 'ckpt-input',
+                    style: { flex: '1.3 1 260px' },
+                    placeholder: 'Optional extra folder(s) to scan (e.g. D:\\Models; C:\\vllm)',
+                    value: scanExtraPath,
+                    onChange: ev => setScanExtraPath(ev.target.value),
+                    onKeyDown: ev => { if (ev.key === 'Enter') handleScanPcModels(); }
+                  }),
+                  e('button', {
+                    type: 'button',
+                    className: 'btn-action',
+                    disabled: isScanningModels,
+                    style: { padding: '7px 14px', fontSize: '12px', background: 'var(--primary)', color: '#fff', fontWeight: 700 },
+                    onClick: () => handleScanPcModels()
+                  }, isScanningModels ? 'Scanning PC…' : [renderIcon('refresh', 12, { marginRight: '5px' }), 'Scan PC'])
+                ),
+                e('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' } },
+                  filterSrcs.map(src => {
+                    const cnt = src === 'all'
+                      ? allModels.length
+                      : allModels.filter(m => m.source === src || m.kind === src).length;
+                    const active = scannerSourceFilter === src;
+                    const lblMap = {
+                      all: 'All',
+                      ollama: 'Ollama',
+                      huggingface: 'Hugging Face',
+                      vllm: 'vLLM',
+                      hermes: 'Hermes',
+                      lmstudio: 'LM Studio',
+                      nvfp4_cache: 'NVFP4 Cache',
+                      checkpoint: 'Checkpoints',
+                      gguf: 'GGUF'
+                    };
+                    return e('button', {
+                      key: src,
+                      type: 'button',
+                      className: `project-filter-chip ${active ? 'active' : ''}`,
+                      onClick: () => setScannerSourceFilter(src)
+                    }, `${lblMap[src] || src} (${cnt})`);
+                  })
+                )
+              ),
+              e('div', { style: { flex: 1, overflowY: 'auto', padding: '14px 20px', display: 'flex', flexDirection: 'column', gap: '8px' } },
+                filtered.length === 0 ?
+                  e('div', { style: { textAlign: 'center', padding: '32px 16px', color: 'var(--text-muted)', fontSize: '13px' } },
+                    isScanningModels ? 'Scanning local caches and model directories...' : 'No matching models found. Add a custom folder path above (e.g. D:\\Models) and click Scan PC.'
+                  ) :
+                  filtered.map((m, idx) => {
+                    const canLoad = m.can_load_direct !== false && m.has_weights !== false && !['ollama', 'gguf'].includes(m.kind) && !['ollama', 'gguf'].includes(m.source);
+                    const specChips = [
+                      m.num_layers ? `${m.num_layers}L` : null,
+                      m.hidden_dim ? `${m.hidden_dim}D` : null,
+                      m.num_heads ? `${m.num_heads}H` : null,
+                      m.quantization || null,
+                      m.size_formatted && m.size_formatted !== '—' ? m.size_formatted : null
+                    ].filter(Boolean);
+                    return e('div', {
+                      key: m.id || idx,
+                      style: {
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        gap: '12px',
+                        flexWrap: 'wrap',
+                        padding: '10px 14px',
+                        background: 'var(--bg-surface)',
+                        border: '1px solid var(--border-color)',
+                        borderRadius: '8px'
+                      }
+                    },
+                      e('div', { style: { minWidth: '240px', flex: '1 1 320px' } },
+                        e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
+                          e('span', { style: { fontWeight: 700, fontSize: '13.5px', fontFamily: 'var(--font-mono)' } }, m.name || m.id),
+                          e('span', {
+                            className: 'badge-folder',
+                            style: { textTransform: 'uppercase', fontSize: '10px', fontWeight: 700 }
+                          }, m.source || m.kind || 'local'),
+                          specChips.map((chip, cIdx) =>
+                            e('span', { key: cIdx, className: 'model-spec-chip', style: { fontSize: '10.5px', padding: '1px 6px' } }, chip)
+                          )
+                        ),
+                        e('div', { style: { fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', marginTop: '3px', wordBreak: 'break-all' } }, m.path || m.id)
+                      ),
+                      e('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' } },
+                        canLoad && e('button', {
+                          type: 'button',
+                          className: 'btn-sec',
+                          disabled: isLoadingSavedModel,
+                          style: { padding: '4px 10px', fontSize: '11.5px', color: 'var(--accent-sage)', fontWeight: 600 },
+                          onClick: () => {
+                            setShowModelScannerModal(false);
+                            handleLoadSavedModel(m.id, {
+                              nvfp4: ['nvfp4_cache', 'hf_cache'].includes(m.kind) || ['vllm', 'hermes'].includes(m.source),
+                              diskStream: m.kind === 'nvfp4_cache'
+                            });
+                          }
+                        }, m.kind === 'nvfp4_cache' ? 'Load NVFP4' : 'Load Weights'),
+                        canLoad && ['hf_local', 'hf_cache', 'vllm', 'hermes'].includes(m.kind) && e('button', {
+                          type: 'button',
+                          className: 'btn-sec',
+                          disabled: isLoadingSavedModel,
+                          style: { padding: '4px 10px', fontSize: '11.5px', color: 'var(--primary)', fontWeight: 600 },
+                          onClick: () => {
+                            setShowModelScannerModal(false);
+                            handleLoadSavedModel(m.id, { nvfp4: true, diskStream: true });
+                          }
+                        }, 'Stream NVFP4'),
+                        e('button', {
+                          type: 'button',
+                          className: 'btn-transmute-action',
+                          style: { padding: '4px 10px', fontSize: '11.5px' },
+                          onClick: () => {
+                            setUpgradeModelName(m.id);
+                            setShowModelScannerModal(false);
+                            setActiveTab('models');
+                            handleUpgradeModel(m.id, false);
+                          }
+                        }, [renderIcon('branch', 11, { marginRight: '4px' }), 'Transmute']),
+                        e('button', {
+                          type: 'button',
+                          className: 'btn-transmute-action',
+                          style: { padding: '4px 10px', fontSize: '11.5px', background: 'var(--accent-olive)', color: '#fff' },
+                          onClick: () => {
+                            setUpgradeModelName(m.id);
+                            setShowModelScannerModal(false);
+                            setActiveTab('models');
+                            handleUpgradeModel(m.id, true);
+                          }
+                        }, [renderIcon('bolt', 11, { marginRight: '4px' }), 'Transmute & Run'])
+                      )
+                    );
+                  })
+              )
+            )
+          );
+        })()
       )
     );
   }

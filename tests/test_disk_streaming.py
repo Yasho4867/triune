@@ -508,6 +508,214 @@ class TestDiskStreamingAndUnifiedHF(unittest.TestCase):
         self.assertIn("handleLoadSavedModel", app_js)
         self.assertIn("useState('llama-3-8b')", app_js)
 
+    def test_pc_model_scanner_ollama_vllm_hermes_gguf_and_loading_menu(self):
+        import struct
+
+        from fastapi.testclient import TestClient
+
+        from triune.api.server import create_app
+
+        def _write_gguf(
+            out_path: Path,
+            *,
+            arch: str,
+            layers: int,
+            hidden_dim: int,
+            heads: int,
+            ffn_dim: int,
+            vocab_size: int,
+            file_type: int = 15,
+        ) -> Path:
+            def _s(txt: str) -> bytes:
+                b = txt.encode("utf-8")
+                return struct.pack("<Q", len(b)) + b
+
+            kv_entries = [
+                ("general.architecture", 8, _s(arch)),
+                ("general.name", 8, _s(f"test-{arch}")),
+                ("general.file_type", 4, struct.pack("<I", file_type)),
+                (f"{arch}.block_count", 4, struct.pack("<I", layers)),
+                (f"{arch}.embedding_length", 4, struct.pack("<I", hidden_dim)),
+                (f"{arch}.attention.head_count", 4, struct.pack("<I", heads)),
+                (f"{arch}.feed_forward_length", 4, struct.pack("<I", ffn_dim)),
+                ("tokenizer.ggml.tokens", 9, struct.pack("<IQ", 8, vocab_size)),
+            ]
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(out_path, "wb") as f:
+                f.write(b"GGUF")
+                f.write(struct.pack("<IQQ", 3, 0, len(kv_entries)))
+                for k, vtype, payload in kv_entries:
+                    f.write(_s(k))
+                    f.write(struct.pack("<I", vtype))
+                    f.write(payload)
+            return out_path
+
+        client_kwargs = {}
+        if "client" in inspect.signature(TestClient).parameters:
+            client_kwargs["client"] = ("127.0.0.1", 43210)
+        client = TestClient(create_app(), **client_kwargs)
+
+        env_keys = ("OLLAMA_MODELS", "HF_HUB_CACHE", "VLLM_CACHE_ROOT", "HERMES_HOME")
+        saved_env = {k: os.environ.get(k) for k in env_keys}
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                tp = Path(tmp)
+
+                # 1. Synthetic Ollama manifest + config + GGUF blob
+                ol_root = tp / "ollama_models"
+                blobs = ol_root / "blobs"
+                blobs.mkdir(parents=True, exist_ok=True)
+                cfg_digest = "sha256:1111"
+                mod_digest = "sha256:2222"
+                (blobs / "sha256-1111").write_text(
+                    json.dumps({"model_format": "gguf", "model_type": "7B", "file_type": "Q4_K_M"}),
+                    encoding="utf-8",
+                )
+                _write_gguf(
+                    blobs / "sha256-2222",
+                    arch="qwen2",
+                    layers=28,
+                    hidden_dim=3584,
+                    heads=28,
+                    ffn_dim=18944,
+                    vocab_size=151936,
+                    file_type=15,
+                )
+                mf = ol_root / "manifests" / "registry.ollama.ai" / "library" / "qwen-custom" / "latest"
+                mf.parent.mkdir(parents=True, exist_ok=True)
+                mf.write_text(
+                    json.dumps(
+                        {
+                            "config": {"digest": cfg_digest},
+                            "layers": [
+                                {"mediaType": "application/vnd.ollama.image.model", "digest": mod_digest, "size": 4096}
+                            ],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+                # 2. Synthetic HF Hub cache (Hermes repo detected cleanly)
+                hf_hub = tp / "hf_hub"
+                snap = hf_hub / "models--NousResearch--Hermes-Test" / "snapshots" / "rev1"
+                snap.mkdir(parents=True, exist_ok=True)
+                (snap / "config.json").write_text(
+                    json.dumps(
+                        {
+                            "model_type": "llama",
+                            "num_hidden_layers": 16,
+                            "hidden_size": 2048,
+                            "num_attention_heads": 16,
+                            "intermediate_size": 5632,
+                            "vocab_size": 32000,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+                # 3. Synthetic vLLM cache dir
+                vllm_dir = tp / "vllm_cache" / "qwen3_serving"
+                vllm_dir.mkdir(parents=True, exist_ok=True)
+                (vllm_dir / "config.json").write_text(
+                    json.dumps(
+                        {
+                            "model_type": "qwen2",
+                            "num_hidden_layers": 32,
+                            "hidden_size": 4096,
+                            "num_attention_heads": 32,
+                            "intermediate_size": 12288,
+                            "vocab_size": 151936,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+                # 4. Synthetic Hermes local GGUF + Extra folder 27B GGUF
+                hermes_dir = tp / "hermes_home"
+                _write_gguf(
+                    hermes_dir / "models" / "hermes_local.gguf",
+                    arch="llama",
+                    layers=12,
+                    hidden_dim=1024,
+                    heads=8,
+                    ffn_dim=4096,
+                    vocab_size=32000,
+                )
+                extra_dir = tp / "extra_models"
+                extra_gguf = _write_gguf(
+                    extra_dir / "qwen27b_custom.gguf",
+                    arch="qwen2",
+                    layers=64,
+                    hidden_dim=5120,
+                    heads=40,
+                    ffn_dim=17408,
+                    vocab_size=151936,
+                    file_type=15,
+                )
+
+                os.environ["OLLAMA_MODELS"] = str(ol_root)
+                os.environ["HF_HUB_CACHE"] = str(hf_hub)
+                os.environ["VLLM_CACHE_ROOT"] = str(tp / "vllm_cache")
+                os.environ["HERMES_HOME"] = str(hermes_dir)
+
+                scan_res = client.post(
+                    "/v1/models/scan",
+                    json={"extra_paths": [str(extra_dir)], "include_wsl": False, "max_depth": 4},
+                )
+                self.assertEqual(scan_res.status_code, 200)
+                sdata = scan_res.json()
+                self.assertEqual(sdata["status"], "success")
+                found_by_id = {m["id"]: m for m in sdata["models"]}
+
+                self.assertIn("ollama:qwen-custom:latest", found_by_id)
+                self.assertEqual(found_by_id["ollama:qwen-custom:latest"]["num_layers"], 28)
+                self.assertEqual(found_by_id["ollama:qwen-custom:latest"]["quantization"], "Q4_K_M")
+
+                self.assertIn("NousResearch/Hermes-Test", found_by_id)
+                self.assertEqual(found_by_id["NousResearch/Hermes-Test"]["source"], "hermes")
+
+                vllm_id = str(vllm_dir).replace("\\", "/")
+                self.assertIn(vllm_id, found_by_id)
+                self.assertEqual(found_by_id[vllm_id]["source"], "vllm")
+
+                extra_id = str(extra_gguf).replace("\\", "/")
+                self.assertIn(extra_id, found_by_id)
+                self.assertEqual(found_by_id[extra_id]["num_layers"], 64)
+                self.assertEqual(found_by_id[extra_id]["hidden_dim"], 5120)
+
+                # Every scanned model source must transmute cleanly using its true dimensions
+                for target, exp_l, exp_d in [
+                    ("ollama:qwen-custom:latest", 28, 3584),
+                    (vllm_id, 32, 4096),
+                    (extra_id, 64, 5120),
+                ]:
+                    tr = client.post(
+                        "/v1/models/upgrade_to_triune",
+                        json={"model_name": target, "apply_as_active": False},
+                    )
+                    self.assertEqual(tr.status_code, 200)
+                    tj = tr.json()
+                    self.assertEqual(len(tj["layer_mapping"]), exp_l)
+                    self.assertEqual(tj["tier_summary"]["hidden_dim"], exp_d)
+
+                # Helpful GGUF/Ollama message when attempting direct PyTorch load
+                ol_load = client.post("/v1/models/load", json={"checkpoint_path": "ollama:qwen-custom:latest"})
+                self.assertEqual(ol_load.status_code, 200)
+                self.assertEqual(ol_load.json()["status"], "error")
+                self.assertIn("Transmute", ol_load.json()["message"])
+        finally:
+            for k, old in saved_env.items():
+                if old is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = old
+
+        app_js = Path("studio/src/app.js").read_text(encoding="utf-8")
+        self.assertIn("__scan_pc__", app_js)
+        self.assertIn("showModelScannerModal", app_js)
+        self.assertIn("PC Model Scanner & Universal Transmuter", app_js)
+        self.assertIn("handleScanPcModels", app_js)
+
 
 if __name__ == "__main__":
     unittest.main()

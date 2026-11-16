@@ -2879,189 +2879,47 @@ if HAS_FASTAPI:
     }
     finetune_cancel_event = threading.Event()
 
-    def _discover_saved_models() -> List[Dict[str, Any]]:
-        """Discover saved checkpoints, NVFP4 disk caches, local HF dirs, and cached HF snapshots."""
-        saved: List[Dict[str, Any]] = []
-        seen_ids: set[str] = set()
+    class ModelScanRequest(BaseModel):
+        extra_paths: List[str] = []
+        include_wsl: bool = True
+        max_depth: int = 4
 
-        def _fmt_mb(size_bytes: int) -> str:
-            mb = size_bytes / (1024 * 1024)
-            return f"{mb:.1f} MB" if mb < 1024 else f"{mb / 1024:.2f} GB"
+    def _discover_saved_models(
+        extra_paths: Optional[List[str]] = None,
+        *,
+        include_wsl: bool = True,
+        max_depth: int = 4,
+    ) -> Dict[str, Any]:
+        """Scan local checkpoints, Ollama, Hugging Face, vLLM, Hermes, LM Studio, and NVFP4 caches."""
+        from triune.runtime.model_scanner import scan_pc_models
 
-        def _add_entry(entry: Dict[str, Any]) -> None:
-            eid = str(entry.get("id", ""))
-            if eid and eid not in seen_ids:
-                seen_ids.add(eid)
-                saved.append(entry)
-
-        # 1. Local checkpoint files & subdirectories across standard workspace folders
-        for folder in ("checkpoints", "checkpoints_full", "caches", "models", "exports"):
-            root = Path(folder)
-            if not root.is_dir():
-                continue
-            try:
-                entries = sorted(root.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True)
-            except OSError:
-                continue
-            for item in entries:
-                try:
-                    if item.is_file() and item.suffix.lower() in {".pt", ".safetensors", ".bin", ".ckpt"}:
-                        if "adapter" in item.stem.lower():
-                            continue
-                        rel = str(item).replace("\\", "/")
-                        sz = _fmt_mb(item.stat().st_size)
-                        _add_entry(
-                            {
-                                "id": rel,
-                                "name": item.name,
-                                "path": rel,
-                                "object": "checkpoint",
-                                "kind": "checkpoint",
-                                "size_formatted": sz,
-                                "has_weights": True,
-                                "description": f"Checkpoint: {item.name} ({sz})",
-                            }
-                        )
-                    elif item.is_dir():
-                        rel = str(item).replace("\\", "/")
-                        manifest_p = item / "manifest.json"
-                        config_p = item / "config.json"
-                        if manifest_p.is_file():
-                            m_data = {}
-                            try:
-                                m_data = json.loads(manifest_p.read_text(encoding="utf-8"))
-                            except Exception:
-                                pass
-                            n_l = m_data.get("num_layers")
-                            meta_tag = f"{n_l}L NVFP4 Cache" if n_l else "NVFP4 Cache"
-                            _add_entry(
-                                {
-                                    "id": rel,
-                                    "name": item.name,
-                                    "path": rel,
-                                    "object": "nvfp4_cache",
-                                    "kind": "nvfp4_cache",
-                                    "num_layers": n_l,
-                                    "has_weights": True,
-                                    "description": f"NVFP4 Cache: {item.name} ({meta_tag})",
-                                }
-                            )
-                        elif config_p.is_file():
-                            cfg_data = {}
-                            try:
-                                cfg_data = json.loads(config_p.read_text(encoding="utf-8"))
-                            except Exception:
-                                pass
-                            n_l = cfg_data.get("num_hidden_layers") or cfg_data.get("n_layer")
-                            h_d = cfg_data.get("hidden_size") or cfg_data.get("n_embd")
-                            has_w = bool(
-                                (item / "model.safetensors").is_file()
-                                or (item / "model.safetensors.index.json").is_file()
-                                or any(item.glob("*.safetensors"))
-                                or any(item.glob("*.bin"))
-                            )
-                            spec_tag = f"{n_l}L / {h_d}D" if (n_l and h_d) else "HF Config"
-                            _add_entry(
-                                {
-                                    "id": rel,
-                                    "name": item.name,
-                                    "path": rel,
-                                    "object": "hf_local",
-                                    "kind": "hf_local",
-                                    "num_layers": n_l,
-                                    "hidden_dim": h_d,
-                                    "has_weights": has_w,
-                                    "description": f"Local HF: {item.name} ({spec_tag})",
-                                }
-                            )
-                except OSError:
-                    continue
-
-        # 2. Hugging Face Hub local cache snapshots (read-only metadata inspection)
-        hf_hub_candidates: List[Path] = []
-        if os.environ.get("HF_HUB_CACHE"):
-            hf_hub_candidates.append(Path(os.environ["HF_HUB_CACHE"]))
-        elif os.environ.get("HF_HOME"):
-            hf_hub_candidates.append(Path(os.environ["HF_HOME"]) / "hub")
-        else:
-            hf_hub_candidates.append(Path.home() / ".cache" / "huggingface" / "hub")
-
-        for hub_dir in hf_hub_candidates:
-            if not hub_dir.is_dir():
-                continue
-            try:
-                model_dirs = sorted(hub_dir.glob("models--*"))
-            except OSError:
-                continue
-            for mdir in model_dirs:
-                snaps_dir = mdir / "snapshots"
-                if not snaps_dir.is_dir():
-                    continue
-                try:
-                    snaps = [s for s in snaps_dir.iterdir() if s.is_dir()]
-                except OSError:
-                    continue
-                repo_id = mdir.name.removeprefix("models--").replace("--", "/", 1)
-                for snap in snaps:
-                    cfg_p = snap / "config.json"
-                    if not cfg_p.is_file():
-                        continue
-                    try:
-                        cfg_data = json.loads(cfg_p.read_text(encoding="utf-8"))
-                    except Exception:
-                        cfg_data = {}
-                    has_w = bool(
-                        (snap / "model.safetensors").is_file()
-                        or (snap / "model.safetensors.index.json").is_file()
-                        or any(snap.glob("*.safetensors"))
-                        or any(snap.glob("*.bin"))
-                    )
-                    n_l = cfg_data.get("num_hidden_layers") or cfg_data.get("n_layer")
-                    h_d = cfg_data.get("hidden_size") or cfg_data.get("n_embd")
-                    spec_str = f"{n_l}L / {h_d}D" if (n_l and h_d) else "cached config"
-                    w_tag = "weights ready" if has_w else "config cached"
-                    _add_entry(
-                        {
-                            "id": repo_id,
-                            "name": repo_id,
-                            "path": str(snap).replace("\\", "/"),
-                            "object": "hf_cache",
-                            "kind": "hf_cache",
-                            "num_layers": n_l,
-                            "hidden_dim": h_d,
-                            "has_weights": has_w,
-                            "description": f"HF Cache: {repo_id} ({spec_str}, {w_tag})",
-                        }
-                    )
-                    break
-
-        # 3. Installed / Cloned module repositories with model weights
+        installed_mods: List[Dict[str, Any]] = []
         try:
-            for mod in module_manager.get_installed_modules():
-                weights = (mod.get("artifacts") or {}).get("weights") or []
-                inst_path = mod.get("installed_at")
-                if mod.get("type") == "model" or weights:
-                    target = str(weights[0] if weights else (inst_path or mod.get("id", ""))).replace("\\", "/")
-                    if target:
-                        _add_entry(
-                            {
-                                "id": target,
-                                "name": mod.get("name") or Path(target).name,
-                                "path": target,
-                                "object": "installed_model",
-                                "kind": "installed_model",
-                                "has_weights": True,
-                                "description": f"Installed Repo: {mod.get('name', target)}",
-                            }
-                        )
+            installed_mods = module_manager.get_installed_modules()
         except Exception:
-            pass
+            installed_mods = []
+        return scan_pc_models(
+            extra_paths=extra_paths,
+            include_wsl=include_wsl,
+            max_depth=max_depth,
+            installed_modules=installed_mods,
+        )
 
-        return saved
+    @router.post("/v1/models/scan")
+    async def scan_pc_models_endpoint(req: Optional[ModelScanRequest] = None) -> Dict[str, Any]:
+        """Scan the PC for local models across Ollama, Hugging Face, vLLM, Hermes, LM Studio, and checkpoints."""
+        req_obj = req or ModelScanRequest()
+        scan_res = await asyncio.to_thread(
+            _discover_saved_models,
+            req_obj.extra_paths,
+            include_wsl=bool(req_obj.include_wsl),
+            max_depth=max(1, min(6, int(req_obj.max_depth or 4))),
+        )
+        return {"status": "success", **scan_res}
 
     @router.get("/v1/models")
     async def list_models() -> Dict[str, Any]:
-        """List available model presets, local checkpoints, NVFP4 caches, and cached HF models."""
+        """List available model presets, local checkpoints, NVFP4 caches, Ollama, vLLM, Hermes, and HF models."""
         from triune.model.base import CANONICAL_MODEL_SPECS
 
         models = [
@@ -3069,23 +2927,34 @@ if HAS_FASTAPI:
                 "id": k,
                 "object": "model",
                 "kind": "preset",
+                "source": "triune",
                 "description": f"{v.name} ({v.num_layers}L / {v.hidden_dim}D / {v.num_experts}E)",
             }
             for k, v in CANONICAL_MODEL_SPECS.items()
         ]
-        saved_models = await asyncio.to_thread(_discover_saved_models)
+        scan_res = await asyncio.to_thread(_discover_saved_models)
+        saved_models = scan_res["models"]
         for item in saved_models:
             models.append(
                 {
                     "id": item["id"],
                     "object": item["object"],
                     "kind": item["kind"],
+                    "source": item.get("source", item["kind"]),
                     "path": item.get("path", item["id"]),
                     "has_weights": item.get("has_weights", True),
+                    "can_load_direct": item.get("can_load_direct", True),
+                    "can_transmute": item.get("can_transmute", True),
                     "description": item["description"],
                 }
             )
-        return {"object": "list", "data": models, "saved_models": saved_models}
+        return {
+            "object": "list",
+            "data": models,
+            "saved_models": saved_models,
+            "counts_by_source": scan_res.get("counts_by_source", {}),
+            "scanned_roots": scan_res.get("scanned_roots", []),
+        }
 
     @router.get("/v1/system/diagnostics")
     async def get_system_diagnostics() -> Dict[str, Any]:
@@ -5736,6 +5605,14 @@ if HAS_FASTAPI:
         if pytorch_state.is_training:
             raise HTTPException(status_code=409, detail="Pause training before replacing the active model weights.")
         raw_source = str(req.checkpoint_path).strip()
+        if raw_source.lower().startswith("ollama:") or Path(raw_source).suffix.lower() == ".gguf":
+            return {
+                "status": "error",
+                "message": (
+                    f"{raw_source} is an Ollama / GGUF binary. Use 'Transmute' to inspect and upgrade its architecture "
+                    "to Triune, or load a Hugging Face / SafeTensors / NVFP4 directory for direct PyTorch inference."
+                ),
+            }
         p = Path(raw_source).resolve()
         allowed_exts = {".pt", ".bin", ".safetensors", ".ckpt"}
         is_hf_dir = p.is_dir() and ((p / "config.json").is_file() or (p / "manifest.json").is_file())
@@ -6648,94 +6525,14 @@ SYSTEM \"\"\"You are Triune AI, a high-efficiency cognitive language model train
             return {"status": "error", "message": str(e)}
 
     def _inspect_upgrade_source_spec(raw_source: str) -> Optional[tuple[int, int, int, int, int, str]]:
-        """Inspect a saved checkpoint file, NVFP4 cache, local HF dir, or HF repo ID for real architecture dims."""
-        import re as _re
+        """Inspect any saved checkpoint, Ollama model, GGUF binary, NVFP4 cache, or HF repo ID."""
+        from triune.runtime.model_scanner import inspect_model_spec_for_upgrade
 
-        raw_str = str(raw_source or "").strip()
-        if not raw_str:
-            return None
-        p = Path(raw_str)
-        if p.is_file() and p.suffix.lower() in {".pt", ".bin", ".ckpt", ".safetensors"}:
-            try:
-                if p.suffix.lower() == ".safetensors":
-                    from safetensors import safe_open
-
-                    with safe_open(str(p), framework="pt", device="cpu") as f:
-                        keys = list(f.keys())
-                        layer_nums = [
-                            int(m.group(1))
-                            for k in keys
-                            if (m := _re.match(r"(?:model\.layers|transformer\.h|layers)\.(\d+)\.", str(k)))
-                        ]
-                        layers = (max(layer_nums) + 1) if layer_nums else 8
-                        emb_key = next(
-                            (k for k in keys if "embed" in k and f.get_slice(k).get_shape().__len__() == 2), None
-                        )
-                        if emb_key:
-                            emb_shape = f.get_slice(emb_key).get_shape()
-                            vocab_size, hidden_dim = int(emb_shape[0]), int(emb_shape[1])
-                        else:
-                            vocab_size, hidden_dim = 32000, 384
-                        ffn_key = next(
-                            (k for k in keys if any(t in k for t in ("gate_proj", "up_proj", "fc1", "experts.0.0"))),
-                            None,
-                        )
-                        ffn_dim = int(max(f.get_slice(ffn_key).get_shape())) if ffn_key else hidden_dim * 4
-                        heads = max(1, hidden_dim // 64)
-                        return layers, hidden_dim, heads, ffn_dim, vocab_size, f"Saved SafeTensors ({p.name})"
-
-                ckpt = torch.load(p, map_location="cpu", weights_only=True)
-                if isinstance(ckpt, dict):
-                    _, arch = _checkpoint_architecture(ckpt, pytorch_state.architecture_spec)
-                    layers = int(arch.get("num_layers") or 8)
-                    hidden_dim = int(arch.get("hidden_dim") or 384)
-                    heads = int(arch.get("num_heads") or max(1, hidden_dim // 64))
-                    vocab_size = int(arch.get("vocab_size") or 32000)
-                    ffn_dim = int(
-                        (ckpt.get("config") or {}).get("ffn_dim", hidden_dim * 4)
-                        if isinstance(ckpt.get("config"), dict)
-                        else hidden_dim * 4
-                    )
-                    return layers, hidden_dim, heads, ffn_dim, vocab_size, f"Saved Checkpoint ({p.name})"
-            except Exception:
-                return None
-
-        cfg_data: Optional[Dict[str, Any]] = None
-        label_name = p.name if p.is_dir() else raw_str
-        if p.is_dir():
-            cfg_p = p / "config.json"
-            if cfg_p.is_file():
-                try:
-                    cfg_data = json.loads(cfg_p.read_text(encoding="utf-8"))
-                except Exception:
-                    cfg_data = None
-        elif "/" in raw_str and not raw_str.endswith((".pt", ".bin", ".safetensors", ".ckpt")):
-            try:
-                from transformers import AutoConfig
-
-                try:
-                    cfg_obj = AutoConfig.from_pretrained(raw_str, local_files_only=True)
-                except Exception:
-                    cfg_obj = AutoConfig.from_pretrained(raw_str)
-                cfg_data = cfg_obj.to_dict() if hasattr(cfg_obj, "to_dict") else vars(cfg_obj)
-            except Exception:
-                cfg_data = None
-
-        if isinstance(cfg_data, dict) and (
-            cfg_data.get("num_hidden_layers")
-            or cfg_data.get("n_layer")
-            or cfg_data.get("hidden_size")
-            or cfg_data.get("n_embd")
-        ):
-            layers = int(cfg_data.get("num_hidden_layers") or cfg_data.get("n_layer") or 24)
-            hidden_dim = int(cfg_data.get("hidden_size") or cfg_data.get("n_embd") or 1024)
-            heads = int(cfg_data.get("num_attention_heads") or cfg_data.get("n_head") or max(1, hidden_dim // 64))
-            ffn_dim = int(cfg_data.get("intermediate_size") or cfg_data.get("n_inner") or hidden_dim * 4)
-            vocab_size = int(cfg_data.get("vocab_size") or 32000)
-            mtype = str(cfg_data.get("model_type") or "hf").upper()
-            return layers, hidden_dim, heads, ffn_dim, vocab_size, f"{mtype} ({label_name})"
-
-        return None
+        return inspect_model_spec_for_upgrade(
+            raw_source,
+            checkpoint_arch_fn=_checkpoint_architecture,
+            fallback_spec=pytorch_state.architecture_spec,
+        )
 
     @router.post("/v1/models/upgrade_to_triune")
     async def upgrade_to_triune_endpoint(req: ModelUpgradeRequest) -> Dict[str, Any]:
@@ -6887,8 +6684,10 @@ SYSTEM \"\"\"You are Triune AI, a high-efficiency cognitive language model train
         active_model_id = None
         if getattr(req, "apply_as_active", False):
             try:
-                if Path(raw_name).exists() or "\\" in raw_name or "/" in raw_name:
-                    slug = _re.sub(r"[^a-zA-Z0-9._-]+", "-", Path(raw_name).stem).strip("-") or "saved"
+                if ":" in raw_name or Path(raw_name).exists() or "\\" in raw_name or "/" in raw_name:
+                    clean_raw = raw_name.removeprefix("ollama:")
+                    slug_src = Path(clean_raw).stem if (Path(clean_raw).exists() or "\\" in clean_raw) else clean_raw
+                    slug = _re.sub(r"[^a-zA-Z0-9._-]+", "-", slug_src).strip("-") or "saved"
                 else:
                     slug = model_name
                 active_model_id = f"triune-{slug}"
