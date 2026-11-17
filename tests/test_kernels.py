@@ -558,6 +558,18 @@ class TestKernelSuite(unittest.TestCase):
             )
             torch.testing.assert_close(out_plain, out_plain_ref, atol=tol, rtol=tol)
 
+        # Exercise the large-output GEMV tuning branches on real CUDA hardware.
+        # These cover both the wider HALF_K tile and the high-N fallback.
+        if device.type == "cuda":
+            for m_tok, k_in, n_out in [(1, 2048, 4096), (1, 4096, 8192)]:
+                lin = nn.Linear(k_in, n_out, bias=True, device=device, dtype=dtype)
+                nv = NVFP4Linear.from_linear(lin, hadamard=True).to(device=device)
+                x = torch.randn(m_tok, k_in, device=device, dtype=dtype)
+                out = nv(x)
+                ref_w = fwht_16(nvfp4_dequantize(nv.packed_weight, nv.scale, dtype=dtype))
+                expected = torch.nn.functional.linear(x, ref_w, nv.bias.to(dtype=dtype))
+                torch.testing.assert_close(out, expected, atol=5e-2, rtol=5e-2)
+
         # 3. convert_to_nvfp4 skips sensitive router/exit/final heads and MoE runs without .weight crash
         m = (
             TriuneTransformer(

@@ -200,22 +200,33 @@ if is_triton_available():
             w0 = _decode_e2m1(p_bytes & 0x0F) * scales
             w1 = _decode_e2m1((p_bytes >> 4) & 0x0F) * scales
 
-            k_idx = k_byte * 2 + k_flat
-            x_k = tl.load(
-                x_row_ptr + k_idx * stride_xk,
-                mask=k_idx < K,
-                other=0.0,
-            ).to(tl.float32)
-            x_u = tl.reshape(x_k, (N_GRP, 8, 2))
             if HADAMARD:
+                k_idx = k_byte * 2 + k_flat
+                x_k = tl.load(
+                    x_row_ptr + k_idx * stride_xk,
+                    mask=k_idx < K,
+                    other=0.0,
+                ).to(tl.float32)
+                x_u = tl.reshape(x_k, (N_GRP, 8, 2))
                 for _ in range(4):
                     a, b = tl.split(x_u)
                     x_u = tl.join(a + b, a - b)
                     x_u = tl.reshape(tl.permute(x_u, (0, 2, 1)), (N_GRP, 8, 2))
                 x_u = x_u * 0.25
-            xe, xo = tl.split(x_u)
-            x_even = tl.reshape(xe, (HALF_K,))
-            x_odd = tl.reshape(xo, (HALF_K,))
+                xe, xo = tl.split(x_u)
+                x_even = tl.reshape(xe, (HALF_K,))
+                x_odd = tl.reshape(xo, (HALF_K,))
+            else:
+                x_even = tl.load(
+                    x_row_ptr + (j_offs * 2) * stride_xk,
+                    mask=(j_offs * 2) < K,
+                    other=0.0,
+                ).to(tl.float32)
+                x_odd = tl.load(
+                    x_row_ptr + (j_offs * 2 + 1) * stride_xk,
+                    mask=(j_offs * 2 + 1) < K,
+                    other=0.0,
+                ).to(tl.float32)
 
             acc += tl.sum(w0 * x_even[None, :] + w1 * x_odd[None, :], axis=1)
 
@@ -453,7 +464,9 @@ def nvfp4_linear(
                 w_deq = nvfp4_dequantize(packed_weight, scale, dtype=x.dtype)
                 return torch.nn.functional.linear(x_in, w_deq, bias.to(dtype=x.dtype) if bias is not None else None)
 
-        x_contig = x_2d.contiguous()
+        # Pre-rotate input once instead of repeating FWHT-16 inside every output tile
+        x_in = fwht_16(x_2d) if hadamard else x_2d
+        x_contig = x_in.contiguous()
         p_contig = packed_weight.contiguous()
         s_contig = scale.contiguous()
         out_2d = torch.empty((m, n), device=x.device, dtype=x.dtype)
@@ -461,7 +474,10 @@ def nvfp4_linear(
         bias_arg = bias.contiguous() if has_bias else out_2d
 
         if m <= 8:
-            block_n = 8
+            block_n = 16 if n >= 512 else 8
+            half_k = 128 if (n >= 4096 and k >= 2048 and block_n == 16) else 64
+            if n >= 8192 and k <= 4096:
+                half_k = 64
             grid = (triton.cdiv(n, block_n), m)
             _nvfp4_fused_gemv_kernel[grid](
                 x_contig,
@@ -481,10 +497,10 @@ def nvfp4_linear(
                 out_2d.stride(0),
                 out_2d.stride(1),
                 HAS_BIAS=has_bias,
-                HADAMARD=hadamard,
+                HADAMARD=False,
                 BLOCK_N=block_n,
-                HALF_K=64,
-                num_warps=4,
+                HALF_K=half_k,
+                num_warps=2,
             )
         else:
             block_m = 16 if m <= 32 else 64
@@ -508,7 +524,7 @@ def nvfp4_linear(
                 out_2d.stride(0),
                 out_2d.stride(1),
                 HAS_BIAS=has_bias,
-                HADAMARD=hadamard,
+                HADAMARD=False,
                 IS_FP32=(x.dtype == torch.float32),
                 BLOCK_M=block_m,
                 BLOCK_N=block_n,
@@ -659,7 +675,7 @@ class NVFP4Linear(nn.Module):
         b = getattr(linear, "bias", None)
         if b is None and hasattr(linear, "linear"):
             b = getattr(linear.linear, "bias", None)
-        mod = cls(
+        mod = cls.empty_skeleton(
             w.size(1),
             w.size(0),
             bias=b is not None,
@@ -668,10 +684,10 @@ class NVFP4Linear(nn.Module):
         )
         w_quant = fwht_16(w) if hadamard else w
         packed, scale = nvfp4_quantize(w_quant)
-        mod.packed_weight = packed.clone()
-        mod.scale = scale.clone()
+        mod.packed_weight = packed
+        mod.scale = scale
         if b is not None:
-            mod.bias = nn.Parameter(b.data.clone())
+            mod.bias = nn.Parameter(b.data.clone(), requires_grad=False)
         return mod
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
