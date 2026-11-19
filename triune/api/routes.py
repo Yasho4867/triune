@@ -1062,6 +1062,29 @@ if HAS_FASTAPI:
         def _release_active_model_vram(self) -> None:
             """Release the active model/optimizer/teacher so multi-GB HF/GGUF loads get full VRAM headroom."""
             self._detach_prev_streaming_engine()
+            if self.model is not None and HAS_TORCH:
+                try:
+                    from triune.inference import release_cuda_graph_runner
+
+                    release_cuda_graph_runner(self.model)
+                except Exception:
+                    pass
+            if getattr(self, "neuron_scope", None) is not None:
+                try:
+                    self.neuron_scope.detach()
+                    self.neuron_scope.model = None
+                except Exception:
+                    pass
+                self.neuron_scope = None
+            finetuner = getattr(self, "active_finetuner", None)
+            if finetuner is not None:
+                if hasattr(finetuner, "detach_lora"):
+                    try:
+                        finetuner.detach_lora()
+                    except Exception:
+                        pass
+                self.active_finetuner = None
+            self.training_engine = None
             self.model = None
             self.optimizer = None
             self.distill_teacher = None
@@ -1070,6 +1093,7 @@ if HAS_FASTAPI:
             gc.collect()
             if HAS_TORCH and getattr(self, "device", None) is not None and self.device.type == "cuda":
                 torch.cuda.empty_cache()
+                torch.cuda.ipc_collect()
 
         def load_tokenizer(self):
             if self.tokenizer is not None:
@@ -2588,7 +2612,9 @@ if HAS_FASTAPI:
                 gen_dev = next((b.device for b in self.model.buffers()), None)
             if gen_dev is None:
                 gen_dev = self.device
-            autocast_ctx = self.model_autocast() if gen_dev.type == "cuda" else contextlib.nullcontext()
+            autocast_ctx = (
+                self.model_autocast() if (gen_dev.type == "cuda" and is_triune_model) else contextlib.nullcontext()
+            )
 
             if speculative and is_triune_model:
                 from triune.model.speculative import SelfSpeculativeGenerator

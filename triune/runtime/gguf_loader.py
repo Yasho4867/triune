@@ -9,6 +9,7 @@ blocks directly into Hugging Face CausalLM modules and Triune's transmuter.
 
 from __future__ import annotations
 
+import gc
 import json
 import math
 import mmap
@@ -20,6 +21,9 @@ from typing import Any
 import numpy as np
 import torch
 import torch.nn as nn
+
+_GGUF_TOKENIZER_CACHE: dict[tuple[str, int, int], tuple[Any, frozenset[int], int]] = {}
+_GGUF_TOKENIZER_CACHE_MAX = 8
 
 # GGML tensor type IDs
 _GGML_F32 = 0
@@ -396,22 +400,39 @@ def dequantize_ggml_tensor(
     target_dtype: torch.dtype,
     *,
     compute_device: torch.device | None = None,
+    return_on_device: bool = False,
 ) -> torch.Tensor:
     """Dequantize a GGUF tensor buffer and return a PyTorch tensor shaped ``tuple(reversed(dims))``."""
     numel = 1
     for d in dims:
         numel *= int(d)
     pt_shape = tuple(reversed(dims))
+    dst_device = compute_device if (return_on_device and compute_device is not None) else None
 
     if ggml_type == _GGML_F32:
-        arr = np.array(np.frombuffer(raw_bytes[: numel * 4], dtype="<f4"), copy=True)
-        return torch.from_numpy(arr).reshape(pt_shape).to(dtype=target_dtype)
+        buf_view = np.frombuffer(raw_bytes, dtype="<f4", count=numel)
+        try:
+            arr = np.array(buf_view, copy=True)
+        finally:
+            del buf_view
+        t = torch.from_numpy(arr).reshape(pt_shape).to(dtype=target_dtype)
+        return t.to(device=dst_device) if dst_device is not None else t
     if ggml_type == _GGML_F16:
-        arr = np.array(np.frombuffer(raw_bytes[: numel * 2], dtype="<f2"), copy=True)
-        return torch.from_numpy(arr).reshape(pt_shape).to(dtype=target_dtype)
+        buf_view = np.frombuffer(raw_bytes, dtype="<f2", count=numel)
+        try:
+            arr = np.array(buf_view, copy=True)
+        finally:
+            del buf_view
+        t = torch.from_numpy(arr).reshape(pt_shape).to(dtype=target_dtype)
+        return t.to(device=dst_device) if dst_device is not None else t
     if ggml_type == _GGML_BF16:
-        raw_u16 = torch.from_numpy(np.array(np.frombuffer(raw_bytes[: numel * 2], dtype="<u2"), copy=True))
-        return raw_u16.view(torch.bfloat16).reshape(pt_shape).to(dtype=target_dtype)
+        buf_view = np.frombuffer(raw_bytes, dtype="<u2", count=numel)
+        try:
+            arr = np.array(buf_view, copy=True)
+        finally:
+            del buf_view
+        t = torch.from_numpy(arr).view(torch.bfloat16).reshape(pt_shape).to(dtype=target_dtype)
+        return t.to(device=dst_device) if dst_device is not None else t
 
     if ggml_type not in _BLOCK_META:
         raise NotImplementedError(f"GGML quantization type {ggml_type} is not yet supported for direct dequantization.")
@@ -421,17 +442,32 @@ def dequantize_ggml_tensor(
         try:
             nb_total = numel // blk_elems
             # Bound temporary CUDA scratch VRAM (<128 MB) via block chunking even for huge embeddings
-            chunk_blocks = 65536 if blk_elems == 256 else 524288
-            blocks_np = np.frombuffer(raw_bytes[: nb_total * blk_bytes], dtype=np.uint8).reshape(nb_total, blk_bytes)
-            dst = torch.empty(numel, dtype=target_dtype, device="cpu")
-            for b_start in range(0, nb_total, chunk_blocks):
-                b_end = min(b_start + chunk_blocks, nb_total)
-                chunk_u8 = torch.from_numpy(np.array(blocks_np[b_start:b_end], copy=True)).to(
-                    compute_device, non_blocking=False
-                )
-                deq_chunk = _dequantize_ggml_torch_chunk(chunk_u8, ggml_type, target_dtype)
-                dst[b_start * blk_elems : b_end * blk_elems].copy_(deq_chunk.cpu())
-            return dst.reshape(pt_shape)
+            chunk_blocks = 131072 if blk_elems == 256 else 524288
+            blocks_np = np.frombuffer(raw_bytes, dtype=np.uint8, count=nb_total * blk_bytes).reshape(
+                nb_total, blk_bytes
+            )
+            try:
+                if return_on_device and nb_total <= chunk_blocks:
+                    chunk_u8 = torch.from_numpy(np.array(blocks_np, copy=True)).to(compute_device, non_blocking=False)
+                    deq_chunk = _dequantize_ggml_torch_chunk(chunk_u8, ggml_type, target_dtype)
+                    del chunk_u8
+                    return deq_chunk.reshape(pt_shape)
+
+                dst = torch.empty(numel, dtype=target_dtype, device=compute_device if return_on_device else "cpu")
+                for b_start in range(0, nb_total, chunk_blocks):
+                    b_end = min(b_start + chunk_blocks, nb_total)
+                    chunk_u8 = torch.from_numpy(np.array(blocks_np[b_start:b_end], copy=True)).to(
+                        compute_device, non_blocking=False
+                    )
+                    deq_chunk = _dequantize_ggml_torch_chunk(chunk_u8, ggml_type, target_dtype)
+                    del chunk_u8
+                    dst[b_start * blk_elems : b_end * blk_elems].copy_(
+                        deq_chunk if return_on_device else deq_chunk.cpu()
+                    )
+                    del deq_chunk
+                return dst.reshape(pt_shape)
+            finally:
+                del blocks_np
         except Exception:
             pass
 
@@ -452,7 +488,8 @@ def dequantize_ggml_tensor(
     else:
         raise NotImplementedError(f"GGML quantization type {ggml_type} is not yet supported for direct dequantization.")
 
-    return torch.from_numpy(f32).reshape(pt_shape).to(dtype=target_dtype)
+    out = torch.from_numpy(f32).reshape(pt_shape).to(dtype=target_dtype)
+    return out.to(device=dst_device) if dst_device is not None else out
 
 
 def _read_gguf_tensor(
@@ -463,6 +500,7 @@ def _read_gguf_tensor(
     *,
     mm: mmap.mmap | None = None,
     compute_device: torch.device | None = None,
+    return_on_device: bool = False,
 ) -> torch.Tensor:
     dims = info["dims"]
     ggml_type = info["ggml_type"]
@@ -476,15 +514,31 @@ def _read_gguf_tensor(
     offset = data_start + info["offset"]
     if mm is not None:
         mv = memoryview(mm)
+        mv_slice = None
         try:
+            mv_slice = mv[offset : offset + n_bytes]
             return dequantize_ggml_tensor(
-                mv[offset : offset + n_bytes], dims, ggml_type, target_dtype, compute_device=compute_device
+                mv_slice,
+                dims,
+                ggml_type,
+                target_dtype,
+                compute_device=compute_device,
+                return_on_device=return_on_device,
             )
         finally:
+            if mv_slice is not None:
+                mv_slice.release()
             mv.release()
     f.seek(offset)
     raw = f.read(n_bytes)
-    return dequantize_ggml_tensor(raw, dims, ggml_type, target_dtype, compute_device=compute_device)
+    return dequantize_ggml_tensor(
+        raw,
+        dims,
+        ggml_type,
+        target_dtype,
+        compute_device=compute_device,
+        return_on_device=return_on_device,
+    )
 
 
 def build_hf_tokenizer_from_gguf(meta: dict[str, Any]):
@@ -562,6 +616,208 @@ def _unpermute_llama_qk(w: torch.Tensor, n_heads: int) -> torch.Tensor:
     return w.view(n_heads, head_dim // 2, 2, in_dim).transpose(1, 2).reshape(out_dim, in_dim).contiguous()
 
 
+def _layer_gguf_to_hf_map(
+    layer_idx: int,
+    *,
+    is_gemma_norm: bool,
+    need_llama_unperm: bool,
+    n_heads: int,
+    n_kv_heads: int,
+    has_pre_ffn_norm: bool,
+) -> dict[str, tuple[str, bool, int | None]]:
+    i = layer_idx
+    return {
+        f"blk.{i}.attn_norm.weight": (f"model.layers.{i}.input_layernorm.weight", is_gemma_norm, None),
+        f"blk.{i}.post_attention_norm.weight": (
+            f"model.layers.{i}.post_attention_layernorm.weight",
+            is_gemma_norm,
+            None,
+        ),
+        f"blk.{i}.ffn_norm.weight": (
+            f"model.layers.{i}.pre_feedforward_layernorm.weight"
+            if has_pre_ffn_norm
+            else f"model.layers.{i}.post_attention_layernorm.weight",
+            is_gemma_norm,
+            None,
+        ),
+        f"blk.{i}.post_ffw_norm.weight": (
+            f"model.layers.{i}.post_feedforward_layernorm.weight",
+            is_gemma_norm,
+            None,
+        ),
+        f"blk.{i}.attn_q_norm.weight": (f"model.layers.{i}.self_attn.q_norm.weight", is_gemma_norm, None),
+        f"blk.{i}.attn_k_norm.weight": (f"model.layers.{i}.self_attn.k_norm.weight", is_gemma_norm, None),
+        f"blk.{i}.attn_q.weight": (
+            f"model.layers.{i}.self_attn.q_proj.weight",
+            False,
+            n_heads if need_llama_unperm else None,
+        ),
+        f"blk.{i}.attn_k.weight": (
+            f"model.layers.{i}.self_attn.k_proj.weight",
+            False,
+            n_kv_heads if need_llama_unperm else None,
+        ),
+        f"blk.{i}.attn_v.weight": (f"model.layers.{i}.self_attn.v_proj.weight", False, None),
+        f"blk.{i}.attn_output.weight": (f"model.layers.{i}.self_attn.o_proj.weight", False, None),
+        f"blk.{i}.attn_q.bias": (f"model.layers.{i}.self_attn.q_proj.bias", False, None),
+        f"blk.{i}.attn_k.bias": (f"model.layers.{i}.self_attn.k_proj.bias", False, None),
+        f"blk.{i}.attn_v.bias": (f"model.layers.{i}.self_attn.v_proj.bias", False, None),
+        f"blk.{i}.ffn_gate.weight": (f"model.layers.{i}.mlp.gate_proj.weight", False, None),
+        f"blk.{i}.ffn_up.weight": (f"model.layers.{i}.mlp.up_proj.weight", False, None),
+        f"blk.{i}.ffn_down.weight": (f"model.layers.{i}.mlp.down_proj.weight", False, None),
+    }
+
+
+def _reinit_hf_nonpersistent_buffers(model: nn.Module, hidden_size: int, device: torch.device) -> None:
+    """Reinitialize non-persistent RoPE and embed_scale buffers wiped by ``meta`` construction."""
+    for parent in model.modules():
+        for child_name, child in list(parent.named_children()):
+            if "rotary" in type(child).__name__.lower() and hasattr(child, "config"):
+                setattr(parent, child_name, type(child)(child.config).to(device))
+    for mod in model.modules():
+        if hasattr(mod, "rope_init_fn") and hasattr(mod, "inv_freq"):
+            inv_freq, att_scaling = mod.rope_init_fn(mod.config, "cpu")
+            inv_dev = inv_freq.to(device=mod.inv_freq.device, dtype=mod.inv_freq.dtype)
+            with torch.no_grad():
+                mod.inv_freq.copy_(inv_dev)
+                if hasattr(mod, "original_inv_freq"):
+                    mod.original_inv_freq.copy_(inv_dev.to(device=mod.original_inv_freq.device))
+                mod.attention_scaling = att_scaling
+    embed_tok = getattr(getattr(model, "model", None), "embed_tokens", None)
+    if embed_tok is not None and hasattr(embed_tok, "embed_scale"):
+        scale_val = math.sqrt(hidden_size)
+        if embed_tok.embed_scale.device.type == "meta" or embed_tok.embed_scale.device != device:
+            embed_tok.register_buffer("embed_scale", torch.tensor(scale_val, device=device), persistent=False)
+        else:
+            with torch.no_grad():
+                embed_tok.embed_scale.fill_(scale_val)
+
+
+def _swap_layers_to_nvfp4_skeletons(
+    module: nn.Module,
+    *,
+    dtype: torch.dtype,
+    hadamard: bool,
+    nvfp4_cls: type[nn.Module],
+    group_size: int,
+    sensitive_names: frozenset[str],
+) -> None:
+    """Replace eligible ``nn.Linear`` layers under ``module`` with unallocated ``NVFP4Linear`` skeletons."""
+    for name, child in list(module.named_children()):
+        if isinstance(child, nn.Linear) and not isinstance(child, nvfp4_cls):
+            if name in sensitive_names or (name == "gate" and child.out_features <= 64):
+                continue
+            if child.in_features % group_size == 0:
+                setattr(
+                    module,
+                    name,
+                    nvfp4_cls.empty_skeleton(
+                        child.in_features,
+                        child.out_features,
+                        bias=(child.bias is not None),
+                        dtype=dtype,
+                        hadamard=hadamard,
+                    ),
+                )
+        else:
+            _swap_layers_to_nvfp4_skeletons(
+                child,
+                dtype=dtype,
+                hadamard=hadamard,
+                nvfp4_cls=nvfp4_cls,
+                group_size=group_size,
+                sensitive_names=sensitive_names,
+            )
+
+
+def _resolve_parent_leaf(model: nn.Module, dotted_name: str) -> tuple[nn.Module, str] | None:
+    if "." not in dotted_name:
+        return model, dotted_name
+    parent_path, leaf = dotted_name.rsplit(".", 1)
+    try:
+        return model.get_submodule(parent_path), leaf
+    except AttributeError:
+        return None
+
+
+def _finalize_streaming_meta_tensors(
+    model: nn.Module,
+    target_dev: torch.device,
+    target_dtype: torch.dtype,
+    nvfp4_cls: type[nn.Module],
+) -> None:
+    """Ensure no ``meta`` tensors or unallocated ``NVFP4Linear.bias`` remain after streaming."""
+    for mod in model.modules():
+        if (
+            isinstance(mod, nvfp4_cls)
+            and mod.bias is not None
+            and (mod.bias.numel() == 0 or mod.bias.device.type == "meta")
+        ):
+            mod.bias = nn.Parameter(
+                torch.zeros(mod.out_features, dtype=target_dtype, device=target_dev),
+                requires_grad=False,
+            )
+        for pname, p in list(mod.named_parameters(recurse=False)):
+            if p is not None and p.device.type == "meta":
+                setattr(
+                    mod,
+                    pname,
+                    nn.Parameter(torch.zeros(p.shape, dtype=target_dtype, device=target_dev), requires_grad=False),
+                )
+        for bname, buf in list(mod.named_buffers(recurse=False)):
+            if buf is not None and buf.device.type == "meta":
+                persistent = bname not in getattr(mod, "_non_persistent_buffers_set", ())
+                mod.register_buffer(
+                    bname,
+                    torch.zeros(buf.shape, dtype=buf.dtype, device=target_dev),
+                    persistent=persistent,
+                )
+
+
+def _compute_extra_eos_ids(hf_tok: Any, meta: dict[str, Any], eos_id: int) -> set[int]:
+    extra_eos: set[int] = {eos_id}
+    raw_eos_arr = meta.get("tokenizer.ggml.eos_token_ids")
+    if isinstance(raw_eos_arr, (list, tuple)):
+        extra_eos.update(int(x) for x in raw_eos_arr)
+    vocab_map = hf_tok.get_vocab() if hasattr(hf_tok, "get_vocab") else {}
+    unk_id = getattr(hf_tok, "unk_token_id", None)
+    for stop_sym in ("<end_of_turn>", "<|eot_id|>", "<|im_end|>"):
+        if stop_sym in vocab_map:
+            sid = int(vocab_map[stop_sym])
+            if sid >= 0 and sid != unk_id:
+                extra_eos.add(sid)
+    return extra_eos
+
+
+def _build_or_get_cached_gguf_tokenizer(
+    cache_key: tuple[str, int, int],
+    meta: dict[str, Any],
+    eos_id: int,
+) -> tuple[Any, set[int]]:
+    cached = _GGUF_TOKENIZER_CACHE.get(cache_key)
+    if cached is not None:
+        hf_tok, extra_frozen, _ = cached
+        extra = set(extra_frozen)
+        extra.add(int(eos_id))
+        return hf_tok, extra
+    hf_tok = build_hf_tokenizer_from_gguf(meta)
+    extra = _compute_extra_eos_ids(hf_tok, meta, eos_id)
+    if len(_GGUF_TOKENIZER_CACHE) >= _GGUF_TOKENIZER_CACHE_MAX:
+        oldest_key = next(iter(_GGUF_TOKENIZER_CACHE))
+        _GGUF_TOKENIZER_CACHE.pop(oldest_key, None)
+    _GGUF_TOKENIZER_CACHE[cache_key] = (hf_tok, frozenset(extra), len(hf_tok))
+    return hf_tok, set(extra)
+
+
+def _tie_lm_head_if_requested(model: nn.Module, *, tie: bool) -> None:
+    if not tie:
+        return
+    embed_tok = getattr(getattr(model, "model", None), "embed_tokens", None)
+    lm_head = getattr(model, "lm_head", None)
+    if embed_tok is not None and lm_head is not None and hasattr(embed_tok, "weight"):
+        lm_head.weight = embed_tok.weight
+
+
 def load_gguf_hf_model(
     gguf_path: str | Path,
     *,
@@ -584,10 +840,13 @@ def load_gguf_hf_model(
         Qwen2ForCausalLM,
     )
 
-    from triune.inference import _HFInferenceTokenizerAdapter
+    from triune.inference import _HFInferenceTokenizerAdapter, optimize_hf_model_for_inference
 
     p = Path(gguf_path)
-    directory = read_gguf_directory(p, load_tokenizer_arrays=True)
+    st = p.stat()
+    tok_cache_key = (str(p.resolve()), int(st.st_size), int(st.st_mtime_ns))
+    cached_tok_entry = _GGUF_TOKENIZER_CACHE.get(tok_cache_key)
+    directory = read_gguf_directory(p, load_tokenizer_arrays=(cached_tok_entry is None))
     meta = directory["meta"]
     tensors_idx = directory["tensors"]
     data_start = directory["data_start"]
@@ -616,7 +875,10 @@ def load_gguf_hf_model(
     rope_theta = float(meta.get(f"{arch}.rope.freq_base") or meta.get(f"{arch}.rope.global.freq_base") or 10000.0)
 
     emb_info = tensors_idx.get("token_embd.weight")
-    vocab_size = int(emb_info["dims"][1]) if emb_info else len(meta.get("tokenizer.ggml.tokens") or [])
+    fallback_vocab_len = (
+        len(meta.get("tokenizer.ggml.tokens") or []) if cached_tok_entry is None else (cached_tok_entry[2] or 0)
+    )
+    vocab_size = int(emb_info["dims"][1]) if emb_info else fallback_vocab_len
     bos_id = int(meta.get("tokenizer.ggml.bos_token_id", 1))
     eos_id = int(meta.get("tokenizer.ggml.eos_token_id", 2))
     pad_id = int(meta.get("tokenizer.ggml.padding_token_id", eos_id))
@@ -757,210 +1019,294 @@ def load_gguf_hf_model(
         )
         model_cls = LlamaForCausalLM
 
-    # Allocate uninitialized skeleton on target dtype cleanly without blowing CPU RAM on default float32 init
     with torch.device("meta"):
         model = model_cls(cfg)
-    model = model.to_empty(device="cpu").to(dtype=target_dtype)
+
+    meta_param_shapes = {name: tuple(p_meta.shape) for name, p_meta in model.named_parameters()}
+    dtype_bytes = torch.empty((), dtype=target_dtype).element_size()
+    est_bf16_bytes = 0
+    est_embed_bytes = 0
+    for pname, p_meta in model.named_parameters():
+        if not has_output_head and pname == "lm_head.weight":
+            continue
+        b = int(p_meta.numel()) * dtype_bytes
+        est_bf16_bytes += b
+        if "embed_tokens" in pname or pname == "lm_head.weight":
+            est_embed_bytes += b
+
+    initial_free_vram = 0
+    if target_dev.type == "cuda":
+        gc.collect()
+        torch.cuda.empty_cache()
+        initial_free_vram, _ = torch.cuda.mem_get_info(target_dev)
+
+    use_nvfp4 = bool(quantize and "nvfp4" in str(quantize).lower())
+    if not use_nvfp4 and target_dev.type == "cuda" and est_bf16_bytes > int(initial_free_vram * 0.75):
+        use_nvfp4 = True
+
+    if target_dev.type == "cuda" and use_nvfp4:
+        est_nvfp4_bytes = est_embed_bytes + int((est_bf16_bytes - est_embed_bytes) * (0.625 / max(1, dtype_bytes)))
+        if est_nvfp4_bytes > int(initial_free_vram * 0.92):
+            target_dev = torch.device("cpu")
 
     is_gemma_norm = arch in ("gemma", "gemma2", "gemma3")
     need_llama_unperm = arch in ("llama", "mistral")
 
-    param_map = dict(model.named_parameters())
+    if target_dev.type == "cuda" and use_nvfp4:
+        from triune.kernels.fast_nvfp4 import NVFP4_GROUP_SIZE, NVFP4Linear, fwht_16, nvfp4_quantize
+        from triune.model.fp4 import _SENSITIVE_NVFP4_EXACT_NAMES
 
-    def _assign(param_name: str, tensor: torch.Tensor) -> None:
-        if param_name not in param_map:
-            return
-        p_dst = param_map[param_name]
-        if p_dst.shape != tensor.shape:
-            raise ValueError(
-                f"Shape mismatch assigning '{param_name}': expected {tuple(p_dst.shape)}, got {tuple(tensor.shape)}"
+        inner_layers = getattr(getattr(model, "model", None), "layers", None)
+        if inner_layers is not None:
+            _swap_layers_to_nvfp4_skeletons(
+                inner_layers,
+                dtype=target_dtype,
+                hadamard=hadamard,
+                nvfp4_cls=NVFP4Linear,
+                group_size=NVFP4_GROUP_SIZE,
+                sensitive_names=_SENSITIVE_NVFP4_EXACT_NAMES,
             )
-        with torch.no_grad():
-            p_dst.copy_(tensor.to(dtype=p_dst.dtype))
 
-    with open(p, "rb") as f:
-        mm: mmap.mmap | None = None
-        try:
-            if p.stat().st_size > 0:
-                mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
-        except Exception:
-            mm = None
-        try:
-            if "token_embd.weight" in tensors_idx:
-                _assign(
-                    "model.embed_tokens.weight",
-                    _read_gguf_tensor(
+        def _assign_streamed_param(param_name: str, tensor: torch.Tensor) -> None:
+            expected = meta_param_shapes.get(param_name)
+            if expected is None:
+                return
+            if tuple(tensor.shape) != expected:
+                raise ValueError(
+                    f"Shape mismatch assigning '{param_name}': expected {expected}, got {tuple(tensor.shape)}"
+                )
+            resolved = _resolve_parent_leaf(model, param_name)
+            if resolved is None:
+                return
+            parent_mod, leaf = resolved
+            setattr(
+                parent_mod,
+                leaf,
+                nn.Parameter(tensor.to(device=target_dev, dtype=target_dtype), requires_grad=False),
+            )
+
+        with open(p, "rb") as f:
+            mm: mmap.mmap | None = None
+            try:
+                if st.st_size > 0:
+                    mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+            except Exception:
+                mm = None
+            try:
+                if "token_embd.weight" in tensors_idx and "model.embed_tokens.weight" in meta_param_shapes:
+                    emb_t = _read_gguf_tensor(
                         f,
                         data_start,
                         tensors_idx["token_embd.weight"],
                         target_dtype,
                         mm=mm,
                         compute_device=target_dev,
-                    ),
-                )
-            if has_output_head and "lm_head.weight" in param_map:
-                _assign(
-                    "lm_head.weight",
-                    _read_gguf_tensor(
+                        return_on_device=True,
+                    )
+                    _assign_streamed_param("model.embed_tokens.weight", emb_t)
+                    del emb_t
+                if has_output_head and "output.weight" in tensors_idx and "lm_head.weight" in meta_param_shapes:
+                    out_t = _read_gguf_tensor(
                         f,
                         data_start,
                         tensors_idx["output.weight"],
                         target_dtype,
                         mm=mm,
                         compute_device=target_dev,
-                    ),
-                )
-            elif not has_output_head and "lm_head.weight" in param_map and "model.embed_tokens.weight" in param_map:
-                with torch.no_grad():
-                    param_map["lm_head.weight"].copy_(param_map["model.embed_tokens.weight"])
+                        return_on_device=True,
+                    )
+                    _assign_streamed_param("lm_head.weight", out_t)
+                    del out_t
+                if "output_norm.weight" in tensors_idx and "model.norm.weight" in meta_param_shapes:
+                    norm_t = _read_gguf_tensor(
+                        f, data_start, tensors_idx["output_norm.weight"], torch.float32, mm=mm, compute_device=None
+                    )
+                    _assign_streamed_param("model.norm.weight", (norm_t - 1.0) if is_gemma_norm else norm_t)
+                    del norm_t
 
-            if "output_norm.weight" in tensors_idx:
-                norm_t = _read_gguf_tensor(
-                    f, data_start, tensors_idx["output_norm.weight"], torch.float32, mm=mm, compute_device=None
-                )
-                _assign("model.norm.weight", (norm_t - 1.0) if is_gemma_norm else norm_t)
+                for i in range(n_layers):
+                    gguf_to_hf = _layer_gguf_to_hf_map(
+                        i,
+                        is_gemma_norm=is_gemma_norm,
+                        need_llama_unperm=need_llama_unperm,
+                        n_heads=n_heads,
+                        n_kv_heads=n_kv_heads,
+                        has_pre_ffn_norm=(f"model.layers.{i}.pre_feedforward_layernorm.weight" in meta_param_shapes),
+                    )
+                    for g_key, (hf_key, sub_one, unperm_h) in gguf_to_hf.items():
+                        if g_key not in tensors_idx or hf_key not in meta_param_shapes:
+                            continue
+                        resolved = _resolve_parent_leaf(model, hf_key)
+                        if resolved is None:
+                            continue
+                        parent_mod, leaf = resolved
+                        if isinstance(parent_mod, NVFP4Linear) and leaf == "weight":
+                            w_gpu = _read_gguf_tensor(
+                                f,
+                                data_start,
+                                tensors_idx[g_key],
+                                target_dtype,
+                                mm=mm,
+                                compute_device=target_dev,
+                                return_on_device=True,
+                            )
+                            expected = meta_param_shapes[hf_key]
+                            if tuple(w_gpu.shape) != expected:
+                                raise ValueError(
+                                    f"Shape mismatch assigning '{hf_key}': expected {expected}, got {tuple(w_gpu.shape)}"
+                                )
+                            if unperm_h is not None:
+                                w_gpu = _unpermute_llama_qk(w_gpu, unperm_h)
+                            w_q = fwht_16(w_gpu) if hadamard else w_gpu
+                            packed, scale = nvfp4_quantize(w_q)
+                            parent_mod.packed_weight = packed
+                            parent_mod.scale = scale
+                            del w_gpu, w_q
+                        elif isinstance(parent_mod, NVFP4Linear) and leaf == "bias":
+                            b_gpu = _read_gguf_tensor(
+                                f,
+                                data_start,
+                                tensors_idx[g_key],
+                                target_dtype,
+                                mm=mm,
+                                compute_device=target_dev,
+                                return_on_device=True,
+                            )
+                            expected = meta_param_shapes[hf_key]
+                            if tuple(b_gpu.shape) != expected:
+                                raise ValueError(
+                                    f"Shape mismatch assigning '{hf_key}': expected {expected}, got {tuple(b_gpu.shape)}"
+                                )
+                            parent_mod.bias = nn.Parameter(b_gpu, requires_grad=False)
+                        else:
+                            t = _read_gguf_tensor(
+                                f,
+                                data_start,
+                                tensors_idx[g_key],
+                                torch.float32 if sub_one else target_dtype,
+                                mm=mm,
+                                compute_device=None if sub_one else target_dev,
+                                return_on_device=not sub_one,
+                            )
+                            if sub_one:
+                                t = t - 1.0
+                            if unperm_h is not None:
+                                t = _unpermute_llama_qk(t, unperm_h)
+                            _assign_streamed_param(hf_key, t)
+                            del t
+                    if (i + 1) % 8 == 0:
+                        torch.cuda.empty_cache()
+            finally:
+                if mm is not None:
+                    mm.close()
 
-            for i in range(n_layers):
-                gguf_to_hf = {
-                    f"blk.{i}.attn_norm.weight": (f"model.layers.{i}.input_layernorm.weight", is_gemma_norm, None),
-                    f"blk.{i}.post_attention_norm.weight": (
-                        f"model.layers.{i}.post_attention_layernorm.weight",
-                        is_gemma_norm,
-                        None,
-                    ),
-                    f"blk.{i}.ffn_norm.weight": (
-                        f"model.layers.{i}.pre_feedforward_layernorm.weight"
-                        if f"model.layers.{i}.pre_feedforward_layernorm.weight" in param_map
-                        else f"model.layers.{i}.post_attention_layernorm.weight",
-                        is_gemma_norm,
-                        None,
-                    ),
-                    f"blk.{i}.post_ffw_norm.weight": (
-                        f"model.layers.{i}.post_feedforward_layernorm.weight",
-                        is_gemma_norm,
-                        None,
-                    ),
-                    f"blk.{i}.attn_q_norm.weight": (f"model.layers.{i}.self_attn.q_norm.weight", is_gemma_norm, None),
-                    f"blk.{i}.attn_k_norm.weight": (f"model.layers.{i}.self_attn.k_norm.weight", is_gemma_norm, None),
-                    f"blk.{i}.attn_q.weight": (
-                        f"model.layers.{i}.self_attn.q_proj.weight",
-                        False,
-                        n_heads if need_llama_unperm else None,
-                    ),
-                    f"blk.{i}.attn_k.weight": (
-                        f"model.layers.{i}.self_attn.k_proj.weight",
-                        False,
-                        n_kv_heads if need_llama_unperm else None,
-                    ),
-                    f"blk.{i}.attn_v.weight": (f"model.layers.{i}.self_attn.v_proj.weight", False, None),
-                    f"blk.{i}.attn_output.weight": (f"model.layers.{i}.self_attn.o_proj.weight", False, None),
-                    f"blk.{i}.attn_q.bias": (f"model.layers.{i}.self_attn.q_proj.bias", False, None),
-                    f"blk.{i}.attn_k.bias": (f"model.layers.{i}.self_attn.k_proj.bias", False, None),
-                    f"blk.{i}.attn_v.bias": (f"model.layers.{i}.self_attn.v_proj.bias", False, None),
-                    f"blk.{i}.ffn_gate.weight": (f"model.layers.{i}.mlp.gate_proj.weight", False, None),
-                    f"blk.{i}.ffn_up.weight": (f"model.layers.{i}.mlp.up_proj.weight", False, None),
-                    f"blk.{i}.ffn_down.weight": (f"model.layers.{i}.mlp.down_proj.weight", False, None),
-                }
-                for g_key, (hf_key, sub_one, unperm_h) in gguf_to_hf.items():
-                    if g_key in tensors_idx and hf_key in param_map:
-                        t = _read_gguf_tensor(
+        _reinit_hf_nonpersistent_buffers(model, hidden_size, target_dev)
+        _tie_lm_head_if_requested(model, tie=not has_output_head)
+        _finalize_streaming_meta_tensors(model, target_dev, target_dtype, NVFP4Linear)
+        _tie_lm_head_if_requested(model, tie=not has_output_head)
+        torch.cuda.empty_cache()
+    else:
+        model = model.to_empty(device="cpu").to(dtype=target_dtype)
+        param_map = dict(model.named_parameters())
+
+        def _assign(param_name: str, tensor: torch.Tensor) -> None:
+            if param_name not in param_map:
+                return
+            p_dst = param_map[param_name]
+            if p_dst.shape != tensor.shape:
+                raise ValueError(
+                    f"Shape mismatch assigning '{param_name}': expected {tuple(p_dst.shape)}, got {tuple(tensor.shape)}"
+                )
+            with torch.no_grad():
+                p_dst.copy_(tensor.to(dtype=p_dst.dtype))
+
+        with open(p, "rb") as f:
+            mm: mmap.mmap | None = None
+            try:
+                if st.st_size > 0:
+                    mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+            except Exception:
+                mm = None
+            try:
+                if "token_embd.weight" in tensors_idx:
+                    _assign(
+                        "model.embed_tokens.weight",
+                        _read_gguf_tensor(
                             f,
                             data_start,
-                            tensors_idx[g_key],
-                            torch.float32 if sub_one else target_dtype,
+                            tensors_idx["token_embd.weight"],
+                            target_dtype,
                             mm=mm,
-                            compute_device=target_dev if not sub_one else None,
-                        )
-                        if sub_one:
-                            t = t - 1.0
-                        if unperm_h is not None:
-                            t = _unpermute_llama_qk(t, unperm_h)
-                        _assign(hf_key, t)
-        finally:
-            if mm is not None:
-                mm.close()
+                            compute_device=target_dev,
+                        ),
+                    )
+                if has_output_head and "lm_head.weight" in param_map:
+                    _assign(
+                        "lm_head.weight",
+                        _read_gguf_tensor(
+                            f,
+                            data_start,
+                            tensors_idx["output.weight"],
+                            target_dtype,
+                            mm=mm,
+                            compute_device=target_dev,
+                        ),
+                    )
 
-    # Reinitialize non-persistent buffers wiped by meta + to_empty() (Gemma3 dual sliding/full RoPE, standard RoPE, embed_scale)
-    for parent in model.modules():
-        for child_name, child in list(parent.named_children()):
-            if "rotary" in type(child).__name__.lower() and hasattr(child, "config"):
-                setattr(parent, child_name, type(child)(child.config))
-    for mod in model.modules():
-        if hasattr(mod, "rope_init_fn") and hasattr(mod, "inv_freq"):
-            inv_freq, att_scaling = mod.rope_init_fn(mod.config, "cpu")
-            with torch.no_grad():
-                mod.inv_freq.copy_(inv_freq)
-                if hasattr(mod, "original_inv_freq"):
-                    mod.original_inv_freq.copy_(inv_freq)
-                mod.attention_scaling = att_scaling
-    if (
-        hasattr(model, "model")
-        and hasattr(model.model, "embed_tokens")
-        and hasattr(model.model.embed_tokens, "embed_scale")
-    ):
-        with torch.no_grad():
-            model.model.embed_tokens.embed_scale.fill_(math.sqrt(hidden_size))
+                if "output_norm.weight" in tensors_idx:
+                    norm_t = _read_gguf_tensor(
+                        f, data_start, tensors_idx["output_norm.weight"], torch.float32, mm=mm, compute_device=None
+                    )
+                    _assign("model.norm.weight", (norm_t - 1.0) if is_gemma_norm else norm_t)
 
-    def _model_unique_bytes(mod: nn.Module) -> int:
-        seen_ptrs: set[int] = set()
-        total = 0
-        for t in (*mod.parameters(), *mod.buffers()):
-            ptr = t.data_ptr()
-            if ptr not in seen_ptrs:
-                seen_ptrs.add(ptr)
-                total += int(t.numel()) * int(t.element_size())
-        return total
+                for i in range(n_layers):
+                    gguf_to_hf = _layer_gguf_to_hf_map(
+                        i,
+                        is_gemma_norm=is_gemma_norm,
+                        need_llama_unperm=need_llama_unperm,
+                        n_heads=n_heads,
+                        n_kv_heads=n_kv_heads,
+                        has_pre_ffn_norm=(f"model.layers.{i}.pre_feedforward_layernorm.weight" in param_map),
+                    )
+                    for g_key, (hf_key, sub_one, unperm_h) in gguf_to_hf.items():
+                        if g_key in tensors_idx and hf_key in param_map:
+                            t = _read_gguf_tensor(
+                                f,
+                                data_start,
+                                tensors_idx[g_key],
+                                torch.float32 if sub_one else target_dtype,
+                                mm=mm,
+                                compute_device=target_dev if not sub_one else None,
+                            )
+                            if sub_one:
+                                t = t - 1.0
+                            if unperm_h is not None:
+                                t = _unpermute_llama_qk(t, unperm_h)
+                            _assign(hf_key, t)
+            finally:
+                if mm is not None:
+                    mm.close()
 
-    # Auto-quantize to NVFP4 when requested or when BF16 weights exceed 80% of initial free CUDA VRAM
-    initial_free_vram = 0
-    if target_dev.type == "cuda":
-        torch.cuda.empty_cache()
-        initial_free_vram, _ = torch.cuda.mem_get_info(target_dev)
+        _tie_lm_head_if_requested(model, tie=not has_output_head)
+        _reinit_hf_nonpersistent_buffers(model, hidden_size, torch.device("cpu"))
 
-    est_bytes = _model_unique_bytes(model)
-    use_nvfp4 = bool(quantize and "nvfp4" in str(quantize).lower())
-    if not use_nvfp4 and target_dev.type == "cuda" and est_bytes > int(initial_free_vram * 0.80):
-        use_nvfp4 = True
+        if use_nvfp4:
+            from triune.model.fp4 import convert_to_nvfp4
 
-    if use_nvfp4:
-        from triune.model.fp4 import convert_to_nvfp4
-
-        inner_layers = getattr(getattr(model, "model", None), "layers", None)
-        if target_dev.type == "cuda" and inner_layers is not None:
-            for li_idx, layer in enumerate(inner_layers):
-                layer.to(target_dev)
-                convert_to_nvfp4(layer, hadamard=hadamard, protect_sensitive=True)
-                if (li_idx + 1) % 8 == 0:
-                    torch.cuda.empty_cache()
             convert_to_nvfp4(model, hadamard=hadamard, protect_sensitive=True)
+
+        try:
+            model = model.to(target_dev)
+        except torch.cuda.OutOfMemoryError:
             torch.cuda.empty_cache()
-        else:
-            convert_to_nvfp4(model, hadamard=hadamard, protect_sensitive=True)
-        est_bytes = _model_unique_bytes(model)
-        if target_dev.type == "cuda" and est_bytes > int(initial_free_vram * 0.92):
             target_dev = torch.device("cpu")
+            model = model.to(target_dev)
+        _tie_lm_head_if_requested(model, tie=not has_output_head)
 
-    try:
-        model = model.to(target_dev)
-    except torch.cuda.OutOfMemoryError:
-        torch.cuda.empty_cache()
-        target_dev = torch.device("cpu")
-        model = model.to(target_dev)
     model.eval()
-    hf_tok = build_hf_tokenizer_from_gguf(meta)
+    optimize_hf_model_for_inference(model)
+    hf_tok, extra_eos = _build_or_get_cached_gguf_tokenizer(tok_cache_key, meta, eos_id)
     tok_adapter = _HFInferenceTokenizerAdapter(hf_tok, model_vocab_size=vocab_size)
-
-    extra_eos: set[int] = {eos_id}
-    raw_eos_arr = meta.get("tokenizer.ggml.eos_token_ids")
-    if isinstance(raw_eos_arr, (list, tuple)):
-        extra_eos.update(int(x) for x in raw_eos_arr)
-    vocab_map = hf_tok.get_vocab() if hasattr(hf_tok, "get_vocab") else {}
-    unk_id = getattr(hf_tok, "unk_token_id", None)
-    for stop_sym in ("<end_of_turn>", "<|eot_id|>", "<|im_end|>"):
-        if stop_sym in vocab_map:
-            sid = int(vocab_map[stop_sym])
-            if sid >= 0 and sid != unk_id:
-                extra_eos.add(sid)
     model._triune_extra_eos_ids = extra_eos
 
     metadata = {

@@ -2,13 +2,395 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+from typing import Any
 
 import torch
+import torch.nn.functional as F
 
 from .configs.config import build_config
 from .data.tokenizer import load_tokenizer
 from .model.factory import build_model
+
+_GEMMA_RMS_NORM_CLASSES = frozenset({"GemmaRMSNorm", "Gemma2RMSNorm", "Gemma3RMSNorm"})
+_STD_RMS_NORM_CLASSES = frozenset({"LlamaRMSNorm", "Qwen2RMSNorm", "Qwen3RMSNorm", "MistralRMSNorm"})
+_SUPPORTED_HF_CG_CLASSES = frozenset(
+    {
+        "Gemma3ForCausalLM",
+        "Gemma2ForCausalLM",
+        "Qwen2ForCausalLM",
+        "Qwen3ForCausalLM",
+        "LlamaForCausalLM",
+        "MistralForCausalLM",
+    }
+)
+_TRIUNE_STATIC_CACHE_CLS = None
+
+
+def optimize_hf_model_for_inference(model: torch.nn.Module) -> torch.nn.Module:
+    """Patch eager HF RMSNorm layers to fused ``torch.nn.functional.rms_norm`` during inference.
+
+    Preserves exact gradient-enabled training paths when ``torch.is_grad_enabled()``
+    or ``module.training`` is True, and stores any pre-shifted ``(1 + weight)`` Gemma norm
+    scales as non-persistent buffers so ``state_dict()`` remains unmodified.
+    """
+    if not hasattr(F, "rms_norm"):
+        return model
+    if getattr(model, "_streaming_engine", None) is not None or getattr(model, "_layer_streaming_active", False):
+        return model
+
+    for mod in model.modules():
+        if getattr(mod, "_triune_rms_fused", False):
+            continue
+        cls_name = type(mod).__name__
+        is_gemma = cls_name in _GEMMA_RMS_NORM_CLASSES
+        if not is_gemma and cls_name not in _STD_RMS_NORM_CLASSES:
+            continue
+        weight = getattr(mod, "weight", None)
+        if (
+            not isinstance(weight, torch.Tensor)
+            or weight.ndim != 1
+            or weight.numel() == 0
+            or weight.device.type == "meta"
+        ):
+            continue
+
+        eps = float(getattr(mod, "eps", getattr(mod, "variance_epsilon", 1e-6)))
+        norm_shape = (int(weight.shape[0]),)
+        orig_forward = mod.forward
+
+        if is_gemma:
+            w_eff = (1.0 + weight.detach().float()).to(dtype=weight.dtype, device=weight.device)
+            mod.register_buffer("_triune_w_eff", w_eff, persistent=False)
+
+            def _fused_gemma_rms(x: torch.Tensor, _m=mod, _orig=orig_forward, _shape=norm_shape, _eps=eps):
+                if torch.is_grad_enabled() or _m.training:
+                    return _orig(x)
+                w = _m._triune_w_eff
+                if w.device != x.device or w.dtype != x.dtype:
+                    w = (1.0 + _m.weight.detach().float()).to(device=x.device, dtype=x.dtype)
+                out = F.rms_norm(x, _shape, w, _eps)
+                return out if out.dtype == x.dtype else out.to(dtype=x.dtype)
+
+            mod.forward = _fused_gemma_rms
+        else:
+
+            def _fused_std_rms(x: torch.Tensor, _m=mod, _orig=orig_forward, _shape=norm_shape, _eps=eps):
+                if torch.is_grad_enabled() or _m.training:
+                    return _orig(x)
+                w = _m.weight
+                if w.dtype != x.dtype:
+                    w = w.to(dtype=x.dtype)
+                out = F.rms_norm(x, _shape, w, _eps)
+                return out if out.dtype == x.dtype else out.to(dtype=x.dtype)
+
+            mod.forward = _fused_std_rms
+
+        mod._triune_rms_fused = True
+
+    return model
+
+
+def _get_static_cache_cls():
+    global _TRIUNE_STATIC_CACHE_CLS
+    if _TRIUNE_STATIC_CACHE_CLS is not None:
+        return _TRIUNE_STATIC_CACHE_CLS
+    from transformers.cache_utils import Cache
+
+    class _TriuneStaticCache(Cache):
+        """Pre-allocated static KV cache supporting multi-token prefill and 1-token CUDA-graph decode."""
+
+        def __init__(
+            self,
+            n_layers: int,
+            n_kv_heads: int,
+            head_dim: int,
+            max_cache_len: int,
+            dtype: torch.dtype,
+            device: torch.device,
+        ) -> None:
+            self.layers = []
+            self.keys = [
+                torch.zeros(1, n_kv_heads, max_cache_len, head_dim, dtype=dtype, device=device) for _ in range(n_layers)
+            ]
+            self.values = [
+                torch.zeros(1, n_kv_heads, max_cache_len, head_dim, dtype=dtype, device=device) for _ in range(n_layers)
+            ]
+            self._max_cache_len = int(max_cache_len)
+            self._n_layers = int(n_layers)
+            self._seen = 0
+            self._prefill_mode = True
+            self._write_pos = torch.zeros(1, dtype=torch.long, device=device)
+
+        @property
+        def max_cache_len(self) -> int:
+            return self._max_cache_len
+
+        def update(self, key_states, value_states, layer_idx, cache_kwargs=None):
+            k_buf = self.keys[layer_idx]
+            if key_states.dtype != k_buf.dtype:
+                key_states = key_states.to(dtype=k_buf.dtype)
+                value_states = value_states.to(dtype=k_buf.dtype)
+            if self._prefill_mode:
+                seq_len = key_states.shape[2]
+                start = self._seen
+                k_buf[:, :, start : start + seq_len].copy_(key_states)
+                self.values[layer_idx][:, :, start : start + seq_len].copy_(value_states)
+                return k_buf[:, :, : start + seq_len], self.values[layer_idx][:, :, : start + seq_len]
+            k_buf.index_copy_(2, self._write_pos, key_states)
+            self.values[layer_idx].index_copy_(2, self._write_pos, value_states)
+            return k_buf, self.values[layer_idx]
+
+        def get_seq_length(self, layer_idx: int = 0) -> int:
+            return self._seen
+
+        def get_max_cache_shape(self, layer_idx: int = 0) -> int:
+            return self._max_cache_len
+
+        def get_mask_sizes(self, q_len_or_pos, layer_idx: int = 0) -> tuple[int, int]:
+            q_len = int(q_len_or_pos.shape[0]) if hasattr(q_len_or_pos, "shape") else int(q_len_or_pos)
+            return (self._seen + q_len if self._prefill_mode else self._max_cache_len), 0
+
+        def __len__(self) -> int:
+            return self._n_layers
+
+    _TRIUNE_STATIC_CACHE_CLS = _TriuneStaticCache
+    return _TRIUNE_STATIC_CACHE_CLS
+
+
+class _HFCUDAGraphDecodeRunner:
+    """Captures 1-token HF autoregressive decode into a CUDA Graph over preallocated static KV/mask buffers."""
+
+    def __init__(
+        self,
+        model: torch.nn.Module,
+        *,
+        max_cache_len: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> None:
+        cfg = getattr(getattr(model, "config", None), "text_config", getattr(model, "config", None))
+        n_layers = int(getattr(cfg, "num_hidden_layers", 0))
+        n_heads = int(getattr(cfg, "num_attention_heads", 1))
+        n_kv_heads = int(getattr(cfg, "num_key_value_heads", n_heads))
+        head_dim = int(getattr(cfg, "head_dim", int(getattr(cfg, "hidden_size", n_heads)) // max(1, n_heads)))
+
+        cache_cls = _get_static_cache_cls()
+        self.model = model
+        self.device = device
+        self.dtype = dtype
+        self.max_cache_len = int(max_cache_len)
+        self.cache = cache_cls(n_layers, n_kv_heads, head_dim, self.max_cache_len, dtype, device)
+        self.sliding_window: int | None = getattr(cfg, "sliding_window", None)
+        has_layer_types = bool(getattr(cfg, "layer_types", None))
+        self.neg_inf = float(torch.finfo(dtype).min)
+
+        self.full_mask = torch.full((1, 1, 1, self.max_cache_len), self.neg_inf, dtype=dtype, device=device)
+        self.slide_mask = (
+            torch.full((1, 1, 1, self.max_cache_len), self.neg_inf, dtype=dtype, device=device)
+            if self.sliding_window is not None
+            else None
+        )
+        if has_layer_types:
+            attn_arg: Any = {"full_attention": self.full_mask}
+            if self.slide_mask is not None:
+                attn_arg["sliding_attention"] = self.slide_mask
+            self.attn_arg = attn_arg
+        else:
+            self.attn_arg = self.slide_mask if self.sliding_window is not None else self.full_mask
+
+        self.static_tok = torch.zeros((1, 1), dtype=torch.long, device=device)
+        self.static_pos = torch.zeros((1, 1), dtype=torch.long, device=device)
+        self._graph: torch.cuda.CUDAGraph | None = None
+        self._static_out: torch.Tensor | None = None
+
+    def _clear_exit_acts(self) -> None:
+        exit_mgr = getattr(self.model, "_exit_manager", None)
+        acts = getattr(exit_mgr, "intermediate_activations", None) if exit_mgr is not None else None
+        if isinstance(acts, dict):
+            acts.clear()
+
+    def capture(self) -> None:
+        self.full_mask.fill_(self.neg_inf)
+        self.full_mask[0, 0, 0, 0] = 0.0
+        if self.slide_mask is not None:
+            self.slide_mask.fill_(self.neg_inf)
+            self.slide_mask[0, 0, 0, 0] = 0.0
+
+        self.cache._prefill_mode = False
+        self.cache._seen = 1
+        # Dedicated scratch slot at max_cache_len - 1 prevents capture/warmup from mutating active KV slots.
+        self.cache._write_pos.fill_(self.max_cache_len - 1)
+        self.static_pos.fill_(0)
+        self.static_tok.fill_(0)
+
+        stream = torch.cuda.Stream(device=self.device)
+        stream.wait_stream(torch.cuda.current_stream(self.device))
+        with torch.cuda.stream(stream), torch.amp.autocast("cuda", enabled=False):
+            for _ in range(2):
+                _ = self.model(
+                    input_ids=self.static_tok,
+                    attention_mask=self.attn_arg,
+                    position_ids=self.static_pos,
+                    past_key_values=self.cache,
+                    use_cache=True,
+                )
+                self._clear_exit_acts()
+        torch.cuda.current_stream(self.device).wait_stream(stream)
+
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph), torch.amp.autocast("cuda", enabled=False):
+            self._static_out = self.model(
+                input_ids=self.static_tok,
+                attention_mask=self.attn_arg,
+                position_ids=self.static_pos,
+                past_key_values=self.cache,
+                use_cache=True,
+            ).logits
+        self._clear_exit_acts()
+        self._graph = graph
+
+    def prefill(self, input_ids: torch.Tensor) -> torch.Tensor:
+        self.full_mask.fill_(self.neg_inf)
+        if self.slide_mask is not None:
+            self.slide_mask.fill_(self.neg_inf)
+
+        self.cache._prefill_mode = True
+        self.cache._seen = 0
+        self._clear_exit_acts()
+        with torch.amp.autocast("cuda", enabled=False):
+            out = self.model(input_ids=input_ids, past_key_values=self.cache, use_cache=True)
+        self._clear_exit_acts()
+
+        prompt_len = int(input_ids.shape[1])
+        self.cache._seen = prompt_len
+        self.cache._prefill_mode = False
+        self.full_mask[0, 0, 0, :prompt_len] = 0.0
+        if self.slide_mask is not None and self.sliding_window is not None:
+            win_start = max(0, prompt_len - self.sliding_window)
+            self.slide_mask[0, 0, 0, win_start:prompt_len] = 0.0
+        return out.logits
+
+    def decode_step(self, next_input: torch.Tensor) -> torch.Tensor:
+        pos = self.cache._seen
+        self.static_tok.copy_(next_input)
+        self.cache._write_pos.fill_(pos)
+        self.static_pos.fill_(pos)
+        self.full_mask[0, 0, 0, pos] = 0.0
+        if self.slide_mask is not None and self.sliding_window is not None:
+            self.slide_mask[0, 0, 0, pos] = 0.0
+            if pos >= self.sliding_window:
+                self.slide_mask[0, 0, 0, pos - self.sliding_window] = self.neg_inf
+        self._graph.replay()
+        self.cache._seen = pos + 1
+        return self._static_out
+
+    def release(self) -> None:
+        if self._graph is not None:
+            try:
+                self._graph.reset()
+            except Exception:
+                pass
+        self._graph = None
+        self._static_out = None
+        self.cache = None
+        self.full_mask = None
+        self.slide_mask = None
+        self.attn_arg = None
+        self.model = None
+
+
+def release_cuda_graph_runner(model: torch.nn.Module | None) -> None:
+    """Release any captured static KV cache and CUDA graph attached to ``model``."""
+    if model is None:
+        return
+    runner = getattr(model, "_triune_cg_runner", None)
+    if runner is not None:
+        try:
+            runner.release()
+        except Exception:
+            pass
+        try:
+            delattr(model, "_triune_cg_runner")
+        except Exception:
+            model._triune_cg_runner = None
+
+
+def _get_or_create_hf_cg_runner(
+    model: torch.nn.Module,
+    *,
+    prompt_len: int,
+    max_new_tokens: int,
+    device: torch.device,
+) -> _HFCUDAGraphDecodeRunner | None:
+    if os.environ.get("TRIUNE_DISABLE_CUDAGRAPH"):
+        return None
+    if device.type != "cuda" or not torch.cuda.is_available():
+        return None
+    if type(model).__name__ not in _SUPPORTED_HF_CG_CLASSES or model.training:
+        return None
+    if getattr(model, "_layer_streaming_active", False) or getattr(model, "_streaming_engine", None) is not None:
+        return None
+    if any(getattr(m, "lora_A", None) is not None for m in model.modules()):
+        return None
+
+    cfg = getattr(getattr(model, "config", None), "text_config", getattr(model, "config", None))
+    if cfg is None:
+        return None
+    n_layers = int(getattr(cfg, "num_hidden_layers", 0) or 0)
+    if n_layers <= 0:
+        return None
+    max_pos = int(getattr(cfg, "max_position_embeddings", 8192) or 8192)
+    required_len = prompt_len + max_new_tokens + 2
+    if required_len > max_pos:
+        return None
+
+    ref_param = next((p for p in model.parameters() if p.is_floating_point()), None)
+    if ref_param is not None and ref_param.device.type == "cuda":
+        device = ref_param.device
+    elif device.index is None:
+        device = torch.device(f"cuda:{torch.cuda.current_device()}")
+
+    existing = getattr(model, "_triune_cg_runner", None)
+    if (
+        existing is not None
+        and existing.device == device
+        and existing.max_cache_len >= required_len
+        and existing._graph is not None
+    ):
+        return existing
+
+    release_cuda_graph_runner(model)
+
+    dtype = ref_param.dtype if ref_param is not None else torch.bfloat16
+    dtype_bytes = torch.empty((), dtype=dtype).element_size()
+    n_heads = int(getattr(cfg, "num_attention_heads", 1))
+    n_kv_heads = int(getattr(cfg, "num_key_value_heads", n_heads))
+    head_dim = int(getattr(cfg, "head_dim", int(getattr(cfg, "hidden_size", n_heads)) // max(1, n_heads)))
+    per_tok_bytes = max(1, n_layers * 2 * n_kv_heads * head_dim * dtype_bytes)
+
+    free_vram, _ = torch.cuda.mem_get_info(device)
+    cap: int | None = None
+    for desired, frac in (
+        (min(max_pos, max(required_len, 2048)), 0.25),
+        (min(max_pos, max(required_len, 1024)), 0.40),
+        (required_len, 0.50),
+    ):
+        if desired >= required_len and desired * per_tok_bytes <= int(free_vram * frac):
+            cap = desired
+            break
+    if cap is None:
+        return None
+
+    runner = _HFCUDAGraphDecodeRunner(model, max_cache_len=cap, device=device, dtype=dtype)
+    try:
+        runner.capture()
+    except Exception:
+        runner.release()
+        return None
+    model._triune_cg_runner = runner
+    return runner
 
 
 def load_checkpoint_model(
@@ -325,6 +707,7 @@ def load_model_for_inference(
         )
         tuner.load_adapter(adapter_path)
     model.eval()
+    optimize_hf_model_for_inference(model)
     return model, tokenizer, metadata, target_dev, pad_id, eos_id
 
 
@@ -515,8 +898,29 @@ def generate_response(
     decode_started: float | None = None
     with torch.inference_mode():
         prompt_len = ids.size(1)
+        gen_limit = min(max_new_tokens, 8192)
+        cg_runner: _HFCUDAGraphDecodeRunner | None = None
+        can_use_cg = (
+            cache is None
+            and not hasattr(model, "init_cache")
+            and not getattr(model, "_is_triune", False)
+            and force_depth not in (0, 1)
+            and not (force_depth is None and getattr(model, "_exits_calibrated", False))
+        )
+        if can_use_cg:
+            cg_runner = _get_or_create_hf_cg_runner(
+                model,
+                prompt_len=prompt_len,
+                max_new_tokens=gen_limit,
+                device=torch.device(device),
+            )
+
         prefill_chunk_size = 1024
-        if is_triune_model and prompt_len > prefill_chunk_size and cache is not None:
+        if cg_runner is not None:
+            logits = cg_runner.prefill(ids)
+            if getattr(model, "_is_triune_transmuted", False):
+                model.last_depth_choice = torch.tensor([2], device=device, dtype=torch.long)
+        elif is_triune_model and prompt_len > prefill_chunk_size and cache is not None:
             for start_idx in range(0, prompt_len - prefill_chunk_size, prefill_chunk_size):
                 if cancel_event is not None and cancel_event.is_set():
                     return (
@@ -544,7 +948,7 @@ def generate_response(
             decode_depth = int(model.last_depth_choice[0].item())
 
         cancelled = False
-        for _ in range(min(max_new_tokens, 8192)):
+        for step_idx in range(gen_limit):
             if cancel_event is not None and cancel_event.is_set():
                 cancelled = True
                 break
@@ -608,7 +1012,10 @@ def generate_response(
                     _emit_text(cum_text)
             seen[next_id] = True
             token_counts[next_id] += 1.0
-            if cache is not None:
+            if cg_runner is not None:
+                if step_idx + 1 < gen_limit:
+                    logits = cg_runner.decode_step(next_input)
+            elif cache is not None:
                 logits, cache = _forward_generation_step(model, next_input, cache, decode_depth)
             else:
                 ids = torch.cat((ids, next_input), dim=1)

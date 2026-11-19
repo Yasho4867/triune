@@ -861,6 +861,443 @@ class TestWeightTransmutationAndOllamaRuntime(unittest.TestCase):
             with self.assertRaises(ValueError):
                 load_gguf_hf_model(phi_blob, device="cpu")
 
+    @staticmethod
+    def _write_synthetic_gguf(
+        path: Path,
+        *,
+        arch: str,
+        vocab: list[str],
+        hidden: int = 32,
+        inter: int = 64,
+        n_layers: int = 4,
+        n_heads: int = 2,
+        n_kv: int = 1,
+        head_dim: int = 16,
+        with_qkv_bias: bool = False,
+        with_qk_norm: bool = False,
+        with_pre_ffn_norm: bool = False,
+        tied_head: bool = True,
+    ) -> None:
+        import struct
+
+        import numpy as np
+
+        def _pack_str(s: str) -> bytes:
+            b = s.encode("utf-8")
+            return struct.pack("<Q", len(b)) + b
+
+        token_types = [3] * min(6, len(vocab)) + [1] * max(0, len(vocab) - 6)
+        kvs: list[tuple[str, int, bytes]] = [
+            ("general.architecture", 8, _pack_str(arch)),
+            ("general.alignment", 4, struct.pack("<I", 32)),
+            (f"{arch}.block_count", 4, struct.pack("<I", n_layers)),
+            (f"{arch}.embedding_length", 4, struct.pack("<I", hidden)),
+            (f"{arch}.attention.head_count", 4, struct.pack("<I", n_heads)),
+            (f"{arch}.attention.head_count_kv", 4, struct.pack("<I", n_kv)),
+            (f"{arch}.attention.key_length", 4, struct.pack("<I", head_dim)),
+            (f"{arch}.attention.value_length", 4, struct.pack("<I", head_dim)),
+            (f"{arch}.feed_forward_length", 4, struct.pack("<I", inter)),
+            (f"{arch}.context_length", 4, struct.pack("<I", 128)),
+            ("tokenizer.ggml.model", 8, _pack_str("llama")),
+            ("tokenizer.ggml.bos_token_id", 4, struct.pack("<I", 2)),
+            ("tokenizer.ggml.eos_token_id", 4, struct.pack("<I", 1)),
+            ("tokenizer.ggml.unknown_token_id", 4, struct.pack("<I", 3)),
+            ("tokenizer.ggml.padding_token_id", 4, struct.pack("<I", 0)),
+            ("tokenizer.ggml.tokens", 9, struct.pack("<IQ", 8, len(vocab)) + b"".join(_pack_str(t) for t in vocab)),
+            (
+                "tokenizer.ggml.token_type",
+                9,
+                struct.pack("<IQ", 4, len(vocab)) + struct.pack(f"<{len(vocab)}I", *token_types),
+            ),
+            (
+                "tokenizer.ggml.scores",
+                9,
+                struct.pack("<IQ", 6, len(vocab)) + np.full(len(vocab), -1.0, dtype="<f4").tobytes(),
+            ),
+        ]
+        if arch == "gemma3":
+            kvs.extend(
+                [
+                    ("gemma3.attention.sliding_window", 4, struct.pack("<I", 8)),
+                    ("gemma3.rope.local.freq_base", 6, struct.pack("<f", 10000.0)),
+                    ("gemma3.rope.global.freq_base", 6, struct.pack("<f", 1000000.0)),
+                ]
+            )
+
+        rng = np.random.default_rng(17)
+        q_out = n_heads * head_dim
+        kv_out = n_kv * head_dim
+        tensor_specs: list[tuple[str, tuple[int, ...], bytes]] = [
+            (
+                "token_embd.weight",
+                (hidden, len(vocab)),
+                (rng.standard_normal((len(vocab), hidden)).astype("<f4") * 0.05).tobytes(),
+            ),
+            ("output_norm.weight", (hidden,), np.ones(hidden, dtype="<f4").tobytes()),
+        ]
+        if not tied_head:
+            tensor_specs.append(
+                (
+                    "output.weight",
+                    (hidden, len(vocab)),
+                    (rng.standard_normal((len(vocab), hidden)).astype("<f4") * 0.05).tobytes(),
+                )
+            )
+        for li in range(n_layers):
+            tensor_specs.extend(
+                [
+                    (f"blk.{li}.attn_norm.weight", (hidden,), np.ones(hidden, dtype="<f4").tobytes()),
+                    (f"blk.{li}.ffn_norm.weight", (hidden,), np.ones(hidden, dtype="<f4").tobytes()),
+                    (
+                        f"blk.{li}.attn_q.weight",
+                        (hidden, q_out),
+                        (rng.standard_normal((q_out, hidden)).astype("<f4") * 0.05).tobytes(),
+                    ),
+                    (
+                        f"blk.{li}.attn_k.weight",
+                        (hidden, kv_out),
+                        (rng.standard_normal((kv_out, hidden)).astype("<f4") * 0.05).tobytes(),
+                    ),
+                    (
+                        f"blk.{li}.attn_v.weight",
+                        (hidden, kv_out),
+                        (rng.standard_normal((kv_out, hidden)).astype("<f4") * 0.05).tobytes(),
+                    ),
+                    (
+                        f"blk.{li}.attn_output.weight",
+                        (q_out, hidden),
+                        (rng.standard_normal((hidden, q_out)).astype("<f4") * 0.05).tobytes(),
+                    ),
+                    (
+                        f"blk.{li}.ffn_gate.weight",
+                        (hidden, inter),
+                        (rng.standard_normal((inter, hidden)).astype("<f4") * 0.05).tobytes(),
+                    ),
+                    (
+                        f"blk.{li}.ffn_up.weight",
+                        (hidden, inter),
+                        (rng.standard_normal((inter, hidden)).astype("<f4") * 0.05).tobytes(),
+                    ),
+                    (
+                        f"blk.{li}.ffn_down.weight",
+                        (inter, hidden),
+                        (rng.standard_normal((hidden, inter)).astype("<f4") * 0.05).tobytes(),
+                    ),
+                ]
+            )
+            if with_pre_ffn_norm:
+                tensor_specs.extend(
+                    [
+                        (f"blk.{li}.post_attention_norm.weight", (hidden,), np.ones(hidden, dtype="<f4").tobytes()),
+                        (f"blk.{li}.post_ffw_norm.weight", (hidden,), np.ones(hidden, dtype="<f4").tobytes()),
+                    ]
+                )
+            if with_qk_norm:
+                tensor_specs.extend(
+                    [
+                        (f"blk.{li}.attn_q_norm.weight", (head_dim,), np.ones(head_dim, dtype="<f4").tobytes()),
+                        (f"blk.{li}.attn_k_norm.weight", (head_dim,), np.ones(head_dim, dtype="<f4").tobytes()),
+                    ]
+                )
+            if with_qkv_bias:
+                tensor_specs.extend(
+                    [
+                        (
+                            f"blk.{li}.attn_q.bias",
+                            (q_out,),
+                            (rng.standard_normal(q_out).astype("<f4") * 0.02).tobytes(),
+                        ),
+                        (
+                            f"blk.{li}.attn_k.bias",
+                            (kv_out,),
+                            (rng.standard_normal(kv_out).astype("<f4") * 0.02).tobytes(),
+                        ),
+                        (
+                            f"blk.{li}.attn_v.bias",
+                            (kv_out,),
+                            (rng.standard_normal(kv_out).astype("<f4") * 0.02).tobytes(),
+                        ),
+                    ]
+                )
+
+        header = bytearray(b"GGUF" + struct.pack("<IQQ", 3, len(tensor_specs), len(kvs)))
+        for k, vt, raw_val in kvs:
+            header.extend(_pack_str(k) + struct.pack("<I", vt) + raw_val)
+        offset = 0
+        tensor_data = bytearray()
+        for tname, dims, buf in tensor_specs:
+            header.extend(
+                _pack_str(tname)
+                + struct.pack("<I", len(dims))
+                + struct.pack(f"<{len(dims)}Q", *dims)
+                + struct.pack("<IQ", 0, offset)
+            )
+            pad_len = (32 - (len(buf) % 32)) % 32
+            tensor_data.extend(buf + b"\x00" * pad_len)
+            offset += len(buf) + pad_len
+        head_pad = (32 - (len(header) % 32)) % 32
+        path.write_bytes(bytes(header) + (b"\x00" * head_pad) + bytes(tensor_data))
+
+    def test_gguf_weight_tying_tokenizer_cache_and_fused_rmsnorm(self) -> None:
+        from transformers.models.gemma3.modeling_gemma3 import Gemma3RMSNorm
+        from transformers.models.llama.modeling_llama import LlamaRMSNorm
+        from transformers.models.qwen2.modeling_qwen2 import Qwen2RMSNorm
+
+        from triune.inference import optimize_hf_model_for_inference
+        from triune.runtime.gguf_loader import _GGUF_TOKENIZER_CACHE, load_gguf_hf_model
+
+        vocab = ["<pad>", "<eos>", "<bos>", "<unk>", "<start_of_turn>", "<end_of_turn>"] + [
+            f"▁t{i}" for i in range(6, 64)
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            g3_path = Path(tmpdir) / "tied_gemma3.gguf"
+            self._write_synthetic_gguf(
+                g3_path,
+                arch="gemma3",
+                vocab=vocab,
+                with_qk_norm=True,
+                with_pre_ffn_norm=True,
+                tied_head=True,
+            )
+            m1, tok1, _, _, _, _ = load_gguf_hf_model(g3_path, device="cpu")
+            self.assertEqual(m1.lm_head.weight.data_ptr(), m1.model.embed_tokens.weight.data_ptr())
+            st = g3_path.stat()
+            cache_key = (str(g3_path.resolve()), int(st.st_size), int(st.st_mtime_ns))
+            self.assertIn(cache_key, _GGUF_TOKENIZER_CACHE)
+
+            # Repeat load reuses cached tokenizer without rebuilding or BufferError on mmap close
+            with patch(
+                "triune.runtime.gguf_loader.build_hf_tokenizer_from_gguf",
+                side_effect=AssertionError("should hit cache"),
+            ):
+                m2, tok2, _, _, _, _ = load_gguf_hf_model(g3_path, device="cpu")
+            self.assertEqual(m2.lm_head.weight.data_ptr(), m2.model.embed_tokens.weight.data_ptr())
+            self.assertEqual(tok1.encode("▁t10 ▁t11").ids, tok2.encode("▁t10 ▁t11").ids)
+            with torch.inference_mode():
+                out = m2(torch.tensor([[2, 10, 11]], dtype=torch.long)).logits
+                self.assertTrue(torch.isfinite(out).all())
+
+        # Fused RMSNorm parity, unmodified state_dict keys, and training/grad safety
+        for norm_cls in (Gemma3RMSNorm, LlamaRMSNorm, Qwen2RMSNorm):
+            ref = norm_cls(32, eps=1e-6)
+            with torch.no_grad():
+                ref.weight.normal_(0.0, 0.25)
+            orig_keys = set(ref.state_dict().keys())
+            x = torch.randn(2, 5, 32, dtype=torch.float32)
+            with torch.inference_mode():
+                expected = ref(x).clone()
+
+            patched = norm_cls(32, eps=1e-6)
+            patched.load_state_dict(ref.state_dict())
+            patched.eval()
+            optimize_hf_model_for_inference(patched)
+            self.assertEqual(set(patched.state_dict().keys()), orig_keys)
+            with torch.inference_mode():
+                actual = patched(x)
+            self.assertLess(float((expected - actual).abs().max()), 1e-5)
+
+            # Training / grad mode falls back to original differentiable forward
+            patched.train()
+            xg = x.clone().requires_grad_(True)
+            y = patched(xg).sum()
+            y.backward()
+            self.assertIsNotNone(xg.grad)
+            self.assertIsNotNone(patched.weight.grad)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for streaming NVFP4 & CUDAGraph parity tests")
+    def test_cuda_streaming_nvfp4_gguf_and_cudagraph_decode_parity(self) -> None:
+        from transformers import (
+            Gemma3ForCausalLM,
+            Gemma3TextConfig,
+            LlamaConfig,
+            LlamaForCausalLM,
+            Qwen2Config,
+            Qwen2ForCausalLM,
+        )
+
+        from triune.inference import (
+            _get_or_create_hf_cg_runner,
+            optimize_hf_model_for_inference,
+            release_cuda_graph_runner,
+        )
+        from triune.kernels.fast_nvfp4 import NVFP4Linear
+        from triune.runtime.gguf_loader import load_gguf_hf_model
+
+        vocab = ["<pad>", "<eos>", "<bos>", "<unk>", "<start_of_turn>", "<end_of_turn>"] + [
+            f"▁t{i}" for i in range(6, 64)
+        ]
+        dev = torch.device("cuda")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            g3_path = Path(tmpdir) / "cuda_gemma3.gguf"
+            q2_path = Path(tmpdir) / "cuda_qwen2.gguf"
+            self._write_synthetic_gguf(
+                g3_path,
+                arch="gemma3",
+                vocab=vocab,
+                hidden=64,
+                inter=128,
+                n_layers=6,
+                n_heads=4,
+                n_kv=2,
+                head_dim=16,
+                with_qk_norm=True,
+                with_pre_ffn_norm=True,
+                tied_head=True,
+            )
+            self._write_synthetic_gguf(
+                q2_path,
+                arch="qwen2",
+                vocab=vocab,
+                hidden=64,
+                inter=128,
+                n_layers=4,
+                n_heads=4,
+                n_kv=2,
+                head_dim=16,
+                with_qkv_bias=True,
+                tied_head=True,
+            )
+
+            m_g3, _, meta_g3, dev_g3, _, _ = load_gguf_hf_model(g3_path, device=dev, quantize="nvfp4")
+            self.assertEqual(dev_g3.type, "cuda")
+            self.assertTrue(meta_g3["quantized_nvfp4"])
+            self.assertEqual(m_g3.lm_head.weight.data_ptr(), m_g3.model.embed_tokens.weight.data_ptr())
+            self.assertFalse(any(p.device.type == "meta" for p in m_g3.parameters()))
+            self.assertFalse(any(b.device.type == "meta" for b in m_g3.buffers()))
+            nv_g3 = [m for m in m_g3.modules() if isinstance(m, NVFP4Linear)]
+            self.assertGreater(len(nv_g3), 0)
+            self.assertTrue(all(m.packed_weight.device.type == "cuda" and m.packed_weight.numel() > 0 for m in nv_g3))
+            with torch.inference_mode():
+                out_g3 = m_g3(torch.tensor([[2, 10, 11]], dtype=torch.long, device=dev)).logits
+                self.assertTrue(torch.isfinite(out_g3).all())
+
+            m_q2, _, _, dev_q2, _, _ = load_gguf_hf_model(q2_path, device=dev, quantize="nvfp4")
+            self.assertEqual(dev_q2.type, "cuda")
+            q_proj = m_q2.model.layers[0].self_attn.q_proj
+            self.assertIsInstance(q_proj, NVFP4Linear)
+            self.assertIsNotNone(q_proj.bias)
+            self.assertEqual(q_proj.bias.device.type, "cuda")
+            self.assertEqual(q_proj.bias.numel(), 64)
+            with torch.inference_mode():
+                out_q2 = m_q2(torch.tensor([[2, 10, 11]], dtype=torch.long, device=dev)).logits
+                self.assertTrue(torch.isfinite(out_q2).all())
+
+            # Early-exit bypass guard on transmuted model with CUDA graph eligible backbone
+            model_tr, tok_tr, _, dev_tr, pad_id, eos_id = transmute_hf_to_triune(
+                g3_path, reflex_ratio=0.25, quantize="nvfp4", device=dev
+            )
+            try:
+                r0 = generate_response(
+                    model_tr,
+                    tok_tr,
+                    "▁t10 ▁t11",
+                    device=dev_tr,
+                    max_new_tokens=3,
+                    temperature=0.0,
+                    force_depth=0,
+                    pad_token_id=pad_id,
+                    eos_token_id=eos_id,
+                    return_info=True,
+                )
+                r1 = generate_response(
+                    model_tr,
+                    tok_tr,
+                    "▁t10 ▁t11",
+                    device=dev_tr,
+                    max_new_tokens=3,
+                    temperature=0.0,
+                    force_depth=1,
+                    pad_token_id=pad_id,
+                    eos_token_id=eos_id,
+                    return_info=True,
+                )
+                with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+                    r_cg = generate_response(
+                        model_tr,
+                        tok_tr,
+                        "▁t10 ▁t11",
+                        device=dev_tr,
+                        max_new_tokens=4,
+                        temperature=0.0,
+                        force_depth=None,
+                        pad_token_id=pad_id,
+                        eos_token_id=eos_id,
+                        return_info=True,
+                    )
+                self.assertEqual(r0["route"], "REFLEX")
+                self.assertEqual(r1["route"], "LIMBIC")
+                self.assertEqual(r_cg["route"], "CORTEX")
+                self.assertIsNotNone(getattr(model_tr, "_triune_cg_runner", None))
+            finally:
+                exit_mgr = getattr(model_tr, "_exit_manager", None)
+                if exit_mgr is not None and hasattr(exit_mgr, "remove_hooks"):
+                    exit_mgr.remove_hooks()
+                release_cuda_graph_runner(model_tr)
+
+        # Bit-exact parity between eager DynamicCache and _HFCUDAGraphDecodeRunner across sliding window + full attention
+        configs = [
+            Gemma3ForCausalLM(
+                Gemma3TextConfig(
+                    vocab_size=256,
+                    hidden_size=128,
+                    intermediate_size=256,
+                    num_hidden_layers=6,
+                    num_attention_heads=4,
+                    num_key_value_heads=2,
+                    head_dim=32,
+                    sliding_window=8,
+                )
+            ),
+            Qwen2ForCausalLM(
+                Qwen2Config(
+                    vocab_size=256,
+                    hidden_size=128,
+                    intermediate_size=256,
+                    num_hidden_layers=4,
+                    num_attention_heads=4,
+                    num_key_value_heads=2,
+                )
+            ),
+            LlamaForCausalLM(
+                LlamaConfig(
+                    vocab_size=256,
+                    hidden_size=128,
+                    intermediate_size=256,
+                    num_hidden_layers=4,
+                    num_attention_heads=4,
+                    num_key_value_heads=2,
+                )
+            ),
+        ]
+        for test_model in configs:
+            test_model = optimize_hf_model_for_inference(test_model.to(device=dev, dtype=torch.bfloat16).eval())
+            prompt = torch.randint(0, 256, (1, 5), device=dev)
+            dec_toks = [torch.randint(0, 256, (1, 1), device=dev) for _ in range(15)]
+
+            ref_logits = []
+            with torch.inference_mode():
+                out = test_model(input_ids=prompt, use_cache=True)
+                pkv = out.past_key_values
+                ref_logits.append(out.logits[:, -1].float().clone())
+                for tok in dec_toks:
+                    out = test_model(input_ids=tok, past_key_values=pkv, use_cache=True)
+                    pkv = out.past_key_values
+                    ref_logits.append(out.logits[:, -1].float().clone())
+
+            runner = _get_or_create_hf_cg_runner(test_model, prompt_len=5, max_new_tokens=16, device=dev)
+            self.assertIsNotNone(runner)
+            for _turn in range(2):
+                cg_logits = []
+                with torch.inference_mode():
+                    cg_logits.append(runner.prefill(prompt)[:, -1].float().clone())
+                    for tok in dec_toks:
+                        cg_logits.append(runner.decode_step(tok)[:, -1].float().clone())
+                max_diff = max(float((r - c).abs().max()) for r, c in zip(ref_logits, cg_logits))
+                self.assertLess(max_diff, 1e-4, f"{type(test_model).__name__} CUDA graph max_diff={max_diff}")
+
+            release_cuda_graph_runner(test_model)
+            self.assertIsNone(getattr(test_model, "_triune_cg_runner", None))
+
 
 if __name__ == "__main__":
     unittest.main()
