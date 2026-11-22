@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Benchmark Category D: Long-Context Inference & Generation Suite.
 
-Compares Triune Gated Linear Attention (GLA) against Standard Softmax Attention (SDPA)
+Compares Lucid Machines Gated Linear Attention (GLA) against Standard Softmax Attention (SDPA)
 across sequence lengths from 512 up to 16,384 tokens.
 
 Measures:
@@ -25,7 +25,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from triune.model import VectorisedGLA
+from lucid_machines.model import VectorisedGLA
 
 
 def get_hardware_info() -> Dict[str, Any]:
@@ -82,7 +82,7 @@ class StandardSoftmaxAttention(nn.Module):
 
 def run_long_context_suite() -> Dict[str, Any]:
     print("=" * 70)
-    print("TRIUNE BENCHMARK CATEGORY D: LONG-CONTEXT INFERENCE & GENERATION")
+    print("LUCID MACHINES BENCHMARK CATEGORY D: LONG-CONTEXT INFERENCE & GENERATION")
     print("=" * 70)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -257,7 +257,7 @@ def run_long_context_suite() -> Dict[str, Any]:
 def generate_markdown_report(results: Dict[str, Any], output_path: str) -> None:
     hw = results["hardware"]
     lines = [
-        "# Triune Category D: Long-Context Inference & Generation Report",
+        "# Lucid Machines Category D: Long-Context Inference & Generation Report",
         "",
         f"**Date**: {time.strftime('%B %d, %Y')}",
         f"**Hardware**: {hw['device_name']} ({hw['total_vram_gb']} GB VRAM)",
@@ -266,7 +266,7 @@ def generate_markdown_report(results: Dict[str, Any], output_path: str) -> None:
         "## 1. Executive Summary",
         "",
         "Standard Softmax Attention exhibits quadratic $O(L^2)$ computational complexity and linear $O(L)$ KV-cache",
-        "memory consumption during autoregressive decoding. Triune's Gated Linear Attention (GLA) replaces quadratic",
+        "memory consumption during autoregressive decoding. Lucid Machines' Gated Linear Attention (GLA) replaces quadratic",
         "attention matrices with chunkwise linear recurrent state updates, yielding **$O(1)$ constant decode memory**",
         "and sub-millisecond per-token latency even at context lengths exceeding 16,384 tokens.",
         "",

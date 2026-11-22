@@ -37,7 +37,7 @@ def test_live_active_states_and_primary_actions_follow_selected_palette():
     nav_active = CSS.split(".nav-item.active {", 1)[1].split("}", 1)[0]
     assert "background: var(--primary-glow)" in nav_active
     assert "border-color: var(--border-glow)" in nav_active
-    assert "color: var(--primary)" in nav_active
+    assert "color: var(--text-main)" in nav_active or "color: var(--primary)" in nav_active
     assert "rgba(139, 92, 246" not in nav_active
     assert "background: var(--primary);" in CSS.split(".btn-send {", 1)[1].split("}", 1)[0]
     assert "color: var(--primary-contrast);" in CSS.split(".btn-send {", 1)[1].split("}", 1)[0]

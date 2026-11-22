@@ -9,9 +9,9 @@ import unittest
 
 import torch
 
-from triune.data.dynamic_tokenizer import DynamicTokenizer
-from triune.model.jev import JEVObjective
-from triune.runtime.parallel_engine import MoERoutingBlock
+from lucid_machines.data.dynamic_tokenizer import DynamicTokenizer
+from lucid_machines.model.jev import JEVObjective
+from lucid_machines.runtime.parallel_engine import MoERoutingBlock
 
 
 class TestMoESparseExecution(unittest.TestCase):
@@ -105,8 +105,8 @@ unprecedented context scaling with strict mathematical guarantees.
 
 class TestFullModelInference(unittest.TestCase):
     def test_last_token_only_parity(self):
-        from triune.model.transformer import TriuneTransformer
-        from triune.runtime.parallel_engine import ParallelEngine
+        from lucid_machines.model.transformer import TriuneTransformer
+        from lucid_machines.runtime.parallel_engine import ParallelEngine
 
         m = TriuneTransformer(
             vocab_size=1000,

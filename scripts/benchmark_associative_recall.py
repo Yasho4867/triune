@@ -1,4 +1,4 @@
-"""Triune Multi-Query Associative Recall (MQAR) Benchmark.
+"""Lucid Machines Multi-Query Associative Recall (MQAR) Benchmark.
 
 Empirical evaluation of associative memory retention and needle-in-a-haystack retrieval
 comparing Softmax Attention, Gated Linear Attention (GLA), and Gated DeltaNet across
@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Tuple
 import torch
 import torch.nn.functional as F
 
-from triune.kernels.fast_gla import fast_chunk_gated_deltanet, fast_chunk_gla
+from lucid_machines.kernels.fast_gla import fast_chunk_gated_deltanet, fast_chunk_gla
 
 
 def generate_mqar_batch(
@@ -212,7 +212,7 @@ def run_benchmark(output_dir: Path):
     dtype = torch.bfloat16 if (device.type == "cuda" and torch.cuda.is_bf16_supported()) else torch.float32
 
     print("=" * 78)
-    print(" TRIUNE MULTI-QUERY ASSOCIATIVE RECALL (MQAR) BENCHMARK")
+    print(" LUCID MACHINES MULTI-QUERY ASSOCIATIVE RECALL (MQAR) BENCHMARK")
     print(f" Hardware: {device} | Dtype: {dtype}")
     print("=" * 78)
 
@@ -253,7 +253,7 @@ def run_benchmark(output_dir: Path):
         json.dump(all_results, f, indent=2)
 
     # Generate Markdown Report
-    md = f"""# Triune Multi-Query Associative Recall (MQAR) Benchmark Report
+    md = f"""# Lucid Machines Multi-Query Associative Recall (MQAR) Benchmark Report
 
 - **Date**: `{time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())}`
 - **Device**: `{device}` | **Precision**: `{dtype}`
@@ -290,7 +290,7 @@ def run_benchmark(output_dir: Path):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Triune MQAR Benchmark")
+    parser = argparse.ArgumentParser(description="Lucid Machines MQAR Benchmark")
     parser.add_argument("--output-dir", type=str, default="benchmarks", help="Output directory")
     args = parser.parse_args()
     run_benchmark(Path(args.output_dir))

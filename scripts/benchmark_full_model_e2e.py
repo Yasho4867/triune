@@ -1,4 +1,4 @@
-"""Hardware-Verified End-to-End Triune Model Benchmark & Telemetry Suite.
+"""Hardware-Verified End-to-End Lucid Machines Model Benchmark & Telemetry Suite.
 
 Rigorously benchmarks:
 1. Full 76M-parameter TriuneTransformer end-to-end forward/prefill throughput
@@ -36,11 +36,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from triune.data.dynamic_tokenizer import DynamicTokenizer
-from triune.model.jev import JEVLatentPredictor, JEVObjective
-from triune.model.moe import MoE_FFN
-from triune.model.transformer import TriuneTransformer
-from triune.runtime.parallel_engine import MoERoutingBlock
+from lucid_machines.data.dynamic_tokenizer import DynamicTokenizer
+from lucid_machines.model.jev import JEVLatentPredictor, JEVObjective
+from lucid_machines.model.moe import MoE_FFN
+from lucid_machines.model.transformer import TriuneTransformer
+from lucid_machines.runtime.parallel_engine import MoERoutingBlock
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("full_model_e2e_benchmark")
@@ -125,7 +125,7 @@ def load_trained_model(
         )
     else:
         logger.info(f"Loading trained checkpoint: {checkpoint_path}")
-        ckpt = torch.load(str(ckpt_p), map_location="cpu", weights_only=False)
+        ckpt = torch.load(str(ckpt_p), map_location="cpu", weights_only=True)
         raw_cfg = ckpt.get("config", {}) or {}
         spec = raw_cfg.get("model_spec") or raw_cfg
         vocab_size = spec.get("vocab_size", 32000)
@@ -389,7 +389,7 @@ def _run_speculative_mode(
     k_draft: int,
     temperature: float,
 ) -> Dict[str, Any]:
-    from triune.model.speculative import SelfSpeculativeGenerator
+    from lucid_machines.model.speculative import SelfSpeculativeGenerator
 
     generator = SelfSpeculativeGenerator(model, tokenizer, k_draft=k_draft, temperature=temperature)
     _ = generator.generate(prompt, max_new_tokens=8)
@@ -653,7 +653,7 @@ def benchmark_tokenizer_generalization(
         * 4,
         "JSON Structured Config (Held-Out)": json.dumps(
             {
-                "service": "triune_inference_worker",
+                "service": "lucid_machines_inference_worker",
                 "routing": {"strategy": "top_k", "experts": 8, "k": 2},
                 "precision": "bf16",
                 "schedules": [{"epoch": i, "warmup_steps": 250} for i in range(6)],
@@ -872,10 +872,10 @@ def benchmark_quantization_tiers(
     import torch.nn as nn
     import torch.nn.functional as F
 
-    from triune.kernels.fast_nvfp4 import NVFP4Linear
-    from triune.model.fp4 import convert_to_nvfp4
-    from triune.model.fp8 import FP8Linear, convert_to_fp8
-    from triune.runtime.staging import NVFP4StagingBuffer, ParameterStager
+    from lucid_machines.kernels.fast_nvfp4 import NVFP4Linear
+    from lucid_machines.model.fp4 import convert_to_nvfp4
+    from lucid_machines.model.fp8 import FP8Linear, convert_to_fp8
+    from lucid_machines.runtime.staging import NVFP4StagingBuffer, ParameterStager
 
     torch.manual_seed(123)
     input_ids = torch.randint(0, model.vocab_size, (2, 128), device=device)
@@ -1007,6 +1007,7 @@ def benchmark_quantization_tiers(
     m_fp4 = _clone_fresh()
     for mod in m_fp4.layers[0].modules():
         if isinstance(mod, nn.Linear):
+            mod._lm_fp4_aware = True
             mod._triune_fp4_aware = True
     stager = ParameterStager(device, use_fp4=True)
     stager.register_module(m_fp4.layers[0])
@@ -1094,7 +1095,7 @@ def generate_markdown_report(data: Dict[str, Any], output_path: str = "benchmark
     quant = data.get("quantization_tiers", {})
 
     lines = [
-        "# Triune Model End-to-End Benchmark & Verification Report",
+        "# Triune Model (Lucid Machines) End-to-End Benchmark & Verification Report",
         "",
         f"**Date:** {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}  ",
         f"**Target System:** {sys_info.get('gpu_name', 'CPU')} ({sys_info.get('compute_capability', 'N/A')}) | PyTorch {sys_info.get('pytorch_version')} | CUDA {sys_info.get('cuda_version', 'N/A')}  ",

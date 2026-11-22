@@ -12,21 +12,21 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <ApplicationIcon>..\triune.ico</ApplicationIcon>
-    <AssemblyName>TriuneStudio</AssemblyName>
-    <Version>2.1.0</Version>
-    <Product>Triune Studio</Product>
-    <Company>Triune AI</Company>
-    <Authors>Triune AI</Authors>
-    <Description>Triune Studio - Triune AI engine and research IDE</Description>
-    <Copyright>Copyright (c) Triune AI</Copyright>
+    <ApplicationIcon>..\polysom.ico</ApplicationIcon>
+    <AssemblyName>PolysomStudio</AssemblyName>
+    <Version>1.0.0</Version>
+    <Product>Polysom Studio</Product>
+    <Company>Lucid Machines</Company>
+    <Authors>Lucid Machines</Authors>
+    <Description>Polysom Studio - Lucid Machines Triune research IDE</Description>
+    <Copyright>Copyright (c) Lucid Machines</Copyright>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <DebugType>none</DebugType>
     <RootNamespace>TriuneStudio.Windows</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <Resource Include="..\triune.ico" Link="triune.ico" />
-    <Content Include="triune_core.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('triune_core.dll')" />
+    <Resource Include="..\polysom.ico" Link="polysom.ico" />
+    <Content Include="lucid_machines_core.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('lucid_machines_core.dll')" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4258.31" />

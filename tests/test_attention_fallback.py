@@ -6,7 +6,7 @@ import unittest
 
 import torch
 
-from triune.model.attention import _pytorch_chunk_gla
+from lucid_machines.model.attention import _pytorch_chunk_gla
 
 
 def _reference_gla(q, k, v, g, initial_state=None):

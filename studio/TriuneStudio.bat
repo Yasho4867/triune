@@ -1,34 +1,39 @@
 @echo off
-TITLE Triune Studio - AI Engine and Research IDE
+TITLE Polysom Studio - Lucid Machines Research IDE
 SETLOCAL EnableDelayedExpansion
 
 cd /d "%~dp0.."
 
 echo ===============================================================================
-echo            TRIUNE STUDIO - AI ENGINE AND RESEARCH IDE
+echo           POLYSOM STUDIO - LUCID MACHINES AI ENGINE AND RESEARCH IDE
 echo ===============================================================================
 echo.
 
 :: Prefer native Windows WPF application host when launched without custom CLI arguments
 if "%~1"=="" (
+    if exist "PolysomStudio.exe" (
+        echo [Studio] Launching Native Windows Application ^(PolysomStudio.exe^)...
+        start "" "PolysomStudio.exe"
+        exit /b 0
+    )
+    if exist "studio\publish\PolysomStudio.exe" (
+        echo [Studio] Launching Native Windows Application ^(studio\publish\PolysomStudio.exe^)...
+        start "" "studio\publish\PolysomStudio.exe"
+        exit /b 0
+    )
+    if exist "studio\windows\publish\PolysomStudio.exe" (
+        echo [Studio] Launching Native Windows Application ^(studio\windows\publish\PolysomStudio.exe^)...
+        start "" "studio\windows\publish\PolysomStudio.exe"
+        exit /b 0
+    )
+    if exist "studio\windows\TriuneStudio.Windows\bin\Release\net10.0-windows\PolysomStudio.exe" (
+        echo [Studio] Launching Native Windows Application ^(bin\Release\PolysomStudio.exe^)...
+        start "" "studio\windows\TriuneStudio.Windows\bin\Release\net10.0-windows\PolysomStudio.exe"
+        exit /b 0
+    )
     if exist "TriuneStudio.exe" (
-        echo [Studio] Launching Native Windows Application ^(TriuneStudio.exe^)...
+        echo [Studio] Launching Legacy Native Windows Application ^(TriuneStudio.exe^)...
         start "" "TriuneStudio.exe"
-        exit /b 0
-    )
-    if exist "studio\publish\TriuneStudio.exe" (
-        echo [Studio] Launching Native Windows Application ^(studio\publish\TriuneStudio.exe^)...
-        start "" "studio\publish\TriuneStudio.exe"
-        exit /b 0
-    )
-    if exist "studio\windows\publish\TriuneStudio.exe" (
-        echo [Studio] Launching Native Windows Application ^(studio\windows\publish\TriuneStudio.exe^)...
-        start "" "studio\windows\publish\TriuneStudio.exe"
-        exit /b 0
-    )
-    if exist "studio\windows\TriuneStudio.Windows\bin\Release\net10.0-windows\TriuneStudio.exe" (
-        echo [Studio] Launching Native Windows Application ^(bin\Release\TriuneStudio.exe^)...
-        start "" "studio\windows\TriuneStudio.Windows\bin\Release\net10.0-windows\TriuneStudio.exe"
         exit /b 0
     )
 )
@@ -69,6 +74,6 @@ goto :eof
 :check_exit
 if %ERRORLEVEL% neq 0 (
     echo.
-    echo [Notice] Triune Studio exited with code %ERRORLEVEL%.
+    echo [Notice] Polysom Studio exited with code %ERRORLEVEL%.
     pause
 )

@@ -1,4 +1,4 @@
-"""Build a Triune tokenizer from the command line."""
+"""Build a Lucid Machines tokenizer from the command line."""
 
 from __future__ import annotations
 
@@ -9,11 +9,11 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from triune.data import build_tokenizer
+from lucid_machines.data import build_tokenizer
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(description="Build a Triune BPE tokenizer")
+    parser = argparse.ArgumentParser(description="Build a Lucid Machines BPE tokenizer")
     parser.add_argument("--output", default="triune_tokenizer.json")
     parser.add_argument("--vocab_size", type=int, default=32_000)
     parser.add_argument("--min_frequency", type=int, default=2)

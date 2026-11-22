@@ -33,7 +33,7 @@ __global__ void init_early_exit_flag_kernel(int* GlobalEarlyExitFlag, int B) {
  * Tier 1: Limbic (Intermediate exit at Layer 5)
  * Tier 2: Cortex (Deep execution through Layer 8)
  */
-__global__ void evaluate_triune_routing_kernel(
+__global__ void evaluate_lucid_machines_routing_kernel(
     const float* __restrict__ RouterLogits,    // [B, 3] (Logits for Reflex, Limbic, Cortex)
     float* __restrict__ OutProbs,              // [B, 3] (Softmax probabilities)
     int* __restrict__ SelectedTiers,           // [B]    (Selected tier 0, 1, or 2)
@@ -83,7 +83,7 @@ __global__ void evaluate_triune_routing_kernel(
 
 extern "C" {
 
-void launch_triune_router(
+void launch_lucid_machines_router(
     const float* RouterLogits,
     float* OutProbs,
     int* SelectedTiers,
@@ -95,7 +95,7 @@ void launch_triune_router(
     init_early_exit_flag_kernel<<<1, 1, 0, stream>>>(GlobalEarlyExitFlag, B);
     int threads = 128;
     int blocks = (B + threads - 1) / threads;
-    evaluate_triune_routing_kernel<<<blocks, threads, 0, stream>>>(
+    evaluate_lucid_machines_routing_kernel<<<blocks, threads, 0, stream>>>(
         RouterLogits, OutProbs, SelectedTiers, GlobalEarlyExitFlag, reflex_threshold, B
     );
 }

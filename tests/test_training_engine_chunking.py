@@ -8,7 +8,7 @@ from contextlib import nullcontext
 import torch
 import torch.nn as nn
 
-from triune.trainer.engine import TrainingEngine
+from lucid_machines.trainer.engine import TrainingEngine
 
 
 class _ChunkTestModel(nn.Module):

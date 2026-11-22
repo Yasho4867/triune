@@ -13,9 +13,9 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from triune.kernels.fast_muon import fast_zeropower_via_newtonschulz5, fast_zeropower_via_newtonschulz5_batched
-from triune.model.transformer import TriuneTransformer
-from triune.optim.centroid import CentroidSteerOptimizer
+from lucid_machines.kernels.fast_muon import fast_zeropower_via_newtonschulz5, fast_zeropower_via_newtonschulz5_batched
+from lucid_machines.model.transformer import TriuneTransformer
+from lucid_machines.optim.centroid import CentroidSteerOptimizer
 
 
 def _create_mini_model(device="cpu", dtype=torch.float32):
@@ -322,7 +322,7 @@ def test_newtonschulz_input_tensor_strict_immutability():
 
 def test_triton_pytorch_triangular_kernel_parity():
     """Verify numerical parity between Triton fused triangular kernel and PyTorch reference."""
-    from triune.kernels.fast_triangular import HAS_TRITON, fast_triangular_adamw
+    from lucid_machines.kernels.fast_triangular import HAS_TRITON, fast_triangular_adamw
 
     if not torch.cuda.is_available() or not HAS_TRITON:
         pytest.skip("CUDA or Triton unavailable for fused triangular kernel parity test.")
@@ -377,8 +377,8 @@ def test_triton_pytorch_triangular_kernel_parity():
 
 
 def test_trainer_checkpoint_roundtrip_equivalence(tmp_path):
-    """Verify that saving and restoring through triune.trainer.checkpoint produces exact training continuation."""
-    from triune.trainer.checkpoint import load_checkpoint, save_latest
+    """Verify that saving and restoring through lucid_machines.trainer.checkpoint produces exact training continuation."""
+    from lucid_machines.trainer.checkpoint import load_checkpoint, save_latest
 
     torch.manual_seed(1337)
     device = "cuda" if torch.cuda.is_available() else "cpu"

@@ -5,13 +5,13 @@ import unittest
 
 import torch
 
-from triune.execution.dag import DAGParser, ExecutionEngine, NodeExecutionError, _sanitize_for_json
-from triune.plugins.node_schema import (
+from lucid_machines.execution.dag import DAGParser, ExecutionEngine, NodeExecutionError, _sanitize_for_json
+from lucid_machines.plugins.node_schema import (
     NodeExecutionType,
     PortType,
     is_port_compatible,
 )
-from triune.plugins.registry import global_registry
+from lucid_machines.plugins.registry import global_registry
 
 
 class TestTypedDAGSchema(unittest.TestCase):
@@ -120,7 +120,7 @@ class TestTypedDAGSchema(unittest.TestCase):
         }
 
         res = engine.execute_graph(
-            graph, initial_context={"text": "Triune builds a modular transformer training pipeline."}
+            graph, initial_context={"text": "Lucid Machines builds a modular transformer training pipeline."}
         )
         self.assertEqual(res["status"], "success")
 

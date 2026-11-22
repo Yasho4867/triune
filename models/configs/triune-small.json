@@ -1,5 +1,9 @@
 {
   "model_name": "triune-small",
+  "name": "triune-small",
+  "model_id": "triune-small",
+  "architecture": "TriuneTransformer",
+  "model_type": "triune",
   "vocab_size": 32000,
   "hidden_dim": 1024,
   "num_layers": 14,

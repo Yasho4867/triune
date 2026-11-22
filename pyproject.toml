@@ -3,13 +3,13 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "triune"
-version = "2.1.0"
-description = "Triune AI — High-performance framework for multi-exit Mixture-of-Experts language models, native C/CUDA/Triton operators, layer streaming, and 3-tier optimization"
+name = "lucid-machines"
+version = "1.0.0"
+description = "LucidMachines — High-performance framework for Triune multi-exit Mixture-of-Experts language models, native C/CUDA/Triton operators, layer streaming, and 3-tier optimization"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [
-    { name = "Triune AI" }
+    { name = "Lucid Machines" }
 ]
 keywords = [
     "deep-learning",
@@ -78,16 +78,19 @@ all = [
 ]
 
 [project.scripts]
-triune = "triune.cli:main"
+lucid-machines = "lucid_machines.cli:main"
+polysom = "lucid_machines.cli:main"
+triune = "lucid_machines.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["triune", "triune.*", "scripts", "scripts.*"]
-exclude = ["tests*", "studio*", "models*", "triune_fast*"]
+include = ["lucid_machines", "lucid_machines.*", "triune", "scripts", "scripts.*", "studio.src", "studio.src.*"]
+exclude = ["tests*", "studio.windows*", "studio.studio_env*", "studio.publish*", "studio.installer*", "models*", "triune_fast*"]
 
 [tool.setuptools.package-data]
-"triune.ops" = ["*.dll", "*.so", "*.dylib", "*.h", "*.def"]
-"triune" = ["*.json"]
+"lucid_machines.ops" = ["*.dll", "*.so", "*.dylib", "*.h", "*.def"]
+"lucid_machines" = ["*.json"]
+"studio.src" = ["*", "*/*", "*/*/*"]
 
 
 [tool.ruff]

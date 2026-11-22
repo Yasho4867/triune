@@ -12,7 +12,7 @@ import unittest
 import torch
 import torch.nn as nn
 
-from triune.runtime.staging import ParameterStager
+from lucid_machines.runtime.staging import ParameterStager
 
 
 class DummyLayer(nn.Module):
@@ -130,7 +130,7 @@ class TestStagingInvariants(unittest.TestCase):
         use_fp8=False,
     ):
         """Helper verifying LayerStreamingEngine backward uses forward weight A even if CPU master is mutated to B."""
-        from triune.model.transformer import TriuneTransformer
+        from lucid_machines.model.transformer import TriuneTransformer
 
         torch.manual_seed(123)
         ref_model = TriuneTransformer(

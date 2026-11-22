@@ -1,4 +1,4 @@
-#define TRIUNE_EXPORTS
+#define LUCID_MACHINES_EXPORTS
 #define _INC_MALLOC
 #include "api.h"
 #include <immintrin.h>
@@ -162,8 +162,8 @@ struct CudaRuntimeTable {
 
 static CudaRuntimeTable g_cuda = {0};
 
-struct TriuneEngine {
-    TriuneConfig config;
+struct LucidMachinesEngine {
+    LucidMachinesConfig config;
     int device_id;
     cudaStream_t stream;
     cudaGraph_t graph;
@@ -181,20 +181,20 @@ struct TriuneEngine {
 
 extern "C" {
 
-TRIUNE_API const char* triune_engine_version(void) {
-    return "2.1.0-native-avx2-cuda";
+LUCID_MACHINES_API const char* lucid_machines_engine_version(void) {
+    return "1.0.0-native-avx2-cuda";
 }
 
-TRIUNE_API int triune_has_cuda_runtime(void) {
+LUCID_MACHINES_API int lucid_machines_has_cuda_runtime(void) {
     g_cuda.init();
     return g_cuda.available;
 }
 
-TRIUNE_API TriuneEngine* triune_engine_create(const TriuneConfig* config, int device_id) {
+LUCID_MACHINES_API LucidMachinesEngine* lucid_machines_engine_create(const LucidMachinesConfig* config, int device_id) {
     if (!config) return nullptr;
     g_cuda.init();
 
-    TriuneEngine* eng = (TriuneEngine*)sys_alloc(sizeof(TriuneEngine));
+    LucidMachinesEngine* eng = (LucidMachinesEngine*)sys_alloc(sizeof(LucidMachinesEngine));
     if (!eng) return nullptr;
 
     eng->config = *config;
@@ -223,7 +223,7 @@ TRIUNE_API TriuneEngine* triune_engine_create(const TriuneConfig* config, int de
     return eng;
 }
 
-TRIUNE_API void triune_engine_destroy(TriuneEngine* engine) {
+LUCID_MACHINES_API void lucid_machines_engine_destroy(LucidMachinesEngine* engine) {
     if (!engine) return;
     if (engine->using_cuda) {
         if (engine->has_graph && engine->graph_exec && g_cuda.GraphExecDestroy) g_cuda.GraphExecDestroy(engine->graph_exec);
@@ -244,13 +244,13 @@ TRIUNE_API void triune_engine_destroy(TriuneEngine* engine) {
     sys_free(engine);
 }
 
-TRIUNE_API int triune_engine_step(
-    TriuneEngine* engine,
+LUCID_MACHINES_API int lucid_machines_engine_step(
+    LucidMachinesEngine* engine,
     const uint16_t* input_tokens,
     const uint16_t* target_tokens,
     int batch_size,
     int seq_len,
-    TriuneStepStats* out_stats
+    LucidMachinesStepStats* out_stats
 ) {
     if (!engine) return -1;
     double t0 = sys_time_ms();
@@ -292,7 +292,7 @@ TRIUNE_API int triune_engine_step(
     return 0;
 }
 
-TRIUNE_API int triune_cuda_graph_capture(TriuneEngine* engine, int batch_size, int seq_len) {
+LUCID_MACHINES_API int lucid_machines_cuda_graph_capture(LucidMachinesEngine* engine, int batch_size, int seq_len) {
     (void)batch_size; (void)seq_len;
     if (!engine || !engine->using_cuda || !g_cuda.StreamBeginCapture || !g_cuda.StreamEndCapture || !g_cuda.GraphInstantiate) {
         return -1;
@@ -304,7 +304,7 @@ TRIUNE_API int triune_cuda_graph_capture(TriuneEngine* engine, int batch_size, i
     return 0;
 }
 
-TRIUNE_API int triune_cuda_graph_replay(TriuneEngine* engine) {
+LUCID_MACHINES_API int lucid_machines_cuda_graph_replay(LucidMachinesEngine* engine) {
     if (!engine || !engine->using_cuda || !engine->has_graph || !engine->graph_exec || !g_cuda.GraphLaunch) {
         return -1;
     }
@@ -312,7 +312,7 @@ TRIUNE_API int triune_cuda_graph_replay(TriuneEngine* engine) {
 }
 
 // AVX2/FMA3-accelerated CentroidSteer projection update: P = momentum * P + steer_scale * (Grad_proj - P)
-TRIUNE_API void triune_centroid_steer_update_f32(
+LUCID_MACHINES_API void lucid_machines_centroid_steer_update_f32(
     float* P,
     const float* Grad_proj,
     int rows,
@@ -342,7 +342,7 @@ TRIUNE_API void triune_centroid_steer_update_f32(
     }
 }
 
-TRIUNE_API void triune_route_tiers_f32(
+LUCID_MACHINES_API void lucid_machines_route_tiers_f32(
     const float* logits,
     float* probs_out,
     int* selected_tiers_out,
@@ -375,7 +375,7 @@ TRIUNE_API void triune_route_tiers_f32(
     }
 }
 
-TRIUNE_API void triune_compute_neuron_heatmap_f32(
+LUCID_MACHINES_API void lucid_machines_compute_neuron_heatmap_f32(
     const float* activations,
     float* bins_out,
     uint32_t* rgba_out,
@@ -416,7 +416,7 @@ TRIUNE_API void triune_compute_neuron_heatmap_f32(
 // AVX2/FMA3/OpenMP-accelerated O(1) Custom GLA Recurrent Decode Step:
 // S[bh, i, j] = exp(g[bh, i]) * S[bh, i, j] + k[bh, i] * v[bh, j]
 // out[bh, j]  = sum_i q[bh, i] * S[bh, i, j]
-TRIUNE_API void triune_gla_recurrent_step_f32(
+LUCID_MACHINES_API void lucid_machines_gla_recurrent_step_f32(
     const float* q,
     const float* k,
     const float* v,
@@ -472,6 +472,86 @@ TRIUNE_API void triune_gla_recurrent_step_f32(
             }
         }
     }
+}
+
+// Legacy ABI Compatibility Wrappers (triune_*)
+LUCID_MACHINES_API TriuneEngine* triune_engine_create(const TriuneConfig* config, int device_id) {
+    return lucid_machines_engine_create(config, device_id);
+}
+
+LUCID_MACHINES_API void triune_engine_destroy(TriuneEngine* engine) {
+    lucid_machines_engine_destroy(engine);
+}
+
+LUCID_MACHINES_API const char* triune_engine_version(void) {
+    return lucid_machines_engine_version();
+}
+
+LUCID_MACHINES_API int triune_has_cuda_runtime(void) {
+    return lucid_machines_has_cuda_runtime();
+}
+
+LUCID_MACHINES_API int triune_engine_step(
+    TriuneEngine* engine,
+    const uint16_t* input_tokens,
+    const uint16_t* target_tokens,
+    int batch_size,
+    int seq_len,
+    TriuneStepStats* out_stats
+) {
+    return lucid_machines_engine_step(engine, input_tokens, target_tokens, batch_size, seq_len, out_stats);
+}
+
+LUCID_MACHINES_API int triune_cuda_graph_capture(TriuneEngine* engine, int batch_size, int seq_len) {
+    return lucid_machines_cuda_graph_capture(engine, batch_size, seq_len);
+}
+
+LUCID_MACHINES_API int triune_cuda_graph_replay(TriuneEngine* engine) {
+    return lucid_machines_cuda_graph_replay(engine);
+}
+
+LUCID_MACHINES_API void triune_centroid_steer_update_f32(
+    float* P,
+    const float* Grad_proj,
+    int rows,
+    int cols,
+    float steer_scale,
+    float momentum
+) {
+    lucid_machines_centroid_steer_update_f32(P, Grad_proj, rows, cols, steer_scale, momentum);
+}
+
+LUCID_MACHINES_API void triune_route_tiers_f32(
+    const float* logits,
+    float* probs_out,
+    int* selected_tiers_out,
+    int batch_size,
+    float reflex_threshold
+) {
+    lucid_machines_route_tiers_f32(logits, probs_out, selected_tiers_out, batch_size, reflex_threshold);
+}
+
+LUCID_MACHINES_API void triune_compute_neuron_heatmap_f32(
+    const float* activations,
+    float* bins_out,
+    uint32_t* rgba_out,
+    int num_elements,
+    int num_bins
+) {
+    lucid_machines_compute_neuron_heatmap_f32(activations, bins_out, rgba_out, num_elements, num_bins);
+}
+
+LUCID_MACHINES_API void triune_gla_recurrent_step_f32(
+    const float* q,
+    const float* k,
+    const float* v,
+    const float* g,
+    float* state,
+    float* out,
+    int batch_heads,
+    int head_dim
+) {
+    lucid_machines_gla_recurrent_step_f32(q, k, v, g, state, out, batch_heads, head_dim);
 }
 
 } // extern "C"

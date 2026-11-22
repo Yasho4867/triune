@@ -13,7 +13,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from triune.model.moe import MoE_FFN  # noqa: E402
+from lucid_machines.model.moe import MoE_FFN  # noqa: E402
 
 CONFIGS = {
     "default_1536d_8e_top1": dict(dim=1536, num_experts=8, top_k=1),

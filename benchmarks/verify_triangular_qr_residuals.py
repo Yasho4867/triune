@@ -144,9 +144,9 @@ if stats is None:
 import torch
 from tokenizers import Tokenizer
 
-from triune.kernels.fast_triangular import fast_triangular_adamw
-from triune.model.factory import build_model
-from triune.optim.centroid import CentroidSteerOptimizer, batched_qr
+from lucid_machines.kernels.fast_triangular import fast_triangular_adamw
+from lucid_machines.model.factory import build_model
+from lucid_machines.optim.centroid import CentroidSteerOptimizer, batched_qr
 
 # Centralized Reproducibility Configuration (12 seeds = 4 complete 3x3 Latin squares, df=11)
 DEFAULT_SEEDS: list[int] = [42, 1337, 2026, 7777, 9999, 31415, 27182, 16180, 86753, 54321, 65537, 90001]
@@ -390,14 +390,14 @@ def _execute_single_subprocess_worker(args: argparse.Namespace) -> None:
         baseline_vram = 0.0
         baseline_reserved = 0.0
 
-    token_bundle = torch.load(args.tokens_cache, map_location="cpu", weights_only=False)
+    token_bundle = torch.load(args.tokens_cache, map_location="cpu", weights_only=True)
     train_tokens_cpu = token_bundle["train_tokens_cpu"]
     val_tokens_cpu = token_bundle["val_tokens_cpu"]
     if "cpu_model_state" in token_bundle and "config" in token_bundle:
         cfg = token_bundle["config"]
         cpu_model_state = token_bundle["cpu_model_state"]
     else:
-        ckpt = torch.load(args.checkpoint_path, map_location="cpu", weights_only=False)
+        ckpt = torch.load(args.checkpoint_path, map_location="cpu", weights_only=True)
         cfg = ckpt.get("config", {})
         cpu_model_state = {k: v.cpu() for k, v in ckpt["model_state"].items()}
         del ckpt
@@ -662,7 +662,7 @@ def run_subprocess_isolated_verification(
         tokens_cache_path = Path(tmpdir) / "tokens_cache.pt"
         cache_bundle: dict = {"train_tokens_cpu": train_tokens_cpu, "val_tokens_cpu": val_tokens_cpu}
         if Path(checkpoint_path).is_file():
-            ckpt_parent = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+            ckpt_parent = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
             cache_bundle["config"] = ckpt_parent.get("config", {})
             cache_bundle["cpu_model_state"] = {k: v.cpu() for k, v in ckpt_parent["model_state"].items()}
             del ckpt_parent
@@ -904,7 +904,7 @@ def run_secondary_checkpoint_verification(
         raise FileNotFoundError(f"Secondary checkpoint file missing: {sec_file}")
 
     print(f"Evaluating secondary checkpoint stage: {sec_file}...")
-    ckpt = torch.load(sec_file, map_location="cpu", weights_only=False)
+    ckpt = torch.load(sec_file, map_location="cpu", weights_only=True)
     cfg = ckpt.get("config", {})
     ckpt_step = ckpt.get("step", 35500)
     ckpt_tokens = ckpt.get("total_tokens_trained", 157211840)
@@ -1202,7 +1202,7 @@ def run_numerical_qr_residual_verification(
         raise FileNotFoundError(f"Mandatory tokenizer file missing: {tok_file}")
 
     print(f"Loading genuine trained checkpoint from: {ckpt_file}")
-    ckpt = torch.load(ckpt_file, map_location="cpu", weights_only=False)
+    ckpt = torch.load(ckpt_file, map_location="cpu", weights_only=True)
     cfg = ckpt.get("config", {})
     ckpt_step = ckpt.get("step", 36500)
     ckpt_tokens = ckpt.get("total_tokens_trained", 241097920)
@@ -2125,7 +2125,7 @@ def run_numerical_qr_residual_verification(
 def _print_verification_report(res: dict, out_path: Path) -> None:
     summary = res["summary"]
     print("======================================================================")
-    print("TRIUNE NUMERICAL QR & RESIDUAL VERIFICATION")
+    print("LUCID MACHINES NUMERICAL QR & RESIDUAL VERIFICATION")
     print("======================================================================")
     print(f"Results saved to: {out_path}")
     if summary["checkpoint_evaluated"]:
@@ -2440,7 +2440,7 @@ def _rebuild_sub_iso_from_seed_runs(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Triune Numerical QR & Residual Verification")
+    parser = argparse.ArgumentParser(description="Lucid Machines Numerical QR & Residual Verification")
     parser.add_argument("--_subprocess-worker", action="store_true", dest="subprocess_worker")
     parser.add_argument("--_augment-existing-json", action="store_true", dest="augment_existing_json")
     parser.add_argument("--_augment-stage", type=str, default="all", dest="augment_stage")

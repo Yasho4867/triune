@@ -1,8 +1,8 @@
 <Window x:Class="TriuneStudio.Installer.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Triune Studio Setup — AI Engine, Research IDE &amp; CLI Installer"
-        Icon="triune.ico"
+        Title="Polysom Studio Setup — Lucid Machines AI Engine &amp; Research IDE"
+        Icon="..\polysom.ico"
         Height="720" Width="920" MinHeight="640" MinWidth="820"
         WindowStartupLocation="CenterScreen"
         Background="{StaticResource InstallerBackground}"
@@ -24,9 +24,9 @@
           <ColumnDefinition Width="*" />
           <ColumnDefinition Width="Auto" />
         </Grid.ColumnDefinitions>
-        <Image Grid.Column="0" Source="triune.ico" Width="44" Height="44" RenderOptions.BitmapScalingMode="HighQuality" VerticalAlignment="Center" Margin="0,0,16,0" />
+        <Image Grid.Column="0" Source="..\polysom.ico" Width="44" Height="44" RenderOptions.BitmapScalingMode="HighQuality" VerticalAlignment="Center" Margin="0,0,16,0" />
         <StackPanel Grid.Column="1" VerticalAlignment="Center">
-          <TextBlock Text="TRIUNE STUDIO &amp; AI ENGINE SETUP" FontSize="19" FontWeight="Bold" Foreground="{StaticResource InstallerForeground}" />
+          <TextBlock Text="POLYSOM STUDIO &amp; LUCID MACHINES SETUP" FontSize="19" FontWeight="Bold" Foreground="{StaticResource InstallerForeground}" />
           <TextBlock x:Name="WorkspacePathText" Text="Provisioning local Mixture-of-Experts IDE, PyTorch CUDA Engine, and Unified CLI" FontSize="12.5" Foreground="{StaticResource InstallerMuted}" Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
         </StackPanel>
         <Border Grid.Column="2" Background="#1E293B" BorderBrush="#334155" BorderThickness="1" CornerRadius="6" Padding="10,5" VerticalAlignment="Center">
@@ -61,8 +61,8 @@
             </ComboBox>
           </Grid>
 
-          <CheckBox x:Name="DesktopShortcutCheck" Content="Create Windows Desktop &amp; Start Menu shortcuts (TriuneStudio.exe)" IsChecked="True" Foreground="#E5E7EB" FontSize="12.5" Margin="0,12,0,0" />
-          <CheckBox x:Name="RegisterPathCheck" Content="Register unified 'triune' CLI on Windows User PATH" IsChecked="True" Foreground="#E5E7EB" FontSize="12.5" Margin="0,8,0,0" />
+          <CheckBox x:Name="DesktopShortcutCheck" Content="Create Windows Desktop &amp; Start Menu shortcuts (PolysomStudio.exe)" IsChecked="True" Foreground="#E5E7EB" FontSize="12.5" Margin="0,12,0,0" />
+          <CheckBox x:Name="RegisterPathCheck" Content="Register unified 'lucid-machines' &amp; 'polysom' CLIs on Windows User PATH" IsChecked="True" Foreground="#E5E7EB" FontSize="12.5" Margin="0,8,0,0" />
           <CheckBox x:Name="SkipTorchCheck" Content="Fast repair mode (keep existing PyTorch wheel if already verified)" IsChecked="False" Foreground="#E5E7EB" FontSize="12.5" Margin="0,8,0,0" />
         </StackPanel>
       </Border>
@@ -94,7 +94,7 @@
             <ColumnDefinition Width="*" />
             <ColumnDefinition Width="Auto" />
           </Grid.ColumnDefinitions>
-          <TextBlock x:Name="StatusHeadlineText" Text="Ready to install or repair Triune Studio." FontSize="13.5" FontWeight="SemiBold" Foreground="#F3F4F6" />
+          <TextBlock x:Name="StatusHeadlineText" Text="Ready to install or repair Polysom Studio." FontSize="13.5" FontWeight="SemiBold" Foreground="#F3F4F6" />
           <TextBlock x:Name="PercentText" Grid.Column="1" Text="0%" FontSize="13" FontWeight="Bold" Foreground="#38BDF8" />
         </Grid>
         <ProgressBar x:Name="InstallProgressBar" Grid.Row="1" Minimum="0" Maximum="100" Value="0" Height="6" Margin="0,10,0,12" Background="#1F2937" Foreground="#38BDF8" BorderThickness="0" />
@@ -115,7 +115,7 @@
         <Button x:Name="ShortcutButton" Content="Create Desktop Shortcut" Padding="14,9" Margin="0,0,10,0" Background="#1E293B" Foreground="#38BDF8" BorderBrush="#334155" Click="ShortcutButton_Click" />
         <Button x:Name="VerifyButton" Content="Verify Health Only" Padding="16,9" Margin="0,0,10,0" Background="#1F2937" Foreground="#F3F4F6" BorderBrush="#374151" Click="VerifyButton_Click" />
         <Button x:Name="InstallButton" Content="Install / Repair Studio" Padding="20,9" Margin="0,0,10,0" Background="#C2410C" Foreground="White" FontWeight="SemiBold" BorderBrush="#EA580C" Click="InstallButton_Click" />
-        <Button x:Name="LaunchStudioButton" Content="Launch Triune Studio →" Padding="20,9" Background="#059669" Foreground="White" FontWeight="SemiBold" BorderBrush="#10B981" IsEnabled="False" Click="LaunchStudioButton_Click" />
+        <Button x:Name="LaunchStudioButton" Content="Launch Polysom Studio →" Padding="20,9" Background="#059669" Foreground="White" FontWeight="SemiBold" BorderBrush="#10B981" IsEnabled="False" Click="LaunchStudioButton_Click" />
       </StackPanel>
     </Grid>
   </Grid>

@@ -1,27 +1,32 @@
 @echo off
-TITLE Triune Studio - Automated Installer
+TITLE Polysom Studio - Lucid Machines Automated Installer
 SETLOCAL EnableDelayedExpansion
 
 echo ===============================================================================
-echo            TRIUNE STUDIO - AUTOMATED AI ENGINE INSTALLER
+echo          POLYSOM STUDIO - LUCID MACHINES AUTOMATED ENGINE INSTALLER
 echo ===============================================================================
 echo.
 
-:: If interactive and the native WPF Setup Wizard exists, launch TriuneStudioSetup.exe
+:: If interactive and the native WPF Setup Wizard exists, launch Setup Wizard
 if "%~1"=="" (
+    if exist "%~dp0..\..\PolysomStudioSetup.exe" (
+        echo [Setup] Launching Native Windows Setup Wizard (PolysomStudioSetup.exe)...
+        start "" "%~dp0..\..\PolysomStudioSetup.exe"
+        exit /b 0
+    )
+    if exist "%~dp0..\publish\PolysomStudioSetup.exe" (
+        echo [Setup] Launching Native Windows Setup Wizard (PolysomStudioSetup.exe)...
+        start "" "%~dp0..\publish\PolysomStudioSetup.exe"
+        exit /b 0
+    )
+    if exist "%~dp0..\windows\publish\PolysomStudioSetup.exe" (
+        echo [Setup] Launching Native Windows Setup Wizard (PolysomStudioSetup.exe)...
+        start "" "%~dp0..\windows\publish\PolysomStudioSetup.exe"
+        exit /b 0
+    )
     if exist "%~dp0..\..\TriuneStudioSetup.exe" (
-        echo [Setup] Launching Native Windows Setup Wizard (TriuneStudioSetup.exe)...
+        echo [Setup] Launching Legacy Windows Setup Wizard (TriuneStudioSetup.exe)...
         start "" "%~dp0..\..\TriuneStudioSetup.exe"
-        exit /b 0
-    )
-    if exist "%~dp0..\publish\TriuneStudioSetup.exe" (
-        echo [Setup] Launching Native Windows Setup Wizard (TriuneStudioSetup.exe)...
-        start "" "%~dp0..\publish\TriuneStudioSetup.exe"
-        exit /b 0
-    )
-    if exist "%~dp0..\windows\publish\TriuneStudioSetup.exe" (
-        echo [Setup] Launching Native Windows Setup Wizard (TriuneStudioSetup.exe)...
-        start "" "%~dp0..\windows\publish\TriuneStudioSetup.exe"
         exit /b 0
     )
 )
@@ -64,7 +69,7 @@ if not "%~1"=="--yes" pause
 exit /b 1
 
 :run_installer
-echo [Launcher] Executing comprehensive Triune installer with %PY_CMD%...
+echo [Launcher] Executing comprehensive Lucid Machines installer with %PY_CMD%...
 echo.
 %PY_CMD% "%~dp0installer.py" %*
 set "EXIT_CODE=%ERRORLEVEL%"

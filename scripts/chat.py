@@ -1,4 +1,4 @@
-"""Interactive terminal chat entry point backed by Triune inference, transmutation, and local Ollama."""
+"""Interactive terminal chat entry point backed by Lucid Machines inference, transmutation, and local Ollama."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from typing import Any
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from triune.cli_ui import (
+from lucid_machines.cli_ui import (
     ensure_utf8_stdio,
     is_tty,
     render_banner,
@@ -20,12 +20,14 @@ from triune.cli_ui import (
     route_badge_ansi,
     status_spinner,
 )
-from triune.inference import generate_response, load_checkpoint_model, load_model_for_inference
+from lucid_machines.inference import generate_response, load_checkpoint_model, load_model_for_inference
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Build argument parser shared by scripts/chat.py and `triune chat`."""
-    parser = argparse.ArgumentParser(description="Chat with a Triune checkpoint, HF/transmuted model, or local Ollama")
+    """Build argument parser shared by scripts/chat.py and `lucid_machines chat`."""
+    parser = argparse.ArgumentParser(
+        description="Chat with a Lucid Machines checkpoint, HF/transmuted model, or local Ollama"
+    )
     parser.add_argument(
         "--model",
         default=None,
@@ -94,13 +96,13 @@ def main(argv: list[str] | None = None) -> None:
     eos_id = 0
 
     if is_ollama:
-        from triune.runtime.model_scanner import _is_tag_live_in_ollama, query_ollama_running_tags
+        from lucid_machines.runtime.model_scanner import _is_tag_live_in_ollama, query_ollama_running_tags
 
         ollama_tag = str(args.model).strip()
         if not _is_tag_live_in_ollama(ollama_tag, query_ollama_running_tags()):
             render_notice(
                 f"'{ollama_tag}' is not currently running in local Ollama. "
-                f"Run `ollama run {ollama_tag.removeprefix('ollama:')}` or run `triune scan` to inspect live models.",
+                f"Run `ollama run {ollama_tag.removeprefix('ollama:')}` or run `lucid_machines scan` to inspect live models.",
                 level="error",
             )
             return
@@ -109,9 +111,12 @@ def main(argv: list[str] | None = None) -> None:
         quantize = "nvfp4" if args.nvfp4 else None
         with status_spinner(f"Loading model '{source}'..."):
             if getattr(args, "transmute", False) and (args.model or Path(source).is_dir()):
-                from triune.model.transmuter import transmute_hf_to_triune
+                from lucid_machines.model import transmuter as _transmuter
 
-                model, tokenizer, metadata, device, pad_id, eos_id = transmute_hf_to_triune(
+                _transmute_fn = getattr(_transmuter, "transmute_hf_to_triune", None) or getattr(
+                    _transmuter, "transmute_hf_to_lucid", None
+                )
+                model, tokenizer, metadata, device, pad_id, eos_id = _transmute_fn(
                     source,
                     reflex_ratio=args.reflex_ratio,
                     quantize=quantize,
@@ -150,7 +155,7 @@ def main(argv: list[str] | None = None) -> None:
         not is_ollama and hasattr(tokenizer, "apply_chat_template") and getattr(tokenizer, "chat_template", None)
     )
 
-    render_banner("TRIUNE CHAT", subtitle=str(source), badge=mode_label)
+    render_banner("LUCID MACHINES CHAT", subtitle=str(source), badge=mode_label)
     session_rows: list[tuple[str, Any]] = [
         ("Device / Runtime", str(device)),
         ("Route", args.depth.upper() if is_triune_model else ("OLLAMA" if is_ollama else "DENSE HF")),
@@ -205,7 +210,7 @@ def main(argv: list[str] | None = None) -> None:
                 continue
 
             if low == "/scan":
-                from triune.runtime.model_scanner import scan_pc_models
+                from lucid_machines.runtime.model_scanner import scan_pc_models
 
                 scan_data = scan_pc_models()
                 rows = [
@@ -267,7 +272,7 @@ def main(argv: list[str] | None = None) -> None:
                         turn_depth, prompt = None, prompt[5:]
 
             if is_ollama:
-                from triune.runtime.model_scanner import stream_ollama_chat
+                from lucid_machines.runtime.model_scanner import stream_ollama_chat
 
                 history.append({"role": "user", "content": prompt})
                 sys.stdout.write(f"{route_badge_ansi('OLLAMA')} ")
@@ -294,7 +299,7 @@ def main(argv: list[str] | None = None) -> None:
                 continue
 
             if use_speculative and hasattr(model, "init_cache"):
-                from triune.model.speculative import SelfSpeculativeGenerator
+                from lucid_machines.model.speculative import SelfSpeculativeGenerator
 
                 spec_gen = SelfSpeculativeGenerator(
                     model,

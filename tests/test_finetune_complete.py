@@ -1,4 +1,4 @@
-"""Comprehensive Unit Tests for Triune LoRA/QLoRA Fine-Tuning Engine and API Routes."""
+"""Comprehensive Unit Tests for Lucid Machines LoRA/QLoRA Fine-Tuning Engine and API Routes."""
 
 import tempfile
 import unittest
@@ -8,9 +8,9 @@ import torch
 import torch.nn as nn
 from fastapi.testclient import TestClient
 
-from triune.api.server import create_app
-from triune.model import TriuneTransformer
-from triune.trainer.finetune import LoRAConfig, LoRALayer, TriuneFineTuner
+from lucid_machines.api.server import create_app
+from lucid_machines.model import TriuneTransformer
+from lucid_machines.trainer.finetune import LoRAConfig, LoRALayer, TriuneFineTuner
 
 
 class TestFineTuneCore(unittest.TestCase):

@@ -4,7 +4,7 @@ and zero-dummy-phrase training steps with RealPyTorchEngineState and FastAPI rou
 
 import os
 
-os.environ["TRIUNE_TESTING"] = "1"
+os.environ["LUCID_MACHINES_TESTING"] = "1"
 import sys
 import unittest
 
@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from triune.api.routes import pytorch_state, router
+from lucid_machines.api.routes import pytorch_state, router
 
 
 class TestLiveApiStreaming(unittest.TestCase):

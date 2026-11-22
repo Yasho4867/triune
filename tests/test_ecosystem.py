@@ -1,4 +1,4 @@
-"""Verification test suite for Triune Ecosystem Phase 1 modules."""
+"""Verification test suite for Lucid Machines Ecosystem Phase 1 modules."""
 
 import unittest
 import warnings
@@ -7,8 +7,8 @@ warnings.filterwarnings("ignore", message=".*httpx.*")
 warnings.filterwarnings("ignore", message=".*starlette.testclient.*")
 import torch
 
-import triune
-from triune import (
+import lucid_machines
+from lucid_machines import (
     Agent,
     MemoryPlanner,
     ProviderManager,
@@ -18,13 +18,13 @@ from triune import (
     register_model,
     register_node,
 )
-from triune.api.server import HAS_FASTAPI, create_app
-from triune.plugins import list_registered_nodes
+from lucid_machines.api.server import HAS_FASTAPI, create_app
+from lucid_machines.plugins import list_registered_nodes
 
 
-class TestTriuneEcosystem(unittest.TestCase):
+class TestLucidMachinesEcosystem(unittest.TestCase):
     def test_memory_planner(self):
-        config = triune.build_config({})
+        config = lucid_machines.build_config({})
         estimate = MemoryPlanner.estimate_vram(config, target_vram_gb=8.0)
         self.assertGreater(estimate.total_params, 0)
         self.assertIn(estimate.recommended_batch_size, [1, 2, 4])
@@ -90,7 +90,15 @@ class TestTriuneEcosystem(unittest.TestCase):
     def test_api_server(self):
         if HAS_FASTAPI:
             app = create_app()
-            self.assertIn(app.title, ("Triune Framework Server", "Triune AI Server"))
+            self.assertIn(
+                app.title,
+                (
+                    "Lucid Machines Framework Server",
+                    "Lucid Machines AI Server",
+                    "Polysom Studio Server",
+                    "Lucid Machines Server",
+                ),
+            )
 
     def test_export_safetensors(self):
         model = torch.nn.Linear(10, 10)
@@ -99,7 +107,7 @@ class TestTriuneEcosystem(unittest.TestCase):
 
     def test_module_manager_search(self):
         """Verify ModuleManager returns curated components and handles multi-source queries."""
-        from triune.modules.manager import ModuleManager
+        from lucid_machines.modules.manager import ModuleManager
 
         mgr = ModuleManager()
         results = mgr.search_marketplace(query="", module_type="all", source="curated")
@@ -116,16 +124,16 @@ class TestTriuneEcosystem(unittest.TestCase):
         import tempfile
         from pathlib import Path
 
-        from triune.execution.dag import ExecutionEngine
-        from triune.modules.manager import ModuleManager
-        from triune.plugins.registry import global_registry
+        from lucid_machines.execution.dag import ExecutionEngine
+        from lucid_machines.modules.manager import ModuleManager
+        from lucid_machines.plugins.registry import global_registry
 
-        temp_dir = Path(tempfile.mkdtemp(prefix="triune_mod_test_"))
+        temp_dir = Path(tempfile.mkdtemp(prefix="lucid_machines_mod_test_"))
         try:
             # Create a sample plugin script with a custom registered DAG node
             script_path = temp_dir / "my_custom_node.py"
             script_content = """
-from triune.plugins.registry import register_node
+from lucid_machines.plugins.registry import register_node
 
 @register_node("DynamicEchoNode", category="Plugin", description="Dynamic test node", inputs=["val"], outputs=["result"])
 def dynamic_echo_handler(val: int) -> dict:
@@ -144,7 +152,7 @@ def dynamic_echo_handler(val: int) -> dict:
             self.assertIn("my_custom_node.py", inspection["artifacts"]["nodes"])
 
             # Test dynamic registration
-            discovered = mgr.discover_and_register_nodes(temp_dir)
+            discovered = mgr.discover_and_register_nodes(temp_dir, trusted=True)
             self.assertIn("DynamicEchoNode", discovered)
             self.assertIn("DynamicEchoNode", global_registry._nodes)
 
@@ -185,7 +193,7 @@ def dynamic_echo_handler(val: int) -> dict:
         import tempfile
         from pathlib import Path
 
-        from triune.modules.manager import ModuleManager
+        from lucid_machines.modules.manager import ModuleManager
 
         mgr = ModuleManager()
 
@@ -200,7 +208,7 @@ def dynamic_echo_handler(val: int) -> dict:
         self.assertFalse(bad_pip["success"])
 
         # 3. Malicious plugin with @register_node + import os is blocked by AST gate before exec_module
-        temp_dir = Path(tempfile.mkdtemp(prefix="triune_evil_mod_"))
+        temp_dir = Path(tempfile.mkdtemp(prefix="lucid_machines_evil_mod_"))
         marker_file = temp_dir / "executed_marker.txt"
         try:
             evil_py = temp_dir / "evil_node.py"
@@ -208,7 +216,7 @@ def dynamic_echo_handler(val: int) -> dict:
                 f"import os\n"
                 f"from pathlib import Path\n"
                 f"Path({str(marker_file)!r}).write_text('pwned')\n"
-                f"from triune.plugins.registry import register_node\n"
+                f"from lucid_machines.plugins.registry import register_node\n"
                 f"@register_node('EvilNode', category='Custom')\n"
                 f"def evil_handler(x): return x\n",
                 encoding="utf-8",
@@ -221,8 +229,8 @@ def dynamic_echo_handler(val: int) -> dict:
 
     def test_dag_model_spec_fidelity_and_failure_reporting(self):
         """Verify DAG _handle_model_node honors ModelSpec/precision and execute_graph reports failures."""
-        from triune.execution.dag import ExecutionEngine
-        from triune.plugins.registry import register_node
+        from lucid_machines.execution.dag import ExecutionEngine
+        from lucid_machines.plugins.registry import register_node
 
         engine = ExecutionEngine()
 

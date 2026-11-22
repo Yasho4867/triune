@@ -19,7 +19,7 @@ sys.path[:0] = [str(ROOT), str(ROOT / "scripts")]
 
 from benchmark_full_model_e2e import load_trained_model  # noqa: E402
 
-from triune.data.tokenizer import load_tokenizer  # noqa: E402
+from lucid_machines.data.tokenizer import load_tokenizer  # noqa: E402
 
 GRID = [round(t, 2) for t in np.arange(0.05, 1.0, 0.05)]
 EXITS = ("reflex", "limbic")

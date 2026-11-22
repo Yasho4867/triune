@@ -24,9 +24,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from triune.model.transformer import TriuneTransformer
-from triune.optim.centroid import CentroidSteerOptimizer
-from triune.runtime.streaming import LayerStreamingEngine, StreamingConfig
+from lucid_machines.model.transformer import TriuneTransformer
+from lucid_machines.optim.centroid import CentroidSteerOptimizer
+from lucid_machines.runtime.streaming import LayerStreamingEngine, StreamingConfig
 
 
 def get_hardware_info() -> Dict[str, Any]:
@@ -212,7 +212,7 @@ def benchmark_step(
 
 def run_layer_streaming_suite() -> Dict[str, Any]:
     print("=" * 70)
-    print("TRIUNE BENCHMARK CATEGORY C: LAYER STREAMING & MEMORY-CONSTRAINED TRAINING")
+    print("LUCID MACHINES BENCHMARK CATEGORY C: LAYER STREAMING & MEMORY-CONSTRAINED TRAINING")
     print("=" * 70)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -372,7 +372,7 @@ def generate_markdown_report(results: Dict[str, Any], output_path: str) -> None:
     hw = results["hardware"]
     cfg = results["config"]
     lines = [
-        "# Triune Category C: Memory-Constrained Training & Layer Streaming Report",
+        "# Lucid Machines Category C: Memory-Constrained Training & Layer Streaming Report",
         "",
         f"**Date**: {time.strftime('%B %d, %Y')}",
         f"**Hardware**: {hw['device_name']} ({hw['total_vram_gb']} GB VRAM)",
@@ -381,7 +381,7 @@ def generate_markdown_report(results: Dict[str, Any], output_path: str) -> None:
         "",
         "## 1. Summary of Findings",
         "",
-        "The Triune `LayerStreamingEngine` decouples model parameter capacity from physical GPU VRAM by virtualizing transformer layer storage:",
+        "The Lucid Machines `LayerStreamingEngine` decouples model parameter capacity from physical GPU VRAM by virtualizing transformer layer storage:",
         "- Layer weights reside in host CPU RAM and are dynamically staged into GPU VRAM layer-by-layer during forward and backward passes.",
         "- CUDA prefetching overlaps host-to-device transfers with compute on preceding layers.",
         "- Immediate gradient offloading frees GPU VRAM as soon as autograd computes each layer's parameter derivatives.",

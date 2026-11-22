@@ -21,8 +21,8 @@ import unittest
 
 import torch
 
-from triune.data.dynamic_tokenizer import DynamicTokenizer, DynamicTokenizerOutput
-from triune.runtime.parallel_engine import ParallelEngine
+from lucid_machines.data.dynamic_tokenizer import DynamicTokenizer, DynamicTokenizerOutput
+from lucid_machines.runtime.parallel_engine import ParallelEngine
 
 
 class TestDynamicTokenizer(unittest.TestCase):
@@ -85,7 +85,7 @@ class TestDynamicTokenizer(unittest.TestCase):
         samples = [
             "def hello_world():\n    return 'Hello, World!'\n",
             "for i in range(100):\n    if i % 2 == 0:\n        print(i)\n",
-            "Triune AI Transformer 2026: Multi-Million Tokens Per Second Throughput Engine.",
+            "Lucid Machines Triune Transformer 2026: Multi-Million Tokens Per Second Throughput Engine.",
             "Short text sequence for round trip validation",
             "The Joint-Embedding Predictive Architecture provides a unified framework for latent space representation learning.",
         ]

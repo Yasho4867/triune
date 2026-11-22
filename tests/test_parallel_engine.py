@@ -4,9 +4,9 @@ import unittest
 
 import torch
 
-from triune.data import DynamicTokenizer
-from triune.model.jev import JEVExitRouter, JEVLatentPredictor
-from triune.runtime import ParallelEngine
+from lucid_machines.data import DynamicTokenizer
+from lucid_machines.model.jev import JEVExitRouter, JEVLatentPredictor
+from lucid_machines.runtime import ParallelEngine
 
 
 class TestDynamicTokenizer(unittest.TestCase):

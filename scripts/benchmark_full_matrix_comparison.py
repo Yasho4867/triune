@@ -1,4 +1,4 @@
-"""Master 3x2x2 Competitive Matrix Benchmark: Triune vs. BitsAndBytes 8-bit AdamW vs. Standard PyTorch AdamW.
+"""Master 3x2x2 Competitive Matrix Benchmark: Lucid Machines vs. BitsAndBytes 8-bit AdamW vs. Standard PyTorch AdamW.
 
 Exhaustively benchmarks:
   [Part 1: Controlled Optimizer Ablation]
@@ -7,7 +7,7 @@ Exhaustively benchmarks:
   [Part 2: End-to-End Systems Stack Benchmark]
     - Compares complete framework pipelines (fused LoRA, chunked cross-entropy, and 3-tier partitioned optimizers)
     - Measures combined systems speedup and allocator memory savings
-  [3 Stacks]       Triune Stack vs. BitsAndBytes 8-bit AdamW vs. Standard PyTorch AdamW
+  [3 Stacks]       Lucid Machines Stack vs. BitsAndBytes 8-bit AdamW vs. Standard PyTorch AdamW
   [2 Tasks]        Pre-Training from Scratch vs. Parameter-Efficient LoRA Fine-Tuning
   [2 Model Types]  Triune Multi-Exit MoE vs. Universal Dense Transformer
 
@@ -21,6 +21,7 @@ import argparse
 import gc
 import hashlib
 import json
+import os
 import statistics
 import subprocess
 import sys
@@ -35,13 +36,20 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from triune.kernels import (
+from lucid_machines.kernels import (
     chunked_cross_entropy_from_hidden,
     fast_cross_entropy,
 )
-from triune.optim.centroid import CentroidSteerOptimizer
-from triune.trainer.finetune import LoRAConfig, TriuneFineTuner
-from triune.universal import UniversalDenseTransformer, UniversalMoETransformer
+from lucid_machines.optim.centroid import CentroidSteerOptimizer
+from lucid_machines.trainer import finetune as _finetune_mod
+from lucid_machines.universal import UniversalDenseTransformer, UniversalMoETransformer
+
+_FineTuner = (
+    getattr(_finetune_mod, "LucidFineTuner", None)
+    or getattr(_finetune_mod, "Lucid MachinesFineTuner", None)
+    or _finetune_mod.TriuneFineTuner
+)
+LoRAConfig = _finetune_mod.LoRAConfig
 
 # =========================================================================
 # Native BitsAndBytes 8-bit AdamW (Unsloth Core Optimizer)
@@ -204,7 +212,7 @@ def load_benchmark_text_batches(
 
 
 def run_benchmark_cell(
-    stack: str,  # "adamw", "bnb_8bit", "triune"
+    stack: str,  # "adamw", "bnb_8bit", "lucid" (also accepts legacy "triune")
     task: str,  # "pretrain", "finetune"
     model_type: str,  # "dense", "moe"
     steps: int = 15,
@@ -247,7 +255,7 @@ def run_benchmark_cell(
             dropout=0.0,
             target_modules=["q_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj", "proj"],
         )
-        tuner = TriuneFineTuner(model, lora_cfg)
+        tuner = _FineTuner(model, lora_cfg)
         tuner.attach_lora()
         assert len(tuner.applied_adapters) > 0, "CRITICAL: No LoRA adapters attached to model!"
         trainable_params = [p for p in model.parameters() if p.requires_grad]
@@ -262,7 +270,7 @@ def run_benchmark_cell(
         optimizer = torch.optim.AdamW(trainable_params, lr=1e-3, weight_decay=0.01)
     elif stack in ("bnb_8bit", "unsloth"):
         optimizer = get_unsloth_optimizer(trainable_params, lr=1e-3, weight_decay=0.01)
-    elif stack == "triune":
+    elif stack in ("triune", "lucid"):
         if task == "pretrain":
             optimizer = CentroidSteerOptimizer(
                 model.core if hasattr(model, "core") else model,
@@ -310,7 +318,7 @@ def run_benchmark_cell(
                 logits = out[0] if isinstance(out, tuple) else out
             loss = F.cross_entropy(logits.reshape(-1, vocab_size).float(), y.reshape(-1))
             loss.backward()
-            if stack == "triune" and task == "pretrain":
+            if stack in ("triune", "lucid") and task == "pretrain":
                 active_opt.step_parameters(active_model.parameters(), is_global_step_end=True)
             else:
                 active_opt.step()
@@ -320,7 +328,7 @@ def run_benchmark_cell(
             # Evaluates the combined impact of stack-specific kernels:
             # Standard AdamW: vanilla PyTorch F.cross_entropy
             # BitsAndBytes: fast_cross_entropy
-            # Triune: chunked_cross_entropy_from_hidden (dense) / fast_cross_entropy (moe) + fused LoRA
+            # Lucid Machines: chunked_cross_entropy_from_hidden (dense) / fast_cross_entropy (moe) + fused LoRA
             if model_type == "moe":
                 logits, _ = active_model(x, force_depth=2)
                 if stack == "adamw":
@@ -328,7 +336,7 @@ def run_benchmark_cell(
                 else:
                     loss = fast_cross_entropy(logits.reshape(-1, vocab_size), y.reshape(-1), chunk_size=512)
             else:
-                if stack == "triune":
+                if stack in ("triune", "lucid"):
                     hidden, _ = active_model(x, return_hidden=True)
                     loss = chunked_cross_entropy_from_hidden(hidden, active_model.lm_head, y, chunk_size=512)
                 else:
@@ -340,7 +348,7 @@ def run_benchmark_cell(
                         loss = F.cross_entropy(logits.reshape(-1, vocab_size).float(), y.reshape(-1))
 
             loss.backward()
-            if stack == "triune" and task == "pretrain":
+            if stack in ("triune", "lucid") and task == "pretrain":
                 active_opt.step_parameters(active_model.parameters(), is_global_step_end=True)
             else:
                 active_opt.step()
@@ -481,7 +489,19 @@ def generate_master_report(
     )
     d_meta = results[0].get("dataset_provenance", {}) if results else {}
 
-    md = f"""# Triune vs. BitsAndBytes 8-bit AdamW vs. Standard AdamW — Master 3x2x2 Competitive Matrix
+    bench_dir = Path(__file__).resolve().parent.parent / "benchmarks"
+    try:
+        qr_rel = Path(
+            os.path.relpath(bench_dir / "triangular_qr_residual_results.json", output_path.resolve().parent)
+        ).as_posix()
+        unsloth_rel = Path(
+            os.path.relpath(bench_dir / "GENUINE_UNSLOTH_VS_TRIUNE_REPORT.md", output_path.resolve().parent)
+        ).as_posix()
+    except ValueError:
+        qr_rel = "benchmarks/triangular_qr_residual_results.json"
+        unsloth_rel = "benchmarks/GENUINE_UNSLOTH_VS_TRIUNE_REPORT.md"
+
+    md = f"""# Lucid Machines vs. BitsAndBytes 8-bit AdamW vs. Standard AdamW — Master 3x2x2 Competitive Matrix
 
 **Benchmarked Hardware**: `{torch.cuda.get_device_name(0) if device.type == "cuda" else "CPU"}`  
 **Precision**: `torch.bfloat16` with native CUDA Tensor Cores  
@@ -500,10 +520,10 @@ def generate_master_report(
 > [!NOTE]
 > **Methodology & Rigor Protocol**:
 > 1. **Controlled Optimizer Ablation (Section 1)**: All stacks execute **identical forward passes** and **identical standard `torch.nn.functional.cross_entropy` loss functions**. This guarantees zero confounding kernel variables: all measured step latency and memory differences originate strictly from optimizer state storage and step update logic.
-> 2. **Full-Stack Systems Benchmark (Section 2)**: Evaluates complete execution pipelines where Triune activates its fused Chunked Cross-Entropy and Fused LoRA kernels against standard PyTorch and BitsAndBytes 8-bit baselines.
-> 3. **Microbenchmark Scope vs. Convergence Evidence**: 15 timed steps are designed strictly for steady-state step latency, throughput, and PyTorch allocator peak memory profiling. **For rigorous statistical convergence and loss equivalence testing, see the 12-seed, 4-Latin-square, 600-step evaluation in [`benchmarks/triangular_qr_residual_results.json`](file:///c:/Users/yashb_f1ls/OneDrive/Documents/TriuneTransformer/benchmarks/triangular_qr_residual_results.json)** (which proves Schuirmann TOST equivalence within $\\pm 0.01$ nats, $p = 1.52 \\times 10^{-7}$).
+> 2. **Full-Stack Systems Benchmark (Section 2)**: Evaluates complete execution pipelines where Lucid Machines activates its fused Chunked Cross-Entropy and Fused LoRA kernels against standard PyTorch and BitsAndBytes 8-bit baselines.
+> 3. **Microbenchmark Scope vs. Convergence Evidence**: 15 timed steps are designed strictly for steady-state step latency, throughput, and PyTorch allocator peak memory profiling. **For rigorous statistical convergence and loss equivalence testing, see the 12-seed, 4-Latin-square, 600-step evaluation in [`benchmarks/triangular_qr_residual_results.json`]({qr_rel})** (which proves Schuirmann TOST equivalence within $\\pm 0.01$ nats, $p = 1.52 \\times 10^{-7}$).
 > 4. **Memory Accounting**: All memory metrics report PyTorch CUDA allocator measurements (`torch.cuda.max_memory_allocated()` / `torch.cuda.max_memory_reserved()`), measuring allocated tensor memory and caching-allocator pool in an isolated OS subprocess, distinct from physical CUDA driver context footprint.
-> 5. **Competitor Baseline Scope**: Category B tests native `bitsandbytes.optim.AdamW8bit` (the core 8-bit optimizer used by Unsloth) on identical Triune model architectures. For full framework testing with Unsloth's custom Triton LoRA/RoPE kernels, see [`benchmarks/GENUINE_UNSLOTH_VS_TRIUNE_REPORT.md`](file:///c:/Users/yashb_f1ls/OneDrive/Documents/TriuneTransformer/benchmarks/GENUINE_UNSLOTH_VS_TRIUNE_REPORT.md).
+> 5. **Competitor Baseline Scope**: Category B tests native `bitsandbytes.optim.AdamW8bit` (the core 8-bit optimizer used by Unsloth) on identical Triune model architectures. For full framework testing with Unsloth's custom Triton LoRA/RoPE kernels, see [`benchmarks/GENUINE_UNSLOTH_VS_TRIUNE_REPORT.md`]({unsloth_rel}).
 > 6. **MFU Reference**: Estimated against a 140 TFLOP/s theoretical peak reference for dense BF16 Tensor Core throughput on NVIDIA GeForce RTX 5070 Laptop GPU (~2.3 GHz boost $\\times$ 64 FP16/BF16 Tensor Core MACs per SM).
 
 ---
@@ -529,8 +549,8 @@ In this controlled ablation, **all models and loss functions are strictly identi
             else 0.0
         )
         stack_label = (
-            f"**Triune CentroidSteer** (`{r.get('optimizer', 'CentroidSteer')}`)"
-            if r["stack"] == "triune"
+            f"**Lucid Machines CentroidSteer** (`{r.get('optimizer', 'CentroidSteer')}`)"
+            if r["stack"] in ("triune", "lucid")
             else (
                 f"BitsAndBytes 8-bit AdamW (`{r.get('optimizer', 'AdamW8bit')}`)"
                 if r["stack"] in ("bnb_8bit", "unsloth")
@@ -562,8 +582,8 @@ In this controlled ablation, **all models and loss functions are strictly identi
             else 0.0
         )
         stack_label = (
-            f"**Triune Optimizer** (`{r.get('optimizer', 'AdamW')}`)"
-            if r["stack"] == "triune"
+            f"**Lucid Machines Optimizer** (`{r.get('optimizer', 'AdamW')}`)"
+            if r["stack"] in ("triune", "lucid")
             else (
                 f"BitsAndBytes 8-bit AdamW (`{r.get('optimizer', 'AdamW8bit')}`)"
                 if r["stack"] in ("bnb_8bit", "unsloth")
@@ -583,7 +603,7 @@ In this controlled ablation, **all models and loss functions are strictly identi
 
 ## 2. End-to-End Full-Stack Systems Benchmark (Fused Kernels + Chunked Loss)
 
-Evaluates complete framework pipelines: Triune utilizes Chunked Vocabulary-Projection Cross-Entropy and Fused LoRA backprop vs. BitsAndBytes and standard PyTorch baselines.
+Evaluates complete framework pipelines: Lucid Machines utilizes Chunked Vocabulary-Projection Cross-Entropy and Fused LoRA backprop vs. BitsAndBytes and standard PyTorch baselines.
 
 ### A. Pre-Training from Scratch (Full-Stack Systems)
 
@@ -602,8 +622,8 @@ Evaluates complete framework pipelines: Triune utilizes Chunked Vocabulary-Proje
                 else 0.0
             )
             stack_label = (
-                "**Triune Full-Stack** (Chunked CE + CentroidSteer)"
-                if r["stack"] == "triune"
+                "**Lucid Machines Full-Stack** (Chunked CE + CentroidSteer)"
+                if r["stack"] in ("triune", "lucid")
                 else (
                     "BitsAndBytes 8-bit Stack (Fast CE + 8-bit AdamW)"
                     if r["stack"] in ("bnb_8bit", "unsloth")
@@ -635,8 +655,8 @@ Evaluates complete framework pipelines: Triune utilizes Chunked Vocabulary-Proje
                 else 0.0
             )
             stack_label = (
-                "**Triune Full-Stack** (Chunked CE + Fused LoRA)"
-                if r["stack"] == "triune"
+                "**Lucid Machines Full-Stack** (Chunked CE + Fused LoRA)"
+                if r["stack"] in ("triune", "lucid")
                 else (
                     "BitsAndBytes 8-bit Stack (Fast CE + 8-bit AdamW)"
                     if r["stack"] in ("bnb_8bit", "unsloth")
@@ -657,7 +677,7 @@ Evaluates complete framework pipelines: Triune utilizes Chunked Vocabulary-Proje
 
 > [!IMPORTANT]
 > **Long-Horizon Multi-Seed Verification vs. 15-Step Microbenchmarks**:
-> While the microbenchmarks in Sections 1 and 2 profile latency and memory allocation, empirical convergence quality is evaluated in our dedicated multi-seed continuation suite ([`benchmarks/triangular_qr_residual_results.json`](file:///c:/Users/yashb_f1ls/OneDrive/Documents/TriuneTransformer/benchmarks/triangular_qr_residual_results.json)):
+> While the microbenchmarks in Sections 1 and 2 profile latency and memory allocation, empirical convergence quality is evaluated in our dedicated multi-seed continuation suite ([`benchmarks/triangular_qr_residual_results.json`](__QR_REL__)):
 > - **Primary Cohort ($N=12, df=11$, 36 OS Subprocesses, 4 Latin Squares)**:
 >   - CentroidSteer final validation loss: $4.1697 \\pm 0.0025$ vs. Standard 2D AdamW: $4.1661 \\pm 0.0023$.
 >   - Paired validation difference: $+0.0037 \\pm 0.0020$ nats.
@@ -683,15 +703,15 @@ Evaluates complete framework pipelines: Triune utilizes Chunked Vocabulary-Proje
    - CentroidSteer is specialized for sparse architectures where expert parameters dominate total model capacity ($E \\ge 8$).
 
 3. **LoRA Fine-Tuning Acceleration**:
-   - Triune's Chunked Cross-Entropy evaluates loss over micro-chunks directly from hidden projections, eliminating the $[B, T, V]$ logit tensor.
-   - In Full-Stack mode, Triune achieves **$28.06 \\pm 5.76\\text{{ ms/step}}$ ($36,489\\text{{ tok/s}}$)** on dense LoRA (+28.0% throughput vs BitsAndBytes 8-bit) and **$68.38 \\pm 12.35\\text{{ ms/step}}$ ($14,974\\text{{ tok/s}}$)** on MoE LoRA (+17.2% throughput vs BitsAndBytes 8-bit).
-"""
+   - Lucid Machines' Chunked Cross-Entropy evaluates loss over micro-chunks directly from hidden projections, eliminating the $[B, T, V]$ logit tensor.
+   - In Full-Stack mode, Lucid Machines achieves **$28.06 \\pm 5.76\\text{{ ms/step}}$ ($36,489\\text{{ tok/s}}$)** on dense LoRA (+28.0% throughput vs BitsAndBytes 8-bit) and **$68.38 \\pm 12.35\\text{{ ms/step}}$ ($14,974\\text{{ tok/s}}$)** on MoE LoRA (+17.2% throughput vs BitsAndBytes 8-bit).
+""".replace("__QR_REL__", qr_rel)
     output_path.write_text(md, encoding="utf-8")
     print(f"\n[SUCCESS] Generated Master Report: {output_path}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Triune Master Matrix Benchmark Runner")
+    parser = argparse.ArgumentParser(description="Lucid Machines Master Matrix Benchmark Runner")
     parser.add_argument(
         "--report-only",
         action="store_true",
@@ -708,7 +728,9 @@ def main():
         default="both",
         help="Evaluation mode",
     )
-    parser.add_argument("--stack", type=str, choices=["adamw", "bnb_8bit", "triune"], help="Stack for single cell")
+    parser.add_argument(
+        "--stack", type=str, choices=["adamw", "bnb_8bit", "triune", "lucid"], help="Stack for single cell"
+    )
     parser.add_argument("--task", type=str, choices=["pretrain", "finetune"], help="Task for single cell")
     parser.add_argument("--model-type", type=str, choices=["dense", "moe"], help="Model type for single cell")
     parser.add_argument("--steps", type=int, default=15, help="Number of timed benchmark steps")
@@ -784,7 +806,7 @@ def main():
         return
 
     print("=" * 80)
-    print(" TRIUNE vs BITSANDBYTES 8-BIT vs ADAMW — MASTER 3x2x2 BENCHMARK RUNNER")
+    print(" LUCID MACHINES vs BITSANDBYTES 8-BIT vs ADAMW — MASTER 3x2x2 BENCHMARK RUNNER")
     print(f" Hardware: {device} ({torch.cuda.get_device_name(0) if device.type == 'cuda' else 'CPU'})")
     print(f" Precision: {dtype}")
     print(f" Benchmark Base Commit: {git_commit} (Clean: {not git_dirty})")
@@ -869,7 +891,7 @@ def main():
         "competitors": {
             "adamw": "PyTorch standard unquantized torch.optim.AdamW",
             "bnb_8bit": "BitsAndBytes native bitsandbytes.optim.AdamW8bit baseline evaluated on identical model architectures",
-            "triune": "Triune CentroidSteer (Pre-Train) / Fused AdamW (LoRA) + chunked logit-free Cross-Entropy",
+            "triune": "Lucid Machines CentroidSteer (Pre-Train) / Fused AdamW (LoRA) + chunked logit-free Cross-Entropy",
         },
         "cells": primary_cells,
         "controlled_optimizer_cells": controlled_cells,

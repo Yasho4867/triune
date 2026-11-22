@@ -7,7 +7,7 @@ import unittest
 import torch
 import torch.nn as nn
 
-from triune.runtime.cuda_graph import CUDAGraphEngine
+from lucid_machines.runtime.cuda_graph import CUDAGraphEngine
 
 
 class SimpleModel(nn.Module):

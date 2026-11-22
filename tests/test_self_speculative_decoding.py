@@ -4,8 +4,8 @@ import unittest
 
 import torch
 
-from triune.model.speculative import SelfSpeculativeGenerator
-from triune.model.transformer import TriuneTransformer
+from lucid_machines.model.speculative import SelfSpeculativeGenerator
+from lucid_machines.model.transformer import TriuneTransformer
 
 
 class MockTokenizer:

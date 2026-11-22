@@ -2,8 +2,8 @@ import unittest
 
 import torch
 
-from triune.data.dynamic_tokenizer import DynamicTokenizer
-from triune.model.transformer import TriuneTransformer
+from lucid_machines.data.dynamic_tokenizer import DynamicTokenizer
+from lucid_machines.model.transformer import TriuneTransformer
 
 TEXT = "def __init__(self):\n    super().__init__()\n    self.x = None\n    return self\n" * 3
 

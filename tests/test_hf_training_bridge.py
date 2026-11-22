@@ -6,11 +6,11 @@ from types import SimpleNamespace
 import torch
 import torch.nn as nn
 
+from lucid_machines.configs import build_config
+from lucid_machines.optim import CentroidSteerOptimizer
+from lucid_machines.trainer.evaluation import forward_causal_lm, run_eval, run_sample
+from lucid_machines.trainer.trainer import Trainer
 from scripts.train import _HFTokenizerAdapter
-from triune.configs import build_config
-from triune.optim import CentroidSteerOptimizer
-from triune.trainer.evaluation import forward_causal_lm, run_eval, run_sample
-from triune.trainer.trainer import Trainer
 
 
 class _MockHFTokenizer:

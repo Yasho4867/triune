@@ -271,7 +271,7 @@ public partial class MainWindow : Window
         ResetStageIndicators();
         InstallProgressBar.Value = 5;
         PercentText.Text = "5%";
-        StatusHeadlineText.Text = verifyOnly ? "Verifying Triune Studio installation health..." : "Provisioning Triune Studio environment...";
+        StatusHeadlineText.Text = verifyOnly ? "Verifying Polysom Studio installation health..." : "Provisioning Polysom Studio environment...";
 
         try
         {
@@ -345,8 +345,8 @@ public partial class MainWindow : Window
                 if (!verifyOnly) RegisterUninstallEntry();
                 MarkAllStagesComplete();
                 StatusHeadlineText.Text = verifyOnly
-                    ? "All Triune Studio & AI Engine subsystems passed verification!"
-                    : "Triune Studio & CLI installed and verified successfully!";
+                    ? "All Polysom Studio & Lucid Machines subsystems passed verification!"
+                    : "Polysom Studio & CLI installed and verified successfully!";
                 LaunchStudioButton.IsEnabled = true;
             }
             else
@@ -369,17 +369,17 @@ public partial class MainWindow : Window
         }
     }
 
-    private const string UninstallKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\TriuneStudio";
-    private const string ShortcutName = "Triune Studio.lnk";
-    private const string SetupShortcutName = "Triune Studio Setup.lnk";
+    private const string UninstallKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\PolysomStudio";
+    private const string ShortcutName = "Polysom Studio.lnk";
+    private const string SetupShortcutName = "Polysom Studio Setup.lnk";
 
     private static string? ResolveStudioTarget(string root) => new[]
     {
-        Path.Combine(AppContext.BaseDirectory, "TriuneStudio.exe"),
-        Path.Combine(root, "TriuneStudio.exe"),
-        Path.Combine(root, "studio", "publish", "TriuneStudio.exe"),
-        Path.Combine(root, "studio", "windows", "publish", "TriuneStudio.exe"),
-        Path.Combine(root, "studio", "windows", "TriuneStudio.Windows", "bin", "Release", "net10.0-windows", "TriuneStudio.exe"),
+        Path.Combine(AppContext.BaseDirectory, "PolysomStudio.exe"),
+        Path.Combine(root, "PolysomStudio.exe"),
+        Path.Combine(root, "studio", "publish", "PolysomStudio.exe"),
+        Path.Combine(root, "studio", "windows", "publish", "PolysomStudio.exe"),
+        Path.Combine(root, "studio", "windows", "TriuneStudio.Windows", "bin", "Release", "net10.0-windows", "PolysomStudio.exe"),
         Path.Combine(root, "studio", "TriuneStudio.bat")
     }.FirstOrDefault(File.Exists);
 
@@ -403,9 +403,9 @@ public partial class MainWindow : Window
         if (_workspaceRoot is null || Environment.ProcessPath is not { } setupExe) return;
         var studioExe = ResolveStudioTarget(_workspaceRoot);
         using var key = Registry.CurrentUser.CreateSubKey(UninstallKeyPath);
-        key.SetValue("DisplayName", "Triune Studio");
+        key.SetValue("DisplayName", "Polysom Studio");
         key.SetValue("DisplayVersion", typeof(App).Assembly.GetName().Version?.ToString(3) ?? "0.0.0");
-        key.SetValue("Publisher", "Triune AI");
+        key.SetValue("Publisher", "Lucid Machines");
         key.SetValue("InstallLocation", _workspaceRoot);
         key.SetValue("DisplayIcon", studioExe ?? setupExe);
         key.SetValue("UninstallString", $"\"{setupExe}\" --uninstall");
@@ -431,7 +431,7 @@ public partial class MainWindow : Window
             removed++;
         }
         Registry.CurrentUser.DeleteSubKeyTree(UninstallKeyPath, throwOnMissingSubKey: false);
-        StatusHeadlineText.Text = "Triune Studio shortcuts and uninstall entry were removed.";
+        StatusHeadlineText.Text = "Polysom Studio shortcuts and uninstall entry were removed.";
         AppendLog($"[Uninstall] Removed {removed} shortcut(s) and the HKCU uninstall entry. Program files and the managed Python environment were left in place.");
     }
     private async Task EnsureWindowsShortcutsAsync()
@@ -439,9 +439,9 @@ public partial class MainWindow : Window
         if (_workspaceRoot is null) return;
         try
         {
-            var studioExe = ResolveStudioTarget(_workspaceRoot) ?? Path.Combine(_workspaceRoot, "TriuneStudio.exe");
-            var setupExe = Environment.ProcessPath ?? Path.Combine(_workspaceRoot, "TriuneStudioSetup.exe");
-            var iconPath = Path.Combine(_workspaceRoot, "studio", "windows", "triune.ico");
+            var studioExe = ResolveStudioTarget(_workspaceRoot) ?? Path.Combine(_workspaceRoot, "PolysomStudio.exe");
+            var setupExe = Environment.ProcessPath ?? Path.Combine(_workspaceRoot, "PolysomStudioSetup.exe");
+            var iconPath = Path.Combine(_workspaceRoot, "studio", "windows", "polysom.ico");
             var iconTarget = File.Exists(iconPath) ? iconPath : studioExe;
 
             var desktopDirs = DesktopDirectories();
@@ -457,7 +457,7 @@ public partial class MainWindow : Window
                 sb.AppendLine($"$s.TargetPath = '{studioExe.Replace("'", "''")}';");
                 sb.AppendLine($"$s.WorkingDirectory = '{_workspaceRoot.Replace("'", "''")}';");
                 sb.AppendLine($"$s.IconLocation = '{iconTarget.Replace("'", "''")},0';");
-                sb.AppendLine("$s.Description = 'Triune Studio - AI Engine and Visual Research IDE';");
+                sb.AppendLine("$s.Description = 'Polysom Studio - Lucid Machines AI Engine and Visual Research IDE';");
                 sb.AppendLine("$s.Save();");
             }
 
@@ -469,7 +469,7 @@ public partial class MainWindow : Window
                 sb.AppendLine($"$sm.TargetPath = '{studioExe.Replace("'", "''")}';");
                 sb.AppendLine($"$sm.WorkingDirectory = '{_workspaceRoot.Replace("'", "''")}';");
                 sb.AppendLine($"$sm.IconLocation = '{iconTarget.Replace("'", "''")},0';");
-                sb.AppendLine("$sm.Description = 'Triune Studio - AI Engine and Visual Research IDE';");
+                sb.AppendLine("$sm.Description = 'Polysom Studio - Lucid Machines AI Engine and Visual Research IDE';");
                 sb.AppendLine("$sm.Save();");
 
                 if (File.Exists(setupExe))
@@ -480,7 +480,7 @@ public partial class MainWindow : Window
                     sb.AppendLine($"$su.TargetPath = '{setupExe.Replace("'", "''")}';");
                     sb.AppendLine($"$su.WorkingDirectory = '{_workspaceRoot.Replace("'", "''")}';");
                     sb.AppendLine($"$su.IconLocation = '{iconTarget.Replace("'", "''")},0';");
-                    sb.AppendLine("$su.Description = 'Triune Studio Setup - Repair or Reconfigure AI Engine';");
+                    sb.AppendLine("$su.Description = 'Polysom Studio Setup - Repair or Reconfigure Lucid Machines Engine';");
                     sb.AppendLine("$su.Save();");
                 }
             }
@@ -515,7 +515,7 @@ public partial class MainWindow : Window
     private async void ShortcutButton_Click(object sender, RoutedEventArgs e)
     {
         await EnsureWindowsShortcutsAsync();
-        StatusHeadlineText.Text = "Desktop and Start Menu shortcuts created for Triune Studio.";
+        StatusHeadlineText.Text = "Desktop and Start Menu shortcuts created for Polysom Studio.";
     }
 
     private async void InstallButton_Click(object sender, RoutedEventArgs e)
@@ -540,7 +540,7 @@ public partial class MainWindow : Window
 
         if (target is null)
         {
-            AppendLog("[ERROR] Could not locate TriuneStudio.exe.");
+            AppendLog("[ERROR] Could not locate PolysomStudio.exe.");
             return false;
         }
 

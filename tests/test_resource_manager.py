@@ -1,7 +1,7 @@
 import torch
 
-from triune.model.transformer import TriuneTransformer
-from triune.runtime.resource_manager import (
+from lucid_machines.model.transformer import TriuneTransformer
+from lucid_machines.runtime.resource_manager import (
     DynamicResourceManager,
     LiveVRAMMonitor,
     VRAMBudgetExceededError,

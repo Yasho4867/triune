@@ -1,4 +1,4 @@
-"""Create or refresh a signed Triune plugin manifest using an Ed25519 private key.
+"""Create or refresh a signed Lucid Machines plugin manifest using an Ed25519 private key.
 
 Keep the signing key in a trusted release environment. This tool prompts for the
 base64-encoded raw 32-byte private key without echoing or writing it to disk.
@@ -20,8 +20,16 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 
+def _resolve_manifest_path(plugin_dir: Path) -> Path:
+    primary = plugin_dir / "lucid_machines_plugin.json"
+    legacy = plugin_dir / "triune_plugin.json"
+    if primary.is_file() or not legacy.is_file():
+        return primary
+    return legacy
+
+
 def sign_manifest(plugin_dir: Path, key_id: str, private_key_b64: str) -> str:
-    manifest_path = plugin_dir / "triune_plugin.json"
+    manifest_path = _resolve_manifest_path(plugin_dir)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if not isinstance(manifest, dict):
         raise ValueError("Manifest root must be a JSON object.")
@@ -62,7 +70,7 @@ def sign_manifest(plugin_dir: Path, key_id: str, private_key_b64: str) -> str:
         "value": base64.b64encode(private_key.sign(canonical)).decode("ascii"),
     }
 
-    fd, temp_name = tempfile.mkstemp(prefix="triune_plugin_manifest_", suffix=".tmp", dir=plugin_dir)
+    fd, temp_name = tempfile.mkstemp(prefix="lucid_machines_plugin_manifest_", suffix=".tmp", dir=plugin_dir)
     temp_path = Path(temp_name)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -84,8 +92,12 @@ def sign_manifest(plugin_dir: Path, key_id: str, private_key_b64: str) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("plugin_dir", type=Path, help="Directory containing triune_plugin.json and plugin entrypoints")
-    parser.add_argument("--key-id", required=True, help="Stable identifier for the public key trusted by Triune users")
+    parser.add_argument(
+        "plugin_dir", type=Path, help="Directory containing lucid_machines_plugin.json and plugin entrypoints"
+    )
+    parser.add_argument(
+        "--key-id", required=True, help="Stable identifier for the public key trusted by Lucid Machines users"
+    )
     args = parser.parse_args()
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", args.key_id):
         parser.error("--key-id must contain only letters, digits, dot, underscore, or hyphen")
@@ -94,7 +106,7 @@ def main() -> int:
         public_key = sign_manifest(args.plugin_dir, args.key_id, private_key)
     except Exception as exc:
         parser.error(str(exc))
-    print(f"Signed manifest: {args.plugin_dir / 'triune_plugin.json'}")
+    print(f"Signed manifest: {_resolve_manifest_path(args.plugin_dir)}")
     print(f"Publish this public key out-of-band as trusted key '{args.key_id}': {public_key}")
     return 0
 

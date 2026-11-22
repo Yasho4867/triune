@@ -6,7 +6,7 @@ import unittest
 
 import torch
 
-from triune.inference import generate_response
+from lucid_machines.inference import generate_response
 
 
 class _Tokenizer:

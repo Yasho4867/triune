@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630" role="img" aria-label="Lucid Machines v1.0.0 Benchmark and Architecture Card">
+  <title>Lucid Machines v1.0.0 — 5-Tier Verified Benchmark &amp; CentroidSteer R2 Summary Card</title>
+  <rect x="0" y="0" width="1200" height="630" fill="#0B0F17" stroke="#1E293B" stroke-width="4"/>
+
+  <rect x="40" y="36" width="1120" height="86" rx="12" fill="#111827" stroke="#1E293B" stroke-width="2"/>
+  <text x="68" y="76" fill="#38BDF8" font-family="Outfit, Segoe UI, sans-serif" font-size="28" font-weight="800">LUCID MACHINES v1.0.0</text>
+  <text x="424" y="76" fill="#F8FAFC" font-family="Inter, Segoe UI, sans-serif" font-size="21" font-weight="600">Triune Architecture, CentroidSteer &amp; Polysom Studio</text>
+  <text x="68" y="104" fill="#94A3B8" font-family="Fira Code, Consolas, monospace" font-size="14">pip install lucid-machines  |  polysom  |  PolysomStudioSetup.exe  |  Flagship Target: Junkie</text>
+
+  <rect x="40" y="144" width="546" height="206" rx="12" fill="#111827" stroke="#38BDF8" stroke-width="2"/>
+  <text x="64" y="178" fill="#38BDF8" font-family="Fira Code, Consolas, monospace" font-size="14" font-weight="700">TIER 1: ISOLATED KERNEL MICROBENCHMARKS</text>
+  <text x="64" y="212" fill="#F8FAFC" font-family="Fira Code, Consolas, monospace" font-size="15">- VectorisedGLA (H=6, L=16384): 48.0 KiB state (10.07x prefill)</text>
+  <text x="64" y="242" fill="#F8FAFC" font-family="Fira Code, Consolas, monospace" font-size="15">- MoE_FFN Sparse (d=384, E=8, k=2, N=4096): 7.518x speedup</text>
+  <text x="64" y="272" fill="#F8FAFC" font-family="Fira Code, Consolas, monospace" font-size="15">- MoE_FFN Single-Token (N=1): 1.648x zero-sync (0.0 max diff)</text>
+  <text x="64" y="302" fill="#10B981" font-family="Fira Code, Consolas, monospace" font-size="15">- Chunked Cross-Entropy (V=32k): 98.5% transient VRAM saved</text>
+  <text x="64" y="330" fill="#94A3B8" font-family="Fira Code, Consolas, monospace" font-size="13">- FastSwiGLU Triton Kernel: 1.95x vs PyTorch eager</text>
+
+  <rect x="614" y="144" width="546" height="206" rx="12" fill="#111827" stroke="#10B981" stroke-width="2"/>
+  <text x="638" y="178" fill="#10B981" font-family="Fira Code, Consolas, monospace" font-size="14" font-weight="700">TIER 2: E2E 90.79M BASELINE &amp; LAYER STREAMING</text>
+  <text x="638" y="212" fill="#F8FAFC" font-family="Fira Code, Consolas, monospace" font-size="15">- Peak E2E Prefill (B=32, T=1024): 383,135 tok/s</text>
+  <text x="638" y="242" fill="#F8FAFC" font-family="Fira Code, Consolas, monospace" font-size="15">- Warm Streaming Decode (RTX 5070): 40.8 tok/s | 71.3 ms TTFT</text>
+  <text x="638" y="272" fill="#F8FAFC" font-family="Fira Code, Consolas, monospace" font-size="15">- Tensor Decode: 157.0 tok/s | LoRA: +6.7% vs Unsloth</text>
+  <text x="638" y="302" fill="#38BDF8" font-family="Fira Code, Consolas, monospace" font-size="15">- LayerStreamingEngine: 1.52B Model Trains in 3,132.6 MB VRAM</text>
+  <text x="638" y="330" fill="#94A3B8" font-family="Fira Code, Consolas, monospace" font-size="13">- NVFP4 4-Bit Quantization: 3.20x compression (46.65 MB)</text>
+
+  <rect x="40" y="370" width="546" height="214" rx="12" fill="#111827" stroke="#F59E0B" stroke-width="2"/>
+  <text x="64" y="404" fill="#F59E0B" font-family="Fira Code, Consolas, monospace" font-size="14" font-weight="700">R2: MULTI-DIRECTIONAL CENTROIDSTEER (5-SEED PROOF)</text>
+  <text x="64" y="438" fill="#F8FAFC" font-family="Fira Code, Consolas, monospace" font-size="15">- FineWeb Cold-Start (0.264 B/p): 2.2012 vs 2.2472 nosteer (p=0.0112)</text>
+  <text x="64" y="468" fill="#10B981" font-family="Fira Code, Consolas, monospace" font-size="15">- vs Random Subspace (0.264 B/p): 2.2012 vs 2.2585 (p = 0.0006)</text>
+  <text x="64" y="498" fill="#F8FAFC" font-family="Fira Code, Consolas, monospace" font-size="15">- FineWeb 75.8M Cont (0.201 B/p): 4.9934 vs 4.9945 (p = 0.0004)</text>
+  <text x="64" y="528" fill="#F8FAFC" font-family="Fira Code, Consolas, monospace" font-size="15">- Block-Oja Energy Capture: 92.23% (51.24x vs random, p=2.1e-8)</text>
+  <text x="64" y="558" fill="#38BDF8" font-family="Fira Code, Consolas, monospace" font-size="13">- Direct-Sum &amp; Grassmann Transport | ||Q^T Q - I||_F &lt; 1e-4</text>
+
+  <rect x="614" y="370" width="546" height="214" rx="12" fill="#111827" stroke="#334155" stroke-width="2"/>
+  <text x="638" y="404" fill="#38BDF8" font-family="Fira Code, Consolas, monospace" font-size="14" font-weight="700">TIERS 3-5, POLYSOM STUDIO &amp; R4 SECURITY</text>
+  <text x="638" y="438" fill="#F8FAFC" font-family="Fira Code, Consolas, monospace" font-size="15">- Multi-Layer L=16384 Cache: 64.0 KiB (-99.8% vs SDPA)</text>
+  <text x="638" y="468" fill="#F8FAFC" font-family="Fira Code, Consolas, monospace" font-size="15">- DynamicTokenizer: 2.65x lossless | expand: 0.0 logit diff</text>
+  <text x="638" y="498" fill="#10B981" font-family="Fira Code, Consolas, monospace" font-size="15">- Self-Spec Decode: T=0.0 Exact (91.62 tok/s) | T=0.7 (90.74)</text>
+  <text x="638" y="528" fill="#F8FAFC" font-family="Fira Code, Consolas, monospace" font-size="15">- Conformal CALM tau=0.20: 95.73% Reflex agr (20.35% FLOPs)</text>
+  <text x="638" y="558" fill="#F59E0B" font-family="Fira Code, Consolas, monospace" font-size="13">- 6 Polysom Themes | weights_only=True, Path Guard, Ed25519</text>
+</svg>

@@ -6,13 +6,13 @@ import unittest
 import torch
 import torch.nn as nn
 
-from triune.kernels.fast_cross_entropy import chunked_cross_entropy_from_hidden
-from triune.kernels.fast_gla import fast_chunk_gated_deltanet, fast_recurrent_gated_deltanet
-from triune.kernels.fast_muon import compute_muon_update_scale
-from triune.model.moe import MoE_FFN
-from triune.model.router import GumbelSoftmaxRouter
-from triune.optim.centroid import CentroidSteerOptimizer
-from triune.optim.muon import Muon
+from lucid_machines.kernels.fast_cross_entropy import chunked_cross_entropy_from_hidden
+from lucid_machines.kernels.fast_gla import fast_chunk_gated_deltanet, fast_recurrent_gated_deltanet
+from lucid_machines.kernels.fast_muon import compute_muon_update_scale
+from lucid_machines.model.moe import MoE_FFN
+from lucid_machines.model.router import GumbelSoftmaxRouter
+from lucid_machines.optim.centroid import CentroidSteerOptimizer
+from lucid_machines.optim.muon import Muon
 
 
 class TestGatedDeltaNetAndAdvancements(unittest.TestCase):
@@ -118,7 +118,7 @@ class TestGatedDeltaNetAndAdvancements(unittest.TestCase):
         self.assertEqual(opt.energy_threshold, 0.6)
 
     def test_scale_residual_projections_initialization(self):
-        from triune.model.transformer import TriuneTransformer
+        from lucid_machines.model.transformer import TriuneTransformer
 
         model_standard = TriuneTransformer(
             vocab_size=256,

@@ -13,17 +13,17 @@ from unittest.mock import patch
 import torch
 from fastapi.testclient import TestClient
 
-from triune.api.routes import pytorch_state
-from triune.api.server import create_app
-from triune.inference import generate_response
-from triune.model.transformer import TriuneTransformer
-from triune.model.transmuter import (
+from lucid_machines.api.routes import pytorch_state
+from lucid_machines.api.server import create_app
+from lucid_machines.inference import generate_response
+from lucid_machines.model.transformer import TriuneTransformer
+from lucid_machines.model.transmuter import (
     distill_native_triune_step,
     ollama_to_hf_candidate,
     transfer_weights_to_native_triune,
     transmute_hf_to_triune,
 )
-from triune.runtime.model_scanner import _is_tag_live_in_ollama, query_ollama_running_tags
+from lucid_machines.runtime.model_scanner import _is_tag_live_in_ollama, query_ollama_running_tags
 
 
 def _build_tiny_hf_llama_dir(target_dir: str) -> Path:
@@ -134,7 +134,9 @@ class TestWeightTransmutationAndOllamaRuntime(unittest.TestCase):
             try:
                 self.assertTrue(meta["weights_transferred"])
                 self.assertEqual(meta["transmute_mode"], "early_exit")
-                self.assertTrue(getattr(model, "_is_triune_transmuted", False))
+                self.assertTrue(
+                    getattr(model, "_is_triune_transmuted", False) or getattr(model, "_lucid_transmuted", False)
+                )
                 self.assertTrue(hasattr(model, "reflex_head"))
                 self.assertTrue(hasattr(model, "limbic_head"))
                 self.assertTrue(hasattr(model, "_exit_manager"))
@@ -181,7 +183,7 @@ class TestWeightTransmutationAndOllamaRuntime(unittest.TestCase):
     def test_native_weight_surgery_and_kl_distillation(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             _build_tiny_hf_llama_dir(tmpdir)
-            from triune.inference import load_model_for_inference
+            from lucid_machines.inference import load_model_for_inference
 
             teacher, tok, _, dev, _, _ = load_model_for_inference(tmpdir, device="cpu", local_files_only=True)
             student, report = transfer_weights_to_native_triune(
@@ -293,7 +295,7 @@ class TestWeightTransmutationAndOllamaRuntime(unittest.TestCase):
         snap = self._snapshot_engine_state()
         try:
             with patch(
-                "triune.runtime.model_scanner.query_ollama_running_tags",
+                "lucid_machines.runtime.model_scanner.query_ollama_running_tags",
                 return_value={"gemma3:4b"},
             ):
                 load_ok = self.client.post("/v1/models/load", json={"checkpoint_path": "ollama:gemma3:4b"})
@@ -360,7 +362,7 @@ class TestWeightTransmutationAndOllamaRuntime(unittest.TestCase):
 
         import numpy as np
 
-        from triune.runtime.gguf_loader import dequantize_ggml_tensor, load_gguf_hf_model
+        from lucid_machines.runtime.gguf_loader import dequantize_ggml_tensor, load_gguf_hf_model
 
         # 1. Verify Q4_0 and Q8_0 dequantization precision on synthetic blocks
         d_f16 = np.float16(0.5).tobytes()
@@ -617,7 +619,7 @@ class TestWeightTransmutationAndOllamaRuntime(unittest.TestCase):
 
         import numpy as np
 
-        from triune.runtime.gguf_loader import load_gguf_hf_model
+        from lucid_machines.runtime.gguf_loader import load_gguf_hf_model
 
         def _pack_str(s: str) -> bytes:
             b = s.encode("utf-8")
@@ -756,9 +758,10 @@ class TestWeightTransmutationAndOllamaRuntime(unittest.TestCase):
                     self.assertTrue(torch.isfinite(buf).all(), f"{bname} has non-finite values")
                     self.assertGreater(float(buf.min()), 0.0, f"{bname} uninitialized min")
                     self.assertLessEqual(float(buf.max()), 1.0, f"{bname} uninitialized max")
-            # 2. <unk> (id=3) must never pollute _triune_extra_eos_ids
-            self.assertNotIn(3, m_g3._triune_extra_eos_ids)
-            self.assertIn(5, m_g3._triune_extra_eos_ids)
+            # 2. <unk> (id=3) must never pollute extra_eos_ids
+            extra_eos = getattr(m_g3, "_lucid_extra_eos_ids", getattr(m_g3, "_triune_extra_eos_ids"))
+            self.assertNotIn(3, extra_eos)
+            self.assertIn(5, extra_eos)
 
             # 3. Studio DEFAULT_SYSTEM_PROMPT must format cleanly via _HFInferenceTokenizerAdapter
             rendered = tok_g3.apply_chat_template(
@@ -1043,8 +1046,8 @@ class TestWeightTransmutationAndOllamaRuntime(unittest.TestCase):
         from transformers.models.llama.modeling_llama import LlamaRMSNorm
         from transformers.models.qwen2.modeling_qwen2 import Qwen2RMSNorm
 
-        from triune.inference import optimize_hf_model_for_inference
-        from triune.runtime.gguf_loader import _GGUF_TOKENIZER_CACHE, load_gguf_hf_model
+        from lucid_machines.inference import optimize_hf_model_for_inference
+        from lucid_machines.runtime.gguf_loader import _GGUF_TOKENIZER_CACHE, load_gguf_hf_model
 
         vocab = ["<pad>", "<eos>", "<bos>", "<unk>", "<start_of_turn>", "<end_of_turn>"] + [
             f"▁t{i}" for i in range(6, 64)
@@ -1067,7 +1070,7 @@ class TestWeightTransmutationAndOllamaRuntime(unittest.TestCase):
 
             # Repeat load reuses cached tokenizer without rebuilding or BufferError on mmap close
             with patch(
-                "triune.runtime.gguf_loader.build_hf_tokenizer_from_gguf",
+                "lucid_machines.runtime.gguf_loader.build_hf_tokenizer_from_gguf",
                 side_effect=AssertionError("should hit cache"),
             ):
                 m2, tok2, _, _, _, _ = load_gguf_hf_model(g3_path, device="cpu")
@@ -1115,13 +1118,13 @@ class TestWeightTransmutationAndOllamaRuntime(unittest.TestCase):
             Qwen2ForCausalLM,
         )
 
-        from triune.inference import (
+        from lucid_machines.inference import (
             _get_or_create_hf_cg_runner,
             optimize_hf_model_for_inference,
             release_cuda_graph_runner,
         )
-        from triune.kernels.fast_nvfp4 import NVFP4Linear
-        from triune.runtime.gguf_loader import load_gguf_hf_model
+        from lucid_machines.kernels.fast_nvfp4 import NVFP4Linear
+        from lucid_machines.runtime.gguf_loader import load_gguf_hf_model
 
         vocab = ["<pad>", "<eos>", "<bos>", "<unk>", "<start_of_turn>", "<end_of_turn>"] + [
             f"▁t{i}" for i in range(6, 64)
@@ -1227,7 +1230,8 @@ class TestWeightTransmutationAndOllamaRuntime(unittest.TestCase):
                 self.assertEqual(r0["route"], "REFLEX")
                 self.assertEqual(r1["route"], "LIMBIC")
                 self.assertEqual(r_cg["route"], "CORTEX")
-                self.assertIsNotNone(getattr(model_tr, "_triune_cg_runner", None))
+                cg_runner = getattr(model_tr, "_lucid_cg_runner", getattr(model_tr, "_triune_cg_runner", None))
+                self.assertIsNotNone(cg_runner)
             finally:
                 exit_mgr = getattr(model_tr, "_exit_manager", None)
                 if exit_mgr is not None and hasattr(exit_mgr, "remove_hooks"):
@@ -1296,7 +1300,7 @@ class TestWeightTransmutationAndOllamaRuntime(unittest.TestCase):
                 self.assertLess(max_diff, 1e-4, f"{type(test_model).__name__} CUDA graph max_diff={max_diff}")
 
             release_cuda_graph_runner(test_model)
-            self.assertIsNone(getattr(test_model, "_triune_cg_runner", None))
+            self.assertIsNone(getattr(test_model, "_lucid_cg_runner", getattr(test_model, "_triune_cg_runner", None)))
 
 
 if __name__ == "__main__":

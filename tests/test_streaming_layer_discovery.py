@@ -3,7 +3,7 @@ import unittest
 import torch
 import torch.nn as nn
 
-from triune.runtime.streaming import LayerStreamingEngine, StreamingConfig
+from lucid_machines.runtime.streaming import LayerStreamingEngine, StreamingConfig
 
 
 class TestStreamingLayerDiscovery(unittest.TestCase):

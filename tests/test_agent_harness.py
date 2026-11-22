@@ -1,4 +1,4 @@
-"""Tests for the Self-Learning Triune Agent Harness (personas, skills, memory, tool mastery, subagents)."""
+"""Tests for the Self-Learning Lucid Machines Agent Harness (personas, skills, memory, tool mastery, subagents)."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
 
-from triune.agents import (
+from lucid_machines.agents import (
     Agent,
     AgentHarness,
     AgentMemoryStore,
@@ -19,11 +19,11 @@ from triune.agents import (
     SkillLibrary,
     StateController,
 )
-from triune.agents.tools import _SafeRedirectHandler, validate_http_url
-from triune.api.server import create_app
+from lucid_machines.agents.tools import _SafeRedirectHandler, validate_http_url
+from lucid_machines.api.server import create_app
 
 
-class TestTriuneAgentHarness(unittest.TestCase):
+class TestLucidMachinesAgentHarness(unittest.TestCase):
     def test_dynamic_persona_and_state_adaptation_with_persistence(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             ctrl = StateController(tmpdir)
@@ -244,7 +244,7 @@ class TestTriuneAgentHarness(unittest.TestCase):
         self.assertIn("debugger", payload["personas"])
 
         with patch(
-            "triune.agents.providers.ProviderManager.complete_chat",
+            "lucid_machines.agents.providers.ProviderManager.complete_chat",
             return_value={"content": '{"thought": "done", "action": "final", "answer": "All systems ready."}'},
         ):
             run_res = client.post(
@@ -376,8 +376,8 @@ class TestTriuneAgentHarness(unittest.TestCase):
         import sys
         from contextlib import redirect_stdout
 
-        from triune.api.server import create_app
-        from triune.cli import main as cli_main
+        from lucid_machines.api.server import create_app
+        from lucid_machines.cli import main as cli_main
 
         client = TestClient(create_app())
 
@@ -412,9 +412,9 @@ class TestTriuneAgentHarness(unittest.TestCase):
 
             # 2. /v1/agents/orchestrate + CLI --team --parallel (even with no host Ollama/BYOK)
             with (
-                patch("triune.agents.providers.ProviderManager.pick_default_model", return_value=None),
+                patch("lucid_machines.agents.providers.ProviderManager.pick_default_model", return_value=None),
                 patch(
-                    "triune.agents.providers.ProviderManager.complete_chat",
+                    "lucid_machines.agents.providers.ProviderManager.complete_chat",
                     return_value={"content": '{"answer": "verified specialist output"}', "tool_calls": []},
                 ),
             ):
@@ -442,7 +442,7 @@ class TestTriuneAgentHarness(unittest.TestCase):
                         sys,
                         "argv",
                         [
-                            "triune",
+                            "lucid-machines",
                             "agent",
                             "--model",
                             "ollama:gemma3:4b",

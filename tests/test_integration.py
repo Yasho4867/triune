@@ -9,8 +9,8 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 
-from triune.model import TriuneTransformer
-from triune.optim import CentroidSteerOptimizer
+from lucid_machines.model import TriuneTransformer
+from lucid_machines.optim import CentroidSteerOptimizer
 
 
 class _Tokenizer:

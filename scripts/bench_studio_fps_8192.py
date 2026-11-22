@@ -1,7 +1,7 @@
-"""Telemetry and Benchmark Script for Triune Studio 8,192-Token Responsiveness.
+"""Telemetry and Benchmark Script for Polysom Studio 8,192-Token Responsiveness.
 
 Measures:
-1. Baseline (Unoptimized) vs Optimized (Triune Studio v2.4):
+1. Baseline (Unoptimized) vs Optimized (Polysom Studio 3.0):
    - DOM Node Count for 8192-token outputs
    - Main Thread Render/Layout Time per token chunk
    - Particle Canvas Flood Count (NeuronSynapseCanvas3D)
@@ -19,7 +19,7 @@ def run_benchmark():
     stream_tokens_per_sec = 110.0  # GPU token emission rate
 
     print("=" * 80)
-    print("TRIUNE STUDIO 8,192-TOKEN RESPONSIVENESS & 120 FPS TELEMETRY BENCHMARK")
+    print("POLYSOM STUDIO 8,192-TOKEN RESPONSIVENESS & 120 FPS TELEMETRY BENCHMARK")
     print("=" * 80)
     print(f"Context Length: {tokens:,} tokens (~{total_chars:,} characters)")
     print(f"Token Generation Velocity: {stream_tokens_per_sec:.1f} tokens/sec")
@@ -34,7 +34,7 @@ def run_benchmark():
     baseline_frame_time_ms = 48.5  # 48.5ms per frame due to layout recalculation & shadowBlur
     baseline_fps = min(60, 1000.0 / baseline_frame_time_ms)  # ~20.6 FPS with periodic 0-FPS freeze spikes
 
-    # 2. Optimized (Triune Studio v2.4):
+    # 2. Optimized (Polysom Studio 3.0):
     # rAF-batched token rendering: capped at 120 FPS (~8.33ms batch interval)
     # React.memo ChatMessageBubble: isolates turn re-rendering to active bubble (0ms for earlier turns)
     # VirtualizedFormattedText: only ~28 DOM blocks mounted in window + spacers

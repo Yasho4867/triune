@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 
-from triune.model import MoE_FFN
-from triune.optim.centroid import CentroidSteerOptimizer
+from lucid_machines.model import MoE_FFN
+from lucid_machines.optim.centroid import CentroidSteerOptimizer
 
 
 class DummyMoEModel(nn.Module):
@@ -242,7 +242,7 @@ def test_basis_orthogonality_and_subdiagonal_residuals():
 
 def test_cholesky_householder_fallback_integrity():
     """Verifies that ill-conditioned or degenerate Gram matrices cleanly trigger Householder QR fallback in production batched_qr."""
-    from triune.optim.centroid import CentroidSteerOptimizer, batched_qr
+    from lucid_machines.optim.centroid import CentroidSteerOptimizer, batched_qr
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch.manual_seed(42)
@@ -278,8 +278,8 @@ def test_cholesky_householder_fallback_integrity():
         "Primary fallback reasons must partition fallback_mask exactly"
     )
 
-    # Also test that batched_subspace_projection in triune.ops uses guarded QR
-    from triune.ops import batched_subspace_projection
+    # Also test that batched_subspace_projection in lucid_machines.ops uses guarded QR
+    from lucid_machines.ops import batched_subspace_projection
 
     test_grads = torch.randn(2, 64, 128, device=device)
     proj, side, diag_hist = batched_subspace_projection(test_grads, rank=8, niter=1, return_diagnostics=True)
@@ -307,7 +307,7 @@ def test_cholesky_householder_fallback_integrity():
 
 def test_triangular_adamw_noise_filtering_and_update_equivalence():
     """Verifies that triangular AdamW matches unconstrained AdamW on exact cores and filters subdiagonal noise."""
-    from triune.kernels.fast_triangular import fast_triangular_adamw
+    from lucid_machines.kernels.fast_triangular import fast_triangular_adamw
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch.manual_seed(42)
@@ -361,7 +361,7 @@ def test_triangular_adamw_noise_filtering_and_update_equivalence():
 
 def test_scholqr2_shift_bias_elimination_and_zero_grad_skip():
     """Verifies that Two-Pass Shifted Cholesky-QR (sCholQR2) eliminates shift bias on kappa~100 matrices without fallback, and skips unrouted zero-grad experts."""
-    from triune.ops.centroid_steer import batched_qr
+    from lucid_machines.ops.centroid_steer import batched_qr
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch.manual_seed(123)

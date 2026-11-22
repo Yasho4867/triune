@@ -15,9 +15,9 @@ import unittest
 
 import torch
 
-from triune.configs.config import default_config, validate_config
-from triune.model.transformer import TriuneTransformer
-from triune.trainer.checkpoint import (
+from lucid_machines.configs.config import default_config, validate_config
+from lucid_machines.model.transformer import TriuneTransformer
+from lucid_machines.trainer.checkpoint import (
     compute_checkpoint_fingerprint,
     load_checkpoint,
     save_latest,

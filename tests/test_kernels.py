@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from triune.kernels import (
+from lucid_machines.kernels import (
     FastRMSNorm,
     chunked_cross_entropy_from_hidden,
     fast_cross_entropy,
@@ -136,7 +136,7 @@ class TestKernelSuite(unittest.TestCase):
         self.assertEqual(out2.item(), 0.0)
 
     def test_fast_swiglu_and_gelu(self):
-        from triune.kernels import FastGELU, fast_swiglu
+        from lucid_machines.kernels import FastGELU, fast_swiglu
 
         gate = torch.randn(4, 16, 64, requires_grad=True)
         up = torch.randn(4, 16, 64, requires_grad=True)
@@ -162,7 +162,7 @@ class TestKernelSuite(unittest.TestCase):
         self.assertIsNotNone(x.grad)
 
     def test_fast_muon_newton_schulz(self):
-        from triune.kernels import fast_zeropower_via_newtonschulz5
+        from lucid_machines.kernels import fast_zeropower_via_newtonschulz5
 
         # 64x128 matrix
         G = torch.randn(64, 128)
@@ -176,7 +176,7 @@ class TestKernelSuite(unittest.TestCase):
         self.assertLess(diff, 0.35)
 
     def test_fast_lora_forward(self):
-        from triune.kernels import fast_lora_forward
+        from lucid_machines.kernels import fast_lora_forward
 
         B, T, D_in, D_out, rank = 2, 8, 32, 48, 8
         x = torch.randn(B, T, D_in, requires_grad=True)
@@ -194,7 +194,7 @@ class TestKernelSuite(unittest.TestCase):
         self.assertIsNotNone(lora_B.grad)
 
     def test_fast_chunk_gla(self):
-        from triune.kernels import fast_chunk_gla
+        from lucid_machines.kernels import fast_chunk_gla
 
         B, T, H, HD = 2, 64, 4, 32
         q = torch.randn(B, T, H, HD)
@@ -209,7 +209,7 @@ class TestKernelSuite(unittest.TestCase):
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for Triton GLA scan parity")
     def test_fused_recurrent_scan_mathematical_parity(self):
         """Verify Triton FusedRecurrentScan against reference sequential recurrence in forward & backward."""
-        from triune.kernels.fast_gla import FusedRecurrentScan
+        from lucid_machines.kernels.fast_gla import FusedRecurrentScan
 
         if FusedRecurrentScan is None:
             self.skipTest("Triton not available")
@@ -265,7 +265,7 @@ class TestKernelSuite(unittest.TestCase):
 
     def test_fast_chunk_gla_gradient_parity_and_lengths(self):
         """Assert fast_chunk_gla matches token-by-token recurrence across divisible and non-divisible lengths on CPU and CUDA."""
-        from triune.kernels.fast_gla import fast_chunk_gla
+        from lucid_machines.kernels.fast_gla import fast_chunk_gla
 
         def _ref_gla(q, k, v, g, init_s=None):
             B, T, H, HD = q.shape
@@ -434,7 +434,7 @@ class TestKernelSuite(unittest.TestCase):
                     self.assertFalse(torch.isnan(s.grad).any())
 
     def test_kernel_telemetry_and_turbo_mode(self):
-        from triune.kernels import get_kernel_telemetry, is_turbo_mode_enabled, set_turbo_mode
+        from lucid_machines.kernels import get_kernel_telemetry, is_turbo_mode_enabled, set_turbo_mode
 
         self.assertTrue(is_turbo_mode_enabled())
         telem = get_kernel_telemetry()
@@ -478,7 +478,7 @@ class TestKernelSuite(unittest.TestCase):
         )
 
     def test_fast_fused_add_rmsnorm(self):
-        from triune.kernels import fast_fused_add_rmsnorm
+        from lucid_machines.kernels import fast_fused_add_rmsnorm
 
         B, T, D = 2, 8, 64
         x = torch.randn(B, T, D, requires_grad=True)
@@ -496,7 +496,7 @@ class TestKernelSuite(unittest.TestCase):
         self.assertIsNotNone(weight.grad)
 
     def test_fast_fp8_linear(self):
-        from triune.kernels import FastFP8Linear
+        from lucid_machines.kernels import FastFP8Linear
 
         mod = FastFP8Linear(64, 32)
         x = torch.randn(2, 8, 64, requires_grad=True)
@@ -508,7 +508,7 @@ class TestKernelSuite(unittest.TestCase):
         self.assertIsNotNone(mod.weight.grad)
 
     def test_nvfp4_roundtrip(self):
-        from triune.kernels import NVFP4Linear, nvfp4_dequantize, nvfp4_quantize
+        from lucid_machines.kernels import NVFP4Linear, nvfp4_dequantize, nvfp4_quantize
 
         rows, cols = 32, 64
         w = torch.randn(rows, cols, dtype=torch.bfloat16)
@@ -529,9 +529,9 @@ class TestKernelSuite(unittest.TestCase):
         self.assertEqual(out.shape, (2, 4, 32))
 
     def test_nvfp4_fused_gemv_gemm_fwht_and_model_protection(self):
-        from triune.kernels import NVFP4Linear, fwht_16, nvfp4_dequantize, nvfp4_linear
-        from triune.model.fp4 import convert_to_nvfp4
-        from triune.model.transformer import TriuneTransformer
+        from lucid_machines.kernels import NVFP4Linear, fwht_16, nvfp4_dequantize, nvfp4_linear
+        from lucid_machines.model.fp4 import convert_to_nvfp4
+        from lucid_machines.model.transformer import TriuneTransformer
 
         # 1. FWHT-16 orthogonal involution check
         x_h = torch.randn(3, 7, 48, dtype=torch.float32)
@@ -589,7 +589,7 @@ class TestKernelSuite(unittest.TestCase):
         convert_to_nvfp4(m, hadamard=True, protect_sensitive=True)
         self.assertIsInstance(m.final_head, nn.Linear)
         self.assertIsInstance(m.layers[m.reflex_exit_layer].exit_head, nn.Linear)
-        from triune.model.moe import MoE_FFN
+        from lucid_machines.model.moe import MoE_FFN
 
         moe_ffns = [blk.ffn for blk in m.layers if isinstance(blk.ffn, MoE_FFN)]
         self.assertGreater(len(moe_ffns), 0)
@@ -604,7 +604,7 @@ class TestKernelSuite(unittest.TestCase):
         self.assertTrue(torch.isfinite(logits).all())
 
     def test_nvfp4_autograd_input_grad_and_empty_skeleton(self):
-        from triune.kernels import NVFP4Linear, fwht_16, nvfp4_dequantize
+        from lucid_machines.kernels import NVFP4Linear, fwht_16, nvfp4_dequantize
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         dtype = torch.bfloat16 if device.type == "cuda" else torch.float32

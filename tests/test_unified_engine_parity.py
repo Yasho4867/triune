@@ -9,12 +9,12 @@ import unittest
 import torch
 import torch.nn as nn
 
-from triune.api.routes import RealPyTorchEngineState
-from triune.model.base import build_model_from_spec, get_model_spec
-from triune.model.moe import MoE_FFN
-from triune.recipes import bf16_autocast
-from triune.trainer.engine import TrainingEngine
-from triune.trainer.scheduler import lr_schedule, set_optimizer_lr
+from lucid_machines.api.routes import RealPyTorchEngineState
+from lucid_machines.model.base import build_model_from_spec, get_model_spec
+from lucid_machines.model.moe import MoE_FFN
+from lucid_machines.recipes import bf16_autocast
+from lucid_machines.trainer.engine import TrainingEngine
+from lucid_machines.trainer.scheduler import lr_schedule, set_optimizer_lr
 
 
 class _CLIStubTrainer:
@@ -175,8 +175,8 @@ class TestUnifiedEngineParity(unittest.TestCase):
 
     def test_cli_train_presets_match_canonical_studio_specs(self) -> None:
         """Proves CLI scripts/train.py and Studio use the exact same CANONICAL_MODEL_SPECS."""
+        from lucid_machines.model.base import CANONICAL_MODEL_SPECS, get_model_spec
         from scripts.train import build_parser
-        from triune.model.base import CANONICAL_MODEL_SPECS, get_model_spec
 
         parser = build_parser()
         args = parser.parse_args(["--model_name", "triune-base", "--depth_mode", "dynamic"])

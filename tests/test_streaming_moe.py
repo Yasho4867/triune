@@ -2,9 +2,9 @@ import unittest
 
 import torch
 
-from triune.model.transformer import TriuneTransformer
-from triune.optim.centroid import CentroidSteerOptimizer
-from triune.runtime.streaming import LayerStreamingEngine, StreamingConfig
+from lucid_machines.model.transformer import TriuneTransformer
+from lucid_machines.optim.centroid import CentroidSteerOptimizer
+from lucid_machines.runtime.streaming import LayerStreamingEngine, StreamingConfig
 
 
 class TestStreamingMoE(unittest.TestCase):

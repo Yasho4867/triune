@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 360" width="960" height="360" role="img" aria-label="Lucid Machines 3-Tier Cognitive Architecture Card">
+  <title>Lucid Machines v1.0.0 — 3-Tier CALM Architecture &amp; Layer Streaming Card</title>
+  <rect x="0" y="0" width="960" height="360" rx="16" fill="#0B0F17" stroke="#1E293B" stroke-width="2"/>
+  <text x="32" y="40" fill="#F8FAFC" font-family="Inter, Segoe UI, sans-serif" font-size="16" font-weight="700">LUCID MACHINES v1.0.0: 3-TIER HIERARCHICAL MULTI-EXIT &amp; SPARSE MoE PIPELINE</text>
+  <text x="32" y="62" fill="#94A3B8" font-family="Fira Code, Consolas, monospace" font-size="12">TriuneTransformer | VectorisedGLA O(1) Cache (48.0 KiB) | MoE_FFN (E=8, k=2 + Shared) | Polysom Studio</text>
+  <rect x="32" y="108" width="140" height="164" rx="10" fill="#111827" stroke="#334155" stroke-width="2"/>
+  <text x="50" y="138" fill="#38BDF8" font-family="Fira Code, Consolas, monospace" font-size="12" font-weight="700">INPUT &amp; EMBED</text>
+  <text x="50" y="164" fill="#E2E8F0" font-family="Inter, Segoe UI, sans-serif" font-size="12">DynamicTokenizer</text>
+  <text x="50" y="184" fill="#94A3B8" font-family="Fira Code, Consolas, monospace" font-size="11">2.65x Lossless</text>
+  <text x="50" y="204" fill="#94A3B8" font-family="Fira Code, Consolas, monospace" font-size="11">expand: 0.0 diff</text>
+  <text x="50" y="224" fill="#94A3B8" font-family="Fira Code, Consolas, monospace" font-size="11">order_pool RoPE</text>
+  <text x="50" y="248" fill="#10B981" font-family="Fira Code, Consolas, monospace" font-size="11">V = 32,000 Base</text>
+  <line x1="172" y1="190" x2="212" y2="190" stroke="#38BDF8" stroke-width="3"/>
+  <polygon points="212,190 202,184 202,196" fill="#38BDF8"/>
+  <rect x="216" y="96" width="204" height="188" rx="10" fill="#111827" stroke="#38BDF8" stroke-width="2"/>
+  <rect x="232" y="112" width="88" height="22" rx="4" fill="#0284C7"/>
+  <text x="242" y="127" fill="#F8FAFC" font-family="Fira Code, Consolas, monospace" font-size="11" font-weight="700">TIER 1: L1-L2</text>
+  <text x="232" y="156" fill="#F8FAFC" font-family="Inter, Segoe UI, sans-serif" font-size="15" font-weight="700">Reflex Stratum</text>
+  <text x="232" y="178" fill="#94A3B8" font-family="Fira Code, Consolas, monospace" font-size="11">GLA + Sparse MoE_FFN</text>
+  <text x="232" y="198" fill="#38BDF8" font-family="Fira Code, Consolas, monospace" font-size="11">Prefill: 741,070 tok/s</text>
+  <text x="232" y="218" fill="#10B981" font-family="Fira Code, Consolas, monospace" font-size="11">4.31x vs Cortex L8</text>
+  <text x="232" y="238" fill="#E2E8F0" font-family="Fira Code, Consolas, monospace" font-size="11">CALM tau=0.20: 95.73% agr</text>
+  <text x="232" y="258" fill="#94A3B8" font-family="Fira Code, Consolas, monospace" font-size="11">Val PPL: 111.80</text>
+  <line x1="420" y1="190" x2="460" y2="190" stroke="#10B981" stroke-width="3"/>
+  <polygon points="460,190 450,184 450,196" fill="#10B981"/>
+  <rect x="464" y="96" width="204" height="188" rx="10" fill="#111827" stroke="#10B981" stroke-width="2"/>
+  <rect x="480" y="112" width="88" height="22" rx="4" fill="#059669"/>
+  <text x="490" y="127" fill="#F8FAFC" font-family="Fira Code, Consolas, monospace" font-size="11" font-weight="700">TIER 2: L3-L5</text>
+  <text x="480" y="156" fill="#F8FAFC" font-family="Inter, Segoe UI, sans-serif" font-size="15" font-weight="700">Limbic Stratum</text>
+  <text x="480" y="178" fill="#94A3B8" font-family="Fira Code, Consolas, monospace" font-size="11">Compacted Active Tokens</text>
+  <text x="480" y="198" fill="#10B981" font-family="Fira Code, Consolas, monospace" font-size="11">CALM AUROC: 0.8319</text>
+  <text x="480" y="218" fill="#E2E8F0" font-family="Fira Code, Consolas, monospace" font-size="11">Hidden Centroids [E, H]</text>
+  <text x="480" y="238" fill="#F59E0B" font-family="Fira Code, Consolas, monospace" font-size="11">Self-Spec Draft Verification</text>
+  <text x="480" y="258" fill="#94A3B8" font-family="Fira Code, Consolas, monospace" font-size="11">Val PPL: 111.18</text>
+  <line x1="668" y1="190" x2="708" y2="190" stroke="#F59E0B" stroke-width="3"/>
+  <polygon points="708,190 698,184 698,196" fill="#F59E0B"/>
+  <rect x="712" y="96" width="216" height="188" rx="10" fill="#111827" stroke="#F59E0B" stroke-width="2"/>
+  <rect x="728" y="112" width="88" height="22" rx="4" fill="#D97706"/>
+  <text x="738" y="127" fill="#0B0F17" font-family="Fira Code, Consolas, monospace" font-size="11" font-weight="700">TIER 3: L6-L8</text>
+  <text x="728" y="156" fill="#F8FAFC" font-family="Inter, Segoe UI, sans-serif" font-size="15" font-weight="700">Cortex Stratum</text>
+  <text x="728" y="178" fill="#94A3B8" font-family="Fira Code, Consolas, monospace" font-size="11">Deep Reasoning Synthesis</text>
+  <text x="728" y="198" fill="#F59E0B" font-family="Fira Code, Consolas, monospace" font-size="11">T=0.0 Exact: 91.62 tok/s</text>
+  <text x="728" y="218" fill="#38BDF8" font-family="Fira Code, Consolas, monospace" font-size="11">T=0.7 Leviathan: 90.74 tok/s</text>
+  <text x="728" y="238" fill="#10B981" font-family="Fira Code, Consolas, monospace" font-size="11">Chunked CE: -98.5% VRAM</text>
+  <text x="728" y="258" fill="#E2E8F0" font-family="Fira Code, Consolas, monospace" font-size="11">Val PPL: 110.92 (Monotonic)</text>
+  <rect x="32" y="302" width="896" height="38" rx="8" fill="#172033" stroke="#1E3A5F" stroke-width="1.5"/>
+  <text x="48" y="325" fill="#38BDF8" font-family="Fira Code, Consolas, monospace" font-size="12" font-weight="700">SUBSTRATE FOR JUNKIE:</text>
+  <text x="234" y="325" fill="#E2E8F0" font-family="Fira Code, Consolas, monospace" font-size="12">CentroidSteer (0.201-0.264 B/p FineWeb, p=0.0004-0.0112) | NVFP4 (3.20x) | 1.52B Trains in 3.13 GB VRAM</text>
+</svg>

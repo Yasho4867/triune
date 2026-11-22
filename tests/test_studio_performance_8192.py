@@ -1,4 +1,4 @@
-"""Comprehensive verification test suite for Triune Studio 8192-token performance optimizations.
+"""Comprehensive verification test suite for Polysom Studio 8192-token performance optimizations.
 
 Verifies:
 1. rAF token stream batching in studio/src/app.js (zero UI thread freezing).
@@ -138,7 +138,7 @@ def test_8192_token_text_parsing_benchmark():
         "    return out\n"
     )
     long_markdown = [
-        "# Triune Model Deep Reasoning and Architecture Analysis (8,192 Tokens)",
+        "# Lucid Machines Deep Reasoning and Architecture Analysis (8,192 Tokens)",
         "> Scaled benchmark of the 3-Tier Reflex-Limbic-Cortex execution path.",
     ]
     for i in range(120):

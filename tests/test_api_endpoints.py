@@ -11,8 +11,8 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from triune.api.routes import ChatCompletionRequest, pytorch_state, router
-from triune.api.server import create_app
+from lucid_machines.api.routes import ChatCompletionRequest, pytorch_state, router
+from lucid_machines.api.server import create_app
 
 
 class TestStudioApiEndpoints(unittest.TestCase):
@@ -76,7 +76,7 @@ class TestStudioApiEndpoints(unittest.TestCase):
     def test_tokenizer_endpoint_reports_real_tokenizer(self) -> None:
         response = self.client.post(
             "/v1/tokenizer/tokenize",
-            json={"text": "Triune framework"},
+            json={"text": "Lucid Machines framework"},
         )
         self.assertEqual(response.status_code, 200)
         payload = response.json()
@@ -88,7 +88,7 @@ class TestStudioApiEndpoints(unittest.TestCase):
             self.assertTrue(all(isinstance(token["id"], int) for token in payload["tokens"]))
 
     def test_legacy_checkpoint_architecture_preserves_router_prefix(self) -> None:
-        from triune.api.routes import _checkpoint_architecture
+        from lucid_machines.api.routes import _checkpoint_architecture
 
         class TensorShape:
             def __init__(self, *shape: int) -> None:
@@ -128,7 +128,7 @@ class TestStudioApiEndpoints(unittest.TestCase):
     def test_local_chat_cancel_signals_active_generation(self) -> None:
         import threading
 
-        from triune.api import routes
+        from lucid_machines.api import routes
 
         previous = routes.pytorch_state.active_generation_cancel
         cancel_event = threading.Event()
@@ -143,7 +143,7 @@ class TestStudioApiEndpoints(unittest.TestCase):
         self.assertTrue(cancel_event.is_set())
 
     def test_byok_save_with_blank_fields_preserves_existing_credentials(self) -> None:
-        from triune.api import routes
+        from lucid_machines.api import routes
 
         class ConfigStub:
             saved = None
@@ -168,7 +168,7 @@ class TestStudioApiEndpoints(unittest.TestCase):
         self.assertEqual(stub.save_options["force_secure_secrets"], {"byok:anthropic"})
 
     def test_byok_save_reports_secure_store_failure_instead_of_success(self) -> None:
-        from triune.api import routes
+        from lucid_machines.api import routes
 
         class ConfigStub:
             def get_config(self):
@@ -189,7 +189,7 @@ class TestStudioApiEndpoints(unittest.TestCase):
     def test_byok_test_performs_authenticated_provider_request(self) -> None:
         from unittest.mock import MagicMock
 
-        from triune.api import routes
+        from lucid_machines.api import routes
 
         provider_response = MagicMock()
         provider_response.status = 200
@@ -202,7 +202,7 @@ class TestStudioApiEndpoints(unittest.TestCase):
         self.assertEqual(request.get_header("Authorization"), "Bearer sk-test-value")
 
     def test_byok_chat_missing_key_is_an_api_error_not_an_assistant_reply(self) -> None:
-        from triune.api import routes
+        from lucid_machines.api import routes
 
         class ConfigStub:
             def get_config(self):
@@ -220,7 +220,7 @@ class TestStudioApiEndpoints(unittest.TestCase):
         self.assertIn("not configured", response.json()["detail"])
 
     def test_byok_chat_uses_selected_current_provider_model(self) -> None:
-        from triune.api import routes
+        from lucid_machines.api import routes
 
         class ConfigStub:
             def get_config(self):
@@ -243,7 +243,7 @@ class TestStudioApiEndpoints(unittest.TestCase):
     def test_byok_chat_distinguishes_authentication_from_quota_failures(self) -> None:
         import urllib.error
 
-        from triune.api import routes
+        from lucid_machines.api import routes
 
         class ConfigStub:
             def get_config(self):
@@ -276,7 +276,7 @@ class TestStudioApiEndpoints(unittest.TestCase):
     def test_byok_chat_identifies_provider_socket_timeouts(self) -> None:
         import urllib.error
 
-        from triune.api import routes
+        from lucid_machines.api import routes
 
         class ConfigStub:
             def get_config(self):
@@ -430,7 +430,7 @@ class TestStudioApiEndpoints(unittest.TestCase):
         self.assertAlmostEqual(data["balance_loss_weight"], 0.4)
 
     def test_single_training_step(self) -> None:
-        from triune.api import routes
+        from lucid_machines.api import routes
 
         pytorch_state = routes.pytorch_state
         initial_step = pytorch_state.step
@@ -455,7 +455,7 @@ class TestStudioApiEndpoints(unittest.TestCase):
         self.assertGreaterEqual(data["loss"], 0.0)
 
     def test_models_endpoint_lists_all_canonical_presets(self) -> None:
-        from triune.model.base import CANONICAL_MODEL_SPECS
+        from lucid_machines.model.base import CANONICAL_MODEL_SPECS
 
         response = self.client.get("/v1/models")
         self.assertEqual(response.status_code, 200)
@@ -465,63 +465,92 @@ class TestStudioApiEndpoints(unittest.TestCase):
             self.assertIn(preset_id, ids)
 
     def test_model_preset_and_hardware_tune_sync(self) -> None:
-        # 1. Switch preset to triune-nano with fp8
-        preset_res = self.client.post(
-            "/v1/models/preset",
-            json={
-                "preset_id": "triune-nano",
-                "num_layers": 4,
-                "hidden_dim": 192,
-                "num_heads": 3,
-                "head_dim": 64,
-                "num_experts": 4,
-                "batch_size": 2,
-                "seq_len": 64,
-                "depth_mode": "dynamic",
-                "precision": "fp8",
-            },
-        )
-        self.assertEqual(preset_res.status_code, 200)
-        preset_data = preset_res.json()
-        self.assertEqual(preset_data["status"], "success")
-        self.assertEqual(preset_data["architecture"]["preset_id"], "triune-nano")
-        self.assertEqual(preset_data["architecture"]["num_layers"], 4)
-        self.assertTrue(preset_data["architecture"]["use_fp8"])
+        from lucid_machines.api import routes
 
-        # 2. Tune hardware with lr, warmup_steps, precision=bf16, gpu_layers=2
-        tune_res = self.client.post(
-            "/v1/hardware/tune",
-            json={
-                "preset": "custom",
-                "batch_size": 4,
-                "seq_len": 64,
-                "grad_accum_steps": 2,
-                "depth_mode": "joint",
-                "precision": "bf16",
-                "gpu_layers": 2,
-                "lr": 0.0008,
-                "warmup_steps": 150,
-            },
-        )
-        self.assertEqual(tune_res.status_code, 200)
-        tune_data = tune_res.json()
-        self.assertEqual(tune_data["status"], "success")
-        cc = tune_data["profile"]["current_config"]
-        self.assertEqual(cc["batch_size"], 4)
-        self.assertEqual(cc["depth_mode"], "joint")
-        self.assertEqual(cc["precision"], "bf16")
-        self.assertAlmostEqual(cc["lr"], 0.0008)
-        self.assertEqual(cc["warmup_steps"], 150)
-        self.assertEqual(tune_data["profile"]["gpu_layers"], 2)
+        ps = routes.pytorch_state
+        prev_model_id = getattr(ps, "active_model_id", "triune-small")
+        prev_precision = getattr(ps, "precision", "bf16")
+        prev_depth = getattr(ps, "depth_mode", "cortex")
+        prev_batch = ps.batch_size
+        prev_seq = ps.seq_len
+        prev_accum = ps.grad_accum_steps
+        prev_warmup = getattr(ps, "warmup_steps", 0)
+        prev_lr = getattr(ps, "lr_peak", 3e-4)
 
-        # 3. Verify /v1/training/status reflects synchronized state
-        status_res = self.client.get("/v1/training/status")
-        self.assertEqual(status_res.status_code, 200)
-        status_data = status_res.json()
-        self.assertEqual(status_data["active_model"], "triune-nano")
-        self.assertEqual(status_data["precision"], "bf16")
-        self.assertEqual(status_data["gpu_layers"], 2)
-        self.assertEqual(status_data["warmup_steps"], 150)
+        try:
+            # 1. Switch preset to triune-nano with fp8
+            preset_res = self.client.post(
+                "/v1/models/preset",
+                json={
+                    "preset_id": "triune-nano",
+                    "num_layers": 4,
+                    "hidden_dim": 192,
+                    "num_heads": 3,
+                    "head_dim": 64,
+                    "num_experts": 4,
+                    "batch_size": 2,
+                    "seq_len": 64,
+                    "depth_mode": "dynamic",
+                    "precision": "fp8",
+                },
+            )
+            self.assertEqual(preset_res.status_code, 200)
+            preset_data = preset_res.json()
+            self.assertEqual(preset_data["status"], "success")
+            self.assertEqual(preset_data["architecture"]["preset_id"], "triune-nano")
+            self.assertEqual(preset_data["architecture"]["num_layers"], 4)
+            self.assertTrue(preset_data["architecture"]["use_fp8"])
+
+            # 2. Tune hardware with lr, warmup_steps, precision=bf16, gpu_layers=2
+            tune_res = self.client.post(
+                "/v1/hardware/tune",
+                json={
+                    "preset": "custom",
+                    "batch_size": 4,
+                    "seq_len": 64,
+                    "grad_accum_steps": 2,
+                    "depth_mode": "joint",
+                    "precision": "bf16",
+                    "gpu_layers": 2,
+                    "lr": 0.0008,
+                    "warmup_steps": 150,
+                },
+            )
+            self.assertEqual(tune_res.status_code, 200)
+            tune_data = tune_res.json()
+            self.assertEqual(tune_data["status"], "success")
+            cc = tune_data["profile"]["current_config"]
+            self.assertEqual(cc["batch_size"], 4)
+            self.assertEqual(cc["depth_mode"], "joint")
+            self.assertEqual(cc["precision"], "bf16")
+            self.assertAlmostEqual(cc["lr"], 0.0008)
+            self.assertEqual(cc["warmup_steps"], 150)
+            self.assertEqual(tune_data["profile"]["gpu_layers"], 2)
+
+            # 3. Verify /v1/training/status reflects synchronized state
+            status_res = self.client.get("/v1/training/status")
+            self.assertEqual(status_res.status_code, 200)
+            status_data = status_res.json()
+            self.assertEqual(status_data["active_model"], "triune-nano")
+            self.assertEqual(status_data["precision"], "bf16")
+            self.assertEqual(status_data["gpu_layers"], 2)
+            self.assertEqual(status_data["warmup_steps"], 150)
+        finally:
+            self.client.post(
+                "/v1/models/preset",
+                json={
+                    "preset_id": prev_model_id
+                    if prev_model_id in ("triune-nano", "triune-small", "triune-base")
+                    else "triune-small",
+                    "batch_size": prev_batch,
+                    "seq_len": prev_seq,
+                    "depth_mode": prev_depth,
+                    "precision": prev_precision,
+                },
+            )
+            ps.grad_accum_steps = prev_accum
+            ps.warmup_steps = prev_warmup
+            ps.lr_peak = prev_lr
 
     def test_finetune_adapter_attach_and_detach_sync(self) -> None:
         attach_res = self.client.post(
@@ -591,7 +620,7 @@ class TestStudioApiEndpoints(unittest.TestCase):
     def test_byok_wandb_save_and_test(self) -> None:
         import os
 
-        from triune.api import routes
+        from lucid_machines.api import routes
 
         class ConfigStub:
             def __init__(self):
@@ -604,21 +633,30 @@ class TestStudioApiEndpoints(unittest.TestCase):
                 self.saved = config
 
         stub = ConfigStub()
-        with patch.object(routes, "module_manager", stub):
-            res = self.client.post(
-                "/v1/byok/save", json={"keys": {"wandb": "test-wandb-api-key-40-hex-characters-long"}}
-            )
-            self.assertEqual(res.status_code, 200)
-            self.assertEqual(res.json()["status"], "saved")
-            self.assertEqual(os.environ.get("WANDB_API_KEY"), "test-wandb-api-key-40-hex-characters-long")
+        prev_wandb_env = os.environ.get("WANDB_API_KEY")
+        prev_wandb_state = getattr(routes.pytorch_state, "wandb_key", None)
+        try:
+            with patch.object(routes, "module_manager", stub):
+                res = self.client.post(
+                    "/v1/byok/save", json={"keys": {"wandb": "test-wandb-api-key-40-hex-characters-long"}}
+                )
+                self.assertEqual(res.status_code, 200)
+                self.assertEqual(res.json()["status"], "saved")
+                self.assertEqual(os.environ.get("WANDB_API_KEY"), "test-wandb-api-key-40-hex-characters-long")
 
-        # Test wandb verification
-        with patch("wandb.login", return_value=True, create=True):
-            test_res = self.client.post(
-                "/v1/byok/test", json={"provider": "wandb", "key": "test-wandb-api-key-40-hex-characters-long"}
-            )
-            self.assertEqual(test_res.status_code, 200)
-            self.assertEqual(test_res.json()["status"], "valid")
+            # Test wandb verification
+            with patch("wandb.login", return_value=True, create=True):
+                test_res = self.client.post(
+                    "/v1/byok/test", json={"provider": "wandb", "key": "test-wandb-api-key-40-hex-characters-long"}
+                )
+                self.assertEqual(test_res.status_code, 200)
+                self.assertEqual(test_res.json()["status"], "valid")
+        finally:
+            if prev_wandb_env is None:
+                os.environ.pop("WANDB_API_KEY", None)
+            else:
+                os.environ["WANDB_API_KEY"] = prev_wandb_env
+            routes.pytorch_state.wandb_key = prev_wandb_state
 
     def test_byok_wandb_reports_missing_sdk_as_unavailable_not_bad_key(self) -> None:
         import sys
@@ -636,7 +674,7 @@ class TestStudioApiEndpoints(unittest.TestCase):
         self.assertIn("SDK is not installed", response.json()["message"])
 
     def test_byok_can_verify_a_saved_key_without_echoing_it_to_the_ui(self) -> None:
-        from triune.api import routes
+        from lucid_machines.api import routes
 
         saved_key = "saved-wandb-api-key-40-hex-characters-long"
 
@@ -655,7 +693,7 @@ class TestStudioApiEndpoints(unittest.TestCase):
         self.assertNotIn(saved_key, response.text)
 
     def test_word_boundary_chunking_pads_and_preserves_words(self) -> None:
-        from triune.api import routes
+        from lucid_machines.api import routes
 
         engine = routes.pytorch_state
         engine.load_tokenizer()

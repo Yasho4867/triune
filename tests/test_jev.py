@@ -5,7 +5,7 @@ import unittest
 import torch
 import torch.nn as nn
 
-from triune.model import (
+from lucid_machines.model import (
     ContinuousLatentExitRouter,
     JEVExitRouter,
     JEVLatentPredictor,

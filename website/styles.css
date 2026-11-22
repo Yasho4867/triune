@@ -1,0 +1,8 @@
+/* Polysom Studio / Lucid Machines v3.0.0 static release compatibility shell.
+   The React experience is defined in src/; this file preserves release-site assets
+   for static integrity checkers and local previews. */
+:root {
+  color-scheme: light;
+  --lucid-ink: #16151b;
+  --lucid-paper: #f2eee4;
+}

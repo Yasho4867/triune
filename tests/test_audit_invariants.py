@@ -8,14 +8,14 @@ import unittest
 import torch
 import torch.nn as nn
 
-from triune.data.dataloader import CyclingDataLoader
-from triune.model.attention import VectorisedGLA
-from triune.model.moe import MoE_FFN
-from triune.model.router import GumbelSoftmaxRouter
-from triune.model.transformer import TriuneTransformer
-from triune.model.zoo import load_model
-from triune.runtime.staging import ParameterStager
-from triune.trainer.checkpoint import load_checkpoint, save_latest
+from lucid_machines.data.dataloader import CyclingDataLoader
+from lucid_machines.model.attention import VectorisedGLA
+from lucid_machines.model.moe import MoE_FFN
+from lucid_machines.model.router import GumbelSoftmaxRouter
+from lucid_machines.model.transformer import TriuneTransformer
+from lucid_machines.model.zoo import load_model
+from lucid_machines.runtime.staging import ParameterStager
+from lucid_machines.trainer.checkpoint import load_checkpoint, save_latest
 
 
 class ArchitecturalAuditInvariantsTest(unittest.TestCase):

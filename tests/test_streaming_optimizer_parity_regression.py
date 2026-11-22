@@ -17,10 +17,10 @@ import unittest
 
 import torch
 
-from triune.model.transformer import TriuneTransformer
-from triune.optim.centroid import CentroidSteerOptimizer
-from triune.optim.muon import Muon
-from triune.runtime.streaming import LayerStreamingEngine, StreamingConfig
+from lucid_machines.model.transformer import TriuneTransformer
+from lucid_machines.optim.centroid import CentroidSteerOptimizer
+from lucid_machines.optim.muon import Muon
+from lucid_machines.runtime.streaming import LayerStreamingEngine, StreamingConfig
 
 
 def create_paired_models(

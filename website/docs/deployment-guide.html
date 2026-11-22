@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; base-uri 'self'; form-action 'self';">
+  <title>Lucid Machines v3.0.0 — Deployment Guide</title>
+  <link rel="icon" type="image/svg+xml" href="../assets/lucid-machines-logo.svg">
+  <link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="container nav-bar">
+      <a href="../index.html" class="brand-link">
+        <img src="../assets/lucid-machines-logo.svg" alt="Lucid Machines Logo" class="brand-logo" width="36" height="36">
+        <span>Lucid Machines</span>
+        <span class="version-pill">v3.0.0</span>
+      </a>
+      <nav aria-label="Document Navigation">
+        <ul class="nav-links">
+          <li><a href="../index.html">Back to Overview</a></li>
+          <li><a href="release-name-report.html">R1 Name Report</a></li>
+          <li><a href="centroidsteer-validation.html">R2 Validation</a></li>
+          <li><a href="release-notes.html">Release Notes</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+  <main class="doc-body">
+    <div class="container">
+      <article class="doc-card">
+        <h1>Lucid Machines v3.0.0 — Deployment Guide</h1>
+        <div class="code-block"><pre># Deployment &amp; Release Publishing Guide — Lucid Machines `v3.0.0`
+
+This guide provides step-by-step, reproducible instructions for building, verifying, and deploying all **Lucid Machines v3.0.0** (the **Triune** architecture **`TriuneTransformer`**, first flagship model to train **Junkie**, &amp; **Polysom Studio**) release artifacts across **GitHub Releases**, **GitHub Pages**, **PyPI**, **Vercel / Netlify / Cloudflare Pages**, **Hugging Face Hub**, and the **Windows Native Polysom Studio Installer**.
+
+&gt; **R3 / R5 Safety Policy:** In accordance with project safety guardrails, external publishing commands (`git push`, `gh release create`, `twine upload`, `vercel`, `netlify`, `wrangler`, `hf upload`) must only be executed when authorized credentials/tokens are explicitly configured by the release operator.
+
+---
+
+## 1. Local Pre-Release Build &amp; Verification Checklist
+
+Run the full verification and packaging pipeline from the repository root (`PowerShell` on Windows or `bash` on Linux/macOS):
+
+```powershell
+# 1. Build native C/AVX2/CUDA shared library (lucid_machines_core.dll / liblucid_machines_core.so)
+.\studio\studio_env\Scripts\python.exe csrc/build_native.py
+
+# 2. Run mandatory lint, bytecode compile, unit, invariant, security, and E2E test suites
+.\studio\studio_env\Scripts\python.exe -m ruff check --select=E9,F63,F7,F82 .
+.\studio\studio_env\Scripts\python.exe -m compileall -q lucid_machines triune
+.\studio\studio_env\Scripts\pytest.exe -q
+.\studio\studio_env\Scripts\python.exe -m unittest discover tests
+
+# 3. Confirm WORKSPACE_RULES.md remains untracked (must return empty output)
+git ls-files WORKSPACE_RULES.md
+
+# 4. Build Python Wheel (.whl) and Source Distribution (.tar.gz) into dist/
+.\studio\studio_env\Scripts\python.exe -m build --sdist --wheel
+
+# 5. Build &amp; package Native Windows Polysom Studio App, Installer, and portable ZIP + SHA256
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish_studio_windows.ps1
+```
+
+### Generating `dist/SHA256SUMS.txt`
+
+```powershell
+Get-ChildItem dist -File -Exclude SHA256SUMS.txt,*.sha256 | ForEach-Object {
+    $h = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+    &quot;$h  $($_.Name)&quot;
+} | Set-Content -Path dist/SHA256SUMS.txt -Encoding UTF8
+Get-Content dist/SHA256SUMS.txt
+```
+
+---
+
+## 2. Deploying the Windows Native Polysom Studio Installer (`PolysomStudioSetup.exe`)
+
+The Windows desktop package (`dist/PolysomStudio-3.0.0-win-x64.zip`) is a self-contained distribution bundling the `.NET 10` runtime, `WebView2` bridge, all 5 Polysom Studio themes (`Hypnagogic`, `Phosphene`, `Pareidolia`, `Afterimage`, `Mirage`), and the native C/CUDA engine (`lucid_machines_core.dll`).
+
+### Interactive GUI Installation
+```powershell
+studio\publish\PolysomStudioSetup.exe
+```
+
+### Headless / Enterprise Unattended Deployment
+```powershell
+# Verify existing environment health (returns exit code 0 on pass)
+studio\publish\PolysomStudioSetup.exe --verify
+
+# Unattended install/repair (registers HKCU Uninstall entry + Desktop/Start Menu shortcuts)
+studio\publish\PolysomStudioSetup.exe --yes --no-launch
+
+# Unattended clean uninstall of shortcuts and HKCU registry entry (preserves checkpoints/data)
+studio\publish\PolysomStudioSetup.exe --uninstall --yes
+```
+
+---
+
+## 3. Publishing to PyPI (`twine upload dist/*`)
+
+### Prerequisites
+- Install Twine: `.\studio\studio_env\Scripts\pip.exe install twine`
+- Configure a PyPI API token (`pypi-...`) via environment variable (`TWINE_USERNAME=__token__`, `TWINE_PASSWORD=&lt;token&gt;`) or `~/.pypirc`.
+
+### Validation &amp; Upload Commands
+```powershell
+# 1. Verify wheel and sdist metadata formatting (lucid_machines-3.0.0*)
+.\studio\studio_env\Scripts\python.exe -m twine check dist/lucid_machines-3.0.0*.whl dist/lucid_machines-3.0.0*.tar.gz
+
+# 2. (Optional) Dry-run upload to TestPyPI first
+.\studio\studio_env\Scripts\python.exe -m twine upload --repository testpypi dist/lucid_machines-3.0.0*.whl dist/lucid_machines-3.0.0*.tar.gz
+
+# 3. Publish official v3.0.0 package to PyPI
+$env:TWINE_USERNAME = &quot;__token__&quot;
+$env:TWINE_PASSWORD = &quot;&lt;YOUR_PYPI_API_TOKEN&gt;&quot;
+.\studio\studio_env\Scripts\python.exe -m twine upload dist/lucid_machines-3.0.0*.whl dist/lucid_machines-3.0.0*.tar.gz
+```
+
+---
+
+## 4. Publishing a GitHub Release (`v3.0.0`)
+
+### Prerequisites
+- Install GitHub CLI (`gh`) and authenticate via `gh auth login` (or set `GH_TOKEN`).
+
+### Tagging &amp; Release Creation
+```powershell
+# 1. Push verified release branch and annotated v3.0.0 tag
+git tag -a v3.0.0 -m &quot;Lucid Machines v3.0.0 Release (Triune Architecture, Junkie Target &amp; Polysom Studio)&quot;
+git push origin release/lucid-machines-v3.0.0
+git push origin v3.0.0
+
+# 2. Create GitHub Release with binary artifacts and RELEASE_NOTES.md
+gh release create v3.0.0 `
+    dist/lucid_machines-3.0.0*.whl `
+    dist/lucid_machines-3.0.0*.tar.gz `
+    dist/PolysomStudio-3.0.0-win-x64.zip `
+    dist/*.sha256 `
+    dist/SHA256SUMS.txt `
+    --title &quot;Lucid Machines v3.0.0 — Triune Architecture, CentroidSteer &amp; Polysom Studio&quot; `
+    --notes-file RELEASE_NOTES.md
+```
+
+---
+
+## 5. Deploying the Project Website (`website/`)
+
+The project website in `website/` is a React/Vite application (`index.html`, `src/*`, `public/*`, `docs/*`, `papers/*`) built to `dist/`. Its final bundle uses Vite assets and hashed filenames.
+
+### Local Smoke Test
+```powershell
+Set-Location website
+npm.cmd run build
+npm.cmd run preview -- --host 127.0.0.1 --port 4173
+# Open http://127.0.0.1:4173/
+```
+
+### Option A: GitHub Pages
+1. In your GitHub repository, navigate to **Settings -&gt; Pages**.
+2. Set **Source** to **GitHub Actions** (or deploy from branch `/website` folder).
+3. Use the following workflow in `.github/workflows/pages.yml`:
+
+```yaml
+name: Deploy Lucid Machines Website to GitHub Pages
+on:
+  push:
+    branches: [&quot;main&quot;, &quot;release/lucid-machines-v3.0.0&quot;]
+    paths: [&quot;website/**&quot;]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: &quot;website&quot;
+      - id: deployment
+        uses: actions/deploy-pages@v4
+```
+
+### Option B: Vercel
+```bash
+# Deploy static website/ directory directly (zero build step needed)
+VERCEL_TOKEN=&quot;&lt;YOUR_VERCEL_TOKEN&gt;&quot; npx vercel deploy website --prod --yes
+```
+
+### Option C: Netlify
+```bash
+# Deploy website/ folder directly to Netlify production
+NETLIFY_AUTH_TOKEN=&quot;&lt;YOUR_NETLIFY_TOKEN&gt;&quot; npx netlify-cli deploy --dir=website --prod
+```
+
+### Option D: Cloudflare Pages
+```bash
+# Deploy website/ directory via Wrangler Pages
+CLOUDFLARE_API_TOKEN=&quot;&lt;YOUR_CF_TOKEN&gt;&quot; npx wrangler pages deploy website --project-name=lucid-machines
+```
+
+---
+
+## 6. Publishing Checkpoints &amp; SafeTensors to Hugging Face Hub (`hf upload`)
+
+### Prerequisites
+- Authenticate with Hugging Face Hub: `.\studio\studio_env\Scripts\hf.exe auth login` or set `$env:HF_TOKEN = &quot;hf_...&quot;`.
+
+### Export &amp; Upload Commands
+```powershell
+# 1. Export checkpoint to Hugging Face SafeTensors format (exports/)
+.\studio\studio_env\Scripts\python.exe -c &quot;import lucid_machines; m = lucid_machines.load_model(&#x27;triune-nano&#x27;); lucid_machines.export.hf_compat.export_to_huggingface(m, &#x27;exports/triune-nano-hf&#x27;)&quot;
+
+# 2. Upload exported model directory to Hugging Face Hub
+$env:HF_TOKEN = &quot;&lt;YOUR_HF_WRITE_TOKEN&gt;&quot;
+.\studio\studio_env\Scripts\hf.exe upload &lt;your-hf-org&gt;/triune-nano-v3.0 exports/triune-nano-hf --repo-type model
+```
+</pre></div>
+      </article>
+    </div>
+  </main>
+</body>
+</html>

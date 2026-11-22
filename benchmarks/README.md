@@ -1,11 +1,13 @@
-# Triune AI — Empirical Benchmark & Competitive Evaluation Suite
+﻿# Lucid Machines — Empirical Benchmark & Competitive Evaluation Suite
 
 **Date**: November 15, 2026  
 **Environment**: NVIDIA GeForce RTX 5070 Laptop GPU (7.93 GB VRAM) | PyTorch: 2.14.1+cu132 | CUDA: 13.2 | BF16 Tensor Cores
 
 ## Overview of Benchmark Categories
 
-This repository contains publication-grade, hardware-verified benchmarks evaluating **Triune AI**'s architectural and runtime components against PyTorch standard baselines and genuine native competitor implementations (`unsloth 2026.10.10` / `bitsandbytes 0.50.2` / PyTorch SDPA; `liger_kernel` is unavailable on Windows in our environment and is explicitly omitted rather than approximated). We explicitly distinguish **isolated kernel microbenchmarks** from **end-to-end 90.79M full-model evaluations** and **legacy block diagnostics** so single-layer kernel speedups are never conflated with full-stack latency.
+This repository contains publication-grade, hardware-verified benchmarks evaluating **Lucid Machines**' (`lucid_machines`) **Triune** architecture and runtime components (powering the flagship **Junkie** model) against PyTorch standard baselines and genuine native competitor implementations (`unsloth 2026.10.10` / `bitsandbytes 0.50.2` / PyTorch SDPA; `liger_kernel` is unavailable on Windows in our environment and is explicitly omitted rather than approximated). We explicitly distinguish **isolated kernel microbenchmarks** from **end-to-end 90.79M full-model evaluations** and **legacy block diagnostics** so single-layer kernel speedups are never conflated with full-stack latency.
+
+> **CLI Quickstart (`lucid_machines`)**: Install with `pip install -e .` and run `lucid_machines train --model_name junkie`, `lucid_machines chat`, `lucid_machines studio`, or execute the benchmark suite via `python scripts/run_all_benchmarks.py --all`.
 
 ### Benchmark Suite Matrix
 
@@ -17,7 +19,7 @@ This repository contains publication-grade, hardware-verified benchmarks evaluat
 | **D** | **Long-Context Generation** | `scripts/benchmark_long_context.py` | Multi-layer GLA vs Softmax SDPA ($O(1)$ vs $O(L)$) | Constant `64.0 KiB` state (`99.8%` @ `16k`), `4.02x` prefill (`4.40M tok/s`) & `4.13x` decode @ `16k` | [Report](LONG_CONTEXT_REPORT.md) |
 | **E** | **Dynamic Exits & Pareto** | `scripts/benchmark_dynamic_exits.py` | Reflex (L2), Limbic (L5), Cortex (L8) | Reflex `280,941 tok/s` (`7.29 ms`) vs Cortex `76,543 tok/s` (`26.76 ms`); Dynamic `299,506 tok/s` | [Report](DYNAMIC_EXITS_REPORT.md) |
 | **F** | **Full Competitive Matrix** | `scripts/benchmark_full_matrix_comparison.py` | PyTorch AdamW, BitsAndBytes 8-bit AdamW | Verified 3x2x2 pre-training and LoRA fine-tuning | [Report](MASTER_COMPETITIVE_MATRIX_REPORT.md) |
-| **G** | **Genuine Full-Stack Unsloth** | `scripts/benchmark_unsloth_real.py` | Genuine Unsloth (`2026.10.10`) vs PyTorch vs Triune | `+6.7%` LoRA throughput vs Unsloth (`25,973` vs `24,344 tok/s`); lowest dense VRAM (`423.9 MB`); native MoE | [Report](GENUINE_UNSLOTH_VS_TRIUNE_REPORT.md) |
+| **G** | **Genuine Full-Stack Unsloth** | `scripts/benchmark_unsloth_real.py` | Genuine Unsloth (`2026.10.10`) vs PyTorch vs Lucid Machines | `+6.7%` LoRA throughput vs Unsloth (`25,973` vs `24,344 tok/s`); lowest dense VRAM (`423.9 MB`); native MoE | [Report](GENUINE_UNSLOTH_VS_TRIUNE_REPORT.md) |
 | **H** | **CUDA Graph Replay & Parity** | `scripts/benchmark_cuda_graph.py` | PyTorch Eager, CUDA Graph Sync vs Async | -99.0% host launch latency, 1.60x wall-clock speedup, `0.00e+00` drift | [Report](CUDA_GRAPH_BENCHMARK_REPORT.md) |
 | **I** | **Full 90.79M Model E2E & CALM** | `scripts/benchmark_full_model_e2e.py`, `benchmarks/calm_calibration.py` | Rescued `step_40555` (`90.79M` / `64.21M` active) | `181.2k` (`B=1`) / `297.8k` (`B=4`) `16k` prefill, `157 tok/s` decode, `91.62/90.74` spec, `N=85,503` CALM, 4-tier Hadamard NVFP4, `2.65x` tok | [E2E](FULL_MODEL_E2E_REPORT.md) / [CALM](calm_calibration.md) |
 | **J** | **Production Sparse `MoE_FFN`** | `benchmarks/moe_ffn_sparse_vs_dense.py` | Sparse Scatter-Gather vs Dense 3D BMM | `4.774x` (`top1`) & `5.450x` (`top2`) @ `1536d`; `7.518x` @ `384d` (`75.0%` FLOPs saved) | [Report](FULL_MODEL_E2E_REPORT.md) |
@@ -31,27 +33,27 @@ This repository contains publication-grade, hardware-verified benchmarks evaluat
 Evaluated across identical architectures (Universal Dense **43,456,896 scalar params** and Triune MoE **90,789,271 scalar params**) with **actively participating LoRA adapters**, verified parameter weight updates, exact scalar parameter accounting, and genuine BitsAndBytes 8-bit AdamW on real FineWeb text batches:
 
 - **Dense LoRA Fine-Tuning** (44.59M total, 1.13M trainable params / 2.54%):
-  - **Memory**: Triune uses **496.4 MB peak VRAM**, representing a **38.7% reduction vs Standard AdamW (810.0 MB)** and a **27.1% reduction vs BitsAndBytes 8-bit AdamW (681.2 MB)** due to fused linear-LoRA and chunked logit-free backprop.
-  - **Throughput**: Triune runs at **28.61 ± 3.01 ms/step (35,786 tok/s)** vs **32.15 ± 4.94 ms/step (31,848 tok/s)** for BitsAndBytes 8-bit AdamW and **26.53 ± 3.47 ms/step (38,599 tok/s)** for standard AdamW.
+  - **Memory**: Lucid Machines uses **496.4 MB peak VRAM**, representing a **38.7% reduction vs Standard AdamW (810.0 MB)** and a **27.1% reduction vs BitsAndBytes 8-bit AdamW (681.2 MB)** due to fused linear-LoRA and chunked logit-free backprop.
+  - **Throughput**: Lucid Machines runs at **28.61 ± 3.01 ms/step (35,786 tok/s)** vs **32.15 ± 4.94 ms/step (31,848 tok/s)** for BitsAndBytes 8-bit AdamW and **26.53 ± 3.47 ms/step (38,599 tok/s)** for standard AdamW.
 - **MoE LoRA Fine-Tuning** (91.28M total, 491.5K trainable params / 0.54%):
-  - Triune executes at **87.28 ± 14.74 ms/step** (11,732 tok/s) and **994.8 MB peak VRAM** (11.2% lower VRAM than Standard AdamW's 1,120.4 MB, operating at near parity with BitsAndBytes's 993.9 MB and 103.28 ms/step).
+  - Lucid Machines executes at **87.28 ± 14.74 ms/step** (11,732 tok/s) and **994.8 MB peak VRAM** (11.2% lower VRAM than Standard AdamW's 1,120.4 MB, operating at near parity with BitsAndBytes's 993.9 MB and 103.28 ms/step).
 - **Dense Pre-Training (Memory & Convergence Win, Throughput Trade-off)**:
-  - **Memory**: Triune uses **573.0 MB peak VRAM**, saving **39.2% vs standard AdamW (942.7 MB)** and **21.7% vs BitsAndBytes 8-bit AdamW (732.1 MB)**.
-  - **Throughput Trade-off**: Triune runs at **32.79 ± 1.84 ms/step** (31,224 tok/s) vs **22.74 ± 1.93 ms/step** (45,036 tok/s) for standard AdamW due to online subspace projections and 3-tier Muon orthogonalization.
+  - **Memory**: Lucid Machines uses **573.0 MB peak VRAM**, saving **39.2% vs standard AdamW (942.7 MB)** and **21.7% vs BitsAndBytes 8-bit AdamW (732.1 MB)**.
+  - **Throughput Trade-off**: Lucid Machines runs at **32.79 ± 1.84 ms/step** (31,224 tok/s) vs **22.74 ± 1.93 ms/step** (45,036 tok/s) for standard AdamW due to online subspace projections and 3-tier Muon orthogonalization.
 - **MoE Pre-Training (Memory Win)**:
-  - Triune achieves the lowest peak VRAM in this category (**1,150.4 MB**, saving 22.0% vs AdamW's 1,474.2 MB and 5.5% vs BitsAndBytes's 1,217.8 MB) and executes at **97.32 ± 12.66 ms/step** (10,522 tok/s).
+  - Lucid Machines achieves the lowest peak VRAM in this category (**1,150.4 MB**, saving 22.0% vs AdamW's 1,474.2 MB and 5.5% vs BitsAndBytes's 1,217.8 MB) and executes at **97.32 ± 12.66 ms/step** (10,522 tok/s).
 
 ### 1.1 Genuine Full-Stack Unsloth Head-to-Head (`Category G`, Isolated Subprocesses)
 Benchmarked against the actual installed **`unsloth` 2026.10.10 framework** (`bitsandbytes 0.50.2`, real causal FineWeb text batches) across Pre-Training and LoRA Fine-Tuning (`37,165,440` base params, 8 layers, 384 dim, 1024 MLP, 6 heads, 2 KV heads; `90,789,271` MoE params):
 - **LoRA Fine-Tuning** (`38.03M` total / `868,352` trainable params / `2.28%`, Rank 16, Batch Size 2, Seq Len 256):
-  - **Throughput**: Triune runs at **39.43 ± 2.95 ms/step (25,973 tok/s)** vs Genuine Unsloth's **42.06 ± 4.62 ms/step (24,344 tok/s)** — delivering **`+6.7%` higher throughput than Unsloth** and a **`1.41x` speedup over Standard PyTorch PEFT (`55.76 ± 7.98 ms/step`, `18,364 tok/s`)**.
-  - **VRAM**: Triune uses **396.4 MB peak VRAM** (`-33.8%` vs Standard PyTorch's `599.1 MB`; Genuine Unsloth `340.6 MB`).
+  - **Throughput**: Lucid Machines runs at **39.43 ± 2.95 ms/step (25,973 tok/s)** vs Genuine Unsloth's **42.06 ± 4.62 ms/step (24,344 tok/s)** — delivering **`+6.7%` higher throughput than Unsloth** and a **`1.41x` speedup over Standard PyTorch PEFT (`55.76 ± 7.98 ms/step`, `18,364 tok/s`)**.
+  - **VRAM**: Lucid Machines uses **396.4 MB peak VRAM** (`-33.8%` vs Standard PyTorch's `599.1 MB`; Genuine Unsloth `340.6 MB`).
 - **Pre-Training from Scratch** (`37.17M` params, Batch Size 4, Seq Len 256):
   - Standard PyTorch (AdamW) executes at **`36.12 ± 3.32 ms/step` (`28,348 tok/s`, `661.6 MB`)**.
   - Genuine Unsloth (`2026.10.10`, `AdamW8bit`) achieves **`27.70 ± 3.65 ms/step` (`36,967 tok/s`, `464.8 MB`)**.
-  - Triune's `CentroidSteerOptimizer` achieves **`28.96 ± 2.84 ms/step` (`35,361 tok/s`, `423.9 MB`)**, delivering the **lowest peak VRAM** (**`-35.9%` vs Standard PyTorch**, **`-8.8%` vs Genuine Unsloth**) alongside 3-tier Muon/CentroidSteer updates.
+  - Lucid Machines' `CentroidSteerOptimizer` achieves **`28.96 ± 2.84 ms/step` (`35,361 tok/s`, `423.9 MB`)**, delivering the **lowest peak VRAM** (**`-35.9%` vs Standard PyTorch**, **`-8.8%` vs Genuine Unsloth**) alongside 3-tier Muon/CentroidSteer updates.
 - **Mixture of Experts Support**:
-  - Triune natively supports and trains `90.79M` Multi-Exit MoE models (**`107.11 ± 11.56 ms/step`, `9,560 tok/s`, `928.9 MB`**), whereas Unsloth is specialized exclusively for dense autoregressive architectures.
+  - Lucid Machines natively supports and trains `90.79M` Multi-Exit MoE models (**`107.11 ± 11.56 ms/step`, `9,560 tok/s`, `928.9 MB`**), whereas Unsloth is specialized exclusively for dense autoregressive architectures.
 
 ### 1.2 CUDA Graph Replay & Multi-Step Mathematical Parity (`Category H`)
 Evaluated using `scripts/benchmark_cuda_graph.py` on 37.17M parameters across eager execution, synchronous graph replay, and asynchronous graph replay, alongside a 10-step mathematical equivalence verification:
@@ -69,12 +71,12 @@ Evaluated using `scripts/benchmark_cuda_graph.py` on 37.17M parameters across ea
 ### 2. Kernel Primitives, Chunked CE & 4-Bit NVFP4 (`Category A`)
 Benchmarked directly on hardware against PyTorch, genuine `unsloth 2026.10.10`, and `bitsandbytes 0.50.2` (`liger_kernel` is unavailable on Windows and explicitly omitted rather than approximated):
 - **Chunked Logit-Free Cross-Entropy ($V=32,000$)**:
-  - At $N=2,048$: PyTorch `14.45 ms (1,032.0 MB)` vs Genuine Unsloth `6.17 ms (275.9 MB)` vs Triune `5.48 ms (56.2 MB)`.
-  - At $N=4,096$: PyTorch `25.93 ms (2,000.0 MB)` vs Genuine Unsloth `12.69 ms (526.4 MB)` vs Triune `11.44 ms (57.7 MB)`.
-  - At $N=8,192$: PyTorch `59.04 ms (4,000.0 MB)` vs Genuine Unsloth `24.67 ms (1,029.4 MB)` vs Triune **`22.97 ms (60.7 MB)`** -> **`98.5%` VRAM saved vs PyTorch** (`94.1%` vs Unsloth), **`2.57x` faster than PyTorch** (`1.07x` vs Unsloth), `loss_diff=0.00e+00`, `grad_diff=4.47e-08`.
+  - At $N=2,048$: PyTorch `14.45 ms (1,032.0 MB)` vs Genuine Unsloth `6.17 ms (275.9 MB)` vs Lucid Machines `5.48 ms (56.2 MB)`.
+  - At $N=4,096$: PyTorch `25.93 ms (2,000.0 MB)` vs Genuine Unsloth `12.69 ms (526.4 MB)` vs Lucid Machines `11.44 ms (57.7 MB)`.
+  - At $N=8,192$: PyTorch `59.04 ms (4,000.0 MB)` vs Genuine Unsloth `24.67 ms (1,029.4 MB)` vs Lucid Machines **`22.97 ms (60.7 MB)`** -> **`98.5%` VRAM saved vs PyTorch** (`94.1%` vs Unsloth), **`2.57x` faster than PyTorch** (`1.07x` vs Unsloth), `loss_diff=0.00e+00`, `grad_diff=4.47e-08`.
 - **Fused Activations & 4-Bit NVFP4 (`[4096 x 4096]`)**:
-  - **RMSNorm** (`4x1024, d=2048`): Triune `0.349 ms (33.03 MB)` vs Naive `4.185 ms (208.0 MB)` (**`11.99x`**, `-84.1%` VRAM), `F.rms_norm` `0.353 ms (32.02 MB)`, and Genuine Unsloth `0.280 ms (33.13 MB)`.
-  - **SwiGLU** (`4x1024, h=4096`): Triune **`1.123 ms (96.0 MB)`** vs PyTorch `2.190 ms (128.0 MB)` (**`1.95x`**) and Genuine Unsloth `2.221 ms (96.0 MB)` (**`1.98x`**).
+  - **RMSNorm** (`4x1024, d=2048`): Lucid Machines `0.349 ms (33.03 MB)` vs Naive `4.185 ms (208.0 MB)` (**`11.99x`**, `-84.1%` VRAM), `F.rms_norm` `0.353 ms (32.02 MB)`, and Genuine Unsloth `0.280 ms (33.13 MB)`.
+  - **SwiGLU** (`4x1024, h=4096`): Lucid Machines **`1.123 ms (96.0 MB)`** vs PyTorch `2.190 ms (128.0 MB)` (**`1.95x`**) and Genuine Unsloth `2.221 ms (96.0 MB)` (**`1.98x`**).
   - **Weight Quantization (`[4096x4096]`)**: BF16 `32.0 MB (1.0x, 0.855 ms, cos=1.0)`, FP8 `16.0 MB (2.0x, 1.915 ms, cos=0.99931)`, and packed **4-bit NVFP4 `10.0 MB (5.0 b/w, 3.2x, 0.99 ms [0.399 ms QDQ], cos=0.99503)`**.
 
 ### 3. Gated Linear Attention & Associative Recall (`Categories D, K`)

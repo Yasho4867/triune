@@ -13,12 +13,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from triune.kernels import (
+from lucid_machines.kernels import (
     chunked_cross_entropy_from_hidden,
     fast_rmsnorm,
 )
-from triune.model import TriuneTransformer
-from triune.optim.centroid import fast_subspace_projection
+from lucid_machines.model import TriuneTransformer
+from lucid_machines.optim.centroid import fast_subspace_projection
 
 
 class TestCompetitiveBenchmarks(unittest.TestCase):
