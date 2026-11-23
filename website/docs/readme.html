@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; base-uri 'self'; form-action 'self';">
+  <title>Lucid Machines v3.0.0 — README</title>
+  <link rel="icon" type="image/svg+xml" href="../assets/lucid-machines-logo.svg">
+  <link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="container nav-bar">
+      <a href="../index.html" class="brand-link">
+        <img src="../assets/lucid-machines-logo.svg" alt="Lucid Machines Logo" class="brand-logo" width="36" height="36">
+        <span>Lucid Machines</span>
+        <span class="version-pill">v3.0.0</span>
+      </a>
+      <nav aria-label="Document Navigation">
+        <ul class="nav-links">
+          <li><a href="../index.html">Back to Overview</a></li>
+          <li><a href="release-name-report.html">R1 Name Report</a></li>
+          <li><a href="centroidsteer-validation.html">R2 Validation</a></li>
+          <li><a href="release-notes.html">Release Notes</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+  <main class="doc-body">
+    <div class="container">
+      <article class="doc-card">
+        <h1>Lucid Machines v3.0.0 — README</h1>
+        <div class="code-block"><pre># Lucid Machines (`v3.0.0`) — Triune Architecture, Junkie &amp; Polysom Studio
+
+**Lucid Machines** (`lucid-machines` / `lucid_machines`) is a modular, hardware-aware deep learning ecosystem built around **the Triune architecture by Lucid Machines** (`TriuneTransformer` / `TriuneModel` / `TriuneConfig` 3-tier multi-exit Mixture-of-Experts architecture, plus `UniversalTransformer`), **Polysom Studio** (a self-contained native desktop workbench), and **Junkie** (`models/configs/junkie.json`) — Lucid Machines&#x27; first flagship model to be trained on the Triune architecture.
+
+&gt; **Seamless Backward Compatibility (`R1`):** Every `triune-*` architecture size template (`models/configs/triune-*.json`), `LUCID_MACHINES_*` environment variable, `&quot;Polysom Studio&quot;` OS keyring service, `import lucid_machines` module, and `lucid_machines_core` native library preserves automatic fallback to its legacy `import triune` shim, legacy preset aliases, `TRIUNE_*` env vars, `&quot;Triune Studio&quot;` keyring service, `triune_core.*` library, and `triune_tokenizer.json`, ensuring 100% compatibility with existing checkpoints (`checkpoints/*.pt`), datasets (`data/*.jsonl`), exports (`exports/*`), and papers (`papers/*`). See [`docs/RELEASE_NAME_REPORT.md`](docs/RELEASE_NAME_REPORT.md).
+
+---
+
+## Key Capabilities &amp; Pillars
+
+- **Gated Linear Attention (`VectorisedGLA`) &amp; Gated DeltaNet**: $O(N)$ linear-time prefill and strictly constant $O(1)$ recurrent state memory (`48.0 KiB` isolated kernel at $H=6$ with `10.07x` prefill / `7.31x` decode vs. SDPA; `64.0 KiB` across multi-layer sweeps up to $L=16,384$, **99.8% cache reduction** vs. Softmax SDPA, `4.02x` prefill / `4.13x` decode speedup at $L=16,384$) with fused chunked Triton scan (`FusedRecurrentScan`) and Gated DeltaNet achieving **100.0% standard and 100.0% overwrite MQAR associative recall**.
+- **Sparse Mixture of Experts (`MoE_FFN`)**: Default sparse scatter-gather evaluation (`use_sparse_eval=True`) with zero-sync `N_tok=1` stacked BMM (**`1.648x` speedup** at `d=384, N=1`, **0.0 max diff** vs. dense) and sorted multi-token sparse slices (**`7.518x` speedup** at checkpoint width `d=384, E=8, k=2, N=4096`; **4.774x** top-1 and **5.450x** top-2 at `d=1536`), alongside always-active shared experts, contrastive activation statistics (`last_centroids`, `[E, D]`), and true post-SwiGLU hidden centroids (`last_hidden_centroids`, `[E, H]`).
+- **3-Tier Hierarchical Exits, Conformal CALM Calibration &amp; Self-Speculative Decoding**: Intermediate exits (**Reflex L2**, **Limbic L5**) and terminal **Cortex L8** on the KL-rescued `90.79M` checkpoint (`checkpoints/triune_studio_step_36500_rescued.pt`, `step_40555`, strictly monotonic validation perplexity **`111.80 -&gt; 111.18 -&gt; 110.92` PPL**), **`4.31x` Reflex vs. Cortex prefill speedup** (`2.764 ms / 741,070 tok/s` vs `11.90 ms / 172,099 tok/s` at `B=4, T=512`), `T=0.0` **exact-match greedy self-speculative decoding** (**`91.62 tok/s`**, **`51.28%` acceptance**), Pearson $\chi^2$-verified Leviathan et al. **rejection sampling** at `T=0.7` (**`90.74 tok/s`**, **`63.64%` acceptance**), and streaming runtime inference at **`40.8 tok/s` warm decode / `71.3 ms` TTFT** on RTX 5070. Held-out conformal CALM calibration over `N=87,141` calibration / `N=85,503` FineWeb-Edu evaluation tokens (`benchmarks/calm_calibration.py`) yields `AUROC = 0.8159` (Reflex) and `0.8319` (Limbic), certifying `95.73%` Reflex agreement at $\tau=0.20$ (`31.34%` coverage, **`20.35%` transformer FLOPs saved** at `+0.14%` PPL delta).
+- **Lossless Dynamic N-Gram Compression (`compress_mode`)**: Explicit separation between lossless text compression (**2.65x aggregate** across held-out Python, Math Prose, JSON, and Repetitive Log splits with `100%` round-trip reconstruction) and transformer computation (`compress_mode=&quot;expand&quot;` achieves **0.0 max logit diff** vs. base tokenization; `compress_mode=&quot;order_pool&quot;` preserves intra-span token ordering via orthogonal RoPE phase rotation; `compress_mode=&quot;mean_pool&quot;` and `extend_vocabulary_for_tokenizer()` enable compressed sequence training).
+- **4-Tier Weight Quantization (BF16 / FP8 / NVFP4 / Hadamard W4A16) &amp; CUDA Graph Decode**: Packed 4-bit E2M1 + 16-element E4M3 block scales via `convert_to_nvfp4` across **`96` `NVFP4Linear` blocks** (`78.26M` params) on the `90.79M` checkpoint (`46.65 MB` / `3.20x` unrotated NVFP4 at `126.887` PPL; **`78.88 MB` / `1.89x` Hadamard-rotated W4A16 + protected layers** reducing 4-bit PPL to **`119.106`**; `74.63 MB` / `2.00x` FP8 E4M3 at `101.560` PPL; `149.26 MB` BF16 at `97.504` PPL), direct GPU GGUF-to-NVFP4 streaming, fused RMSNorm, CUDA Graph decode capture, and `ParameterStager(use_fp4=True)` (`7 NVFP4StagingBuffer` transfers = `5.94 MB`).
+- **3-Tier Partitioned Optimizer (`CentroidSteerOptimizer` — Upgraded in `R2` / Milestone M1)**:
+  - **Tier 1 (`Muon`)**: Batched 5th-order Newton-Schulz polar orthogonalization with fused `baddbmm` polynomial evaluation and multi-tensor `_foreach` updates for 2D hidden projections ($2.0\text{ bytes/param}$).
+  - **Tier 2 (`CentroidSteer` v3.0.0)**: Multi-directional contrastive ($k_c \ge 4$) and scale-preserving Fisher-weighted steering on the Universal Triangular Core with centroid-deflated Krylov, batched `sCholQR2` ($||Q^T Q - I||_F &lt; 10^{-4}$), sliced Householder fallback, true post-SwiGLU hidden centroid capture (`last_hidden_centroids` `[E, H]` for `e[2]` down-projections), independent `steer_step` reset, non-refresh moment zeroing, and Triton-fused upper-triangular AdamW. Validated across `N=5` seeds (`[42, 1337, 2026, 777, 1024]`): **`1.1998` vs `1.2311` val loss (`p=0.0446`)** and **`4.38x` alignment energy (`0.1769` vs `0.0404`, `p&lt;1e-4`)** on multi-domain MoE, plus **`4.5185` vs `4.5250` FineWeb-Edu (`p=0.0068`) at `0.109 B/p`** (vs `4.000 B/p` AdamW; `0.1118 B/p` / `3.78 MB` vs `135.21 MB` on 90.79M Tier-2, **98.4% reduction**).
+  - **Tier 3 (`AdamW` / `8-bit AdamW`)**: Fused adaptive moments for 1D vectors, norms, router gates, and vocabulary embeddings.
+- **Activation-Checkpointed Layer Streaming &amp; Hugging Face Bridge (`LayerStreamingEngine`, `hf_compat`)**: Depth-invariant host-to-GPU layer virtualization with `activation_checkpointing=True`, `_is_bwd_staged` reentry guards, and non-parameter buffer copy-back cuts `102M` peak allocated VRAM by **`76.43%`** (`1,033.6 MB`), cuts `271M` VRAM by **`83.76%`** (`1,498.1 MB`, running **`1.97x` faster** than Windows WDDM paging spill), and trains **`695M` (`2,115.7 MB`)** and **`1.52B + CentroidSteer` (`3,132.6 MB`)** inside an `8 GB` consumer GPU.
+- **Native C/AVX2/CUDA/Triton Operator Engine (`csrc/` &amp; `lucid_machines.ops`)**: Zero-copy `ctypes` / P/Invoke C ABI (`lucid_machines_core.dll` / `liblucid_machines_core.so`, with `triune_core.*` fallback) and Triton/Tensor Core kernels for RMSNorm, RoPE, GLA recurrent decode, chunked vocabulary-projection Cross-Entropy (**`98.5%` peak transient VRAM saved vs. PyTorch, `94.1%` vs. genuine Unsloth at `V=32,000, N=8,192`**), SwiGLU (**`1.95x` vs. PyTorch**), and Neuron Scope activation telemetry.
+- **Polysom Studio (`PolysomStudio.exe` / `PolysomStudioSetup.exe`) &amp; R4 Security Architecture**: Self-contained native Windows desktop application (`.NET 10` + `WebView2`), WPF installer, 5 editorial themes (`Hypnagogic`, `Phosphene`, `Pareidolia`, `Afterimage`, `Mirage`), 40-node visual DAG IDE, Obsidian 3D brain topology inspector, PC model scanner (Ollama, HF, vLLM, Hermes), and R4 defense-in-depth security (`weights_only=True` checkpoint hydration, symlink-resolved path confinement, proxy-aware `LUCID_MACHINES_API_TOKEN` bearer authentication, Origin/CSRF/SSRF guards, Ed25519 cryptographic plugin verification with `trusted=False` default, and OS keyring credential storage).
+
+---
+
+## 5-Tier Empirical Benchmark Summary (`CONTRIBUTING.md §1`)
+
+| Tier | Benchmark Category | Hardware-Verified Metrics (RTX 5070 Laptop GPU) |
+| :-: | :--- | :--- |
+| **Tier 1** | **Isolated Kernel Microbenchmarks** | `VectorisedGLA` (`H=6, L=16384`): **`48.0 KiB`** state cache, **`10.07x`** prefill / **`7.31x`** decode vs. SDPA; `Gated DeltaNet`: **100.0% standard &amp; overwrite MQAR recall**; Sparse `MoE_FFN(use_sparse_eval=True)`: **`1.648x`** zero-sync at `N=1` (`0.0` max diff) and **`7.518x`** at `d=384, E=8, k=2, N=4096` (`4.774x` top-1 / `5.450x` top-2 at `d=1536`); `chunked_cross_entropy`: **`98.5%` transient VRAM saved** vs. PyTorch (**`94.1%`** vs. Unsloth `2026.10.10`) at `V=32,000, N=8,192`; `FastSwiGLU`: **`1.95x`** vs. PyTorch. |
+| **Tier 2** | **End-to-End 90.79M Model (`64.21M` Active)** | Rescued `step_40555`: **`383,135 tok/s`** peak prefill (`B=32, T=1024`), **`200,463 tok/s`** (`B=1, T=2048`), **`242,029 tok/s`** (`B=1, T=8192`), **`297,753 tok/s`** (`B=4, L=16384`), **`157.0 tok/s`** sequential tensor decode (`6.363 ms/tok`), **`40.8 tok/s` warm decode / `71.3 ms` TTFT** streaming inference, **`25,973 tok/s` LoRA fine-tuning** (**`+6.7%`** over Unsloth `24,344 tok/s`); `LayerStreamingEngine`: trains **`1.52B + CentroidSteer` in `3,132.6 MB` VRAM**; `NVFP4`: **`3.20x`** compression (`46.65 MB` across 96 blocks), Hadamard W4A16 4-bit PPL **`119.106`**. |
+| **Tier 3** | **Multi-Layer Wrapper vs. Legacy Diagnostics** | Multi-layer long-context sweep (`L=16384`): **`64.0 KiB`** cache (**99.8% reduction** vs. SDPA), **`4.02x`** prefill / **`4.13x`** decode; production `MoE_FFN` (`1.648x–7.518x`) explicitly separated from legacy diagnostic `MoERoutingBlock` (`0.47x`). |
+| **Tier 4** | **Tokenizer Compression vs. Model Compute** | Held-out lossless text compression: **`2.65x` aggregate** (`100%` reconstruction); compute-equivalent `compress_mode=&quot;expand&quot;`: **`0.0` max logit diff** vs. base IDs; `order_pool` orthogonal RoPE phase rotation. |
+| **Tier 5** | **Speculative &amp; Conformal CALM Exits** | Monotonic exit PPL (`111.80 -&gt; 111.18 -&gt; 110.92`), **`4.31x` Reflex prefill speedup** (`741,070` vs. `172,099 tok/s`); `T=0.0` greedy self-speculative decode: **`91.62 tok/s`** (`51.28%` acceptance, 100% exact Cortex parity); `T=0.7` Leviathan rejection sampling: **`90.74 tok/s`** (`63.64%` acceptance, Pearson $\chi^2$ verified); Conformal CALM (`N=85,503` eval tokens, $\tau=0.20$): **`95.73%` Reflex agreement** (`31.34%` coverage, **`20.35%` FLOPs saved**). |
+
+---
+
+## Repository Structure
+
+```text
+LucidMachines/
+├── lucid_machines/             # Core Python SDK, Kernels, Optimizers, Runtime, API &amp; CLI
+│   ├── ops/                    # Unified Operator API (gla, rmsnorm, rope, cross_entropy, centroid_steer, muon_ns)
+│   ├── kernels/                # Triton &amp; PyTorch Tensor Core kernels (fast_gla, fast_muon, fast_triangular, fast_ce, fast_nvfp4)
+│   ├── model/                  # TriuneTransformer (TriuneModel alias), TriuneConfig, VectorisedGLA, MoE_FFN, GumbelSoftmaxRouter, FP8/FP4
+│   ├── optim/                  # 3-Tier Optimizers: Muon, Multi-Directional CentroidSteer, AdamW
+│   ├── runtime/                # LayerStreamingEngine, ParameterStager, DynamicResourceManager, PythonSandbox
+│   ├── trainer/                # Trainer, TrainingEngine, LoRA/QLoRA, Checkpointing
+│   ├── execution/ &amp; plugins/   # 40-Node Typed DAG Engine &amp; Ed25519 Cryptographic Plugin Registry
+│   ├── api/                    # Hardened FastAPI server, OpenAI-compatible REST API, WebSocket telemetry
+│   └── cli.py                  # Unified CLI (lucid-machines &amp; polysom)
+├── triune/                     # Backward-compatibility Python shim delegating to lucid_machines
+├── csrc/                       # Native C/AVX2/OpenMP &amp; CUDA Engine (lucid_machines_core.dll / liblucid_machines_core.so)
+├── studio/                     # Polysom Studio Frontend (studio/src/), .NET 10 WPF Host (studio/windows/) &amp; Installers
+├── models/                     # Triune architecture size templates (`models/configs/triune-*.json`) &amp; `junkie.json` flagship model target
+├── website/                    # React/Vite Project Website (index.html, src/, public/, SVG assets)
+├── launch_kit/                 # Local Launch &amp; Advertising Kit (messaging, blog, social drafts, SVG cards)
+├── benchmarks/                 # Hardware-verified empirical benchmark reports + M1 CentroidSteer validation report
+├── papers/                     # Companion LaTeX manuscripts &amp; compiled PDFs (Paper 1: CentroidSteer, Paper 2: Systems)
+├── tests/                      # Unit, mathematical invariant, security regression, and Tiers 1–4 E2E suites (tests/e2e/)
+└── docs/                       # Architecture, mathematical foundations, installation, and RELEASE_NAME_REPORT.md
+```
+
+---
+
+## 1-Click Installation &amp; Launching Polysom Studio
+
+### Windows (Native Installer, Double-Click, or PowerShell)
+```cmd
+:: Run the native Windows setup wizard or automated batch installer:
+studio\publish\PolysomStudioSetup.exe
+studio\installer\install_studio.bat
+```
+
+### Linux / WSL2 / macOS
+```bash
+chmod +x studio/installer/install_studio.sh
+./studio/installer/install_studio.sh
+```
+
+### Rebuilding the Native Windows App &amp; Installer (`scripts/publish_studio_windows.ps1`)
+```powershell
+python csrc/build_native.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish_studio_windows.ps1
+```
+
+---
+
+## Quickstart (Python SDK &amp; Unified CLI)
+
+### Python SDK
+```python
+import torch
+import lucid_machines  # (or `import triune` via compatibility shim)
+
+# Load a Triune architecture template (&quot;triune-2.5b&quot;) or first flagship target (&quot;junkie&quot;)
+model = lucid_machines.load_model(&quot;triune-2.5b&quot;)
+
+# Or upgrade any PyTorch / Hugging Face model with FastRMSNorm, LoRA &amp; CentroidSteer
+engine = lucid_machines.upgrade(model, lora_rank=16)
+
+# Forward pass returning all 3 exit head logits
+input_ids = torch.randint(0, 32000, (1, 128))
+reflex_logits, limbic_logits, cortex_logits, route_logits = model.forward_all_exits(input_ids)
+```
+
+### CLI
+```bash
+# Launch Polysom Studio Desktop App
+polysom --port 8000
+# or: lucid-machines studio --port 8000
+
+# Start embedded OpenAI-compatible API &amp; UI server
+lucid-machines serve --port 8000
+
+# Run hardware &amp; CUDA diagnostics
+lucid-machines doctor
+
+# Plan memory requirements for target GPU VRAM
+lucid-machines plan-memory --vram-gb 8.0
+```
+
+---
+
+## Triune Architecture Templates &amp; First Flagship Model (`models/configs/`)
+
+**Junkie** (`models/configs/junkie.json`) is Lucid Machines&#x27; first flagship model to be trained on the **Triune** architecture (`TriuneTransformer`, 24L, 1024D, 16H, 8+1 experts, L7/L16 exits). Triune architecture size templates live in `models/configs/triune-*.json`:
+
+| Architecture Template | Legacy Alias | Layers | Hidden Dim | Heads | Experts | Exit Layers |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: |
+| `triune-tiny` | `triune-micro` | 4 | 192 | 3 | 2 + 1 shared | L2, L3 |
+| `triune-edge` | — | 6 | 256 | 4 | 4 + 1 shared | L2, L4 |
+| `triune-nano` | — | 8 | 512 | 4 | 4 + 1 shared | L3, L6 |
+| `triune-base` | — | 8 | 384 | 6 | 4 + 1 shared | L2, L5 |
+| `triune-small` | — | 14 | 1024 | 8 | 4 + 1 shared | L5, L10 |
+| `triune-pro` | `triune-large` | 16 | 768 | 12 | 8 + 1 shared | L5, L10 |
+| `triune-1b` | `triune-1.5b` | 24 | 1024 | 16 | 8 + 1 shared | L7, L16 |
+| `triune-2.5b` | — | 18 | 1280 | 10 | 8 + 1 shared | L5, L13 |
+| `triune-large` | — | 28 | 1536 | 12 | 8 + 1 shared | L8, L19 |
+| `triune-moe` | — | 24 | 1280 | 10 | 16 + 1 shared | L6, L16 |
+| `triune-7b` | — | 32 | 2048 | 16 | 8 + 1 shared | L8, L22 |
+| `triune-frontier` | `triune-32b` | 48 | 2560 | 20 | 16 + 1 shared | L11, L30 |
+
+---
+
+## Documentation Index
+
+- [Release Name Selection &amp; Conflict Report (`R1`)](docs/RELEASE_NAME_REPORT.md): Timestamped PyPI/npm/GitHub/DNS/web conflict matrix, 4-layer split (`Lucid Machines` company / `Triune` architecture / `Junkie` first model / `Polysom Studio` workbench), and non-legal disclaimer.
+- [Architecture Overview (`docs/ARCHITECTURE.md`)](docs/ARCHITECTURE.md): 6-layer system architecture, 3-Tier CALM pipeline, and R2 multi-directional CentroidSteer design.
+- [Installation Guide (`docs/INSTALL.md`)](docs/INSTALL.md) &amp; [Windows Setup (`docs/WINDOWS_INSTALLATION.md`)](docs/WINDOWS_INSTALLATION.md): Native Windows `.NET 10` Polysom Studio installer, Python/CUDA bootstrap, and cross-platform setup.
+- [Mathematical Foundations (`docs/MATH_FOUNDATIONS.md`)](docs/MATH_FOUNDATIONS.md): Formulations and proofs for batched `sCholQR2`, multi-directional CentroidSteer, Muon, conformal CALM gating, and Leviathan speculative rejection sampling.
+- [Framework Guide (`docs/FRAMEWORK.md`)](docs/FRAMEWORK.md) &amp; [Dynamic Modular Guide (`docs/DYNAMIC_MODULAR_GUIDE.md`)](docs/DYNAMIC_MODULAR_GUIDE.md): Subsystems, runtime layer streaming, DAG nodes, and configuration parameters.
+- [Release Notes (`RELEASE_NOTES.md`)](RELEASE_NOTES.md) &amp; [Deployment Guide (`DEPLOYMENT_GUIDE.md`)](DEPLOYMENT_GUIDE.md): Complete `v3.0.0` release notes and step-by-step publishing runbook.
+- [Security Policy (`SECURITY.md`)](SECURITY.md) &amp; [Contributing Policy (`CONTRIBUTING.md`)](CONTRIBUTING.md): R4 security boundaries and 5-tier empirical verification rules.
+</pre></div>
+      </article>
+    </div>
+  </main>
+</body>
+</html>

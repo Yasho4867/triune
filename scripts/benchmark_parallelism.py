@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Benchmark Category P: Parallelism & Pipelining Acceleration Benchmark.
 
-Evaluates Triune's multi-level parallelism enhancements:
+Evaluates Lucid Machines' multi-level parallelism enhancements:
 1. Pipelined AsyncDevicePrefetcher (PCIe DMA transfer overlapped with compute) vs Synchronous H2D.
 2. Fused QKVG Single-GEMM projection vs 4 Separate GEMMs.
 3. Multi-GPU Distributed Data Parallel (DDP) scaling readiness.
@@ -15,7 +15,7 @@ from pathlib import Path
 
 import torch
 
-from triune.data.dataloader import AsyncDevicePrefetcher
+from lucid_machines.data.dataloader import AsyncDevicePrefetcher
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BENCHMARK_DIR = REPO_ROOT / "benchmarks"
@@ -134,7 +134,7 @@ def benchmark_fused_qkvg(device: torch.device, num_steps: int = 50) -> dict:
 def main():
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print("=" * 80)
-    print("TRIUNE PARALLELISM & PIPELINING ACCELERATION BENCHMARK")
+    print("LUCID MACHINES PARALLELISM & PIPELINING ACCELERATION BENCHMARK")
     print(f"Device: {device} | PyTorch: {torch.__version__}")
     print("=" * 80)
 
@@ -164,7 +164,7 @@ def main():
     print(f"[OK] Results saved to {json_path}")
 
     # Generate Markdown Report
-    report = f"""# Triune Parallelism & Pipelining Acceleration Report
+    report = f"""# Lucid Machines Parallelism & Pipelining Acceleration Report
 
 **Generated**: {time.strftime("%Y-%m-%d %H:%M:%S")}  
 **Device**: `{device}` (`{torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU"}`)  
@@ -174,16 +174,16 @@ def main():
 
 ## 1. Executive Summary
 
-This benchmark validates Triune's multi-level parallelism and pipelining optimizations:
+This benchmark validates Lucid Machines' multi-level parallelism and pipelining optimizations:
 1. **Asynchronous Pipelined Data Loading (`AsyncDevicePrefetcher`)**: Overlaps page-locked PCIe DMA host-to-device transfers with GPU execution on dedicated CUDA streams, eliminating CPU data-transfer stalls (**{prefetch_res["speedup"]}x speedup**, delivering **{prefetch_res["async_tok_per_sec"]:,} tok/s** vs {prefetch_res["sync_tok_per_sec"]:,} tok/s).
 2. **Fused QKVG Linear Attention Projection**: Consolidates separate $Q, K, V, G$ linear projections into a unified Tensor Core GEMM (**{qkvg_res["speedup"]}x speedup**).
-3. **Multi-GPU Distributed Data Parallel (DDP)**: Native multi-GPU orchestration (`triune.trainer.distributed`) with bucketed all-reduce metrics synchronization.
+3. **Multi-GPU Distributed Data Parallel (DDP)**: Native multi-GPU orchestration (`lucid_machines.trainer.distributed`) with bucketed all-reduce metrics synchronization.
 
 ---
 
 ## 2. Empirical Benchmark Results
 
-| Parallelism Component | Baseline | Triune Optimized | Speedup |
+| Parallelism Component | Baseline | Lucid Machines Optimized | Speedup |
 | :--- | :--- | :--- | :--- |
 | **Pipelined Async Prefetcher** | `{prefetch_res["sync_time_ms"]} ms` (`{prefetch_res["sync_tok_per_sec"]} tok/s`) | `{prefetch_res["async_time_ms"]} ms` (`{prefetch_res["async_tok_per_sec"]} tok/s`) | **{prefetch_res["speedup"]}x** |
 | **Fused QKVG Projection** | `{qkvg_res["separate_gemm_ms"]} ms` | `{qkvg_res["fused_gemm_ms"]} ms` | **{qkvg_res["speedup"]}x** |
@@ -192,7 +192,7 @@ This benchmark validates Triune's multi-level parallelism and pipelining optimiz
 
 ## 3. Distributed Multi-GPU Parallelism (DDP)
 
-Triune now provides native Distributed Data Parallelism:
+Lucid Machines now provides native Distributed Data Parallelism:
 - Multi-node / multi-GPU execution via `torchrun --nproc_per_node=N scripts/train.py --distributed`.
 - Automatic rank, local rank, and world size negotiation.
 - Bucketed gradient all-reduce overlapping with backward pass.

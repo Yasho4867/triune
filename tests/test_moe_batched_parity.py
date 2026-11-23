@@ -13,7 +13,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from triune.model.moe import MoE_FFN
+from lucid_machines.model.moe import MoE_FFN
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for GPU testing")

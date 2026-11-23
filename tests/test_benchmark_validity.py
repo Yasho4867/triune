@@ -145,8 +145,8 @@ class BenchmarkValidityTest(unittest.TestCase):
         import torch.nn as nn
         import torch.optim as optim
 
-        from triune.model.moe import MoE_FFN
-        from triune.optim.centroid import CentroidSteerOptimizer
+        from lucid_machines.model.moe import MoE_FFN
+        from lucid_machines.optim.centroid import CentroidSteerOptimizer
 
         self.assertTrue(hasattr(optim, "AdamW"), "PyTorch standard AdamW must exist")
 
@@ -183,12 +183,12 @@ class BenchmarkValidityTest(unittest.TestCase):
         x = torch.randn(2, 8, 256)
         target = torch.randn(2, 8, 256)
 
-        def _run_two_steps(use_triune: bool):
+        def _run_two_steps(use_lucid: bool):
             torch.manual_seed(0)
             block = MoE_FFN(dim=256, num_experts=4, top_k=1)
             opt = (
                 CentroidSteerOptimizer(block, lr=1e-2, rank=8, use_muon=False)
-                if use_triune
+                if use_lucid
                 else optim.AdamW(block.parameters(), lr=1e-2)
             )
             w0 = block.experts[0][0].weight.detach().clone()
@@ -204,16 +204,17 @@ class BenchmarkValidityTest(unittest.TestCase):
             return losses, delta, opt
 
         adam_losses, adam_delta, _ = _run_two_steps(False)
-        triune_losses, triune_delta, triune_opt = _run_two_steps(True)
+        lucid_losses, lucid_delta, lucid_opt = _run_two_steps(True)
         self.assertGreater(adam_delta, 0.0, "AdamW failed to mutate weights")
-        self.assertGreater(triune_delta, 0.0, "CentroidSteerOptimizer failed to mutate weights")
+        self.assertGreater(lucid_delta, 0.0, "CentroidSteerOptimizer failed to mutate weights")
         self.assertLess(adam_losses[-1], adam_losses[0], "AdamW loss must decrease over 2 steps")
-        self.assertLess(triune_losses[-1], triune_losses[0], "CentroidSteerOptimizer loss must decrease over 2 steps")
+        self.assertLess(lucid_losses[-1], lucid_losses[0], "CentroidSteerOptimizer loss must decrease over 2 steps")
 
-        mem = triune_opt.get_telemetry()["memory"]
+        mem = lucid_opt.get_telemetry()["memory"]
         self.assertGreater(mem["uncompressed_state_mb"], 0.0)
+        state_mb = mem.get("lucid_state_mb", mem.get("triune_state_mb"))
         self.assertLess(
-            mem["triune_state_mb"],
+            state_mb,
             mem["uncompressed_state_mb"],
             f"Expected CentroidSteer state < uncompressed AdamW state, got {mem}",
         )

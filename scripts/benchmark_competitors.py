@@ -1,6 +1,6 @@
-"""Triune Comprehensive Competitive Benchmark Suite.
+"""Lucid Machines Comprehensive Competitive Benchmark Suite.
 
-Performs rigorous empirical benchmarks comparing Triune components against
+Performs rigorous empirical benchmarks comparing Lucid Machines components against
 industry standards and competitors (Vanilla PyTorch, Hugging Face baselines,
 Unsloth / Liger Kernel architectures, and standard fixed-depth LLMs).
 
@@ -30,17 +30,17 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from triune.kernels import (
+from lucid_machines.kernels import (
     chunked_cross_entropy_from_hidden,
     fast_chunk_gla,
     fast_rmsnorm,
     fast_swiglu,
     fast_zeropower_via_newtonschulz5,
 )
-from triune.kernels.fast_nvfp4 import NVFP4Linear, nvfp4_dequantize, nvfp4_quantize
-from triune.model import MoE_FFN, TriuneTransformer
-from triune.model.fp8 import FP8Linear
-from triune.optim.centroid import CentroidSteerOptimizer, fast_subspace_projection
+from lucid_machines.kernels.fast_nvfp4 import NVFP4Linear, nvfp4_dequantize, nvfp4_quantize
+from lucid_machines.model import MoE_FFN, TriuneTransformer
+from lucid_machines.model.fp8 import FP8Linear
+from lucid_machines.optim.centroid import CentroidSteerOptimizer, fast_subspace_projection
 
 
 def get_cuda_device() -> torch.device:
@@ -340,7 +340,7 @@ def run_attention_benchmark(device: torch.device, dtype: torch.dtype) -> Dict[st
         if device.type == "cuda":
             torch.cuda.empty_cache()
 
-        # Triune GLA Recurrent State Decode (O(1))
+        # Lucid Machines GLA Recurrent State Decode (O(1))
         q_gla = torch.randn(b_dec, 1, H, HD, device=device, dtype=dtype)
         k_gla = torch.randn(b_dec, 1, H, HD, device=device, dtype=dtype)
         v_gla = torch.randn(b_dec, 1, H, HD, device=device, dtype=dtype)
@@ -439,8 +439,8 @@ def run_optimizer_benchmark(device: torch.device, dtype: torch.dtype) -> Dict[st
     algo_speedup = round(svd_time / max(subspace_time, 1e-6), 2)
 
     print("\nSubspace Projection Latency:")
-    print(f"  Classical SVD (torch.linalg.svd):       {svd_time:.3f} ms")
-    print(f"  Triune Fast Cholesky-QR Subspace Iter: {subspace_time:.3f} ms ({algo_speedup}x faster)")
+    print(f"  Classical SVD (torch.linalg.svd):              {svd_time:.3f} ms")
+    print(f"  Lucid Machines Fast Cholesky-QR Subspace Iter: {subspace_time:.3f} ms ({algo_speedup}x faster)")
 
     # 3. Muon 5th-Order Newton Schulz Orthogonalization
     attn_weight_grad = torch.randn(dim, dim, device=device, dtype=dtype)
@@ -801,7 +801,7 @@ def run_fused_activations_benchmark(device: torch.device, dtype: torch.dtype) ->
     except Exception:
         pass
 
-    # Triune Fast Fused RMSNorm
+    # Lucid Machines Fast Fused RMSNorm
     weight_triune = nn.Parameter(torch.ones(D, device=device, dtype=dtype))
     x_triune = torch.randn(B, T, D, device=device, dtype=dtype, requires_grad=True)
 
@@ -910,7 +910,7 @@ def run_fused_activations_benchmark(device: torch.device, dtype: torch.dtype) ->
             f"  Unsloth swiglu kernel:        {unsloth_swiglu_time:.3f} ms | Delta VRAM: {unsloth_swiglu_vram:.2f} MB"
         )
     print(
-        f"  Triune Fused fast_swiglu:     {fast_swiglu_time:.3f} ms | Delta VRAM: {fast_swiglu_vram:.2f} MB ({swiglu_speedup}x vs PyTorch)"
+        f"  Lucid Fused fast_swiglu:      {fast_swiglu_time:.3f} ms | Delta VRAM: {fast_swiglu_vram:.2f} MB ({swiglu_speedup}x vs PyTorch)"
     )
 
     return {
@@ -947,7 +947,7 @@ def generate_markdown_report(all_benchmarks: Dict[str, Any], output_path: Path):
 
     device_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU"
 
-    md = f"""# Triune Transformer — Official Competitive Benchmark Report
+    md = f"""# Triune Transformer (Lucid Machines) — Official Competitive Benchmark Report
 
 **Benchmarked Hardware**: `{device_name}`  
 **Precision**: `bfloat16` with native CUDA Tensor Cores  
@@ -958,7 +958,7 @@ def generate_markdown_report(all_benchmarks: Dict[str, Any], output_path: Path):
 
 ## Executive Summary
 
-Triune combines four foundational breakthroughs for high-speed pre-training and serving on consumer hardware:
+Lucid Machines combines four foundational breakthroughs in the Triune architecture for high-speed pre-training and serving on consumer hardware:
 1. **Streaming Chunked Cross-Entropy**: Fuses the LM-head projection and in-place Triton softmax/gradient reduction, saving substantial VRAM vs PyTorch and Unsloth CE without materializing full $[N, V]$ logits.
 2. **$O(N)$ Gated Linear Attention (GLA)**: Achieves strictly linear sequence complexity with constant recurrent state during decode.
 3. **3-Tier Partitioned Optimizer (CentroidSteer + Muon + AdamW) & NVFP4 4-Bit**: Compresses MoE optimizer states by **{opt.get("memory_reduction_vs_fp32_pct", 80)}%** and supports full BF16 / FP8 (E4M3) / NVFP4 (E2M1 4-bit) weight quantization tiers.
@@ -984,7 +984,7 @@ Triune combines four foundational breakthroughs for high-speed pre-training and 
         md += f"| {r['tokens']:,} | {r['vocab']:,} | {r['standard_time_ms']} ms | {un_t} | **{r['triune_time_ms']} ms** | {r['standard_vram_mb']} MB | {un_v} | **{r['triune_vram_mb']} MB** | {un_save} | `{r['grad_parity_diff']}` |\n"
 
     md += """
-*Takeaway*: Both Standard PyTorch and Unsloth's kernel consume `[N, V]` logits produced by the LM head before cross-entropy. Triune fuses the LM-head linear projection and in-place Triton cross-entropy across 512-token streaming chunks, eliminating `[N, V]` logits allocation entirely.
+*Takeaway*: Both Standard PyTorch and Unsloth's kernel consume `[N, V]` logits produced by the LM head before cross-entropy. Lucid Machines fuses the LM-head linear projection and in-place Triton cross-entropy across 512-token streaming chunks, eliminating `[N, V]` logits allocation entirely.
 
 ---
 
@@ -1020,7 +1020,7 @@ During continuous token generation, standard models (Llama, Mistral, SmolLM, Qwe
 | **8-bit AdamW (Unsloth)** | {opt.get("adamw_8bit_state_mb", 0):.1f} MB | {round((1 - (opt.get("adamw_8bit_state_mb", 1) / max(opt.get("adamw_fp32_state_mb", 1), 1e-6))) * 100, 1)}% | None | Element-wise quantized |
 | **Triune CentroidSteer (Rank {16})** | **{opt.get("centroid_steer_state_mb", 0):.1f} MB** | **{opt.get("memory_reduction_vs_fp32_pct", 0)}%** | **Gram-Schmidt ($P^T c_\\text{{orth}} = 0$)** | **Subspace Transport SVD** |
 
-- **Subspace Iteration Speed**: Triune Fast Cholesky-QR computes rank-{16} SVD updates in **{opt.get("cholesky_subspace_ms", 0)} ms** ({opt.get("subspace_algo_speedup", 1)}x faster than `torch.linalg.svd`).
+- **Subspace Iteration Speed**: Lucid Machines Fast Cholesky-QR computes rank-{16} SVD updates in **{opt.get("cholesky_subspace_ms", 0)} ms** ({opt.get("subspace_algo_speedup", 1)}x faster than `torch.linalg.svd`).
 - **Muon Newton-Schulz 5th-Order**: Attn orthogonalization completes in **{opt.get("muon_step_ms", 0)} ms** with polar decomposition.
 """
     live_opt = opt.get("live_step_comparison", {})
@@ -1029,7 +1029,7 @@ During continuous token generation, standard models (Llama, Mistral, SmolLM, Qwe
             f"- **Live 1-Layer MoE Step Timing (`bitsandbytes 0.50.2` executed)**: "
             f"PyTorch `AdamW` = `{live_opt.get('adamw_step_ms')} ms` (`{live_opt.get('adamw_delta_vram_mb')} MB`), "
             f"`bitsandbytes.optim.AdamW8bit` = `{live_opt.get('bnb_8bit_step_ms')} ms` (`{live_opt.get('bnb_8bit_delta_vram_mb')} MB`), "
-            f"Triune `CentroidSteerOptimizer` = `{live_opt.get('centroid_steer_step_ms')} ms` (`{live_opt.get('centroid_steer_delta_vram_mb')} MB`).\n"
+            f"Lucid Machines `CentroidSteerOptimizer` = `{live_opt.get('centroid_steer_step_ms')} ms` (`{live_opt.get('centroid_steer_delta_vram_mb')} MB`).\n"
         )
     qt_rows = opt.get("quantization_tiers", [])
     if qt_rows:
@@ -1066,7 +1066,7 @@ During continuous token generation, standard models (Llama, Mistral, SmolLM, Qwe
 
 ## Conclusion & Competitive Standing
 
-Triune is benchmarked directly against vanilla PyTorch, installed `unsloth 2026.10.10` kernels, and installed `bitsandbytes 0.50.2` (`AdamW8bit`), with full NVFP4 4-bit (E2M1) + FP8 (E4M3) support:
+Lucid Machines is benchmarked directly against vanilla PyTorch, installed `unsloth 2026.10.10` kernels, and installed `bitsandbytes 0.50.2` (`AdamW8bit`), with full NVFP4 4-bit (E2M1) + FP8 (E4M3) support:
 1. **Pre-training Memory Cap**: Can pre-train full 76M-2.5B architectures on consumer laptops with $< 1.95$ GB VRAM.
 2. **MoE Stability**: Eliminates expert representation collapse via CentroidSteer.
 3. **Inference Decode**: ~{exit_bench.get("effective_speedup_vs_fixed", 1.8)}x higher tokens/sec decode throughput via dynamic Reflex/Limbic exits.
@@ -1077,7 +1077,7 @@ Triune is benchmarked directly against vanilla PyTorch, installed `unsloth 2026.
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Triune Competitive Benchmark Suite")
+    parser = argparse.ArgumentParser(description="Lucid Machines Competitive Benchmark Suite")
     parser.add_argument("--device", default="auto", help="Compute device ('cuda', 'cpu', 'auto')")
     parser.add_argument("--output-json", default="benchmarks/benchmark_results.json", help="Path to save JSON results")
     parser.add_argument(
@@ -1089,7 +1089,7 @@ def main():
     dtype = get_compute_dtype(device)
 
     print("=" * 78)
-    print(" TRIUNE TRANSFORMER — COMPETITIVE BENCHMARK RUNNER")
+    print(" TRIUNE TRANSFORMER (LUCID MACHINES) — COMPETITIVE BENCHMARK RUNNER")
     print(f" Target Device:   {device} ({torch.cuda.get_device_name(0) if device.type == 'cuda' else 'CPU'})")
     print(f" Compute Dtype:   {dtype}")
     print("=" * 78)

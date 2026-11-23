@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Triune Studio & AI Engine - Comprehensive Automated Installer.
+"""LucidMachines Studio & AI Engine - Comprehensive Automated Installer.
 
 Cross-platform installer for Windows, Linux, WSL2, and macOS.
 Inspects hardware stack, provisions virtual environment, installs optimal
@@ -46,18 +46,12 @@ RESET = "\033[0m" if USE_COLOR else ""
 def print_banner() -> None:
     banner = rf"""{CYAN}{BOLD}
 ================================================================================
-   _______ _____  _____ _    _ _   _ ______
-  |__   __|  __ \|_   _| |  | | \ | |  ____|
-     | |  | |__) | | | | |  | |  \| | |__   
-     | |  |  _  /  | | | |  | | . ` |  __|  
-     | |  | | \ \ _| |_| |__| | |\  | |____ 
-     |_|  |_|  \_\_____|\____/|_| \_|______|
-               AI ENGINE & STUDIO RESEARCH IDE
+              LUCID_MACHINES AI ENGINE & STUDIO RESEARCH IDE (v1.0.0)
 ================================================================================{RESET}"""
     try:
         print(banner)
     except UnicodeEncodeError:
-        print("\n=== TRIUNE AI ENGINE & STUDIO RESEARCH IDE ===\n")
+        print("\n=== LUCID_MACHINES AI ENGINE & STUDIO RESEARCH IDE ===\n")
 
 
 def log_step(step_num: int, total_steps: int, title: str) -> None:
@@ -402,8 +396,9 @@ def create_desktop_shortcut(hw: HardwareProfile, create_shortcuts: bool = True) 
     studio_bat = STUDIO_DIR / "TriuneStudio.bat"
     studio_sh = STUDIO_DIR / "TriuneStudio.sh"
     native_studio_candidates = (
-        WORKSPACE_ROOT / "TriuneStudio.exe",
-        WORKSPACE_ROOT / "studio" / "windows" / "publish" / "TriuneStudio.exe",
+        WORKSPACE_ROOT / "PolysomStudio.exe",
+        WORKSPACE_ROOT / "studio" / "publish" / "PolysomStudio.exe",
+        WORKSPACE_ROOT / "studio" / "windows" / "publish" / "PolysomStudio.exe",
         WORKSPACE_ROOT
         / "studio"
         / "windows"
@@ -411,7 +406,7 @@ def create_desktop_shortcut(hw: HardwareProfile, create_shortcuts: bool = True) 
         / "bin"
         / "Release"
         / "net10.0-windows"
-        / "TriuneStudio.exe",
+        / "PolysomStudio.exe",
         WORKSPACE_ROOT
         / "studio"
         / "windows"
@@ -420,12 +415,13 @@ def create_desktop_shortcut(hw: HardwareProfile, create_shortcuts: bool = True) 
         / "Release"
         / "net10.0-windows"
         / "win-x64"
-        / "TriuneStudio.exe",
+        / "PolysomStudio.exe",
     )
     native_studio_exe = next((path for path in native_studio_candidates if path.is_file()), studio_bat)
     native_setup_candidates = (
-        WORKSPACE_ROOT / "TriuneStudioSetup.exe",
-        WORKSPACE_ROOT / "studio" / "windows" / "publish" / "TriuneStudioSetup.exe",
+        WORKSPACE_ROOT / "PolysomStudioSetup.exe",
+        WORKSPACE_ROOT / "studio" / "publish" / "PolysomStudioSetup.exe",
+        WORKSPACE_ROOT / "studio" / "windows" / "publish" / "PolysomStudioSetup.exe",
         WORKSPACE_ROOT
         / "studio"
         / "windows"
@@ -433,7 +429,7 @@ def create_desktop_shortcut(hw: HardwareProfile, create_shortcuts: bool = True) 
         / "bin"
         / "Release"
         / "net10.0-windows"
-        / "TriuneStudioSetup.exe",
+        / "PolysomStudioSetup.exe",
     )
     native_setup_exe = next((path for path in native_setup_candidates if path.is_file()), None)
 
@@ -463,18 +459,18 @@ fi
     # Create Windows Desktop & Start Menu .lnk shortcuts via PowerShell
     if hw.is_windows:
         try:
-            icon_file = WORKSPACE_ROOT / "studio" / "windows" / "triune.ico"
+            icon_file = WORKSPACE_ROOT / "studio" / "windows" / "polysom.ico"
             icon_loc = str(icon_file) if icon_file.is_file() else str(native_studio_exe)
             setup_snippet = ""
             if native_setup_exe is not None:
                 setup_snippet = f"""
-$SetupLnk = Join-Path $StartMenuPath "Triune Studio Setup.lnk"
+$SetupLnk = Join-Path $StartMenuPath "Polysom Studio Setup.lnk"
 if (Test-Path $SetupLnk) {{ Remove-Item $SetupLnk -Force -ErrorAction SilentlyContinue }}
 $SetupShortcut = $WshShell.CreateShortcut($SetupLnk)
 $SetupShortcut.TargetPath = "{native_setup_exe}"
 $SetupShortcut.WorkingDirectory = "{WORKSPACE_ROOT}"
 $SetupShortcut.IconLocation = "{icon_loc},0"
-$SetupShortcut.Description = "Triune Studio Setup - Repair or Reconfigure AI Engine"
+$SetupShortcut.Description = "Polysom Studio Setup - Repair or Reconfigure Lucid Machines Engine"
 $SetupShortcut.Save()
 """
             ps_script = f"""
@@ -487,26 +483,26 @@ $DesktopDirs = @(
 ) | Where-Object {{ $_ -and (Test-Path $_) }} | Select-Object -Unique
 
 foreach ($DesktopPath in $DesktopDirs) {{
-    foreach ($Name in @("Triune Studio.lnk", "Triune.lnk")) {{
+    foreach ($Name in @("Polysom Studio.lnk", "Triune Studio.lnk", "Triune.lnk")) {{
         $LnkPath = Join-Path $DesktopPath $Name
         if (Test-Path $LnkPath) {{ Remove-Item $LnkPath -Force -ErrorAction SilentlyContinue }}
     }}
-    $Shortcut = $WshShell.CreateShortcut((Join-Path $DesktopPath "Triune Studio.lnk"))
+    $Shortcut = $WshShell.CreateShortcut((Join-Path $DesktopPath "Polysom Studio.lnk"))
     $Shortcut.TargetPath = "{native_studio_exe}"
     $Shortcut.WorkingDirectory = "{WORKSPACE_ROOT}"
     $Shortcut.IconLocation = "{icon_loc},0"
-    $Shortcut.Description = "Triune Studio - AI Engine and Visual Research IDE"
+    $Shortcut.Description = "Polysom Studio - Lucid Machines AI Engine and Research IDE"
     $Shortcut.Save()
 }}
 
 $StartMenuPath = [Environment]::GetFolderPath('Programs')
-$StartLnk = Join-Path $StartMenuPath "Triune Studio.lnk"
+$StartLnk = Join-Path $StartMenuPath "Polysom Studio.lnk"
 if (Test-Path $StartLnk) {{ Remove-Item $StartLnk -Force -ErrorAction SilentlyContinue }}
 $StartShortcut = $WshShell.CreateShortcut($StartLnk)
 $StartShortcut.TargetPath = "{native_studio_exe}"
 $StartShortcut.WorkingDirectory = "{WORKSPACE_ROOT}"
 $StartShortcut.IconLocation = "{icon_loc},0"
-$StartShortcut.Description = "Triune Studio - AI Engine and Visual Research IDE"
+$StartShortcut.Description = "Polysom Studio - Lucid Machines AI Engine and Research IDE"
 $StartShortcut.Save()
 {setup_snippet}
 """
@@ -521,11 +517,11 @@ $StartShortcut.Save()
         try:
             apps_dir = Path.home() / ".local" / "share" / "applications"
             apps_dir.mkdir(parents=True, exist_ok=True)
-            desktop_file = apps_dir / "triune-studio.desktop"
+            desktop_file = apps_dir / "polysom-studio.desktop"
             content = f"""[Desktop Entry]
 Type=Application
-Name=Triune Studio
-Comment=Triune AI Engine & Visual Research IDE
+Name=Polysom Studio
+Comment=Lucid Machines AI Engine & Visual Research IDE
 Exec={studio_sh}
 Path={WORKSPACE_ROOT}
 Terminal=false
@@ -539,7 +535,7 @@ Categories=Development;Science;ArtificialIntelligence;
 
 
 def register_cli_on_path(py_bin: Path, hw: HardwareProfile, enable_path: bool = True) -> None:
-    """Register the virtual environment's Scripts/bin directory on User PATH so 'triune' CLI works globally."""
+    """Register the virtual environment's Scripts/bin directory on User PATH so the Lucid Machines CLI works globally."""
     if not enable_path:
         log_info("Skipping global PATH registration as requested (--no-path).")
         return
@@ -561,22 +557,22 @@ def register_cli_on_path(py_bin: Path, hw: HardwareProfile, enable_path: bool = 
                     entries.insert(0, scripts_dir)
                     new_path = ";".join(entries)
                     winreg.SetValueEx(key, "Path", 0, reg_type, new_path)
-                    log_success(f"Registered 'triune' CLI on Windows User PATH: {scripts_dir}")
+                    log_success(f"Registered 'lucid-machines' CLI on Windows User PATH: {scripts_dir}")
                 else:
-                    log_success(f"Unified 'triune' CLI already registered on Windows User PATH: {scripts_dir}")
+                    log_success(f"Unified 'lucid-machines' CLI already registered on Windows User PATH: {scripts_dir}")
         except Exception as e:
             log_warning(f"Could not update Windows User PATH: {e}")
     else:
         local_bin = Path.home() / ".local" / "bin"
         try:
             local_bin.mkdir(parents=True, exist_ok=True)
-            triune_bin = py_bin.parent / "triune"
-            if triune_bin.exists():
-                target_link = local_bin / "triune"
+            lucid_machines_bin = py_bin.parent / "lucid-machines"
+            if lucid_machines_bin.exists():
+                target_link = local_bin / "lucid-machines"
                 if target_link.is_symlink() or target_link.exists():
                     target_link.unlink()
-                target_link.symlink_to(triune_bin)
-                log_success(f"Linked 'triune' CLI to {target_link}")
+                target_link.symlink_to(lucid_machines_bin)
+                log_success(f"Linked 'lucid-machines' CLI to {target_link}")
         except Exception as e:
             log_warning(f"Could not symlink 'triune' into ~/.local/bin: {e}")
 
@@ -624,7 +620,7 @@ def verify_installation(py_bin: Path, hw: HardwareProfile, allow_cpu: bool = Fal
         all_ok = False
 
     # 3. Studio FastAPI & Server
-    srv_code = "from triune.api.server import HAS_FASTAPI, create_app; assert HAS_FASTAPI; print('SERVER_OK')"
+    srv_code = "from lucid_machines.api.server import HAS_FASTAPI, create_app; assert HAS_FASTAPI; print('SERVER_OK')"
     res = subprocess.run([str(py_bin), "-c", srv_code], capture_output=True, text=True)
     if "SERVER_OK" in res.stdout:
         log_success("Studio API & Telemetry Engine: Operational")
@@ -647,7 +643,7 @@ def verify_installation(py_bin: Path, hw: HardwareProfile, allow_cpu: bool = Fal
 # Main Orchestrator
 # ---------------------------------------------------------------------------
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Triune Studio Comprehensive Automated Installer")
+    parser = argparse.ArgumentParser(description="Polysom Studio Comprehensive Automated Installer (Lucid Machines)")
     parser.add_argument(
         "--venv", default="studio/studio_env", help="Target virtual environment directory (default: studio/studio_env)"
     )
@@ -725,8 +721,8 @@ def main() -> None:
 
     print("\n" + "=" * 80)
     if healthy:
-        print(f"{GREEN}{BOLD}   TRIUNE STUDIO INSTALLATION COMPLETED SUCCESSFULLY!{RESET}")
-        print("   Ready for local MoE language model research, training, and dynamic routing.")
+        print(f"{GREEN}{BOLD}   POLYSOM STUDIO INSTALLATION COMPLETED SUCCESSFULLY!{RESET}")
+        print("   Ready for local Triune MoE model research, training, and dynamic routing.")
     else:
         print(f"{YELLOW}{BOLD}   INSTALLATION FINISHED WITH WARNINGS{RESET}")
         print("   Studio was not launched because one or more required components failed verification.")
@@ -736,7 +732,7 @@ def main() -> None:
         raise SystemExit(1)
 
     print("Launch commands:")
-    print(f"  • Windows: Double-click {BOLD}studio\\TriuneStudio.bat{RESET} or desktop icon 'Triune Studio'")
+    print(f"  • Windows: Double-click {BOLD}PolysomStudio.exe{RESET} or desktop icon 'Polysom Studio'")
     print(f"  • Linux/macOS: Run {BOLD}studio/TriuneStudio.sh{RESET}")
     print(f"  • CLI / Custom Port: {BOLD}python scripts/launch_studio.py --port 8000{RESET}\n")
 
@@ -744,13 +740,13 @@ def main() -> None:
     should_launch = not args.no_launch
     if not args.yes and not args.no_launch:
         try:
-            choice = input(f"{BOLD}Would you like to launch Triune Studio now? [Y/n]: {RESET}").strip().lower()
+            choice = input(f"{BOLD}Would you like to launch Polysom Studio now? [Y/n]: {RESET}").strip().lower()
             should_launch = choice in ("", "y", "yes")
         except (KeyboardInterrupt, EOFError):
             should_launch = False
 
     if should_launch:
-        print(f"\n{CYAN}Starting Triune Studio...{RESET}\n")
+        print(f"\n{CYAN}Starting Polysom Studio...{RESET}\n")
         launch_script = WORKSPACE_ROOT / "scripts" / "launch_studio.py"
         subprocess.Popen([str(py_bin), str(launch_script)])
 

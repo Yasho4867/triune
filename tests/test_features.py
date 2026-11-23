@@ -1,4 +1,4 @@
-"""Unit tests for Triune Framework core 5 features:
+"""Unit tests for Lucid Machines Framework core 5 features:
 1. JSON-to-DAG Execution Engine
 2. Telemetry & Event Emitter Hooks
 3. Dynamic Plugin Node Registry (@register_node)
@@ -18,11 +18,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from triune.callbacks import EventEmitter
-from triune.execution import DAGParser, ExecutionEngine
-from triune.plugins import global_registry, register_node
-from triune.runtime import AutoOffloader, VRAMProfiler
-from triune.trainer import LoRAConfig, TriuneFineTuner
+from lucid_machines.callbacks import EventEmitter
+from lucid_machines.execution import DAGParser, ExecutionEngine
+from lucid_machines.plugins import global_registry, register_node
+from lucid_machines.runtime import AutoOffloader, VRAMProfiler
+from lucid_machines.trainer import LoRAConfig, TriuneFineTuner
 
 
 class NewFrameworkFeaturesTest(unittest.TestCase):
@@ -48,7 +48,7 @@ class NewFrameworkFeaturesTest(unittest.TestCase):
             {
                 "nodes": [
                     {"id": "node_1", "type": "GradientAccumulator", "params": {"grad_accum_steps": 4}},
-                    {"id": "node_2", "type": "BYOKChatRouter", "params": {"provider": "triune-local"}},
+                    {"id": "node_2", "type": "BYOKChatRouter", "params": {"provider": "lucid-local"}},
                     {"id": "node_3", "type": "GGUFExport", "params": {"quantization": "Q4_K_M"}},
                 ],
                 "edges": [],

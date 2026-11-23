@@ -1,7 +1,7 @@
 import torch
 
-from triune.model.manifold_embedding import UniversalAdaptiveEmbedding
-from triune.optim.manifold import LowSpaceWeightProjector, UnitaryManifoldOptimizer
+from lucid_machines.model.manifold_embedding import UniversalAdaptiveEmbedding
+from lucid_machines.optim.manifold import LowSpaceWeightProjector, UnitaryManifoldOptimizer
 
 
 def test_adaptive_embedding_forward_and_logits():

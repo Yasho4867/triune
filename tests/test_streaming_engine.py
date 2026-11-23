@@ -2,8 +2,8 @@ import unittest
 
 import torch
 
-from triune.model.transformer import TriuneTransformer
-from triune.optim.centroid import CentroidSteerOptimizer
+from lucid_machines.model.transformer import TriuneTransformer
+from lucid_machines.optim.centroid import CentroidSteerOptimizer
 
 
 def test_layer_streaming_engine_lifecycle():

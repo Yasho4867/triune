@@ -4,8 +4,8 @@ import unittest
 
 import torch
 
-from triune.data.dataloader import AsyncDevicePrefetcher, CyclingDataLoader
-from triune.trainer.distributed import (
+from lucid_machines.data.dataloader import AsyncDevicePrefetcher, CyclingDataLoader
+from lucid_machines.trainer.distributed import (
     all_reduce_dict,
     get_local_rank,
     get_rank,

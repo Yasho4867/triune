@@ -14,8 +14,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from triune.configs import build_config
-from triune.trainer import NullLogger, Trainer
+from lucid_machines.configs import build_config
+from lucid_machines.trainer import NullLogger, Trainer
 
 
 class _Tokenizer:
@@ -119,7 +119,7 @@ class FrameworkTest(unittest.TestCase):
                         )
 
     def test_fp8_linear_backward_dtype_mix(self):
-        from triune.model.fp8 import FP8Linear
+        from lucid_machines.model.fp8 import FP8Linear
 
         layer = FP8Linear(16, 32, bias=True, dtype=torch.bfloat16)
         x = torch.randn(2, 4, 16, dtype=torch.bfloat16, requires_grad=True)
@@ -133,8 +133,8 @@ class FrameworkTest(unittest.TestCase):
         self.assertEqual(layer.weight.grad.dtype, torch.bfloat16)
 
     def test_triune_model_with_fp8(self):
-        from triune.model import build_model
-        from triune.optim.factory import build_optimizer
+        from lucid_machines.model import build_model
+        from lucid_machines.optim.factory import build_optimizer
 
         config = build_config(
             {

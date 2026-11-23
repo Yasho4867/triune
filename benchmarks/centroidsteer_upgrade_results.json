@@ -1,0 +1,5713 @@
+{
+  "metadata": {
+    "timestamp_utc": "2026-11-22T07:40:02Z",
+    "git_commit": "57a14767647edc465bf7f221bdd260021cc561c7",
+    "git_dirty": true,
+    "hardware": {
+      "device_type": "cuda",
+      "python_version": "3.14.7",
+      "pytorch_version": "2.14.1+cu132",
+      "cuda_version": "13.2",
+      "device_name": "NVIDIA GeForce RTX 5070 Laptop GPU",
+      "total_vram_gb": 7.93,
+      "compute_capability": "12.0"
+    },
+    "seeds": [
+      42,
+      1337,
+      2026,
+      777,
+      1024
+    ],
+    "suites": [
+      1,
+      2,
+      3,
+      4
+    ]
+  },
+  "suite1_mechanistic_diagnostics": {
+    "direct_sum_orthogonality": {
+      "w1_max_rel_ortho_error": 4.5e-07,
+      "w2_max_rel_ortho_error": 7.9e-07,
+      "update_step_rel_ortho_error": 0.0,
+      "subspace_isometry_max_error": 9.1e-07
+    },
+    "block_oja_energy_capture": {
+      "v3_block_oja_grad_capture_frac": 0.8736,
+      "random_same_mem_grad_capture_frac": 0.0427,
+      "legacy_rank1_grad_capture_frac": 0.6254,
+      "v3_vs_random_grad_ratio": 20.48,
+      "v3_block_oja_activation_var_frac": 0.6053,
+      "random_same_mem_activation_var_frac": 0.0333,
+      "v3_vs_random_activation_ratio": 18.16
+    },
+    "grassmann_parallel_transport": {
+      "steps_executed": 10,
+      "continuous_steer_step_min": 10,
+      "continuous_steer_step_max": 10,
+      "v_c_min_value": 1.1441459318330387e-14,
+      "m_c_mean_norm": 0.0004,
+      "legacy_steer_step_after_refresh": 1,
+      "legacy_momentum_survived": false
+    },
+    "activation_space_step_ratio": {
+      "d_out_w1": 768,
+      "rank_r": 8,
+      "v3_direct_sum_vs_adamw_ratio": 1.5446,
+      "v2_core_only_vs_adamw_ratio": 0.1021,
+      "v3_step_amplification_vs_v2_core": 15.13
+    }
+  },
+  "suite2_multidomain_moe": {
+    "config": {
+      "seeds": [
+        42,
+        1337,
+        2026,
+        777,
+        1024
+      ],
+      "steps": 120,
+      "dim": 128,
+      "num_layers": 2,
+      "num_experts": 4,
+      "num_classes": 32,
+      "rank": 8,
+      "update_gap": 10,
+      "steer_update_gap": 2,
+      "steer_scale": 1.0,
+      "steer_dirs": 4,
+      "lr": 0.003,
+      "use_rms_steer": false
+    },
+    "summary": {
+      "nosteer": {
+        "final_val_loss": {
+          "mean": 1.22426,
+          "std": 0.046824,
+          "sem": 0.02094,
+          "ci95": [
+            1.16612,
+            1.2824
+          ]
+        },
+        "final_val_ppl": {
+          "mean": 3.40464,
+          "std": 0.159335,
+          "sem": 0.071257,
+          "ci95": [
+            3.2068,
+            3.60248
+          ]
+        },
+        "final_val_accuracy": {
+          "mean": 0.56752,
+          "std": 0.02284,
+          "sem": 0.010214,
+          "ci95": [
+            0.53916,
+            0.59588
+          ]
+        },
+        "expert_domain_purity": {
+          "mean": 0.78304,
+          "std": 0.12823,
+          "sem": 0.057346,
+          "ci95": [
+            0.623821,
+            0.942259
+          ]
+        },
+        "expert_domain_nmi": {
+          "mean": 0.69418,
+          "std": 0.148321,
+          "sem": 0.066331,
+          "ci95": [
+            0.510015,
+            0.878345
+          ]
+        },
+        "centroid_separation": {
+          "mean": 1.34342,
+          "std": 0.036689,
+          "sem": 0.016408,
+          "ci95": [
+            1.297865,
+            1.388975
+          ]
+        },
+        "within_vs_global_var_ratio": {
+          "mean": 0.75406,
+          "std": 0.054462,
+          "sem": 0.024356,
+          "ci95": [
+            0.686436,
+            0.821684
+          ]
+        },
+        "mean_border_energy_frac": {
+          "mean": 0.0,
+          "std": 0.0,
+          "sem": 0.0,
+          "ci95": [
+            0.0,
+            0.0
+          ]
+        },
+        "expert_bytes_per_param": {
+          "mean": 0.3325,
+          "std": 0.0,
+          "sem": 0.0,
+          "ci95": [
+            0.3325,
+            0.3325
+          ]
+        },
+        "elapsed_sec": {
+          "mean": 4.1656,
+          "std": 0.37601,
+          "sem": 0.168157,
+          "ci95": [
+            3.698722,
+            4.632478
+          ]
+        }
+      },
+      "random_same_mem": {
+        "final_val_loss": {
+          "mean": 1.204373,
+          "std": 0.044622,
+          "sem": 0.019956,
+          "ci95": [
+            1.148968,
+            1.259779
+          ]
+        },
+        "final_val_ppl": {
+          "mean": 3.33732,
+          "std": 0.14993,
+          "sem": 0.067051,
+          "ci95": [
+            3.151158,
+            3.523482
+          ]
+        },
+        "final_val_accuracy": {
+          "mean": 0.57572,
+          "std": 0.021064,
+          "sem": 0.00942,
+          "ci95": [
+            0.549566,
+            0.601874
+          ]
+        },
+        "expert_domain_purity": {
+          "mean": 0.819,
+          "std": 0.116314,
+          "sem": 0.052017,
+          "ci95": [
+            0.674578,
+            0.963422
+          ]
+        },
+        "expert_domain_nmi": {
+          "mean": 0.73714,
+          "std": 0.13738,
+          "sem": 0.061438,
+          "ci95": [
+            0.566561,
+            0.907719
+          ]
+        },
+        "centroid_separation": {
+          "mean": 1.32766,
+          "std": 0.005439,
+          "sem": 0.002432,
+          "ci95": [
+            1.320907,
+            1.334413
+          ]
+        },
+        "within_vs_global_var_ratio": {
+          "mean": 0.72018,
+          "std": 0.048096,
+          "sem": 0.021509,
+          "ci95": [
+            0.660461,
+            0.779899
+          ]
+        },
+        "mean_border_energy_frac": {
+          "mean": 0.018791,
+          "std": 0.000867,
+          "sem": 0.000388,
+          "ci95": [
+            0.017715,
+            0.019867
+          ]
+        },
+        "expert_bytes_per_param": {
+          "mean": 0.5502,
+          "std": 0.0,
+          "sem": 0.0,
+          "ci95": [
+            0.5502,
+            0.5502
+          ]
+        },
+        "elapsed_sec": {
+          "mean": 6.5316,
+          "std": 0.682681,
+          "sem": 0.305304,
+          "ci95": [
+            5.68394,
+            7.37926
+          ]
+        }
+      },
+      "adamw": {
+        "final_val_loss": {
+          "mean": 0.830734,
+          "std": 0.03645,
+          "sem": 0.016301,
+          "ci95": [
+            0.785475,
+            0.875993
+          ]
+        },
+        "final_val_ppl": {
+          "mean": 2.29624,
+          "std": 0.084387,
+          "sem": 0.037739,
+          "ci95": [
+            2.191459,
+            2.401021
+          ]
+        },
+        "final_val_accuracy": {
+          "mean": 0.7007,
+          "std": 0.010804,
+          "sem": 0.004832,
+          "ci95": [
+            0.687285,
+            0.714115
+          ]
+        },
+        "expert_domain_purity": {
+          "mean": 0.58208,
+          "std": 0.092364,
+          "sem": 0.041307,
+          "ci95": [
+            0.467394,
+            0.696766
+          ]
+        },
+        "expert_domain_nmi": {
+          "mean": 0.41848,
+          "std": 0.110354,
+          "sem": 0.049352,
+          "ci95": [
+            0.281458,
+            0.555502
+          ]
+        },
+        "centroid_separation": {
+          "mean": 1.42152,
+          "std": 0.11421,
+          "sem": 0.051076,
+          "ci95": [
+            1.27971,
+            1.56333
+          ]
+        },
+        "within_vs_global_var_ratio": {
+          "mean": 0.81534,
+          "std": 0.023958,
+          "sem": 0.010715,
+          "ci95": [
+            0.785592,
+            0.845088
+          ]
+        },
+        "mean_border_energy_frac": {
+          "mean": 0.0,
+          "std": 0.0,
+          "sem": 0.0,
+          "ci95": [
+            0.0,
+            0.0
+          ]
+        },
+        "expert_bytes_per_param": {
+          "mean": 8.0001,
+          "std": 0.0,
+          "sem": 0.0,
+          "ci95": [
+            8.0001,
+            8.0001
+          ]
+        },
+        "elapsed_sec": {
+          "mean": 3.6454,
+          "std": 0.443342,
+          "sem": 0.198268,
+          "ci95": [
+            3.094919,
+            4.195881
+          ]
+        }
+      },
+      "upgraded": {
+        "final_val_loss": {
+          "mean": 1.19921,
+          "std": 0.04444,
+          "sem": 0.019874,
+          "ci95": [
+            1.144031,
+            1.254389
+          ]
+        },
+        "final_val_ppl": {
+          "mean": 3.32012,
+          "std": 0.147217,
+          "sem": 0.065837,
+          "ci95": [
+            3.137326,
+            3.502914
+          ]
+        },
+        "final_val_accuracy": {
+          "mean": 0.5729,
+          "std": 0.023286,
+          "sem": 0.010414,
+          "ci95": [
+            0.543987,
+            0.601813
+          ]
+        },
+        "expert_domain_purity": {
+          "mean": 0.71128,
+          "std": 0.118429,
+          "sem": 0.052963,
+          "ci95": [
+            0.564231,
+            0.858329
+          ]
+        },
+        "expert_domain_nmi": {
+          "mean": 0.57338,
+          "std": 0.167066,
+          "sem": 0.074714,
+          "ci95": [
+            0.36594,
+            0.78082
+          ]
+        },
+        "centroid_separation": {
+          "mean": 1.32784,
+          "std": 0.011059,
+          "sem": 0.004946,
+          "ci95": [
+            1.314108,
+            1.341572
+          ]
+        },
+        "within_vs_global_var_ratio": {
+          "mean": 0.74892,
+          "std": 0.034276,
+          "sem": 0.015329,
+          "ci95": [
+            0.706361,
+            0.791479
+          ]
+        },
+        "mean_border_energy_frac": {
+          "mean": 0.618762,
+          "std": 0.02429,
+          "sem": 0.010863,
+          "ci95": [
+            0.588603,
+            0.648922
+          ]
+        },
+        "expert_bytes_per_param": {
+          "mean": 0.5502,
+          "std": 0.0,
+          "sem": 0.0,
+          "ci95": [
+            0.5502,
+            0.5502
+          ]
+        },
+        "elapsed_sec": {
+          "mean": 6.9576,
+          "std": 0.262779,
+          "sem": 0.117518,
+          "ci95": [
+            6.631317,
+            7.283883
+          ]
+        }
+      }
+    },
+    "paired_comparisons": {
+      "upgraded_vs_nosteer_val_loss": {
+        "n": 5,
+        "df": 4,
+        "mean_a": 1.19921,
+        "std_a": 0.04444,
+        "mean_b": 1.22426,
+        "std_b": 0.046824,
+        "mean_diff": -0.02505,
+        "std_diff": 0.02031,
+        "ci95_diff": [
+          -0.050268,
+          0.000167
+        ],
+        "cohens_d_paired": -1.2334,
+        "t_stat": -2.758,
+        "paired_p": 0.05095244223102603,
+        "welch_p": 0.4108970281379327,
+        "wilcoxon_p": 0.0625,
+        "wilcoxon_onesided_p": 0.03125
+      },
+      "upgraded_vs_nosteer_val_ppl": {
+        "n": 5,
+        "df": 4,
+        "mean_a": 3.32012,
+        "std_a": 0.147217,
+        "mean_b": 3.40464,
+        "std_b": 0.159335,
+        "mean_diff": -0.08452,
+        "std_diff": 0.068922,
+        "ci95_diff": [
+          -0.170098,
+          0.001058
+        ],
+        "cohens_d_paired": -1.2263,
+        "t_stat": -2.7421,
+        "paired_p": 0.05179265243899769,
+        "welch_p": 0.40918077702691885,
+        "wilcoxon_p": 0.0625,
+        "wilcoxon_onesided_p": 0.03125
+      },
+      "upgraded_vs_nosteer_purity": {
+        "n": 5,
+        "df": 4,
+        "mean_a": 0.71128,
+        "std_a": 0.118429,
+        "mean_b": 0.78304,
+        "std_b": 0.12823,
+        "mean_diff": -0.07176,
+        "std_diff": 0.090222,
+        "ci95_diff": [
+          -0.183785,
+          0.040265
+        ],
+        "cohens_d_paired": -0.7954,
+        "t_stat": -1.7785,
+        "paired_p": 0.14994517787925152,
+        "welch_p": 0.38499807321812446,
+        "wilcoxon_p": 0.3125,
+        "wilcoxon_onesided_p": 0.90625
+      },
+      "upgraded_vs_nosteer_border_energy": {
+        "n": 5,
+        "df": 4,
+        "mean_a": 0.618762,
+        "std_a": 0.02429,
+        "mean_b": 0.0,
+        "std_b": 0.0,
+        "mean_diff": 0.618762,
+        "std_diff": 0.02429,
+        "ci95_diff": [
+          0.588603,
+          0.648922
+        ],
+        "cohens_d_paired": 25.4743,
+        "t_stat": 56.9624,
+        "paired_p": 5.687321426127671e-07,
+        "welch_p": 5.687321426127671e-07,
+        "wilcoxon_p": 0.0625,
+        "wilcoxon_onesided_p": 0.03125
+      },
+      "upgraded_vs_random_same_mem_val_loss": {
+        "n": 5,
+        "df": 4,
+        "mean_a": 1.19921,
+        "std_a": 0.04444,
+        "mean_b": 1.204373,
+        "std_b": 0.044622,
+        "mean_diff": -0.005164,
+        "std_diff": 0.019613,
+        "ci95_diff": [
+          -0.029517,
+          0.019189
+        ],
+        "cohens_d_paired": -0.2633,
+        "t_stat": -0.5887,
+        "paired_p": 0.5877037650860066,
+        "welch_p": 0.859091345197148,
+        "wilcoxon_p": 0.625,
+        "wilcoxon_onesided_p": 0.3125
+      },
+      "upgraded_vs_random_same_mem_val_ppl": {
+        "n": 5,
+        "df": 4,
+        "mean_a": 3.32012,
+        "std_a": 0.147217,
+        "mean_b": 3.33732,
+        "std_b": 0.14993,
+        "mean_diff": -0.0172,
+        "std_diff": 0.0648,
+        "ci95_diff": [
+          -0.09766,
+          0.06326
+        ],
+        "cohens_d_paired": -0.2654,
+        "t_stat": -0.5935,
+        "paired_p": 0.5847642958693342,
+        "welch_p": 0.859323833355966,
+        "wilcoxon_p": 0.625,
+        "wilcoxon_onesided_p": 0.3125
+      },
+      "upgraded_vs_random_same_mem_purity": {
+        "n": 5,
+        "df": 4,
+        "mean_a": 0.71128,
+        "std_a": 0.118429,
+        "mean_b": 0.819,
+        "std_b": 0.116314,
+        "mean_diff": -0.10772,
+        "std_diff": 0.073376,
+        "ci95_diff": [
+          -0.198828,
+          -0.016612
+        ],
+        "cohens_d_paired": -1.4681,
+        "t_stat": -3.2827,
+        "paired_p": 0.030423642565395283,
+        "welch_p": 0.18482845150813315,
+        "wilcoxon_p": 0.0625,
+        "wilcoxon_onesided_p": 1.0
+      },
+      "upgraded_vs_random_same_mem_border_energy": {
+        "n": 5,
+        "df": 4,
+        "mean_a": 0.618762,
+        "std_a": 0.02429,
+        "mean_b": 0.018791,
+        "std_b": 0.000867,
+        "mean_diff": 0.599971,
+        "std_diff": 0.024182,
+        "ci95_diff": [
+          0.569946,
+          0.629996
+        ],
+        "cohens_d_paired": 24.8111,
+        "t_stat": 55.4792,
+        "paired_p": 6.319608774942432e-07,
+        "welch_p": 6.259994723667462e-07,
+        "wilcoxon_p": 0.0625,
+        "wilcoxon_onesided_p": 0.03125
+      },
+      "upgraded_vs_adamw_val_loss": {
+        "n": 5,
+        "df": 4,
+        "mean_a": 1.19921,
+        "std_a": 0.04444,
+        "mean_b": 0.830734,
+        "std_b": 0.03645,
+        "mean_diff": 0.368476,
+        "std_diff": 0.055516,
+        "ci95_diff": [
+          0.299543,
+          0.437408
+        ],
+        "cohens_d_paired": 6.6373,
+        "t_stat": 14.8414,
+        "paired_p": 0.00012001170473927071,
+        "welch_p": 7.858699034326941e-07,
+        "wilcoxon_p": 0.0625,
+        "wilcoxon_onesided_p": 1.0
+      },
+      "upgraded_vs_adamw_val_ppl": {
+        "n": 5,
+        "df": 4,
+        "mean_a": 3.32012,
+        "std_a": 0.147217,
+        "mean_b": 2.29624,
+        "std_b": 0.084387,
+        "mean_diff": 1.02388,
+        "std_diff": 0.165441,
+        "ci95_diff": [
+          0.818458,
+          1.229302
+        ],
+        "cohens_d_paired": 6.1888,
+        "t_stat": 13.8385,
+        "paired_p": 0.00015805976065917074,
+        "welch_p": 6.340994131584349e-06,
+        "wilcoxon_p": 0.0625,
+        "wilcoxon_onesided_p": 1.0
+      },
+      "upgraded_vs_adamw_purity": {
+        "n": 5,
+        "df": 4,
+        "mean_a": 0.71128,
+        "std_a": 0.118429,
+        "mean_b": 0.58208,
+        "std_b": 0.092364,
+        "mean_diff": 0.1292,
+        "std_diff": 0.071516,
+        "ci95_diff": [
+          0.040402,
+          0.217998
+        ],
+        "cohens_d_paired": 1.8066,
+        "t_stat": 4.0397,
+        "paired_p": 0.015608229546114653,
+        "welch_p": 0.09277813233325909,
+        "wilcoxon_p": 0.0625,
+        "wilcoxon_onesided_p": 0.03125
+      },
+      "upgraded_vs_adamw_border_energy": {
+        "n": 5,
+        "df": 4,
+        "mean_a": 0.618762,
+        "std_a": 0.02429,
+        "mean_b": 0.0,
+        "std_b": 0.0,
+        "mean_diff": 0.618762,
+        "std_diff": 0.02429,
+        "ci95_diff": [
+          0.588603,
+          0.648922
+        ],
+        "cohens_d_paired": 25.4743,
+        "t_stat": 56.9624,
+        "paired_p": 5.687321426127671e-07,
+        "welch_p": 5.687321426127671e-07,
+        "wilcoxon_p": 0.0625,
+        "wilcoxon_onesided_p": 0.03125
+      }
+    },
+    "per_seed": {
+      "42": {
+        "nosteer": {
+          "initial_val_loss": 3.639305,
+          "final_val_loss": 1.173039,
+          "final_val_ppl": 3.2318,
+          "final_val_accuracy": 0.5813,
+          "expert_domain_purity": 0.7063,
+          "expert_domain_nmi": 0.6871,
+          "centroid_separation": 1.4088,
+          "within_vs_global_var_ratio": 0.8096,
+          "dispersion_ratio": 2.5144,
+          "router_entropy": 0.477,
+          "mean_border_energy_frac": 0.0,
+          "steered_group_frac": 0.0,
+          "expert_bytes_per_param": 0.3325,
+          "expert_reduction_vs_fp32_adamw_pct": 95.84,
+          "elapsed_sec": 4.496,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 3.639305,
+              "val_ppl": 38.0654,
+              "val_accuracy": 0.0266,
+              "expert_domain_purity": 0.3993,
+              "expert_domain_nmi": 0.0884,
+              "centroid_separation": 1.3183,
+              "within_vs_global_var_ratio": 0.9333,
+              "dispersion_ratio": 3.4485,
+              "router_entropy": 1.2817
+            },
+            {
+              "step": 30,
+              "val_loss": 1.626292,
+              "val_ppl": 5.085,
+              "val_accuracy": 0.5273,
+              "expert_domain_purity": 0.6798,
+              "expert_domain_nmi": 0.6033,
+              "centroid_separation": 1.4074,
+              "within_vs_global_var_ratio": 0.7732,
+              "dispersion_ratio": 2.0186,
+              "router_entropy": 0.5392
+            },
+            {
+              "step": 60,
+              "val_loss": 1.321503,
+              "val_ppl": 3.7491,
+              "val_accuracy": 0.5652,
+              "expert_domain_purity": 0.6945,
+              "expert_domain_nmi": 0.6364,
+              "centroid_separation": 1.3275,
+              "within_vs_global_var_ratio": 0.7342,
+              "dispersion_ratio": 2.0489,
+              "router_entropy": 0.4903
+            },
+            {
+              "step": 90,
+              "val_loss": 1.239207,
+              "val_ppl": 3.4529,
+              "val_accuracy": 0.5649,
+              "expert_domain_purity": 0.6931,
+              "expert_domain_nmi": 0.6663,
+              "centroid_separation": 1.3997,
+              "within_vs_global_var_ratio": 0.7931,
+              "dispersion_ratio": 2.3456,
+              "router_entropy": 0.4636
+            },
+            {
+              "step": 120,
+              "val_loss": 1.173039,
+              "val_ppl": 3.2318,
+              "val_accuracy": 0.5813,
+              "expert_domain_purity": 0.7063,
+              "expert_domain_nmi": 0.6871,
+              "centroid_separation": 1.4088,
+              "within_vs_global_var_ratio": 0.8096,
+              "dispersion_ratio": 2.5144,
+              "router_entropy": 0.477
+            }
+          ]
+        },
+        "random_same_mem": {
+          "initial_val_loss": 3.639305,
+          "final_val_loss": 1.159337,
+          "final_val_ppl": 3.1878,
+          "final_val_accuracy": 0.5842,
+          "expert_domain_purity": 0.7642,
+          "expert_domain_nmi": 0.7323,
+          "centroid_separation": 1.3306,
+          "within_vs_global_var_ratio": 0.7025,
+          "dispersion_ratio": 1.9586,
+          "router_entropy": 0.4107,
+          "mean_border_energy_frac": 0.019626,
+          "steered_group_frac": 1.0,
+          "expert_bytes_per_param": 0.5502,
+          "expert_reduction_vs_fp32_adamw_pct": 93.12,
+          "elapsed_sec": 6.427,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 3.639305,
+              "val_ppl": 38.0654,
+              "val_accuracy": 0.0266,
+              "expert_domain_purity": 0.3993,
+              "expert_domain_nmi": 0.0884,
+              "centroid_separation": 1.3183,
+              "within_vs_global_var_ratio": 0.9333,
+              "dispersion_ratio": 3.4485,
+              "router_entropy": 1.2817
+            },
+            {
+              "step": 30,
+              "val_loss": 1.571517,
+              "val_ppl": 4.8139,
+              "val_accuracy": 0.5305,
+              "expert_domain_purity": 0.6857,
+              "expert_domain_nmi": 0.6209,
+              "centroid_separation": 1.4834,
+              "within_vs_global_var_ratio": 0.7981,
+              "dispersion_ratio": 2.1917,
+              "router_entropy": 0.5096
+            },
+            {
+              "step": 60,
+              "val_loss": 1.301895,
+              "val_ppl": 3.6763,
+              "val_accuracy": 0.5605,
+              "expert_domain_purity": 0.7399,
+              "expert_domain_nmi": 0.677,
+              "centroid_separation": 1.3273,
+              "within_vs_global_var_ratio": 0.6987,
+              "dispersion_ratio": 1.8508,
+              "router_entropy": 0.4394
+            },
+            {
+              "step": 90,
+              "val_loss": 1.211677,
+              "val_ppl": 3.3591,
+              "val_accuracy": 0.5745,
+              "expert_domain_purity": 0.7371,
+              "expert_domain_nmi": 0.7262,
+              "centroid_separation": 1.3546,
+              "within_vs_global_var_ratio": 0.7024,
+              "dispersion_ratio": 1.9475,
+              "router_entropy": 0.4035
+            },
+            {
+              "step": 120,
+              "val_loss": 1.159337,
+              "val_ppl": 3.1878,
+              "val_accuracy": 0.5842,
+              "expert_domain_purity": 0.7642,
+              "expert_domain_nmi": 0.7323,
+              "centroid_separation": 1.3306,
+              "within_vs_global_var_ratio": 0.7025,
+              "dispersion_ratio": 1.9586,
+              "router_entropy": 0.4107
+            }
+          ]
+        },
+        "adamw": {
+          "initial_val_loss": 3.639305,
+          "final_val_loss": 0.810483,
+          "final_val_ppl": 2.249,
+          "final_val_accuracy": 0.7058,
+          "expert_domain_purity": 0.53,
+          "expert_domain_nmi": 0.4275,
+          "centroid_separation": 1.5766,
+          "within_vs_global_var_ratio": 0.7939,
+          "dispersion_ratio": 3.5687,
+          "router_entropy": 1.0656,
+          "mean_border_energy_frac": 0.0,
+          "steered_group_frac": 0.0,
+          "expert_bytes_per_param": 8.0001,
+          "expert_reduction_vs_fp32_adamw_pct": -0.0,
+          "elapsed_sec": 4.414,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 3.639305,
+              "val_ppl": 38.0654,
+              "val_accuracy": 0.0266,
+              "expert_domain_purity": 0.3993,
+              "expert_domain_nmi": 0.0884,
+              "centroid_separation": 1.3183,
+              "within_vs_global_var_ratio": 0.9333,
+              "dispersion_ratio": 3.4485,
+              "router_entropy": 1.2817
+            },
+            {
+              "step": 30,
+              "val_loss": 1.132973,
+              "val_ppl": 3.1049,
+              "val_accuracy": 0.5955,
+              "expert_domain_purity": 0.6533,
+              "expert_domain_nmi": 0.477,
+              "centroid_separation": 1.3376,
+              "within_vs_global_var_ratio": 0.6253,
+              "dispersion_ratio": 2.1213,
+              "router_entropy": 1.1274
+            },
+            {
+              "step": 60,
+              "val_loss": 1.014258,
+              "val_ppl": 2.7573,
+              "val_accuracy": 0.623,
+              "expert_domain_purity": 0.5543,
+              "expert_domain_nmi": 0.4305,
+              "centroid_separation": 1.4572,
+              "within_vs_global_var_ratio": 0.7242,
+              "dispersion_ratio": 3.1681,
+              "router_entropy": 1.0789
+            },
+            {
+              "step": 90,
+              "val_loss": 0.896748,
+              "val_ppl": 2.4516,
+              "val_accuracy": 0.6707,
+              "expert_domain_purity": 0.5139,
+              "expert_domain_nmi": 0.3761,
+              "centroid_separation": 1.3931,
+              "within_vs_global_var_ratio": 0.7854,
+              "dispersion_ratio": 3.5117,
+              "router_entropy": 1.1147
+            },
+            {
+              "step": 120,
+              "val_loss": 0.810483,
+              "val_ppl": 2.249,
+              "val_accuracy": 0.7058,
+              "expert_domain_purity": 0.53,
+              "expert_domain_nmi": 0.4275,
+              "centroid_separation": 1.5766,
+              "within_vs_global_var_ratio": 0.7939,
+              "dispersion_ratio": 3.5687,
+              "router_entropy": 1.0656
+            }
+          ]
+        },
+        "upgraded": {
+          "initial_val_loss": 3.639305,
+          "final_val_loss": 1.137087,
+          "final_val_ppl": 3.1177,
+          "final_val_accuracy": 0.5913,
+          "expert_domain_purity": 0.749,
+          "expert_domain_nmi": 0.6619,
+          "centroid_separation": 1.3252,
+          "within_vs_global_var_ratio": 0.7402,
+          "dispersion_ratio": 2.0038,
+          "router_entropy": 0.6644,
+          "mean_border_energy_frac": 0.619699,
+          "steered_group_frac": 1.0,
+          "expert_bytes_per_param": 0.5502,
+          "expert_reduction_vs_fp32_adamw_pct": 93.12,
+          "elapsed_sec": 7.063,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 3.639305,
+              "val_ppl": 38.0654,
+              "val_accuracy": 0.0266,
+              "expert_domain_purity": 0.3993,
+              "expert_domain_nmi": 0.0884,
+              "centroid_separation": 1.3183,
+              "within_vs_global_var_ratio": 0.9333,
+              "dispersion_ratio": 3.4485,
+              "router_entropy": 1.2817
+            },
+            {
+              "step": 30,
+              "val_loss": 1.400954,
+              "val_ppl": 4.0591,
+              "val_accuracy": 0.5422,
+              "expert_domain_purity": 0.6234,
+              "expert_domain_nmi": 0.463,
+              "centroid_separation": 1.3944,
+              "within_vs_global_var_ratio": 0.7504,
+              "dispersion_ratio": 2.1591,
+              "router_entropy": 0.6829
+            },
+            {
+              "step": 60,
+              "val_loss": 1.22955,
+              "val_ppl": 3.4197,
+              "val_accuracy": 0.5767,
+              "expert_domain_purity": 0.6818,
+              "expert_domain_nmi": 0.5672,
+              "centroid_separation": 1.347,
+              "within_vs_global_var_ratio": 0.7133,
+              "dispersion_ratio": 2.1355,
+              "router_entropy": 0.6248
+            },
+            {
+              "step": 90,
+              "val_loss": 1.176399,
+              "val_ppl": 3.2427,
+              "val_accuracy": 0.5845,
+              "expert_domain_purity": 0.724,
+              "expert_domain_nmi": 0.586,
+              "centroid_separation": 1.3215,
+              "within_vs_global_var_ratio": 0.7668,
+              "dispersion_ratio": 2.216,
+              "router_entropy": 0.6712
+            },
+            {
+              "step": 120,
+              "val_loss": 1.137087,
+              "val_ppl": 3.1177,
+              "val_accuracy": 0.5913,
+              "expert_domain_purity": 0.749,
+              "expert_domain_nmi": 0.6619,
+              "centroid_separation": 1.3252,
+              "within_vs_global_var_ratio": 0.7402,
+              "dispersion_ratio": 2.0038,
+              "router_entropy": 0.6644
+            }
+          ]
+        }
+      },
+      "1337": {
+        "random_same_mem": {
+          "initial_val_loss": 3.636517,
+          "final_val_loss": 1.239604,
+          "final_val_ppl": 3.4542,
+          "final_val_accuracy": 0.5537,
+          "expert_domain_purity": 0.8169,
+          "expert_domain_nmi": 0.7129,
+          "centroid_separation": 1.3297,
+          "within_vs_global_var_ratio": 0.7734,
+          "dispersion_ratio": 2.3452,
+          "router_entropy": 0.5243,
+          "mean_border_energy_frac": 0.019082,
+          "steered_group_frac": 1.0,
+          "expert_bytes_per_param": 0.5502,
+          "expert_reduction_vs_fp32_adamw_pct": 93.12,
+          "elapsed_sec": 7.031,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 3.636517,
+              "val_ppl": 37.9594,
+              "val_accuracy": 0.0251,
+              "expert_domain_purity": 0.3986,
+              "expert_domain_nmi": 0.0866,
+              "centroid_separation": 1.3263,
+              "within_vs_global_var_ratio": 0.945,
+              "dispersion_ratio": 3.9942,
+              "router_entropy": 1.2994
+            },
+            {
+              "step": 30,
+              "val_loss": 1.707204,
+              "val_ppl": 5.5135,
+              "val_accuracy": 0.4741,
+              "expert_domain_purity": 0.7631,
+              "expert_domain_nmi": 0.6184,
+              "centroid_separation": 1.3272,
+              "within_vs_global_var_ratio": 0.7815,
+              "dispersion_ratio": 2.2189,
+              "router_entropy": 0.6397
+            },
+            {
+              "step": 60,
+              "val_loss": 1.398767,
+              "val_ppl": 4.0502,
+              "val_accuracy": 0.52,
+              "expert_domain_purity": 0.8147,
+              "expert_domain_nmi": 0.7038,
+              "centroid_separation": 1.3283,
+              "within_vs_global_var_ratio": 0.7632,
+              "dispersion_ratio": 2.2874,
+              "router_entropy": 0.5058
+            },
+            {
+              "step": 90,
+              "val_loss": 1.303544,
+              "val_ppl": 3.6823,
+              "val_accuracy": 0.5388,
+              "expert_domain_purity": 0.8167,
+              "expert_domain_nmi": 0.7199,
+              "centroid_separation": 1.3265,
+              "within_vs_global_var_ratio": 0.7601,
+              "dispersion_ratio": 2.2606,
+              "router_entropy": 0.4945
+            },
+            {
+              "step": 120,
+              "val_loss": 1.239604,
+              "val_ppl": 3.4542,
+              "val_accuracy": 0.5537,
+              "expert_domain_purity": 0.8169,
+              "expert_domain_nmi": 0.7129,
+              "centroid_separation": 1.3297,
+              "within_vs_global_var_ratio": 0.7734,
+              "dispersion_ratio": 2.3452,
+              "router_entropy": 0.5243
+            }
+          ]
+        },
+        "adamw": {
+          "initial_val_loss": 3.636517,
+          "final_val_loss": 0.856791,
+          "final_val_ppl": 2.3556,
+          "final_val_accuracy": 0.6882,
+          "expert_domain_purity": 0.605,
+          "expert_domain_nmi": 0.4841,
+          "centroid_separation": 1.3887,
+          "within_vs_global_var_ratio": 0.8208,
+          "dispersion_ratio": 3.9971,
+          "router_entropy": 1.0194,
+          "mean_border_energy_frac": 0.0,
+          "steered_group_frac": 0.0,
+          "expert_bytes_per_param": 8.0001,
+          "expert_reduction_vs_fp32_adamw_pct": -0.0,
+          "elapsed_sec": 3.619,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 3.636517,
+              "val_ppl": 37.9594,
+              "val_accuracy": 0.0251,
+              "expert_domain_purity": 0.3986,
+              "expert_domain_nmi": 0.0866,
+              "centroid_separation": 1.3263,
+              "within_vs_global_var_ratio": 0.945,
+              "dispersion_ratio": 3.9942,
+              "router_entropy": 1.2994
+            },
+            {
+              "step": 30,
+              "val_loss": 1.22206,
+              "val_ppl": 3.3942,
+              "val_accuracy": 0.5281,
+              "expert_domain_purity": 0.6023,
+              "expert_domain_nmi": 0.3812,
+              "centroid_separation": 1.319,
+              "within_vs_global_var_ratio": 0.8067,
+              "dispersion_ratio": 4.048,
+              "router_entropy": 1.1713
+            },
+            {
+              "step": 60,
+              "val_loss": 1.052054,
+              "val_ppl": 2.8635,
+              "val_accuracy": 0.6221,
+              "expert_domain_purity": 0.5896,
+              "expert_domain_nmi": 0.4543,
+              "centroid_separation": 1.3971,
+              "within_vs_global_var_ratio": 0.8154,
+              "dispersion_ratio": 4.2464,
+              "router_entropy": 1.0335
+            },
+            {
+              "step": 90,
+              "val_loss": 0.927173,
+              "val_ppl": 2.5274,
+              "val_accuracy": 0.6553,
+              "expert_domain_purity": 0.7118,
+              "expert_domain_nmi": 0.56,
+              "centroid_separation": 1.3535,
+              "within_vs_global_var_ratio": 0.7383,
+              "dispersion_ratio": 2.9964,
+              "router_entropy": 1.0313
+            },
+            {
+              "step": 120,
+              "val_loss": 0.856791,
+              "val_ppl": 2.3556,
+              "val_accuracy": 0.6882,
+              "expert_domain_purity": 0.605,
+              "expert_domain_nmi": 0.4841,
+              "centroid_separation": 1.3887,
+              "within_vs_global_var_ratio": 0.8208,
+              "dispersion_ratio": 3.9971,
+              "router_entropy": 1.0194
+            }
+          ]
+        },
+        "upgraded": {
+          "initial_val_loss": 3.636517,
+          "final_val_loss": 1.21244,
+          "final_val_ppl": 3.3617,
+          "final_val_accuracy": 0.5522,
+          "expert_domain_purity": 0.776,
+          "expert_domain_nmi": 0.6461,
+          "centroid_separation": 1.3246,
+          "within_vs_global_var_ratio": 0.782,
+          "dispersion_ratio": 2.5976,
+          "router_entropy": 0.7039,
+          "mean_border_energy_frac": 0.627728,
+          "steered_group_frac": 1.0,
+          "expert_bytes_per_param": 0.5502,
+          "expert_reduction_vs_fp32_adamw_pct": 93.12,
+          "elapsed_sec": 7.245,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 3.636517,
+              "val_ppl": 37.9594,
+              "val_accuracy": 0.0251,
+              "expert_domain_purity": 0.3986,
+              "expert_domain_nmi": 0.0866,
+              "centroid_separation": 1.3263,
+              "within_vs_global_var_ratio": 0.945,
+              "dispersion_ratio": 3.9942,
+              "router_entropy": 1.2994
+            },
+            {
+              "step": 30,
+              "val_loss": 1.481693,
+              "val_ppl": 4.4004,
+              "val_accuracy": 0.5039,
+              "expert_domain_purity": 0.6979,
+              "expert_domain_nmi": 0.5473,
+              "centroid_separation": 1.3319,
+              "within_vs_global_var_ratio": 0.7805,
+              "dispersion_ratio": 2.4473,
+              "router_entropy": 0.7752
+            },
+            {
+              "step": 60,
+              "val_loss": 1.334544,
+              "val_ppl": 3.7983,
+              "val_accuracy": 0.5261,
+              "expert_domain_purity": 0.7194,
+              "expert_domain_nmi": 0.5771,
+              "centroid_separation": 1.3228,
+              "within_vs_global_var_ratio": 0.7576,
+              "dispersion_ratio": 2.6049,
+              "router_entropy": 0.7175
+            },
+            {
+              "step": 90,
+              "val_loss": 1.271498,
+              "val_ppl": 3.5662,
+              "val_accuracy": 0.5327,
+              "expert_domain_purity": 0.7445,
+              "expert_domain_nmi": 0.5844,
+              "centroid_separation": 1.3235,
+              "within_vs_global_var_ratio": 0.8014,
+              "dispersion_ratio": 2.7143,
+              "router_entropy": 0.7043
+            },
+            {
+              "step": 120,
+              "val_loss": 1.21244,
+              "val_ppl": 3.3617,
+              "val_accuracy": 0.5522,
+              "expert_domain_purity": 0.776,
+              "expert_domain_nmi": 0.6461,
+              "centroid_separation": 1.3246,
+              "within_vs_global_var_ratio": 0.782,
+              "dispersion_ratio": 2.5976,
+              "router_entropy": 0.7039
+            }
+          ]
+        },
+        "nosteer": {
+          "initial_val_loss": 3.636517,
+          "final_val_loss": 1.266158,
+          "final_val_ppl": 3.5472,
+          "final_val_accuracy": 0.541,
+          "expert_domain_purity": 0.7736,
+          "expert_domain_nmi": 0.6721,
+          "centroid_separation": 1.3295,
+          "within_vs_global_var_ratio": 0.7863,
+          "dispersion_ratio": 2.4504,
+          "router_entropy": 0.5556,
+          "mean_border_energy_frac": 0.0,
+          "steered_group_frac": 0.0,
+          "expert_bytes_per_param": 0.3325,
+          "expert_reduction_vs_fp32_adamw_pct": 95.84,
+          "elapsed_sec": 4.481,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 3.636517,
+              "val_ppl": 37.9594,
+              "val_accuracy": 0.0251,
+              "expert_domain_purity": 0.3986,
+              "expert_domain_nmi": 0.0866,
+              "centroid_separation": 1.3263,
+              "within_vs_global_var_ratio": 0.945,
+              "dispersion_ratio": 3.9942,
+              "router_entropy": 1.2994
+            },
+            {
+              "step": 30,
+              "val_loss": 1.775854,
+              "val_ppl": 5.9053,
+              "val_accuracy": 0.4675,
+              "expert_domain_purity": 0.7203,
+              "expert_domain_nmi": 0.5837,
+              "centroid_separation": 1.3271,
+              "within_vs_global_var_ratio": 0.7875,
+              "dispersion_ratio": 2.2523,
+              "router_entropy": 0.6505
+            },
+            {
+              "step": 60,
+              "val_loss": 1.44925,
+              "val_ppl": 4.2599,
+              "val_accuracy": 0.5071,
+              "expert_domain_purity": 0.7512,
+              "expert_domain_nmi": 0.649,
+              "centroid_separation": 1.3257,
+              "within_vs_global_var_ratio": 0.7611,
+              "dispersion_ratio": 2.2514,
+              "router_entropy": 0.508
+            },
+            {
+              "step": 90,
+              "val_loss": 1.32599,
+              "val_ppl": 3.7659,
+              "val_accuracy": 0.5303,
+              "expert_domain_purity": 0.7633,
+              "expert_domain_nmi": 0.6702,
+              "centroid_separation": 1.3263,
+              "within_vs_global_var_ratio": 0.7736,
+              "dispersion_ratio": 2.3526,
+              "router_entropy": 0.5307
+            },
+            {
+              "step": 120,
+              "val_loss": 1.266158,
+              "val_ppl": 3.5472,
+              "val_accuracy": 0.541,
+              "expert_domain_purity": 0.7736,
+              "expert_domain_nmi": 0.6721,
+              "centroid_separation": 1.3295,
+              "within_vs_global_var_ratio": 0.7863,
+              "dispersion_ratio": 2.4504,
+              "router_entropy": 0.5556
+            }
+          ]
+        }
+      },
+      "2026": {
+        "adamw": {
+          "initial_val_loss": 3.665476,
+          "final_val_loss": 0.807004,
+          "final_val_ppl": 2.2412,
+          "final_val_accuracy": 0.7109,
+          "expert_domain_purity": 0.6754,
+          "expert_domain_nmi": 0.4903,
+          "centroid_separation": 1.3149,
+          "within_vs_global_var_ratio": 0.7868,
+          "dispersion_ratio": 3.4075,
+          "router_entropy": 1.0351,
+          "mean_border_energy_frac": 0.0,
+          "steered_group_frac": 0.0,
+          "expert_bytes_per_param": 8.0001,
+          "expert_reduction_vs_fp32_adamw_pct": -0.0,
+          "elapsed_sec": 3.48,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 3.665476,
+              "val_ppl": 39.0747,
+              "val_accuracy": 0.042,
+              "expert_domain_purity": 0.3641,
+              "expert_domain_nmi": 0.0668,
+              "centroid_separation": 1.2834,
+              "within_vs_global_var_ratio": 0.8976,
+              "dispersion_ratio": 3.2884,
+              "router_entropy": 1.2546
+            },
+            {
+              "step": 30,
+              "val_loss": 1.138767,
+              "val_ppl": 3.1229,
+              "val_accuracy": 0.5928,
+              "expert_domain_purity": 0.6132,
+              "expert_domain_nmi": 0.3483,
+              "centroid_separation": 1.3102,
+              "within_vs_global_var_ratio": 0.7787,
+              "dispersion_ratio": 3.569,
+              "router_entropy": 1.174
+            },
+            {
+              "step": 60,
+              "val_loss": 0.946056,
+              "val_ppl": 2.5755,
+              "val_accuracy": 0.6565,
+              "expert_domain_purity": 0.6549,
+              "expert_domain_nmi": 0.4371,
+              "centroid_separation": 1.3297,
+              "within_vs_global_var_ratio": 0.7881,
+              "dispersion_ratio": 3.1549,
+              "router_entropy": 1.092
+            },
+            {
+              "step": 90,
+              "val_loss": 0.901056,
+              "val_ppl": 2.4622,
+              "val_accuracy": 0.6792,
+              "expert_domain_purity": 0.735,
+              "expert_domain_nmi": 0.5344,
+              "centroid_separation": 1.341,
+              "within_vs_global_var_ratio": 0.7373,
+              "dispersion_ratio": 2.7572,
+              "router_entropy": 1.0323
+            },
+            {
+              "step": 120,
+              "val_loss": 0.807004,
+              "val_ppl": 2.2412,
+              "val_accuracy": 0.7109,
+              "expert_domain_purity": 0.6754,
+              "expert_domain_nmi": 0.4903,
+              "centroid_separation": 1.3149,
+              "within_vs_global_var_ratio": 0.7868,
+              "dispersion_ratio": 3.4075,
+              "router_entropy": 1.0351
+            }
+          ]
+        },
+        "upgraded": {
+          "initial_val_loss": 3.665476,
+          "final_val_loss": 1.181639,
+          "final_val_ppl": 3.2597,
+          "final_val_accuracy": 0.5835,
+          "expert_domain_purity": 0.7357,
+          "expert_domain_nmi": 0.6354,
+          "centroid_separation": 1.3204,
+          "within_vs_global_var_ratio": 0.7077,
+          "dispersion_ratio": 1.9942,
+          "router_entropy": 0.6508,
+          "mean_border_energy_frac": 0.629694,
+          "steered_group_frac": 1.0,
+          "expert_bytes_per_param": 0.5502,
+          "expert_reduction_vs_fp32_adamw_pct": 93.12,
+          "elapsed_sec": 7.009,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 3.665476,
+              "val_ppl": 39.0747,
+              "val_accuracy": 0.042,
+              "expert_domain_purity": 0.3641,
+              "expert_domain_nmi": 0.0668,
+              "centroid_separation": 1.2834,
+              "within_vs_global_var_ratio": 0.8976,
+              "dispersion_ratio": 3.2884,
+              "router_entropy": 1.2546
+            },
+            {
+              "step": 30,
+              "val_loss": 1.435942,
+              "val_ppl": 4.2036,
+              "val_accuracy": 0.5383,
+              "expert_domain_purity": 0.6541,
+              "expert_domain_nmi": 0.4963,
+              "centroid_separation": 1.3042,
+              "within_vs_global_var_ratio": 0.7461,
+              "dispersion_ratio": 2.1015,
+              "router_entropy": 0.8004
+            },
+            {
+              "step": 60,
+              "val_loss": 1.302531,
+              "val_ppl": 3.6786,
+              "val_accuracy": 0.5508,
+              "expert_domain_purity": 0.6998,
+              "expert_domain_nmi": 0.5393,
+              "centroid_separation": 1.3147,
+              "within_vs_global_var_ratio": 0.7643,
+              "dispersion_ratio": 2.2327,
+              "router_entropy": 0.7088
+            },
+            {
+              "step": 90,
+              "val_loss": 1.226109,
+              "val_ppl": 3.4079,
+              "val_accuracy": 0.5642,
+              "expert_domain_purity": 0.7385,
+              "expert_domain_nmi": 0.6325,
+              "centroid_separation": 1.3165,
+              "within_vs_global_var_ratio": 0.7556,
+              "dispersion_ratio": 2.1218,
+              "router_entropy": 0.6876
+            },
+            {
+              "step": 120,
+              "val_loss": 1.181639,
+              "val_ppl": 3.2597,
+              "val_accuracy": 0.5835,
+              "expert_domain_purity": 0.7357,
+              "expert_domain_nmi": 0.6354,
+              "centroid_separation": 1.3204,
+              "within_vs_global_var_ratio": 0.7077,
+              "dispersion_ratio": 1.9942,
+              "router_entropy": 0.6508
+            }
+          ]
+        },
+        "nosteer": {
+          "initial_val_loss": 3.665476,
+          "final_val_loss": 1.182329,
+          "final_val_ppl": 3.262,
+          "final_val_accuracy": 0.5808,
+          "expert_domain_purity": 0.9076,
+          "expert_domain_nmi": 0.8192,
+          "centroid_separation": 1.3281,
+          "within_vs_global_var_ratio": 0.7104,
+          "dispersion_ratio": 1.7466,
+          "router_entropy": 0.418,
+          "mean_border_energy_frac": 0.0,
+          "steered_group_frac": 0.0,
+          "expert_bytes_per_param": 0.3325,
+          "expert_reduction_vs_fp32_adamw_pct": 95.84,
+          "elapsed_sec": 4.331,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 3.665476,
+              "val_ppl": 39.0747,
+              "val_accuracy": 0.042,
+              "expert_domain_purity": 0.3641,
+              "expert_domain_nmi": 0.0668,
+              "centroid_separation": 1.2834,
+              "within_vs_global_var_ratio": 0.8976,
+              "dispersion_ratio": 3.2884,
+              "router_entropy": 1.2546
+            },
+            {
+              "step": 30,
+              "val_loss": 1.655369,
+              "val_ppl": 5.235,
+              "val_accuracy": 0.5212,
+              "expert_domain_purity": 0.7456,
+              "expert_domain_nmi": 0.6227,
+              "centroid_separation": 1.3205,
+              "within_vs_global_var_ratio": 0.7492,
+              "dispersion_ratio": 1.9839,
+              "router_entropy": 0.6214
+            },
+            {
+              "step": 60,
+              "val_loss": 1.335298,
+              "val_ppl": 3.8011,
+              "val_accuracy": 0.5554,
+              "expert_domain_purity": 0.8756,
+              "expert_domain_nmi": 0.7527,
+              "centroid_separation": 1.3267,
+              "within_vs_global_var_ratio": 0.7184,
+              "dispersion_ratio": 1.7996,
+              "router_entropy": 0.4667
+            },
+            {
+              "step": 90,
+              "val_loss": 1.232436,
+              "val_ppl": 3.4296,
+              "val_accuracy": 0.5645,
+              "expert_domain_purity": 0.8606,
+              "expert_domain_nmi": 0.7753,
+              "centroid_separation": 1.3257,
+              "within_vs_global_var_ratio": 0.7159,
+              "dispersion_ratio": 1.849,
+              "router_entropy": 0.4324
+            },
+            {
+              "step": 120,
+              "val_loss": 1.182329,
+              "val_ppl": 3.262,
+              "val_accuracy": 0.5808,
+              "expert_domain_purity": 0.9076,
+              "expert_domain_nmi": 0.8192,
+              "centroid_separation": 1.3281,
+              "within_vs_global_var_ratio": 0.7104,
+              "dispersion_ratio": 1.7466,
+              "router_entropy": 0.418
+            }
+          ]
+        },
+        "random_same_mem": {
+          "initial_val_loss": 3.665476,
+          "final_val_loss": 1.171969,
+          "final_val_ppl": 3.2283,
+          "final_val_accuracy": 0.5864,
+          "expert_domain_purity": 0.8979,
+          "expert_domain_nmi": 0.8135,
+          "centroid_separation": 1.3286,
+          "within_vs_global_var_ratio": 0.7133,
+          "dispersion_ratio": 1.7608,
+          "router_entropy": 0.4263,
+          "mean_border_energy_frac": 0.019463,
+          "steered_group_frac": 1.0,
+          "expert_bytes_per_param": 0.5502,
+          "expert_reduction_vs_fp32_adamw_pct": 93.12,
+          "elapsed_sec": 7.417,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 3.665476,
+              "val_ppl": 39.0747,
+              "val_accuracy": 0.042,
+              "expert_domain_purity": 0.3641,
+              "expert_domain_nmi": 0.0668,
+              "centroid_separation": 1.2834,
+              "within_vs_global_var_ratio": 0.8976,
+              "dispersion_ratio": 3.2884,
+              "router_entropy": 1.2546
+            },
+            {
+              "step": 30,
+              "val_loss": 1.615932,
+              "val_ppl": 5.0326,
+              "val_accuracy": 0.5386,
+              "expert_domain_purity": 0.8112,
+              "expert_domain_nmi": 0.6692,
+              "centroid_separation": 1.326,
+              "within_vs_global_var_ratio": 0.7567,
+              "dispersion_ratio": 1.9446,
+              "router_entropy": 0.6182
+            },
+            {
+              "step": 60,
+              "val_loss": 1.313151,
+              "val_ppl": 3.7179,
+              "val_accuracy": 0.5654,
+              "expert_domain_purity": 0.8545,
+              "expert_domain_nmi": 0.757,
+              "centroid_separation": 1.3287,
+              "within_vs_global_var_ratio": 0.7294,
+              "dispersion_ratio": 1.8732,
+              "router_entropy": 0.4654
+            },
+            {
+              "step": 90,
+              "val_loss": 1.216523,
+              "val_ppl": 3.3754,
+              "val_accuracy": 0.5769,
+              "expert_domain_purity": 0.8634,
+              "expert_domain_nmi": 0.7676,
+              "centroid_separation": 1.3264,
+              "within_vs_global_var_ratio": 0.7239,
+              "dispersion_ratio": 1.8957,
+              "router_entropy": 0.4487
+            },
+            {
+              "step": 120,
+              "val_loss": 1.171969,
+              "val_ppl": 3.2283,
+              "val_accuracy": 0.5864,
+              "expert_domain_purity": 0.8979,
+              "expert_domain_nmi": 0.8135,
+              "centroid_separation": 1.3286,
+              "within_vs_global_var_ratio": 0.7133,
+              "dispersion_ratio": 1.7608,
+              "router_entropy": 0.4263
+            }
+          ]
+        }
+      },
+      "777": {
+        "upgraded": {
+          "initial_val_loss": 3.844359,
+          "final_val_loss": 1.206481,
+          "final_val_ppl": 3.3417,
+          "final_val_accuracy": 0.5938,
+          "expert_domain_purity": 0.5032,
+          "expert_domain_nmi": 0.275,
+          "centroid_separation": 1.3473,
+          "within_vs_global_var_ratio": 0.7864,
+          "dispersion_ratio": 2.5298,
+          "router_entropy": 0.6609,
+          "mean_border_energy_frac": 0.577183,
+          "steered_group_frac": 1.0,
+          "expert_bytes_per_param": 0.5502,
+          "expert_reduction_vs_fp32_adamw_pct": 93.12,
+          "elapsed_sec": 6.937,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 3.844359,
+              "val_ppl": 46.7287,
+              "val_accuracy": 0.0125,
+              "expert_domain_purity": 0.3806,
+              "expert_domain_nmi": 0.0806,
+              "centroid_separation": 1.3247,
+              "within_vs_global_var_ratio": 0.92,
+              "dispersion_ratio": 3.2088,
+              "router_entropy": 1.2516
+            },
+            {
+              "step": 30,
+              "val_loss": 1.510687,
+              "val_ppl": 4.5298,
+              "val_accuracy": 0.5469,
+              "expert_domain_purity": 0.4587,
+              "expert_domain_nmi": 0.2685,
+              "centroid_separation": 1.3269,
+              "within_vs_global_var_ratio": 0.7743,
+              "dispersion_ratio": 2.2694,
+              "router_entropy": 0.7348
+            },
+            {
+              "step": 60,
+              "val_loss": 1.296984,
+              "val_ppl": 3.6582,
+              "val_accuracy": 0.5791,
+              "expert_domain_purity": 0.4923,
+              "expert_domain_nmi": 0.2989,
+              "centroid_separation": 1.319,
+              "within_vs_global_var_ratio": 0.8024,
+              "dispersion_ratio": 2.7687,
+              "router_entropy": 0.7021
+            },
+            {
+              "step": 90,
+              "val_loss": 1.251185,
+              "val_ppl": 3.4945,
+              "val_accuracy": 0.5923,
+              "expert_domain_purity": 0.4875,
+              "expert_domain_nmi": 0.2812,
+              "centroid_separation": 1.3253,
+              "within_vs_global_var_ratio": 0.797,
+              "dispersion_ratio": 2.618,
+              "router_entropy": 0.6609
+            },
+            {
+              "step": 120,
+              "val_loss": 1.206481,
+              "val_ppl": 3.3417,
+              "val_accuracy": 0.5938,
+              "expert_domain_purity": 0.5032,
+              "expert_domain_nmi": 0.275,
+              "centroid_separation": 1.3473,
+              "within_vs_global_var_ratio": 0.7864,
+              "dispersion_ratio": 2.5298,
+              "router_entropy": 0.6609
+            }
+          ]
+        },
+        "nosteer": {
+          "initial_val_loss": 3.844359,
+          "final_val_loss": 1.224204,
+          "final_val_ppl": 3.4015,
+          "final_val_accuracy": 0.5898,
+          "expert_domain_purity": 0.6163,
+          "expert_domain_nmi": 0.4629,
+          "centroid_separation": 1.3216,
+          "within_vs_global_var_ratio": 0.7813,
+          "dispersion_ratio": 2.3606,
+          "router_entropy": 0.4978,
+          "mean_border_energy_frac": 0.0,
+          "steered_group_frac": 0.0,
+          "expert_bytes_per_param": 0.3325,
+          "expert_reduction_vs_fp32_adamw_pct": 95.84,
+          "elapsed_sec": 3.776,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 3.844359,
+              "val_ppl": 46.7287,
+              "val_accuracy": 0.0125,
+              "expert_domain_purity": 0.3806,
+              "expert_domain_nmi": 0.0806,
+              "centroid_separation": 1.3247,
+              "within_vs_global_var_ratio": 0.92,
+              "dispersion_ratio": 3.2088,
+              "router_entropy": 1.2516
+            },
+            {
+              "step": 30,
+              "val_loss": 1.799779,
+              "val_ppl": 6.0483,
+              "val_accuracy": 0.5273,
+              "expert_domain_purity": 0.5841,
+              "expert_domain_nmi": 0.3795,
+              "centroid_separation": 1.3165,
+              "within_vs_global_var_ratio": 0.7879,
+              "dispersion_ratio": 2.0224,
+              "router_entropy": 0.6475
+            },
+            {
+              "step": 60,
+              "val_loss": 1.379657,
+              "val_ppl": 3.9735,
+              "val_accuracy": 0.5789,
+              "expert_domain_purity": 0.6573,
+              "expert_domain_nmi": 0.5116,
+              "centroid_separation": 1.3174,
+              "within_vs_global_var_ratio": 0.7747,
+              "dispersion_ratio": 2.2383,
+              "router_entropy": 0.5084
+            },
+            {
+              "step": 90,
+              "val_loss": 1.275724,
+              "val_ppl": 3.5813,
+              "val_accuracy": 0.5913,
+              "expert_domain_purity": 0.6404,
+              "expert_domain_nmi": 0.4954,
+              "centroid_separation": 1.3215,
+              "within_vs_global_var_ratio": 0.7786,
+              "dispersion_ratio": 2.311,
+              "router_entropy": 0.4849
+            },
+            {
+              "step": 120,
+              "val_loss": 1.224204,
+              "val_ppl": 3.4015,
+              "val_accuracy": 0.5898,
+              "expert_domain_purity": 0.6163,
+              "expert_domain_nmi": 0.4629,
+              "centroid_separation": 1.3216,
+              "within_vs_global_var_ratio": 0.7813,
+              "dispersion_ratio": 2.3606,
+              "router_entropy": 0.4978
+            }
+          ]
+        },
+        "random_same_mem": {
+          "initial_val_loss": 3.844359,
+          "final_val_loss": 1.188369,
+          "final_val_ppl": 3.2817,
+          "final_val_accuracy": 0.6006,
+          "expert_domain_purity": 0.6586,
+          "expert_domain_nmi": 0.5292,
+          "centroid_separation": 1.3181,
+          "within_vs_global_var_ratio": 0.759,
+          "dispersion_ratio": 2.3232,
+          "router_entropy": 0.4961,
+          "mean_border_energy_frac": 0.018173,
+          "steered_group_frac": 1.0,
+          "expert_bytes_per_param": 0.5502,
+          "expert_reduction_vs_fp32_adamw_pct": 93.12,
+          "elapsed_sec": 5.907,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 3.844359,
+              "val_ppl": 46.7287,
+              "val_accuracy": 0.0125,
+              "expert_domain_purity": 0.3806,
+              "expert_domain_nmi": 0.0806,
+              "centroid_separation": 1.3247,
+              "within_vs_global_var_ratio": 0.92,
+              "dispersion_ratio": 3.2088,
+              "router_entropy": 1.2516
+            },
+            {
+              "step": 30,
+              "val_loss": 1.757267,
+              "val_ppl": 5.7966,
+              "val_accuracy": 0.533,
+              "expert_domain_purity": 0.5931,
+              "expert_domain_nmi": 0.4131,
+              "centroid_separation": 1.3199,
+              "within_vs_global_var_ratio": 0.7872,
+              "dispersion_ratio": 2.024,
+              "router_entropy": 0.6079
+            },
+            {
+              "step": 60,
+              "val_loss": 1.353394,
+              "val_ppl": 3.8705,
+              "val_accuracy": 0.5813,
+              "expert_domain_purity": 0.6676,
+              "expert_domain_nmi": 0.5404,
+              "centroid_separation": 1.3191,
+              "within_vs_global_var_ratio": 0.7396,
+              "dispersion_ratio": 2.1835,
+              "router_entropy": 0.4771
+            },
+            {
+              "step": 90,
+              "val_loss": 1.242514,
+              "val_ppl": 3.4643,
+              "val_accuracy": 0.5994,
+              "expert_domain_purity": 0.649,
+              "expert_domain_nmi": 0.5285,
+              "centroid_separation": 1.319,
+              "within_vs_global_var_ratio": 0.7468,
+              "dispersion_ratio": 2.2324,
+              "router_entropy": 0.4702
+            },
+            {
+              "step": 120,
+              "val_loss": 1.188369,
+              "val_ppl": 3.2817,
+              "val_accuracy": 0.6006,
+              "expert_domain_purity": 0.6586,
+              "expert_domain_nmi": 0.5292,
+              "centroid_separation": 1.3181,
+              "within_vs_global_var_ratio": 0.759,
+              "dispersion_ratio": 2.3232,
+              "router_entropy": 0.4961
+            }
+          ]
+        },
+        "adamw": {
+          "initial_val_loss": 3.844359,
+          "final_val_loss": 0.881539,
+          "final_val_ppl": 2.4146,
+          "final_val_accuracy": 0.6899,
+          "expert_domain_purity": 0.4497,
+          "expert_domain_nmi": 0.226,
+          "centroid_separation": 1.5019,
+          "within_vs_global_var_ratio": 0.8383,
+          "dispersion_ratio": 4.1282,
+          "router_entropy": 1.1345,
+          "mean_border_energy_frac": 0.0,
+          "steered_group_frac": 0.0,
+          "expert_bytes_per_param": 8.0001,
+          "expert_reduction_vs_fp32_adamw_pct": -0.0,
+          "elapsed_sec": 3.334,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 3.844359,
+              "val_ppl": 46.7287,
+              "val_accuracy": 0.0125,
+              "expert_domain_purity": 0.3806,
+              "expert_domain_nmi": 0.0806,
+              "centroid_separation": 1.3247,
+              "within_vs_global_var_ratio": 0.92,
+              "dispersion_ratio": 3.2088,
+              "router_entropy": 1.2516
+            },
+            {
+              "step": 30,
+              "val_loss": 1.152835,
+              "val_ppl": 3.1672,
+              "val_accuracy": 0.6035,
+              "expert_domain_purity": 0.4956,
+              "expert_domain_nmi": 0.2383,
+              "centroid_separation": 1.4641,
+              "within_vs_global_var_ratio": 0.7648,
+              "dispersion_ratio": 3.9663,
+              "router_entropy": 1.1532
+            },
+            {
+              "step": 60,
+              "val_loss": 1.046175,
+              "val_ppl": 2.8467,
+              "val_accuracy": 0.6318,
+              "expert_domain_purity": 0.3778,
+              "expert_domain_nmi": 0.1122,
+              "centroid_separation": 1.3538,
+              "within_vs_global_var_ratio": 0.8029,
+              "dispersion_ratio": 4.8061,
+              "router_entropy": 1.1344
+            },
+            {
+              "step": 90,
+              "val_loss": 0.949832,
+              "val_ppl": 2.5853,
+              "val_accuracy": 0.665,
+              "expert_domain_purity": 0.4159,
+              "expert_domain_nmi": 0.1844,
+              "centroid_separation": 1.454,
+              "within_vs_global_var_ratio": 0.8154,
+              "dispersion_ratio": 4.7083,
+              "router_entropy": 1.1703
+            },
+            {
+              "step": 120,
+              "val_loss": 0.881539,
+              "val_ppl": 2.4146,
+              "val_accuracy": 0.6899,
+              "expert_domain_purity": 0.4497,
+              "expert_domain_nmi": 0.226,
+              "centroid_separation": 1.5019,
+              "within_vs_global_var_ratio": 0.8383,
+              "dispersion_ratio": 4.1282,
+              "router_entropy": 1.1345
+            }
+          ]
+        }
+      },
+      "1024": {
+        "nosteer": {
+          "initial_val_loss": 3.463771,
+          "final_val_loss": 1.27557,
+          "final_val_ppl": 3.5807,
+          "final_val_accuracy": 0.5447,
+          "expert_domain_purity": 0.9114,
+          "expert_domain_nmi": 0.8296,
+          "centroid_separation": 1.3291,
+          "within_vs_global_var_ratio": 0.6827,
+          "dispersion_ratio": 1.6247,
+          "router_entropy": 0.3271,
+          "mean_border_energy_frac": 0.0,
+          "steered_group_frac": 0.0,
+          "expert_bytes_per_param": 0.3325,
+          "expert_reduction_vs_fp32_adamw_pct": 95.84,
+          "elapsed_sec": 3.744,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 3.463771,
+              "val_ppl": 31.9372,
+              "val_accuracy": 0.0388,
+              "expert_domain_purity": 0.384,
+              "expert_domain_nmi": 0.0715,
+              "centroid_separation": 1.3187,
+              "within_vs_global_var_ratio": 0.9275,
+              "dispersion_ratio": 3.3532,
+              "router_entropy": 1.2853
+            },
+            {
+              "step": 30,
+              "val_loss": 1.731138,
+              "val_ppl": 5.6471,
+              "val_accuracy": 0.4878,
+              "expert_domain_purity": 0.7701,
+              "expert_domain_nmi": 0.6401,
+              "centroid_separation": 1.3517,
+              "within_vs_global_var_ratio": 0.776,
+              "dispersion_ratio": 2.2224,
+              "router_entropy": 0.6411
+            },
+            {
+              "step": 60,
+              "val_loss": 1.426928,
+              "val_ppl": 4.1659,
+              "val_accuracy": 0.5195,
+              "expert_domain_purity": 0.843,
+              "expert_domain_nmi": 0.7586,
+              "centroid_separation": 1.3229,
+              "within_vs_global_var_ratio": 0.6935,
+              "dispersion_ratio": 1.8529,
+              "router_entropy": 0.4175
+            },
+            {
+              "step": 90,
+              "val_loss": 1.330755,
+              "val_ppl": 3.7839,
+              "val_accuracy": 0.53,
+              "expert_domain_purity": 0.8965,
+              "expert_domain_nmi": 0.8092,
+              "centroid_separation": 1.3278,
+              "within_vs_global_var_ratio": 0.6843,
+              "dispersion_ratio": 1.6808,
+              "router_entropy": 0.3593
+            },
+            {
+              "step": 120,
+              "val_loss": 1.27557,
+              "val_ppl": 3.5807,
+              "val_accuracy": 0.5447,
+              "expert_domain_purity": 0.9114,
+              "expert_domain_nmi": 0.8296,
+              "centroid_separation": 1.3291,
+              "within_vs_global_var_ratio": 0.6827,
+              "dispersion_ratio": 1.6247,
+              "router_entropy": 0.3271
+            }
+          ]
+        },
+        "random_same_mem": {
+          "initial_val_loss": 3.463771,
+          "final_val_loss": 1.262587,
+          "final_val_ppl": 3.5346,
+          "final_val_accuracy": 0.5537,
+          "expert_domain_purity": 0.9574,
+          "expert_domain_nmi": 0.8978,
+          "centroid_separation": 1.3313,
+          "within_vs_global_var_ratio": 0.6527,
+          "dispersion_ratio": 1.4267,
+          "router_entropy": 0.2669,
+          "mean_border_energy_frac": 0.017612,
+          "steered_group_frac": 1.0,
+          "expert_bytes_per_param": 0.5502,
+          "expert_reduction_vs_fp32_adamw_pct": 93.12,
+          "elapsed_sec": 5.876,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 3.463771,
+              "val_ppl": 31.9372,
+              "val_accuracy": 0.0388,
+              "expert_domain_purity": 0.384,
+              "expert_domain_nmi": 0.0715,
+              "centroid_separation": 1.3187,
+              "within_vs_global_var_ratio": 0.9275,
+              "dispersion_ratio": 3.3532,
+              "router_entropy": 1.2853
+            },
+            {
+              "step": 30,
+              "val_loss": 1.670733,
+              "val_ppl": 5.3161,
+              "val_accuracy": 0.4951,
+              "expert_domain_purity": 0.7816,
+              "expert_domain_nmi": 0.654,
+              "centroid_separation": 1.3803,
+              "within_vs_global_var_ratio": 0.7796,
+              "dispersion_ratio": 2.331,
+              "router_entropy": 0.5995
+            },
+            {
+              "step": 60,
+              "val_loss": 1.407841,
+              "val_ppl": 4.0871,
+              "val_accuracy": 0.5242,
+              "expert_domain_purity": 0.8413,
+              "expert_domain_nmi": 0.7572,
+              "centroid_separation": 1.3236,
+              "within_vs_global_var_ratio": 0.6936,
+              "dispersion_ratio": 1.8676,
+              "router_entropy": 0.3945
+            },
+            {
+              "step": 90,
+              "val_loss": 1.313952,
+              "val_ppl": 3.7209,
+              "val_accuracy": 0.5376,
+              "expert_domain_purity": 0.9143,
+              "expert_domain_nmi": 0.8321,
+              "centroid_separation": 1.3294,
+              "within_vs_global_var_ratio": 0.675,
+              "dispersion_ratio": 1.6057,
+              "router_entropy": 0.3441
+            },
+            {
+              "step": 120,
+              "val_loss": 1.262587,
+              "val_ppl": 3.5346,
+              "val_accuracy": 0.5537,
+              "expert_domain_purity": 0.9574,
+              "expert_domain_nmi": 0.8978,
+              "centroid_separation": 1.3313,
+              "within_vs_global_var_ratio": 0.6527,
+              "dispersion_ratio": 1.4267,
+              "router_entropy": 0.2669
+            }
+          ]
+        },
+        "adamw": {
+          "initial_val_loss": 3.463771,
+          "final_val_loss": 0.797853,
+          "final_val_ppl": 2.2208,
+          "final_val_accuracy": 0.7087,
+          "expert_domain_purity": 0.6503,
+          "expert_domain_nmi": 0.4645,
+          "centroid_separation": 1.3255,
+          "within_vs_global_var_ratio": 0.8369,
+          "dispersion_ratio": 4.8295,
+          "router_entropy": 1.0032,
+          "mean_border_energy_frac": 0.0,
+          "steered_group_frac": 0.0,
+          "expert_bytes_per_param": 8.0001,
+          "expert_reduction_vs_fp32_adamw_pct": -0.0,
+          "elapsed_sec": 3.38,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 3.463771,
+              "val_ppl": 31.9372,
+              "val_accuracy": 0.0388,
+              "expert_domain_purity": 0.384,
+              "expert_domain_nmi": 0.0715,
+              "centroid_separation": 1.3187,
+              "within_vs_global_var_ratio": 0.9275,
+              "dispersion_ratio": 3.3532,
+              "router_entropy": 1.2853
+            },
+            {
+              "step": 30,
+              "val_loss": 1.240787,
+              "val_ppl": 3.4583,
+              "val_accuracy": 0.5398,
+              "expert_domain_purity": 0.6938,
+              "expert_domain_nmi": 0.552,
+              "centroid_separation": 1.3164,
+              "within_vs_global_var_ratio": 0.7705,
+              "dispersion_ratio": 3.3644,
+              "router_entropy": 1.0547
+            },
+            {
+              "step": 60,
+              "val_loss": 1.117554,
+              "val_ppl": 3.0574,
+              "val_accuracy": 0.5881,
+              "expert_domain_purity": 0.6547,
+              "expert_domain_nmi": 0.492,
+              "centroid_separation": 1.3259,
+              "within_vs_global_var_ratio": 0.7935,
+              "dispersion_ratio": 3.6067,
+              "router_entropy": 1.0049
+            },
+            {
+              "step": 90,
+              "val_loss": 0.912479,
+              "val_ppl": 2.4905,
+              "val_accuracy": 0.6714,
+              "expert_domain_purity": 0.6829,
+              "expert_domain_nmi": 0.4803,
+              "centroid_separation": 1.3152,
+              "within_vs_global_var_ratio": 0.8007,
+              "dispersion_ratio": 4.2404,
+              "router_entropy": 0.9962
+            },
+            {
+              "step": 120,
+              "val_loss": 0.797853,
+              "val_ppl": 2.2208,
+              "val_accuracy": 0.7087,
+              "expert_domain_purity": 0.6503,
+              "expert_domain_nmi": 0.4645,
+              "centroid_separation": 1.3255,
+              "within_vs_global_var_ratio": 0.8369,
+              "dispersion_ratio": 4.8295,
+              "router_entropy": 1.0032
+            }
+          ]
+        },
+        "upgraded": {
+          "initial_val_loss": 3.463771,
+          "final_val_loss": 1.258401,
+          "final_val_ppl": 3.5198,
+          "final_val_accuracy": 0.5437,
+          "expert_domain_purity": 0.7925,
+          "expert_domain_nmi": 0.6485,
+          "centroid_separation": 1.3217,
+          "within_vs_global_var_ratio": 0.7283,
+          "dispersion_ratio": 2.0545,
+          "router_entropy": 0.6903,
+          "mean_border_energy_frac": 0.639507,
+          "steered_group_frac": 1.0,
+          "expert_bytes_per_param": 0.5502,
+          "expert_reduction_vs_fp32_adamw_pct": 93.12,
+          "elapsed_sec": 6.534,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 3.463771,
+              "val_ppl": 31.9372,
+              "val_accuracy": 0.0388,
+              "expert_domain_purity": 0.384,
+              "expert_domain_nmi": 0.0715,
+              "centroid_separation": 1.3187,
+              "within_vs_global_var_ratio": 0.9275,
+              "dispersion_ratio": 3.3532,
+              "router_entropy": 1.2853
+            },
+            {
+              "step": 30,
+              "val_loss": 1.500582,
+              "val_ppl": 4.4843,
+              "val_accuracy": 0.5007,
+              "expert_domain_purity": 0.7169,
+              "expert_domain_nmi": 0.576,
+              "centroid_separation": 1.3138,
+              "within_vs_global_var_ratio": 0.7179,
+              "dispersion_ratio": 2.2589,
+              "router_entropy": 0.8065
+            },
+            {
+              "step": 60,
+              "val_loss": 1.363977,
+              "val_ppl": 3.9117,
+              "val_accuracy": 0.5193,
+              "expert_domain_purity": 0.7417,
+              "expert_domain_nmi": 0.613,
+              "centroid_separation": 1.307,
+              "within_vs_global_var_ratio": 0.7537,
+              "dispersion_ratio": 2.3113,
+              "router_entropy": 0.7364
+            },
+            {
+              "step": 90,
+              "val_loss": 1.2887,
+              "val_ppl": 3.6281,
+              "val_accuracy": 0.5442,
+              "expert_domain_purity": 0.7131,
+              "expert_domain_nmi": 0.59,
+              "centroid_separation": 1.2854,
+              "within_vs_global_var_ratio": 0.7838,
+              "dispersion_ratio": 2.7124,
+              "router_entropy": 0.7119
+            },
+            {
+              "step": 120,
+              "val_loss": 1.258401,
+              "val_ppl": 3.5198,
+              "val_accuracy": 0.5437,
+              "expert_domain_purity": 0.7925,
+              "expert_domain_nmi": 0.6485,
+              "centroid_separation": 1.3217,
+              "within_vs_global_var_ratio": 0.7283,
+              "dispersion_ratio": 2.0545,
+              "router_entropy": 0.6903
+            }
+          ]
+        }
+      }
+    }
+  },
+  "suite3_fineweb_cold_start": {
+    "model_label": "Pure-Routed MoE Transformer Cold-Start (FineWeb-Edu)",
+    "checkpoint_path": null,
+    "checkpoint_sha256": null,
+    "data_meta": {
+      "dataset_path": "data/fineweb_edu_large.jsonl",
+      "dataset_sha256": "0432004653835d87b40b6ab120dce8fbf305e0388d65fba21f57a35555e8b10c",
+      "tokenizer_path": "utf8_bytes_256",
+      "tokenizer_sha256": "utf8_bytes_256",
+      "train_docs": 7800,
+      "val_docs": 200,
+      "train_tokens": 1228801,
+      "val_tokens": 131073,
+      "tokens_per_run": 1228800
+    },
+    "config": {
+      "seeds": [
+        42,
+        1337,
+        2026,
+        777,
+        1024
+      ],
+      "steps": 300,
+      "batch_size": 16,
+      "seq_len": 256,
+      "val_batches": 32,
+      "dim": 256,
+      "num_layers": 4,
+      "num_heads": 4,
+      "num_experts": 4,
+      "vocab_size": 256,
+      "rank": 4,
+      "update_gap": 20,
+      "steer_update_gap": 2,
+      "steer_scale": 1.0,
+      "steer_dirs": 8,
+      "lr": 0.002,
+      "expert_lr": 0.0015,
+      "muon_lr": 0.004,
+      "use_rms_steer": false,
+      "dtype": "torch.bfloat16"
+    },
+    "summary": {
+      "nosteer": {
+        "final_val_loss": {
+          "mean": 2.247174,
+          "std": 0.00691,
+          "sem": 0.00309,
+          "ci95": [
+            2.238594,
+            2.255754
+          ]
+        },
+        "final_val_ppl": {
+          "mean": 9.46114,
+          "std": 0.065251,
+          "sem": 0.029181,
+          "ci95": [
+            9.38012,
+            9.54216
+          ]
+        },
+        "val_loss_drop": {
+          "mean": 3.369549,
+          "std": 0.00691,
+          "sem": 0.00309,
+          "ci95": [
+            3.360969,
+            3.378129
+          ]
+        },
+        "centroid_separation": {
+          "mean": 1.31322,
+          "std": 0.015895,
+          "sem": 0.007109,
+          "ci95": [
+            1.293484,
+            1.332956
+          ]
+        },
+        "within_vs_global_var_ratio": {
+          "mean": 0.63452,
+          "std": 0.05547,
+          "sem": 0.024807,
+          "ci95": [
+            0.565645,
+            0.703395
+          ]
+        },
+        "mean_border_energy_frac": {
+          "mean": 0.0,
+          "std": 0.0,
+          "sem": 0.0,
+          "ci95": [
+            0.0,
+            0.0
+          ]
+        },
+        "expert_bytes_per_param": {
+          "mean": 0.0458,
+          "std": 0.0,
+          "sem": 0.0,
+          "ci95": [
+            0.0458,
+            0.0458
+          ]
+        },
+        "peak_vram_mb": {
+          "mean": 778.72,
+          "std": 29.490202,
+          "sem": 13.188419,
+          "ci95": [
+            742.103078,
+            815.336922
+          ]
+        },
+        "elapsed_sec": {
+          "mean": 31.235,
+          "std": 1.726653,
+          "sem": 0.772183,
+          "ci95": [
+            29.091077,
+            33.378923
+          ]
+        }
+      },
+      "random_same_mem": {
+        "final_val_loss": {
+          "mean": 2.258541,
+          "std": 0.013142,
+          "sem": 0.005877,
+          "ci95": [
+            2.242223,
+            2.274859
+          ]
+        },
+        "final_val_ppl": {
+          "mean": 9.56978,
+          "std": 0.126113,
+          "sem": 0.0564,
+          "ci95": [
+            9.413189,
+            9.726371
+          ]
+        },
+        "val_loss_drop": {
+          "mean": 3.358182,
+          "std": 0.013142,
+          "sem": 0.005877,
+          "ci95": [
+            3.341864,
+            3.3745
+          ]
+        },
+        "centroid_separation": {
+          "mean": 1.32388,
+          "std": 0.019068,
+          "sem": 0.008528,
+          "ci95": [
+            1.300203,
+            1.347557
+          ]
+        },
+        "within_vs_global_var_ratio": {
+          "mean": 0.61178,
+          "std": 0.038894,
+          "sem": 0.017394,
+          "ci95": [
+            0.563487,
+            0.660073
+          ]
+        },
+        "mean_border_energy_frac": {
+          "mean": 0.017965,
+          "std": 0.000312,
+          "sem": 0.000139,
+          "ci95": [
+            0.017578,
+            0.018352
+          ]
+        },
+        "expert_bytes_per_param": {
+          "mean": 0.264,
+          "std": 0.0,
+          "sem": 0.0,
+          "ci95": [
+            0.264,
+            0.264
+          ]
+        },
+        "peak_vram_mb": {
+          "mean": 785.24,
+          "std": 23.836485,
+          "sem": 10.66,
+          "ci95": [
+            755.643095,
+            814.836905
+          ]
+        },
+        "elapsed_sec": {
+          "mean": 46.269,
+          "std": 3.967814,
+          "sem": 1.77446,
+          "ci95": [
+            41.342308,
+            51.195692
+          ]
+        }
+      },
+      "adamw": {
+        "final_val_loss": {
+          "mean": 2.149989,
+          "std": 0.041697,
+          "sem": 0.018647,
+          "ci95": [
+            2.098215,
+            2.201763
+          ]
+        },
+        "final_val_ppl": {
+          "mean": 8.59078,
+          "std": 0.362014,
+          "sem": 0.161897,
+          "ci95": [
+            8.141281,
+            9.040279
+          ]
+        },
+        "val_loss_drop": {
+          "mean": 3.466734,
+          "std": 0.041697,
+          "sem": 0.018647,
+          "ci95": [
+            3.41496,
+            3.518508
+          ]
+        },
+        "centroid_separation": {
+          "mean": 1.32314,
+          "std": 0.018677,
+          "sem": 0.008353,
+          "ci95": [
+            1.299949,
+            1.346331
+          ]
+        },
+        "within_vs_global_var_ratio": {
+          "mean": 0.62612,
+          "std": 0.02993,
+          "sem": 0.013385,
+          "ci95": [
+            0.588957,
+            0.663283
+          ]
+        },
+        "mean_border_energy_frac": {
+          "mean": 0.0,
+          "std": 0.0,
+          "sem": 0.0,
+          "ci95": [
+            0.0,
+            0.0
+          ]
+        },
+        "expert_bytes_per_param": {
+          "mean": 4.0,
+          "std": 0.0,
+          "sem": 0.0,
+          "ci95": [
+            4.0,
+            4.0
+          ]
+        },
+        "peak_vram_mb": {
+          "mean": 772.2,
+          "std": 0.0,
+          "sem": 0.0,
+          "ci95": [
+            772.2,
+            772.2
+          ]
+        },
+        "elapsed_sec": {
+          "mean": 30.0928,
+          "std": 0.926318,
+          "sem": 0.414262,
+          "ci95": [
+            28.942624,
+            31.242976
+          ]
+        }
+      },
+      "upgraded": {
+        "final_val_loss": {
+          "mean": 2.201192,
+          "std": 0.017824,
+          "sem": 0.007971,
+          "ci95": [
+            2.179061,
+            2.223323
+          ]
+        },
+        "final_val_ppl": {
+          "mean": 9.03694,
+          "std": 0.160721,
+          "sem": 0.071876,
+          "ci95": [
+            8.837379,
+            9.236501
+          ]
+        },
+        "val_loss_drop": {
+          "mean": 3.415531,
+          "std": 0.017824,
+          "sem": 0.007971,
+          "ci95": [
+            3.3934,
+            3.437662
+          ]
+        },
+        "centroid_separation": {
+          "mean": 1.3513,
+          "std": 0.026407,
+          "sem": 0.01181,
+          "ci95": [
+            1.318511,
+            1.384089
+          ]
+        },
+        "within_vs_global_var_ratio": {
+          "mean": 0.64508,
+          "std": 0.030987,
+          "sem": 0.013858,
+          "ci95": [
+            0.606605,
+            0.683555
+          ]
+        },
+        "mean_border_energy_frac": {
+          "mean": 0.922288,
+          "std": 0.015825,
+          "sem": 0.007077,
+          "ci95": [
+            0.902639,
+            0.941937
+          ]
+        },
+        "expert_bytes_per_param": {
+          "mean": 0.264,
+          "std": 0.0,
+          "sem": 0.0,
+          "ci95": [
+            0.264,
+            0.264
+          ]
+        },
+        "peak_vram_mb": {
+          "mean": 783.74,
+          "std": 6.797647,
+          "sem": 3.04,
+          "ci95": [
+            775.299607,
+            792.180393
+          ]
+        },
+        "elapsed_sec": {
+          "mean": 56.0778,
+          "std": 1.781171,
+          "sem": 0.796564,
+          "ci95": [
+            53.866185,
+            58.289415
+          ]
+        }
+      }
+    },
+    "paired_comparisons": {
+      "upgraded_vs_nosteer_val_loss": {
+        "n": 5,
+        "df": 4,
+        "mean_a": 2.201192,
+        "std_a": 0.017824,
+        "mean_b": 2.247174,
+        "std_b": 0.00691,
+        "mean_diff": -0.045982,
+        "std_diff": 0.02306,
+        "ci95_diff": [
+          -0.074615,
+          -0.017349
+        ],
+        "cohens_d_paired": -1.994,
+        "t_stat": -4.4587,
+        "paired_p": 0.011171462674046753,
+        "welch_p": 0.0026939070947927853,
+        "wilcoxon_p": 0.0625,
+        "wilcoxon_onesided_p": 0.03125
+      },
+      "upgraded_vs_nosteer_val_ppl": {
+        "n": 5,
+        "df": 4,
+        "mean_a": 9.03694,
+        "std_a": 0.160721,
+        "mean_b": 9.46114,
+        "std_b": 0.065251,
+        "mean_diff": -0.4242,
+        "std_diff": 0.210409,
+        "ci95_diff": [
+          -0.685457,
+          -0.162943
+        ],
+        "cohens_d_paired": -2.0161,
+        "t_stat": -4.5081,
+        "paired_p": 0.010755840986660384,
+        "welch_p": 0.0023435820144890158,
+        "wilcoxon_p": 0.0625,
+        "wilcoxon_onesided_p": 0.03125
+      },
+      "upgraded_vs_nosteer_border_energy": {
+        "n": 5,
+        "df": 4,
+        "mean_a": 0.922288,
+        "std_a": 0.015825,
+        "mean_b": 0.0,
+        "std_b": 0.0,
+        "mean_diff": 0.922288,
+        "std_diff": 0.015825,
+        "ci95_diff": [
+          0.902639,
+          0.941937
+        ],
+        "cohens_d_paired": 58.2816,
+        "t_stat": 130.3216,
+        "paired_p": 2.0792874277800386e-08,
+        "welch_p": 2.0792874277800386e-08,
+        "wilcoxon_p": 0.0625,
+        "wilcoxon_onesided_p": 0.03125
+      },
+      "upgraded_vs_random_same_mem_val_loss": {
+        "n": 5,
+        "df": 4,
+        "mean_a": 2.201192,
+        "std_a": 0.017824,
+        "mean_b": 2.258541,
+        "std_b": 0.013142,
+        "mean_diff": -0.057349,
+        "std_diff": 0.012978,
+        "ci95_diff": [
+          -0.073463,
+          -0.041235
+        ],
+        "cohens_d_paired": -4.4191,
+        "t_stat": -9.8813,
+        "paired_p": 0.0005885845132073953,
+        "welch_p": 0.0005585064358552606,
+        "wilcoxon_p": 0.0625,
+        "wilcoxon_onesided_p": 0.03125
+      },
+      "upgraded_vs_random_same_mem_val_ppl": {
+        "n": 5,
+        "df": 4,
+        "mean_a": 9.03694,
+        "std_a": 0.160721,
+        "mean_b": 9.56978,
+        "std_b": 0.126113,
+        "mean_diff": -0.53284,
+        "std_diff": 0.118691,
+        "ci95_diff": [
+          -0.680214,
+          -0.385466
+        ],
+        "cohens_d_paired": -4.4893,
+        "t_stat": -10.0384,
+        "paired_p": 0.0005537283387975319,
+        "welch_p": 0.00048022706178589656,
+        "wilcoxon_p": 0.0625,
+        "wilcoxon_onesided_p": 0.03125
+      },
+      "upgraded_vs_random_same_mem_border_energy": {
+        "n": 5,
+        "df": 4,
+        "mean_a": 0.922288,
+        "std_a": 0.015825,
+        "mean_b": 0.017965,
+        "std_b": 0.000312,
+        "mean_diff": 0.904323,
+        "std_diff": 0.015603,
+        "ci95_diff": [
+          0.88495,
+          0.923696
+        ],
+        "cohens_d_paired": 57.9598,
+        "t_stat": 129.6022,
+        "paired_p": 2.125836824321697e-08,
+        "welch_p": 2.2250213702487492e-08,
+        "wilcoxon_p": 0.0625,
+        "wilcoxon_onesided_p": 0.03125
+      },
+      "upgraded_vs_adamw_val_loss": {
+        "n": 5,
+        "df": 4,
+        "mean_a": 2.201192,
+        "std_a": 0.017824,
+        "mean_b": 2.149989,
+        "std_b": 0.041697,
+        "mean_diff": 0.051203,
+        "std_diff": 0.050487,
+        "ci95_diff": [
+          -0.011485,
+          0.113891
+        ],
+        "cohens_d_paired": 1.0142,
+        "t_stat": 2.2678,
+        "paired_p": 0.0859372870175673,
+        "welch_p": 0.04921750949039428,
+        "wilcoxon_p": 0.125,
+        "wilcoxon_onesided_p": 0.96875
+      },
+      "upgraded_vs_adamw_val_ppl": {
+        "n": 5,
+        "df": 4,
+        "mean_a": 9.03694,
+        "std_a": 0.160721,
+        "mean_b": 8.59078,
+        "std_b": 0.362014,
+        "mean_diff": 0.44616,
+        "std_diff": 0.440544,
+        "ci95_diff": [
+          -0.100847,
+          0.993167
+        ],
+        "cohens_d_paired": 1.0127,
+        "t_stat": 2.2646,
+        "paired_p": 0.086243165876667,
+        "welch_p": 0.04878354401532846,
+        "wilcoxon_p": 0.125,
+        "wilcoxon_onesided_p": 0.96875
+      },
+      "upgraded_vs_adamw_border_energy": {
+        "n": 5,
+        "df": 4,
+        "mean_a": 0.922288,
+        "std_a": 0.015825,
+        "mean_b": 0.0,
+        "std_b": 0.0,
+        "mean_diff": 0.922288,
+        "std_diff": 0.015825,
+        "ci95_diff": [
+          0.902639,
+          0.941937
+        ],
+        "cohens_d_paired": 58.2816,
+        "t_stat": 130.3216,
+        "paired_p": 2.0792874277800386e-08,
+        "welch_p": 2.0792874277800386e-08,
+        "wilcoxon_p": 0.0625,
+        "wilcoxon_onesided_p": 0.03125
+      }
+    },
+    "per_seed": {
+      "42": {
+        "nosteer": {
+          "initial_val_loss": 5.616723,
+          "final_val_loss": 2.237628,
+          "final_val_ppl": 9.3711,
+          "val_loss_drop": 3.379095,
+          "centroid_separation": 1.3207,
+          "within_vs_global_var_ratio": 0.7148,
+          "router_entropy": 0.4788,
+          "mean_border_energy_frac": 0.0,
+          "steered_group_frac": 0.0,
+          "expert_bytes_per_param": 0.0458,
+          "expert_reduction_vs_fp32_adamw_pct": 99.43,
+          "peak_vram_mb": 727.8,
+          "elapsed_sec": 29.553,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 5.616723,
+              "val_ppl": 274.9867,
+              "centroid_separation": 1.3122,
+              "within_vs_global_var_ratio": 1.0045,
+              "router_entropy": 1.2792
+            },
+            {
+              "step": 75,
+              "val_loss": 2.672164,
+              "val_ppl": 14.4713,
+              "centroid_separation": 1.4132,
+              "within_vs_global_var_ratio": 0.5686,
+              "router_entropy": 0.6454
+            },
+            {
+              "step": 150,
+              "val_loss": 2.401273,
+              "val_ppl": 11.0372,
+              "centroid_separation": 1.34,
+              "within_vs_global_var_ratio": 0.6279,
+              "router_entropy": 0.5178
+            },
+            {
+              "step": 225,
+              "val_loss": 2.292425,
+              "val_ppl": 9.8989,
+              "centroid_separation": 1.3447,
+              "within_vs_global_var_ratio": 0.6997,
+              "router_entropy": 0.4702
+            },
+            {
+              "step": 300,
+              "val_loss": 2.237628,
+              "val_ppl": 9.3711,
+              "centroid_separation": 1.3207,
+              "within_vs_global_var_ratio": 0.7148,
+              "router_entropy": 0.4788
+            }
+          ]
+        },
+        "random_same_mem": {
+          "initial_val_loss": 5.616723,
+          "final_val_loss": 2.253678,
+          "final_val_ppl": 9.5227,
+          "val_loss_drop": 3.363045,
+          "centroid_separation": 1.3224,
+          "within_vs_global_var_ratio": 0.5949,
+          "router_entropy": 0.4888,
+          "mean_border_energy_frac": 0.018274,
+          "steered_group_frac": 1.0,
+          "expert_bytes_per_param": 0.264,
+          "expert_reduction_vs_fp32_adamw_pct": 96.7,
+          "peak_vram_mb": 742.6,
+          "elapsed_sec": 43.173,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 5.616723,
+              "val_ppl": 274.9867,
+              "centroid_separation": 1.3122,
+              "within_vs_global_var_ratio": 1.0045,
+              "router_entropy": 1.2792
+            },
+            {
+              "step": 75,
+              "val_loss": 2.683815,
+              "val_ppl": 14.6408,
+              "centroid_separation": 1.6566,
+              "within_vs_global_var_ratio": 0.5434,
+              "router_entropy": 0.5682
+            },
+            {
+              "step": 150,
+              "val_loss": 2.405114,
+              "val_ppl": 11.0797,
+              "centroid_separation": 1.3211,
+              "within_vs_global_var_ratio": 0.5505,
+              "router_entropy": 0.4997
+            },
+            {
+              "step": 225,
+              "val_loss": 2.301907,
+              "val_ppl": 9.9932,
+              "centroid_separation": 1.3205,
+              "within_vs_global_var_ratio": 0.5789,
+              "router_entropy": 0.4882
+            },
+            {
+              "step": 300,
+              "val_loss": 2.253678,
+              "val_ppl": 9.5227,
+              "centroid_separation": 1.3224,
+              "within_vs_global_var_ratio": 0.5949,
+              "router_entropy": 0.4888
+            }
+          ]
+        },
+        "adamw": {
+          "initial_val_loss": 5.616723,
+          "final_val_loss": 2.213391,
+          "final_val_ppl": 9.1467,
+          "val_loss_drop": 3.403332,
+          "centroid_separation": 1.3195,
+          "within_vs_global_var_ratio": 0.6342,
+          "router_entropy": 0.3493,
+          "mean_border_energy_frac": 0.0,
+          "steered_group_frac": 0.0,
+          "expert_bytes_per_param": 4.0,
+          "expert_reduction_vs_fp32_adamw_pct": 50.0,
+          "peak_vram_mb": 772.2,
+          "elapsed_sec": 29.827,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 5.616723,
+              "val_ppl": 274.9867,
+              "centroid_separation": 1.3122,
+              "within_vs_global_var_ratio": 1.0045,
+              "router_entropy": 1.2792
+            },
+            {
+              "step": 75,
+              "val_loss": 2.686391,
+              "val_ppl": 14.6786,
+              "centroid_separation": 1.4227,
+              "within_vs_global_var_ratio": 0.5053,
+              "router_entropy": 0.2972
+            },
+            {
+              "step": 150,
+              "val_loss": 2.399799,
+              "val_ppl": 11.021,
+              "centroid_separation": 1.4899,
+              "within_vs_global_var_ratio": 0.5978,
+              "router_entropy": 0.3079
+            },
+            {
+              "step": 225,
+              "val_loss": 2.283815,
+              "val_ppl": 9.8141,
+              "centroid_separation": 1.3812,
+              "within_vs_global_var_ratio": 0.6028,
+              "router_entropy": 0.2996
+            },
+            {
+              "step": 300,
+              "val_loss": 2.213391,
+              "val_ppl": 9.1467,
+              "centroid_separation": 1.3195,
+              "within_vs_global_var_ratio": 0.6342,
+              "router_entropy": 0.3493
+            }
+          ]
+        },
+        "upgraded": {
+          "initial_val_loss": 5.616723,
+          "final_val_loss": 2.207225,
+          "final_val_ppl": 9.0905,
+          "val_loss_drop": 3.409498,
+          "centroid_separation": 1.3897,
+          "within_vs_global_var_ratio": 0.6423,
+          "router_entropy": 0.3652,
+          "mean_border_energy_frac": 0.946058,
+          "steered_group_frac": 1.0,
+          "expert_bytes_per_param": 0.264,
+          "expert_reduction_vs_fp32_adamw_pct": 96.7,
+          "peak_vram_mb": 780.7,
+          "elapsed_sec": 55.546,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 5.616723,
+              "val_ppl": 274.9867,
+              "centroid_separation": 1.3122,
+              "within_vs_global_var_ratio": 1.0045,
+              "router_entropy": 1.2792
+            },
+            {
+              "step": 75,
+              "val_loss": 2.620009,
+              "val_ppl": 13.7358,
+              "centroid_separation": 1.4444,
+              "within_vs_global_var_ratio": 0.4755,
+              "router_entropy": 0.5765
+            },
+            {
+              "step": 150,
+              "val_loss": 2.374547,
+              "val_ppl": 10.7461,
+              "centroid_separation": 1.4462,
+              "within_vs_global_var_ratio": 0.5903,
+              "router_entropy": 0.3333
+            },
+            {
+              "step": 225,
+              "val_loss": 2.26444,
+              "val_ppl": 9.6257,
+              "centroid_separation": 1.414,
+              "within_vs_global_var_ratio": 0.634,
+              "router_entropy": 0.3362
+            },
+            {
+              "step": 300,
+              "val_loss": 2.207225,
+              "val_ppl": 9.0905,
+              "centroid_separation": 1.3897,
+              "within_vs_global_var_ratio": 0.6423,
+              "router_entropy": 0.3652
+            }
+          ]
+        }
+      },
+      "1337": {
+        "random_same_mem": {
+          "initial_val_loss": 5.616723,
+          "final_val_loss": 2.242658,
+          "final_val_ppl": 9.4183,
+          "val_loss_drop": 3.374065,
+          "centroid_separation": 1.3136,
+          "within_vs_global_var_ratio": 0.6376,
+          "router_entropy": 0.4667,
+          "mean_border_energy_frac": 0.017948,
+          "steered_group_frac": 1.0,
+          "expert_bytes_per_param": 0.264,
+          "expert_reduction_vs_fp32_adamw_pct": 96.7,
+          "peak_vram_mb": 795.9,
+          "elapsed_sec": 45.304,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 5.616723,
+              "val_ppl": 274.9867,
+              "centroid_separation": 1.3122,
+              "within_vs_global_var_ratio": 1.0045,
+              "router_entropy": 1.2792
+            },
+            {
+              "step": 75,
+              "val_loss": 2.638,
+              "val_ppl": 13.9852,
+              "centroid_separation": 1.4691,
+              "within_vs_global_var_ratio": 0.4989,
+              "router_entropy": 0.4885
+            },
+            {
+              "step": 150,
+              "val_loss": 2.389501,
+              "val_ppl": 10.9081,
+              "centroid_separation": 1.3134,
+              "within_vs_global_var_ratio": 0.5561,
+              "router_entropy": 0.4438
+            },
+            {
+              "step": 225,
+              "val_loss": 2.292334,
+              "val_ppl": 9.898,
+              "centroid_separation": 1.3104,
+              "within_vs_global_var_ratio": 0.6078,
+              "router_entropy": 0.4582
+            },
+            {
+              "step": 300,
+              "val_loss": 2.242658,
+              "val_ppl": 9.4183,
+              "centroid_separation": 1.3136,
+              "within_vs_global_var_ratio": 0.6376,
+              "router_entropy": 0.4667
+            }
+          ]
+        },
+        "adamw": {
+          "initial_val_loss": 5.616723,
+          "final_val_loss": 2.158329,
+          "final_val_ppl": 8.6567,
+          "val_loss_drop": 3.458394,
+          "centroid_separation": 1.3204,
+          "within_vs_global_var_ratio": 0.5976,
+          "router_entropy": 0.4334,
+          "mean_border_energy_frac": 0.0,
+          "steered_group_frac": 0.0,
+          "expert_bytes_per_param": 4.0,
+          "expert_reduction_vs_fp32_adamw_pct": 50.0,
+          "peak_vram_mb": 772.2,
+          "elapsed_sec": 30.414,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 5.616723,
+              "val_ppl": 274.9867,
+              "centroid_separation": 1.3122,
+              "within_vs_global_var_ratio": 1.0045,
+              "router_entropy": 1.2792
+            },
+            {
+              "step": 75,
+              "val_loss": 2.605779,
+              "val_ppl": 13.5418,
+              "centroid_separation": 1.5703,
+              "within_vs_global_var_ratio": 0.5273,
+              "router_entropy": 0.5089
+            },
+            {
+              "step": 150,
+              "val_loss": 2.357419,
+              "val_ppl": 10.5637,
+              "centroid_separation": 1.3674,
+              "within_vs_global_var_ratio": 0.5202,
+              "router_entropy": 0.4019
+            },
+            {
+              "step": 225,
+              "val_loss": 2.219108,
+              "val_ppl": 9.1991,
+              "centroid_separation": 1.323,
+              "within_vs_global_var_ratio": 0.5449,
+              "router_entropy": 0.4242
+            },
+            {
+              "step": 300,
+              "val_loss": 2.158329,
+              "val_ppl": 8.6567,
+              "centroid_separation": 1.3204,
+              "within_vs_global_var_ratio": 0.5976,
+              "router_entropy": 0.4334
+            }
+          ]
+        },
+        "upgraded": {
+          "initial_val_loss": 5.616723,
+          "final_val_loss": 2.177119,
+          "final_val_ppl": 8.8209,
+          "val_loss_drop": 3.439604,
+          "centroid_separation": 1.3209,
+          "within_vs_global_var_ratio": 0.6924,
+          "router_entropy": 0.3599,
+          "mean_border_energy_frac": 0.905682,
+          "steered_group_frac": 1.0,
+          "expert_bytes_per_param": 0.264,
+          "expert_reduction_vs_fp32_adamw_pct": 96.7,
+          "peak_vram_mb": 780.7,
+          "elapsed_sec": 56.742,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 5.616723,
+              "val_ppl": 274.9867,
+              "centroid_separation": 1.3122,
+              "within_vs_global_var_ratio": 1.0045,
+              "router_entropy": 1.2792
+            },
+            {
+              "step": 75,
+              "val_loss": 2.590671,
+              "val_ppl": 13.3387,
+              "centroid_separation": 1.4498,
+              "within_vs_global_var_ratio": 0.5419,
+              "router_entropy": 0.3597
+            },
+            {
+              "step": 150,
+              "val_loss": 2.344903,
+              "val_ppl": 10.4323,
+              "centroid_separation": 1.3332,
+              "within_vs_global_var_ratio": 0.6009,
+              "router_entropy": 0.2494
+            },
+            {
+              "step": 225,
+              "val_loss": 2.237096,
+              "val_ppl": 9.3661,
+              "centroid_separation": 1.3218,
+              "within_vs_global_var_ratio": 0.6894,
+              "router_entropy": 0.3395
+            },
+            {
+              "step": 300,
+              "val_loss": 2.177119,
+              "val_ppl": 8.8209,
+              "centroid_separation": 1.3209,
+              "within_vs_global_var_ratio": 0.6924,
+              "router_entropy": 0.3599
+            }
+          ]
+        },
+        "nosteer": {
+          "initial_val_loss": 5.616723,
+          "final_val_loss": 2.252846,
+          "final_val_ppl": 9.5148,
+          "val_loss_drop": 3.363877,
+          "centroid_separation": 1.3291,
+          "within_vs_global_var_ratio": 0.5753,
+          "router_entropy": 0.3814,
+          "mean_border_energy_frac": 0.0,
+          "steered_group_frac": 0.0,
+          "expert_bytes_per_param": 0.0458,
+          "expert_reduction_vs_fp32_adamw_pct": 99.43,
+          "peak_vram_mb": 795.9,
+          "elapsed_sec": 30.883,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 5.616723,
+              "val_ppl": 274.9867,
+              "centroid_separation": 1.3122,
+              "within_vs_global_var_ratio": 1.0045,
+              "router_entropy": 1.2792
+            },
+            {
+              "step": 75,
+              "val_loss": 2.654546,
+              "val_ppl": 14.2185,
+              "centroid_separation": 1.5166,
+              "within_vs_global_var_ratio": 0.4985,
+              "router_entropy": 0.5413
+            },
+            {
+              "step": 150,
+              "val_loss": 2.421614,
+              "val_ppl": 11.264,
+              "centroid_separation": 1.3538,
+              "within_vs_global_var_ratio": 0.5415,
+              "router_entropy": 0.464
+            },
+            {
+              "step": 225,
+              "val_loss": 2.295653,
+              "val_ppl": 9.9309,
+              "centroid_separation": 1.3313,
+              "within_vs_global_var_ratio": 0.5636,
+              "router_entropy": 0.4029
+            },
+            {
+              "step": 300,
+              "val_loss": 2.252846,
+              "val_ppl": 9.5148,
+              "centroid_separation": 1.3291,
+              "within_vs_global_var_ratio": 0.5753,
+              "router_entropy": 0.3814
+            }
+          ]
+        }
+      },
+      "2026": {
+        "adamw": {
+          "initial_val_loss": 5.616723,
+          "final_val_loss": 2.112408,
+          "final_val_ppl": 8.2681,
+          "val_loss_drop": 3.504315,
+          "centroid_separation": 1.3541,
+          "within_vs_global_var_ratio": 0.649,
+          "router_entropy": 0.3393,
+          "mean_border_energy_frac": 0.0,
+          "steered_group_frac": 0.0,
+          "expert_bytes_per_param": 4.0,
+          "expert_reduction_vs_fp32_adamw_pct": 50.0,
+          "peak_vram_mb": 772.2,
+          "elapsed_sec": 31.305,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 5.616723,
+              "val_ppl": 274.9867,
+              "centroid_separation": 1.3122,
+              "within_vs_global_var_ratio": 1.0045,
+              "router_entropy": 1.2792
+            },
+            {
+              "step": 75,
+              "val_loss": 2.498876,
+              "val_ppl": 12.1688,
+              "centroid_separation": 1.364,
+              "within_vs_global_var_ratio": 0.4279,
+              "router_entropy": 0.3644
+            },
+            {
+              "step": 150,
+              "val_loss": 2.279595,
+              "val_ppl": 9.7727,
+              "centroid_separation": 1.4042,
+              "within_vs_global_var_ratio": 0.6094,
+              "router_entropy": 0.3032
+            },
+            {
+              "step": 225,
+              "val_loss": 2.170302,
+              "val_ppl": 8.7609,
+              "centroid_separation": 1.3599,
+              "within_vs_global_var_ratio": 0.6458,
+              "router_entropy": 0.3172
+            },
+            {
+              "step": 300,
+              "val_loss": 2.112408,
+              "val_ppl": 8.2681,
+              "centroid_separation": 1.3541,
+              "within_vs_global_var_ratio": 0.649,
+              "router_entropy": 0.3393
+            }
+          ]
+        },
+        "upgraded": {
+          "initial_val_loss": 5.616723,
+          "final_val_loss": 2.222129,
+          "final_val_ppl": 9.227,
+          "val_loss_drop": 3.394594,
+          "centroid_separation": 1.3345,
+          "within_vs_global_var_ratio": 0.6537,
+          "router_entropy": 0.2919,
+          "mean_border_energy_frac": 0.91018,
+          "steered_group_frac": 1.0,
+          "expert_bytes_per_param": 0.264,
+          "expert_reduction_vs_fp32_adamw_pct": 96.7,
+          "peak_vram_mb": 780.7,
+          "elapsed_sec": 57.891,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 5.616723,
+              "val_ppl": 274.9867,
+              "centroid_separation": 1.3122,
+              "within_vs_global_var_ratio": 1.0045,
+              "router_entropy": 1.2792
+            },
+            {
+              "step": 75,
+              "val_loss": 2.607861,
+              "val_ppl": 13.57,
+              "centroid_separation": 1.5364,
+              "within_vs_global_var_ratio": 0.5255,
+              "router_entropy": 0.4046
+            },
+            {
+              "step": 150,
+              "val_loss": 2.378265,
+              "val_ppl": 10.7862,
+              "centroid_separation": 1.3871,
+              "within_vs_global_var_ratio": 0.593,
+              "router_entropy": 0.3292
+            },
+            {
+              "step": 225,
+              "val_loss": 2.264888,
+              "val_ppl": 9.63,
+              "centroid_separation": 1.368,
+              "within_vs_global_var_ratio": 0.6616,
+              "router_entropy": 0.2824
+            },
+            {
+              "step": 300,
+              "val_loss": 2.222129,
+              "val_ppl": 9.227,
+              "centroid_separation": 1.3345,
+              "within_vs_global_var_ratio": 0.6537,
+              "router_entropy": 0.2919
+            }
+          ]
+        },
+        "nosteer": {
+          "initial_val_loss": 5.616723,
+          "final_val_loss": 2.242088,
+          "final_val_ppl": 9.413,
+          "val_loss_drop": 3.374635,
+          "centroid_separation": 1.2873,
+          "within_vs_global_var_ratio": 0.6562,
+          "router_entropy": 0.4455,
+          "mean_border_energy_frac": 0.0,
+          "steered_group_frac": 0.0,
+          "expert_bytes_per_param": 0.0458,
+          "expert_reduction_vs_fp32_adamw_pct": 99.43,
+          "peak_vram_mb": 795.9,
+          "elapsed_sec": 32.553,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 5.616723,
+              "val_ppl": 274.9867,
+              "centroid_separation": 1.3122,
+              "within_vs_global_var_ratio": 1.0045,
+              "router_entropy": 1.2792
+            },
+            {
+              "step": 75,
+              "val_loss": 2.632,
+              "val_ppl": 13.9015,
+              "centroid_separation": 1.5317,
+              "within_vs_global_var_ratio": 0.5377,
+              "router_entropy": 0.5553
+            },
+            {
+              "step": 150,
+              "val_loss": 2.395392,
+              "val_ppl": 10.9725,
+              "centroid_separation": 1.2964,
+              "within_vs_global_var_ratio": 0.5384,
+              "router_entropy": 0.4511
+            },
+            {
+              "step": 225,
+              "val_loss": 2.288777,
+              "val_ppl": 9.8629,
+              "centroid_separation": 1.2892,
+              "within_vs_global_var_ratio": 0.6457,
+              "router_entropy": 0.4364
+            },
+            {
+              "step": 300,
+              "val_loss": 2.242088,
+              "val_ppl": 9.413,
+              "centroid_separation": 1.2873,
+              "within_vs_global_var_ratio": 0.6562,
+              "router_entropy": 0.4455
+            }
+          ]
+        },
+        "random_same_mem": {
+          "initial_val_loss": 5.616723,
+          "final_val_loss": 2.262431,
+          "final_val_ppl": 9.6064,
+          "val_loss_drop": 3.354292,
+          "centroid_separation": 1.3117,
+          "within_vs_global_var_ratio": 0.6264,
+          "router_entropy": 0.4817,
+          "mean_border_energy_frac": 0.017457,
+          "steered_group_frac": 1.0,
+          "expert_bytes_per_param": 0.264,
+          "expert_reduction_vs_fp32_adamw_pct": 96.7,
+          "peak_vram_mb": 795.9,
+          "elapsed_sec": 48.523,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 5.616723,
+              "val_ppl": 274.9867,
+              "centroid_separation": 1.3122,
+              "within_vs_global_var_ratio": 1.0045,
+              "router_entropy": 1.2792
+            },
+            {
+              "step": 75,
+              "val_loss": 2.640164,
+              "val_ppl": 14.0155,
+              "centroid_separation": 1.3549,
+              "within_vs_global_var_ratio": 0.5345,
+              "router_entropy": 0.5318
+            },
+            {
+              "step": 150,
+              "val_loss": 2.393762,
+              "val_ppl": 10.9546,
+              "centroid_separation": 1.3179,
+              "within_vs_global_var_ratio": 0.556,
+              "router_entropy": 0.4809
+            },
+            {
+              "step": 225,
+              "val_loss": 2.303625,
+              "val_ppl": 10.0104,
+              "centroid_separation": 1.3274,
+              "within_vs_global_var_ratio": 0.6312,
+              "router_entropy": 0.4725
+            },
+            {
+              "step": 300,
+              "val_loss": 2.262431,
+              "val_ppl": 9.6064,
+              "centroid_separation": 1.3117,
+              "within_vs_global_var_ratio": 0.6264,
+              "router_entropy": 0.4817
+            }
+          ]
+        }
+      },
+      "777": {
+        "upgraded": {
+          "initial_val_loss": 5.616723,
+          "final_val_loss": 2.189441,
+          "final_val_ppl": 8.9302,
+          "val_loss_drop": 3.427282,
+          "centroid_separation": 1.3498,
+          "within_vs_global_var_ratio": 0.6258,
+          "router_entropy": 0.3426,
+          "mean_border_energy_frac": 0.923739,
+          "steered_group_frac": 1.0,
+          "expert_bytes_per_param": 0.264,
+          "expert_reduction_vs_fp32_adamw_pct": 96.7,
+          "peak_vram_mb": 795.9,
+          "elapsed_sec": 56.947,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 5.616723,
+              "val_ppl": 274.9867,
+              "centroid_separation": 1.3122,
+              "within_vs_global_var_ratio": 1.0045,
+              "router_entropy": 1.2792
+            },
+            {
+              "step": 75,
+              "val_loss": 2.64019,
+              "val_ppl": 14.0159,
+              "centroid_separation": 1.6507,
+              "within_vs_global_var_ratio": 0.5064,
+              "router_entropy": 0.454
+            },
+            {
+              "step": 150,
+              "val_loss": 2.390623,
+              "val_ppl": 10.9203,
+              "centroid_separation": 1.3976,
+              "within_vs_global_var_ratio": 0.6153,
+              "router_entropy": 0.3523
+            },
+            {
+              "step": 225,
+              "val_loss": 2.238166,
+              "val_ppl": 9.3761,
+              "centroid_separation": 1.3539,
+              "within_vs_global_var_ratio": 0.6162,
+              "router_entropy": 0.3399
+            },
+            {
+              "step": 300,
+              "val_loss": 2.189441,
+              "val_ppl": 8.9302,
+              "centroid_separation": 1.3498,
+              "within_vs_global_var_ratio": 0.6258,
+              "router_entropy": 0.3426
+            }
+          ]
+        },
+        "nosteer": {
+          "initial_val_loss": 5.616723,
+          "final_val_loss": 2.252579,
+          "final_val_ppl": 9.5122,
+          "val_loss_drop": 3.364144,
+          "centroid_separation": 1.3182,
+          "within_vs_global_var_ratio": 0.6352,
+          "router_entropy": 0.5078,
+          "mean_border_energy_frac": 0.0,
+          "steered_group_frac": 0.0,
+          "expert_bytes_per_param": 0.0458,
+          "expert_reduction_vs_fp32_adamw_pct": 99.43,
+          "peak_vram_mb": 795.9,
+          "elapsed_sec": 33.461,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 5.616723,
+              "val_ppl": 274.9867,
+              "centroid_separation": 1.3122,
+              "within_vs_global_var_ratio": 1.0045,
+              "router_entropy": 1.2792
+            },
+            {
+              "step": 75,
+              "val_loss": 2.651899,
+              "val_ppl": 14.1809,
+              "centroid_separation": 1.4718,
+              "within_vs_global_var_ratio": 0.5752,
+              "router_entropy": 0.7072
+            },
+            {
+              "step": 150,
+              "val_loss": 2.421592,
+              "val_ppl": 11.2638,
+              "centroid_separation": 1.3581,
+              "within_vs_global_var_ratio": 0.5308,
+              "router_entropy": 0.4741
+            },
+            {
+              "step": 225,
+              "val_loss": 2.296124,
+              "val_ppl": 9.9356,
+              "centroid_separation": 1.3332,
+              "within_vs_global_var_ratio": 0.6147,
+              "router_entropy": 0.4907
+            },
+            {
+              "step": 300,
+              "val_loss": 2.252579,
+              "val_ppl": 9.5122,
+              "centroid_separation": 1.3182,
+              "within_vs_global_var_ratio": 0.6352,
+              "router_entropy": 0.5078
+            }
+          ]
+        },
+        "random_same_mem": {
+          "initial_val_loss": 5.616723,
+          "final_val_loss": 2.255616,
+          "final_val_ppl": 9.5412,
+          "val_loss_drop": 3.361107,
+          "centroid_separation": 1.3572,
+          "within_vs_global_var_ratio": 0.648,
+          "router_entropy": 0.43,
+          "mean_border_energy_frac": 0.01815,
+          "steered_group_frac": 1.0,
+          "expert_bytes_per_param": 0.264,
+          "expert_reduction_vs_fp32_adamw_pct": 96.7,
+          "peak_vram_mb": 795.9,
+          "elapsed_sec": 51.955,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 5.616723,
+              "val_ppl": 274.9867,
+              "centroid_separation": 1.3122,
+              "within_vs_global_var_ratio": 1.0045,
+              "router_entropy": 1.2792
+            },
+            {
+              "step": 75,
+              "val_loss": 2.653804,
+              "val_ppl": 14.208,
+              "centroid_separation": 1.3787,
+              "within_vs_global_var_ratio": 0.5472,
+              "router_entropy": 0.6484
+            },
+            {
+              "step": 150,
+              "val_loss": 2.408636,
+              "val_ppl": 11.1188,
+              "centroid_separation": 1.404,
+              "within_vs_global_var_ratio": 0.5882,
+              "router_entropy": 0.3939
+            },
+            {
+              "step": 225,
+              "val_loss": 2.292223,
+              "val_ppl": 9.8969,
+              "centroid_separation": 1.3559,
+              "within_vs_global_var_ratio": 0.592,
+              "router_entropy": 0.4073
+            },
+            {
+              "step": 300,
+              "val_loss": 2.255616,
+              "val_ppl": 9.5412,
+              "centroid_separation": 1.3572,
+              "within_vs_global_var_ratio": 0.648,
+              "router_entropy": 0.43
+            }
+          ]
+        },
+        "adamw": {
+          "initial_val_loss": 5.616723,
+          "final_val_loss": 2.153757,
+          "final_val_ppl": 8.6172,
+          "val_loss_drop": 3.462966,
+          "centroid_separation": 1.3033,
+          "within_vs_global_var_ratio": 0.5919,
+          "router_entropy": 0.3812,
+          "mean_border_energy_frac": 0.0,
+          "steered_group_frac": 0.0,
+          "expert_bytes_per_param": 4.0,
+          "expert_reduction_vs_fp32_adamw_pct": 50.0,
+          "peak_vram_mb": 772.2,
+          "elapsed_sec": 28.757,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 5.616723,
+              "val_ppl": 274.9867,
+              "centroid_separation": 1.3122,
+              "within_vs_global_var_ratio": 1.0045,
+              "router_entropy": 1.2792
+            },
+            {
+              "step": 75,
+              "val_loss": 2.626239,
+              "val_ppl": 13.8217,
+              "centroid_separation": 1.4418,
+              "within_vs_global_var_ratio": 0.5133,
+              "router_entropy": 0.4143
+            },
+            {
+              "step": 150,
+              "val_loss": 2.347551,
+              "val_ppl": 10.4599,
+              "centroid_separation": 1.311,
+              "within_vs_global_var_ratio": 0.5078,
+              "router_entropy": 0.3797
+            },
+            {
+              "step": 225,
+              "val_loss": 2.221585,
+              "val_ppl": 9.2219,
+              "centroid_separation": 1.3438,
+              "within_vs_global_var_ratio": 0.5834,
+              "router_entropy": 0.3694
+            },
+            {
+              "step": 300,
+              "val_loss": 2.153757,
+              "val_ppl": 8.6172,
+              "centroid_separation": 1.3033,
+              "within_vs_global_var_ratio": 0.5919,
+              "router_entropy": 0.3812
+            }
+          ]
+        }
+      },
+      "1024": {
+        "nosteer": {
+          "initial_val_loss": 5.616723,
+          "final_val_loss": 2.250728,
+          "final_val_ppl": 9.4946,
+          "val_loss_drop": 3.365995,
+          "centroid_separation": 1.3108,
+          "within_vs_global_var_ratio": 0.5911,
+          "router_entropy": 0.3854,
+          "mean_border_energy_frac": 0.0,
+          "steered_group_frac": 0.0,
+          "expert_bytes_per_param": 0.0458,
+          "expert_reduction_vs_fp32_adamw_pct": 99.43,
+          "peak_vram_mb": 778.1,
+          "elapsed_sec": 29.725,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 5.616723,
+              "val_ppl": 274.9867,
+              "centroid_separation": 1.3122,
+              "within_vs_global_var_ratio": 1.0045,
+              "router_entropy": 1.2792
+            },
+            {
+              "step": 75,
+              "val_loss": 2.663891,
+              "val_ppl": 14.352,
+              "centroid_separation": 1.5073,
+              "within_vs_global_var_ratio": 0.5031,
+              "router_entropy": 0.5156
+            },
+            {
+              "step": 150,
+              "val_loss": 2.406588,
+              "val_ppl": 11.096,
+              "centroid_separation": 1.3036,
+              "within_vs_global_var_ratio": 0.5917,
+              "router_entropy": 0.412
+            },
+            {
+              "step": 225,
+              "val_loss": 2.289411,
+              "val_ppl": 9.8691,
+              "centroid_separation": 1.3088,
+              "within_vs_global_var_ratio": 0.5569,
+              "router_entropy": 0.3668
+            },
+            {
+              "step": 300,
+              "val_loss": 2.250728,
+              "val_ppl": 9.4946,
+              "centroid_separation": 1.3108,
+              "within_vs_global_var_ratio": 0.5911,
+              "router_entropy": 0.3854
+            }
+          ]
+        },
+        "random_same_mem": {
+          "initial_val_loss": 5.616723,
+          "final_val_loss": 2.278321,
+          "final_val_ppl": 9.7603,
+          "val_loss_drop": 3.338402,
+          "centroid_separation": 1.3145,
+          "within_vs_global_var_ratio": 0.552,
+          "router_entropy": 0.457,
+          "mean_border_energy_frac": 0.017996,
+          "steered_group_frac": 1.0,
+          "expert_bytes_per_param": 0.264,
+          "expert_reduction_vs_fp32_adamw_pct": 96.7,
+          "peak_vram_mb": 795.9,
+          "elapsed_sec": 42.39,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 5.616723,
+              "val_ppl": 274.9867,
+              "centroid_separation": 1.3122,
+              "within_vs_global_var_ratio": 1.0045,
+              "router_entropy": 1.2792
+            },
+            {
+              "step": 75,
+              "val_loss": 2.65804,
+              "val_ppl": 14.2683,
+              "centroid_separation": 1.4242,
+              "within_vs_global_var_ratio": 0.6398,
+              "router_entropy": 0.5243
+            },
+            {
+              "step": 150,
+              "val_loss": 2.442908,
+              "val_ppl": 11.5065,
+              "centroid_separation": 1.3801,
+              "within_vs_global_var_ratio": 0.5366,
+              "router_entropy": 0.4332
+            },
+            {
+              "step": 225,
+              "val_loss": 2.326418,
+              "val_ppl": 10.2412,
+              "centroid_separation": 1.3166,
+              "within_vs_global_var_ratio": 0.5663,
+              "router_entropy": 0.4456
+            },
+            {
+              "step": 300,
+              "val_loss": 2.278321,
+              "val_ppl": 9.7603,
+              "centroid_separation": 1.3145,
+              "within_vs_global_var_ratio": 0.552,
+              "router_entropy": 0.457
+            }
+          ]
+        },
+        "adamw": {
+          "initial_val_loss": 5.616723,
+          "final_val_loss": 2.112059,
+          "final_val_ppl": 8.2652,
+          "val_loss_drop": 3.504664,
+          "centroid_separation": 1.3184,
+          "within_vs_global_var_ratio": 0.6579,
+          "router_entropy": 0.4055,
+          "mean_border_energy_frac": 0.0,
+          "steered_group_frac": 0.0,
+          "expert_bytes_per_param": 4.0,
+          "expert_reduction_vs_fp32_adamw_pct": 50.0,
+          "peak_vram_mb": 772.2,
+          "elapsed_sec": 30.161,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 5.616723,
+              "val_ppl": 274.9867,
+              "centroid_separation": 1.3122,
+              "within_vs_global_var_ratio": 1.0045,
+              "router_entropy": 1.2792
+            },
+            {
+              "step": 75,
+              "val_loss": 2.524357,
+              "val_ppl": 12.4829,
+              "centroid_separation": 1.3825,
+              "within_vs_global_var_ratio": 0.4945,
+              "router_entropy": 0.4295
+            },
+            {
+              "step": 150,
+              "val_loss": 2.29318,
+              "val_ppl": 9.9064,
+              "centroid_separation": 1.3286,
+              "within_vs_global_var_ratio": 0.567,
+              "router_entropy": 0.4016
+            },
+            {
+              "step": 225,
+              "val_loss": 2.174451,
+              "val_ppl": 8.7974,
+              "centroid_separation": 1.3189,
+              "within_vs_global_var_ratio": 0.6373,
+              "router_entropy": 0.3795
+            },
+            {
+              "step": 300,
+              "val_loss": 2.112059,
+              "val_ppl": 8.2652,
+              "centroid_separation": 1.3184,
+              "within_vs_global_var_ratio": 0.6579,
+              "router_entropy": 0.4055
+            }
+          ]
+        },
+        "upgraded": {
+          "initial_val_loss": 5.616723,
+          "final_val_loss": 2.210046,
+          "final_val_ppl": 9.1161,
+          "val_loss_drop": 3.406677,
+          "centroid_separation": 1.3616,
+          "within_vs_global_var_ratio": 0.6112,
+          "router_entropy": 0.295,
+          "mean_border_energy_frac": 0.925781,
+          "steered_group_frac": 1.0,
+          "expert_bytes_per_param": 0.264,
+          "expert_reduction_vs_fp32_adamw_pct": 96.7,
+          "peak_vram_mb": 780.7,
+          "elapsed_sec": 53.263,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 5.616723,
+              "val_ppl": 274.9867,
+              "centroid_separation": 1.3122,
+              "within_vs_global_var_ratio": 1.0045,
+              "router_entropy": 1.2792
+            },
+            {
+              "step": 75,
+              "val_loss": 2.601908,
+              "val_ppl": 13.4895,
+              "centroid_separation": 1.5254,
+              "within_vs_global_var_ratio": 0.4889,
+              "router_entropy": 0.3369
+            },
+            {
+              "step": 150,
+              "val_loss": 2.366463,
+              "val_ppl": 10.6596,
+              "centroid_separation": 1.3627,
+              "within_vs_global_var_ratio": 0.5722,
+              "router_entropy": 0.2905
+            },
+            {
+              "step": 225,
+              "val_loss": 2.257748,
+              "val_ppl": 9.5615,
+              "centroid_separation": 1.361,
+              "within_vs_global_var_ratio": 0.5864,
+              "router_entropy": 0.2862
+            },
+            {
+              "step": 300,
+              "val_loss": 2.210046,
+              "val_ppl": 9.1161,
+              "centroid_separation": 1.3616,
+              "within_vs_global_var_ratio": 0.6112,
+              "router_entropy": 0.295
+            }
+          ]
+        }
+      }
+    }
+  },
+  "suite4_fineweb_continuation": {
+    "model_label": "75.8M Triune-Base Routed-Expert Continuation (checkpoints/triune_studio_step_36500.pt)",
+    "checkpoint_path": "checkpoints/triune_studio_step_36500.pt",
+    "checkpoint_sha256": "d872646561f29c27bf8cde7476ec2f9699bd503552917450137fcc44fd32a89e",
+    "data_meta": {
+      "dataset_path": "data/fineweb_edu_large.jsonl",
+      "dataset_sha256": "0432004653835d87b40b6ab120dce8fbf305e0388d65fba21f57a35555e8b10c",
+      "tokenizer_path": "triune_tokenizer.json",
+      "tokenizer_sha256": "df2c43cfab506acce484e8c45a12e497a7901622fa60058fd4cd5802f4e36451",
+      "train_docs": 7800,
+      "val_docs": 200,
+      "train_tokens": 56073,
+      "val_tokens": 26056,
+      "tokens_per_run": 51200
+    },
+    "config": {
+      "seeds": [
+        42,
+        1337,
+        2026,
+        777,
+        1024
+      ],
+      "steps": 100,
+      "batch_size": 4,
+      "seq_len": 128,
+      "val_batches": 24,
+      "dim": 384,
+      "num_layers": 8,
+      "num_heads": 6,
+      "num_experts": 4,
+      "vocab_size": 32000,
+      "rank": 8,
+      "update_gap": 10,
+      "steer_update_gap": 2,
+      "steer_scale": 0.75,
+      "steer_dirs": 8,
+      "lr": 0.0005,
+      "expert_lr": 0.0005,
+      "muon_lr": 0.0005,
+      "use_rms_steer": false,
+      "dtype": "torch.bfloat16"
+    },
+    "summary": {
+      "nosteer": {
+        "final_val_loss": {
+          "mean": 4.994487,
+          "std": 0.000148,
+          "sem": 6.6e-05,
+          "ci95": [
+            4.994302,
+            4.994671
+          ]
+        },
+        "final_val_ppl": {
+          "mean": 147.59724,
+          "std": 0.021924,
+          "sem": 0.009805,
+          "ci95": [
+            147.570018,
+            147.624462
+          ]
+        },
+        "val_loss_drop": {
+          "mean": 0.000494,
+          "std": 0.000148,
+          "sem": 6.6e-05,
+          "ci95": [
+            0.00031,
+            0.000679
+          ]
+        },
+        "centroid_separation": {
+          "mean": 1.44252,
+          "std": 0.002657,
+          "sem": 0.001188,
+          "ci95": [
+            1.439222,
+            1.445818
+          ]
+        },
+        "within_vs_global_var_ratio": {
+          "mean": 0.87486,
+          "std": 0.000537,
+          "sem": 0.00024,
+          "ci95": [
+            0.874194,
+            0.875526
+          ]
+        },
+        "mean_border_energy_frac": {
+          "mean": 0.0,
+          "std": 0.0,
+          "sem": 0.0,
+          "ci95": [
+            0.0,
+            0.0
+          ]
+        },
+        "expert_bytes_per_param": {
+          "mean": 0.0552,
+          "std": 0.0,
+          "sem": 0.0,
+          "ci95": [
+            0.0552,
+            0.0552
+          ]
+        },
+        "peak_vram_mb": {
+          "mean": 2975.16,
+          "std": 804.115239,
+          "sem": 359.611267,
+          "ci95": [
+            1976.719057,
+            3973.600943
+          ]
+        },
+        "elapsed_sec": {
+          "mean": 17.5464,
+          "std": 2.559834,
+          "sem": 1.144793,
+          "ci95": [
+            14.367946,
+            20.724854
+          ]
+        }
+      },
+      "random_same_mem": {
+        "final_val_loss": {
+          "mean": 4.994541,
+          "std": 8.2e-05,
+          "sem": 3.7e-05,
+          "ci95": [
+            4.99444,
+            4.994643
+          ]
+        },
+        "final_val_ppl": {
+          "mean": 147.6052,
+          "std": 0.01207,
+          "sem": 0.005398,
+          "ci95": [
+            147.590213,
+            147.620187
+          ]
+        },
+        "val_loss_drop": {
+          "mean": 0.00044,
+          "std": 8.2e-05,
+          "sem": 3.7e-05,
+          "ci95": [
+            0.000338,
+            0.000541
+          ]
+        },
+        "centroid_separation": {
+          "mean": 1.4429,
+          "std": 0.000671,
+          "sem": 0.0003,
+          "ci95": [
+            1.442067,
+            1.443733
+          ]
+        },
+        "within_vs_global_var_ratio": {
+          "mean": 0.8747,
+          "std": 0.000308,
+          "sem": 0.000138,
+          "ci95": [
+            0.874317,
+            0.875083
+          ]
+        },
+        "mean_border_energy_frac": {
+          "mean": 0.012248,
+          "std": 0.000376,
+          "sem": 0.000168,
+          "ci95": [
+            0.011782,
+            0.012715
+          ]
+        },
+        "expert_bytes_per_param": {
+          "mean": 0.2008,
+          "std": 0.0,
+          "sem": 0.0,
+          "ci95": [
+            0.2008,
+            0.2008
+          ]
+        },
+        "peak_vram_mb": {
+          "mean": 3082.14,
+          "std": 641.465477,
+          "sem": 286.872082,
+          "ci95": [
+            2285.655411,
+            3878.624589
+          ]
+        },
+        "elapsed_sec": {
+          "mean": 21.6442,
+          "std": 1.019814,
+          "sem": 0.456075,
+          "ci95": [
+            20.377934,
+            22.910466
+          ]
+        }
+      },
+      "adamw": {
+        "final_val_loss": {
+          "mean": 4.995371,
+          "std": 0.00083,
+          "sem": 0.000371,
+          "ci95": [
+            4.99434,
+            4.996402
+          ]
+        },
+        "final_val_ppl": {
+          "mean": 147.72782,
+          "std": 0.122651,
+          "sem": 0.054851,
+          "ci95": [
+            147.575529,
+            147.880111
+          ]
+        },
+        "val_loss_drop": {
+          "mean": -0.00039,
+          "std": 0.00083,
+          "sem": 0.000371,
+          "ci95": [
+            -0.001421,
+            0.000641
+          ]
+        },
+        "centroid_separation": {
+          "mean": 1.43162,
+          "std": 0.000228,
+          "sem": 0.000102,
+          "ci95": [
+            1.431337,
+            1.431903
+          ]
+        },
+        "within_vs_global_var_ratio": {
+          "mean": 0.87338,
+          "std": 0.000958,
+          "sem": 0.000428,
+          "ci95": [
+            0.872191,
+            0.874569
+          ]
+        },
+        "mean_border_energy_frac": {
+          "mean": 0.0,
+          "std": 0.0,
+          "sem": 0.0,
+          "ci95": [
+            0.0,
+            0.0
+          ]
+        },
+        "expert_bytes_per_param": {
+          "mean": 3.9939,
+          "std": 0.0,
+          "sem": 0.0,
+          "ci95": [
+            3.9939,
+            3.9939
+          ]
+        },
+        "peak_vram_mb": {
+          "mean": 3114.56,
+          "std": 498.210732,
+          "sem": 222.806613,
+          "ci95": [
+            2495.949671,
+            3733.170329
+          ]
+        },
+        "elapsed_sec": {
+          "mean": 15.291,
+          "std": 1.440534,
+          "sem": 0.644226,
+          "ci95": [
+            13.502341,
+            17.079659
+          ]
+        }
+      },
+      "upgraded": {
+        "final_val_loss": {
+          "mean": 4.993372,
+          "std": 0.000266,
+          "sem": 0.000119,
+          "ci95": [
+            4.993041,
+            4.993703
+          ]
+        },
+        "final_val_ppl": {
+          "mean": 147.4328,
+          "std": 0.039247,
+          "sem": 0.017552,
+          "ci95": [
+            147.384068,
+            147.481532
+          ]
+        },
+        "val_loss_drop": {
+          "mean": 0.001609,
+          "std": 0.000266,
+          "sem": 0.000119,
+          "ci95": [
+            0.001278,
+            0.00194
+          ]
+        },
+        "centroid_separation": {
+          "mean": 1.43912,
+          "std": 0.000581,
+          "sem": 0.00026,
+          "ci95": [
+            1.438399,
+            1.439841
+          ]
+        },
+        "within_vs_global_var_ratio": {
+          "mean": 0.87448,
+          "std": 0.00011,
+          "sem": 4.9e-05,
+          "ci95": [
+            0.874344,
+            0.874616
+          ]
+        },
+        "mean_border_energy_frac": {
+          "mean": 0.705442,
+          "std": 0.005959,
+          "sem": 0.002665,
+          "ci95": [
+            0.698043,
+            0.712841
+          ]
+        },
+        "expert_bytes_per_param": {
+          "mean": 0.2008,
+          "std": 0.0,
+          "sem": 0.0,
+          "ci95": [
+            0.2008,
+            0.2008
+          ]
+        },
+        "peak_vram_mb": {
+          "mean": 3269.36,
+          "std": 377.182891,
+          "sem": 168.681317,
+          "ci95": [
+            2801.025584,
+            3737.694416
+          ]
+        },
+        "elapsed_sec": {
+          "mean": 27.0092,
+          "std": 2.037125,
+          "sem": 0.91103,
+          "ci95": [
+            24.479775,
+            29.538625
+          ]
+        }
+      }
+    },
+    "paired_comparisons": {
+      "upgraded_vs_nosteer_val_loss": {
+        "n": 5,
+        "df": 4,
+        "mean_a": 4.993372,
+        "std_a": 0.000266,
+        "mean_b": 4.994487,
+        "std_b": 0.000148,
+        "mean_diff": -0.001115,
+        "std_diff": 0.000226,
+        "ci95_diff": [
+          -0.001396,
+          -0.000833
+        ],
+        "cohens_d_paired": -4.9212,
+        "t_stat": -11.0041,
+        "paired_p": 0.0003876080766082867,
+        "welch_p": 0.00014422568372082282,
+        "wilcoxon_p": 0.0625,
+        "wilcoxon_onesided_p": 0.03125
+      },
+      "upgraded_vs_nosteer_val_ppl": {
+        "n": 5,
+        "df": 4,
+        "mean_a": 147.4328,
+        "std_a": 0.039247,
+        "mean_b": 147.59724,
+        "std_b": 0.021924,
+        "mean_diff": -0.16444,
+        "std_diff": 0.033362,
+        "ci95_diff": [
+          -0.205864,
+          -0.123016
+        ],
+        "cohens_d_paired": -4.929,
+        "t_stat": -11.0215,
+        "paired_p": 0.00038523255145700826,
+        "welch_p": 0.00014246973588906748,
+        "wilcoxon_p": 0.0625,
+        "wilcoxon_onesided_p": 0.03125
+      },
+      "upgraded_vs_nosteer_border_energy": {
+        "n": 5,
+        "df": 4,
+        "mean_a": 0.705442,
+        "std_a": 0.005959,
+        "mean_b": 0.0,
+        "std_b": 0.0,
+        "mean_diff": 0.705442,
+        "std_diff": 0.005959,
+        "ci95_diff": [
+          0.698043,
+          0.712841
+        ],
+        "cohens_d_paired": 118.3853,
+        "t_stat": 264.7176,
+        "paired_p": 1.2217397051448894e-09,
+        "welch_p": 1.2217397051448894e-09,
+        "wilcoxon_p": 0.0625,
+        "wilcoxon_onesided_p": 0.03125
+      },
+      "upgraded_vs_random_same_mem_val_loss": {
+        "n": 5,
+        "df": 4,
+        "mean_a": 4.993372,
+        "std_a": 0.000266,
+        "mean_b": 4.994541,
+        "std_b": 8.2e-05,
+        "mean_diff": -0.001169,
+        "std_diff": 0.000257,
+        "ci95_diff": [
+          -0.001488,
+          -0.00085
+        ],
+        "cohens_d_paired": -4.5466,
+        "t_stat": -10.1665,
+        "paired_p": 0.0005271837555229311,
+        "welch_p": 0.0003056753862833289,
+        "wilcoxon_p": 0.0625,
+        "wilcoxon_onesided_p": 0.03125
+      },
+      "upgraded_vs_random_same_mem_val_ppl": {
+        "n": 5,
+        "df": 4,
+        "mean_a": 147.4328,
+        "std_a": 0.039247,
+        "mean_b": 147.6052,
+        "std_b": 0.01207,
+        "mean_diff": -0.1724,
+        "std_diff": 0.037881,
+        "ci95_diff": [
+          -0.219436,
+          -0.125364
+        ],
+        "cohens_d_paired": -4.5511,
+        "t_stat": -10.1765,
+        "paired_p": 0.0005251823893328445,
+        "welch_p": 0.0003034892833688118,
+        "wilcoxon_p": 0.0625,
+        "wilcoxon_onesided_p": 0.03125
+      },
+      "upgraded_vs_random_same_mem_border_energy": {
+        "n": 5,
+        "df": 4,
+        "mean_a": 0.705442,
+        "std_a": 0.005959,
+        "mean_b": 0.012248,
+        "std_b": 0.000376,
+        "mean_diff": 0.693194,
+        "std_diff": 0.006141,
+        "ci95_diff": [
+          0.685569,
+          0.700819
+        ],
+        "cohens_d_paired": 112.8785,
+        "t_stat": 252.4041,
+        "paired_p": 1.478155871130882e-09,
+        "welch_p": 1.145585737306872e-09,
+        "wilcoxon_p": 0.0625,
+        "wilcoxon_onesided_p": 0.03125
+      },
+      "upgraded_vs_adamw_val_loss": {
+        "n": 5,
+        "df": 4,
+        "mean_a": 4.993372,
+        "std_a": 0.000266,
+        "mean_b": 4.995371,
+        "std_b": 0.00083,
+        "mean_diff": -0.001999,
+        "std_diff": 0.000742,
+        "ci95_diff": [
+          -0.002921,
+          -0.001077
+        ],
+        "cohens_d_paired": -2.6927,
+        "t_stat": -6.021,
+        "paired_p": 0.0038331281318910422,
+        "welch_p": 0.004107025880144292,
+        "wilcoxon_p": 0.0625,
+        "wilcoxon_onesided_p": 0.03125
+      },
+      "upgraded_vs_adamw_val_ppl": {
+        "n": 5,
+        "df": 4,
+        "mean_a": 147.4328,
+        "std_a": 0.039247,
+        "mean_b": 147.72782,
+        "std_b": 0.122651,
+        "mean_diff": -0.29502,
+        "std_diff": 0.10968,
+        "ci95_diff": [
+          -0.431205,
+          -0.158835
+        ],
+        "cohens_d_paired": -2.6898,
+        "t_stat": -6.0147,
+        "paired_p": 0.0038479692109953147,
+        "welch_p": 0.004128155326714114,
+        "wilcoxon_p": 0.0625,
+        "wilcoxon_onesided_p": 0.03125
+      },
+      "upgraded_vs_adamw_border_energy": {
+        "n": 5,
+        "df": 4,
+        "mean_a": 0.705442,
+        "std_a": 0.005959,
+        "mean_b": 0.0,
+        "std_b": 0.0,
+        "mean_diff": 0.705442,
+        "std_diff": 0.005959,
+        "ci95_diff": [
+          0.698043,
+          0.712841
+        ],
+        "cohens_d_paired": 118.3853,
+        "t_stat": 264.7176,
+        "paired_p": 1.2217397051448894e-09,
+        "welch_p": 1.2217397051448894e-09,
+        "wilcoxon_p": 0.0625,
+        "wilcoxon_onesided_p": 0.03125
+      }
+    },
+    "per_seed": {
+      "42": {
+        "nosteer": {
+          "initial_val_loss": 4.994981,
+          "final_val_loss": 4.994315,
+          "final_val_ppl": 147.5719,
+          "val_loss_drop": 0.000666,
+          "centroid_separation": 1.4379,
+          "within_vs_global_var_ratio": 0.8741,
+          "router_entropy": 0.7379,
+          "mean_border_energy_frac": 0.0,
+          "steered_group_frac": 0.0,
+          "expert_bytes_per_param": 0.0552,
+          "expert_reduction_vs_fp32_adamw_pct": 99.31,
+          "peak_vram_mb": 1543.5,
+          "elapsed_sec": 19.097,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 4.994981,
+              "val_ppl": 147.6702,
+              "centroid_separation": 1.4441,
+              "within_vs_global_var_ratio": 0.8754,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 25,
+              "val_loss": 4.99446,
+              "val_ppl": 147.5933,
+              "centroid_separation": 1.4379,
+              "within_vs_global_var_ratio": 0.8744,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 50,
+              "val_loss": 4.994697,
+              "val_ppl": 147.6282,
+              "centroid_separation": 1.4427,
+              "within_vs_global_var_ratio": 0.8745,
+              "router_entropy": 0.7379
+            },
+            {
+              "step": 75,
+              "val_loss": 4.994486,
+              "val_ppl": 147.597,
+              "centroid_separation": 1.4427,
+              "within_vs_global_var_ratio": 0.8745,
+              "router_entropy": 0.7379
+            },
+            {
+              "step": 100,
+              "val_loss": 4.994315,
+              "val_ppl": 147.5719,
+              "centroid_separation": 1.4379,
+              "within_vs_global_var_ratio": 0.8741,
+              "router_entropy": 0.7379
+            }
+          ]
+        },
+        "random_same_mem": {
+          "initial_val_loss": 4.994981,
+          "final_val_loss": 4.994482,
+          "final_val_ppl": 147.5965,
+          "val_loss_drop": 0.000499,
+          "centroid_separation": 1.4441,
+          "within_vs_global_var_ratio": 0.8752,
+          "router_entropy": 0.7379,
+          "mean_border_energy_frac": 0.012194,
+          "steered_group_frac": 1.0,
+          "expert_bytes_per_param": 0.2008,
+          "expert_reduction_vs_fp32_adamw_pct": 97.49,
+          "peak_vram_mb": 2032.8,
+          "elapsed_sec": 20.975,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 4.994981,
+              "val_ppl": 147.6702,
+              "centroid_separation": 1.4441,
+              "within_vs_global_var_ratio": 0.8754,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 25,
+              "val_loss": 4.994687,
+              "val_ppl": 147.6268,
+              "centroid_separation": 1.4379,
+              "within_vs_global_var_ratio": 0.8742,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 50,
+              "val_loss": 4.994474,
+              "val_ppl": 147.5954,
+              "centroid_separation": 1.444,
+              "within_vs_global_var_ratio": 0.8752,
+              "router_entropy": 0.7379
+            },
+            {
+              "step": 75,
+              "val_loss": 4.994478,
+              "val_ppl": 147.5959,
+              "centroid_separation": 1.444,
+              "within_vs_global_var_ratio": 0.8749,
+              "router_entropy": 0.7379
+            },
+            {
+              "step": 100,
+              "val_loss": 4.994482,
+              "val_ppl": 147.5965,
+              "centroid_separation": 1.4441,
+              "within_vs_global_var_ratio": 0.8752,
+              "router_entropy": 0.7379
+            }
+          ]
+        },
+        "adamw": {
+          "initial_val_loss": 4.994981,
+          "final_val_loss": 4.995421,
+          "final_val_ppl": 147.7351,
+          "val_loss_drop": -0.00044,
+          "centroid_separation": 1.4319,
+          "within_vs_global_var_ratio": 0.8746,
+          "router_entropy": 0.74,
+          "mean_border_energy_frac": 0.0,
+          "steered_group_frac": 0.0,
+          "expert_bytes_per_param": 3.9939,
+          "expert_reduction_vs_fp32_adamw_pct": 50.08,
+          "peak_vram_mb": 2254.4,
+          "elapsed_sec": 16.233,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 4.994981,
+              "val_ppl": 147.6702,
+              "centroid_separation": 1.4441,
+              "within_vs_global_var_ratio": 0.8754,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 25,
+              "val_loss": 4.993391,
+              "val_ppl": 147.4355,
+              "centroid_separation": 1.4396,
+              "within_vs_global_var_ratio": 0.8756,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 50,
+              "val_loss": 4.994809,
+              "val_ppl": 147.6448,
+              "centroid_separation": 1.4347,
+              "within_vs_global_var_ratio": 0.8767,
+              "router_entropy": 0.7388
+            },
+            {
+              "step": 75,
+              "val_loss": 4.995275,
+              "val_ppl": 147.7136,
+              "centroid_separation": 1.4332,
+              "within_vs_global_var_ratio": 0.8755,
+              "router_entropy": 0.7397
+            },
+            {
+              "step": 100,
+              "val_loss": 4.995421,
+              "val_ppl": 147.7351,
+              "centroid_separation": 1.4319,
+              "within_vs_global_var_ratio": 0.8746,
+              "router_entropy": 0.74
+            }
+          ]
+        },
+        "upgraded": {
+          "initial_val_loss": 4.994981,
+          "final_val_loss": 4.992997,
+          "final_val_ppl": 147.3775,
+          "val_loss_drop": 0.001984,
+          "centroid_separation": 1.4394,
+          "within_vs_global_var_ratio": 0.8745,
+          "router_entropy": 0.7385,
+          "mean_border_energy_frac": 0.699938,
+          "steered_group_frac": 1.0,
+          "expert_bytes_per_param": 0.2008,
+          "expert_reduction_vs_fp32_adamw_pct": 97.49,
+          "peak_vram_mb": 2609.6,
+          "elapsed_sec": 26.753,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 4.994981,
+              "val_ppl": 147.6702,
+              "centroid_separation": 1.4441,
+              "within_vs_global_var_ratio": 0.8754,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 25,
+              "val_loss": 4.993357,
+              "val_ppl": 147.4306,
+              "centroid_separation": 1.4394,
+              "within_vs_global_var_ratio": 0.8746,
+              "router_entropy": 0.7379
+            },
+            {
+              "step": 50,
+              "val_loss": 4.992748,
+              "val_ppl": 147.3407,
+              "centroid_separation": 1.4394,
+              "within_vs_global_var_ratio": 0.8747,
+              "router_entropy": 0.7382
+            },
+            {
+              "step": 75,
+              "val_loss": 4.992877,
+              "val_ppl": 147.3598,
+              "centroid_separation": 1.4395,
+              "within_vs_global_var_ratio": 0.8748,
+              "router_entropy": 0.7384
+            },
+            {
+              "step": 100,
+              "val_loss": 4.992997,
+              "val_ppl": 147.3775,
+              "centroid_separation": 1.4394,
+              "within_vs_global_var_ratio": 0.8745,
+              "router_entropy": 0.7385
+            }
+          ]
+        }
+      },
+      "1337": {
+        "random_same_mem": {
+          "initial_val_loss": 4.994981,
+          "final_val_loss": 4.994429,
+          "final_val_ppl": 147.5886,
+          "val_loss_drop": 0.000552,
+          "centroid_separation": 1.4426,
+          "within_vs_global_var_ratio": 0.8744,
+          "router_entropy": 0.7379,
+          "mean_border_energy_frac": 0.012891,
+          "steered_group_frac": 1.0,
+          "expert_bytes_per_param": 0.2008,
+          "expert_reduction_vs_fp32_adamw_pct": 97.49,
+          "peak_vram_mb": 2895.4,
+          "elapsed_sec": 22.583,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 4.994981,
+              "val_ppl": 147.6702,
+              "centroid_separation": 1.4441,
+              "within_vs_global_var_ratio": 0.8754,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 25,
+              "val_loss": 4.994647,
+              "val_ppl": 147.6208,
+              "centroid_separation": 1.4427,
+              "within_vs_global_var_ratio": 0.8746,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 50,
+              "val_loss": 4.994431,
+              "val_ppl": 147.5889,
+              "centroid_separation": 1.444,
+              "within_vs_global_var_ratio": 0.8753,
+              "router_entropy": 0.7379
+            },
+            {
+              "step": 75,
+              "val_loss": 4.994587,
+              "val_ppl": 147.6119,
+              "centroid_separation": 1.4426,
+              "within_vs_global_var_ratio": 0.8745,
+              "router_entropy": 0.7379
+            },
+            {
+              "step": 100,
+              "val_loss": 4.994429,
+              "val_ppl": 147.5886,
+              "centroid_separation": 1.4426,
+              "within_vs_global_var_ratio": 0.8744,
+              "router_entropy": 0.7379
+            }
+          ]
+        },
+        "adamw": {
+          "initial_val_loss": 4.994981,
+          "final_val_loss": 4.995413,
+          "final_val_ppl": 147.734,
+          "val_loss_drop": -0.000432,
+          "centroid_separation": 1.4316,
+          "within_vs_global_var_ratio": 0.8723,
+          "router_entropy": 0.7428,
+          "mean_border_energy_frac": 0.0,
+          "steered_group_frac": 0.0,
+          "expert_bytes_per_param": 3.9939,
+          "expert_reduction_vs_fp32_adamw_pct": 50.08,
+          "peak_vram_mb": 3121.9,
+          "elapsed_sec": 14.587,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 4.994981,
+              "val_ppl": 147.6702,
+              "centroid_separation": 1.4441,
+              "within_vs_global_var_ratio": 0.8754,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 25,
+              "val_loss": 4.995021,
+              "val_ppl": 147.676,
+              "centroid_separation": 1.4332,
+              "within_vs_global_var_ratio": 0.8745,
+              "router_entropy": 0.7394
+            },
+            {
+              "step": 50,
+              "val_loss": 4.996856,
+              "val_ppl": 147.9473,
+              "centroid_separation": 1.4363,
+              "within_vs_global_var_ratio": 0.8739,
+              "router_entropy": 0.7413
+            },
+            {
+              "step": 75,
+              "val_loss": 4.995324,
+              "val_ppl": 147.7209,
+              "centroid_separation": 1.4316,
+              "within_vs_global_var_ratio": 0.8722,
+              "router_entropy": 0.7426
+            },
+            {
+              "step": 100,
+              "val_loss": 4.995413,
+              "val_ppl": 147.734,
+              "centroid_separation": 1.4316,
+              "within_vs_global_var_ratio": 0.8723,
+              "router_entropy": 0.7428
+            }
+          ]
+        },
+        "upgraded": {
+          "initial_val_loss": 4.994981,
+          "final_val_loss": 4.993451,
+          "final_val_ppl": 147.4444,
+          "val_loss_drop": 0.00153,
+          "centroid_separation": 1.4381,
+          "within_vs_global_var_ratio": 0.8743,
+          "router_entropy": 0.7385,
+          "mean_border_energy_frac": 0.702376,
+          "steered_group_frac": 1.0,
+          "expert_bytes_per_param": 0.2008,
+          "expert_reduction_vs_fp32_adamw_pct": 97.49,
+          "peak_vram_mb": 3315.2,
+          "elapsed_sec": 27.184,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 4.994981,
+              "val_ppl": 147.6702,
+              "centroid_separation": 1.4441,
+              "within_vs_global_var_ratio": 0.8754,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 25,
+              "val_loss": 4.994148,
+              "val_ppl": 147.5471,
+              "centroid_separation": 1.4439,
+              "within_vs_global_var_ratio": 0.875,
+              "router_entropy": 0.738
+            },
+            {
+              "step": 50,
+              "val_loss": 4.993621,
+              "val_ppl": 147.4694,
+              "centroid_separation": 1.438,
+              "within_vs_global_var_ratio": 0.8741,
+              "router_entropy": 0.7383
+            },
+            {
+              "step": 75,
+              "val_loss": 4.993384,
+              "val_ppl": 147.4345,
+              "centroid_separation": 1.4333,
+              "within_vs_global_var_ratio": 0.874,
+              "router_entropy": 0.7385
+            },
+            {
+              "step": 100,
+              "val_loss": 4.993451,
+              "val_ppl": 147.4444,
+              "centroid_separation": 1.4381,
+              "within_vs_global_var_ratio": 0.8743,
+              "router_entropy": 0.7385
+            }
+          ]
+        },
+        "nosteer": {
+          "initial_val_loss": 4.994981,
+          "final_val_loss": 4.994716,
+          "final_val_ppl": 147.6311,
+          "val_loss_drop": 0.000265,
+          "centroid_separation": 1.444,
+          "within_vs_global_var_ratio": 0.8753,
+          "router_entropy": 0.7379,
+          "mean_border_energy_frac": 0.0,
+          "steered_group_frac": 0.0,
+          "expert_bytes_per_param": 0.0552,
+          "expert_reduction_vs_fp32_adamw_pct": 99.31,
+          "peak_vram_mb": 3215.3,
+          "elapsed_sec": 20.675,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 4.994981,
+              "val_ppl": 147.6702,
+              "centroid_separation": 1.4441,
+              "within_vs_global_var_ratio": 0.8754,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 25,
+              "val_loss": 4.994775,
+              "val_ppl": 147.6397,
+              "centroid_separation": 1.444,
+              "within_vs_global_var_ratio": 0.8751,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 50,
+              "val_loss": 4.994676,
+              "val_ppl": 147.625,
+              "centroid_separation": 1.4426,
+              "within_vs_global_var_ratio": 0.8747,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 75,
+              "val_loss": 4.994751,
+              "val_ppl": 147.6362,
+              "centroid_separation": 1.444,
+              "within_vs_global_var_ratio": 0.875,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 100,
+              "val_loss": 4.994716,
+              "val_ppl": 147.6311,
+              "centroid_separation": 1.444,
+              "within_vs_global_var_ratio": 0.8753,
+              "router_entropy": 0.7379
+            }
+          ]
+        }
+      },
+      "2026": {
+        "adamw": {
+          "initial_val_loss": 4.994981,
+          "final_val_loss": 4.994154,
+          "final_val_ppl": 147.5481,
+          "val_loss_drop": 0.000827,
+          "centroid_separation": 1.4314,
+          "within_vs_global_var_ratio": 0.8732,
+          "router_entropy": 0.7414,
+          "mean_border_energy_frac": 0.0,
+          "steered_group_frac": 0.0,
+          "expert_bytes_per_param": 3.9939,
+          "expert_reduction_vs_fp32_adamw_pct": 50.08,
+          "peak_vram_mb": 3315.2,
+          "elapsed_sec": 14.306,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 4.994981,
+              "val_ppl": 147.6702,
+              "centroid_separation": 1.4441,
+              "within_vs_global_var_ratio": 0.8754,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 25,
+              "val_loss": 4.993375,
+              "val_ppl": 147.4332,
+              "centroid_separation": 1.4391,
+              "within_vs_global_var_ratio": 0.875,
+              "router_entropy": 0.7386
+            },
+            {
+              "step": 50,
+              "val_loss": 4.994628,
+              "val_ppl": 147.618,
+              "centroid_separation": 1.4344,
+              "within_vs_global_var_ratio": 0.8752,
+              "router_entropy": 0.7408
+            },
+            {
+              "step": 75,
+              "val_loss": 4.994204,
+              "val_ppl": 147.5554,
+              "centroid_separation": 1.4314,
+              "within_vs_global_var_ratio": 0.8731,
+              "router_entropy": 0.7413
+            },
+            {
+              "step": 100,
+              "val_loss": 4.994154,
+              "val_ppl": 147.5481,
+              "centroid_separation": 1.4314,
+              "within_vs_global_var_ratio": 0.8732,
+              "router_entropy": 0.7414
+            }
+          ]
+        },
+        "upgraded": {
+          "initial_val_loss": 4.994981,
+          "final_val_loss": 4.993205,
+          "final_val_ppl": 147.4082,
+          "val_loss_drop": 0.001776,
+          "centroid_separation": 1.4392,
+          "within_vs_global_var_ratio": 0.8745,
+          "router_entropy": 0.7384,
+          "mean_border_energy_frac": 0.715502,
+          "steered_group_frac": 1.0,
+          "expert_bytes_per_param": 0.2008,
+          "expert_reduction_vs_fp32_adamw_pct": 97.49,
+          "peak_vram_mb": 3410.5,
+          "elapsed_sec": 26.236,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 4.994981,
+              "val_ppl": 147.6702,
+              "centroid_separation": 1.4441,
+              "within_vs_global_var_ratio": 0.8754,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 25,
+              "val_loss": 4.994111,
+              "val_ppl": 147.5418,
+              "centroid_separation": 1.4439,
+              "within_vs_global_var_ratio": 0.8753,
+              "router_entropy": 0.738
+            },
+            {
+              "step": 50,
+              "val_loss": 4.993478,
+              "val_ppl": 147.4484,
+              "centroid_separation": 1.4439,
+              "within_vs_global_var_ratio": 0.875,
+              "router_entropy": 0.7383
+            },
+            {
+              "step": 75,
+              "val_loss": 4.993236,
+              "val_ppl": 147.4127,
+              "centroid_separation": 1.4379,
+              "within_vs_global_var_ratio": 0.8741,
+              "router_entropy": 0.7384
+            },
+            {
+              "step": 100,
+              "val_loss": 4.993205,
+              "val_ppl": 147.4082,
+              "centroid_separation": 1.4392,
+              "within_vs_global_var_ratio": 0.8745,
+              "router_entropy": 0.7384
+            }
+          ]
+        },
+        "nosteer": {
+          "initial_val_loss": 4.994981,
+          "final_val_loss": 4.994445,
+          "final_val_ppl": 147.591,
+          "val_loss_drop": 0.000536,
+          "centroid_separation": 1.4426,
+          "within_vs_global_var_ratio": 0.8745,
+          "router_entropy": 0.7379,
+          "mean_border_energy_frac": 0.0,
+          "steered_group_frac": 0.0,
+          "expert_bytes_per_param": 0.0552,
+          "expert_reduction_vs_fp32_adamw_pct": 99.31,
+          "peak_vram_mb": 3309.9,
+          "elapsed_sec": 15.156,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 4.994981,
+              "val_ppl": 147.6702,
+              "centroid_separation": 1.4441,
+              "within_vs_global_var_ratio": 0.8754,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 25,
+              "val_loss": 4.994716,
+              "val_ppl": 147.6311,
+              "centroid_separation": 1.4379,
+              "within_vs_global_var_ratio": 0.8743,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 50,
+              "val_loss": 4.994632,
+              "val_ppl": 147.6187,
+              "centroid_separation": 1.444,
+              "within_vs_global_var_ratio": 0.8751,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 75,
+              "val_loss": 4.994605,
+              "val_ppl": 147.6147,
+              "centroid_separation": 1.4426,
+              "within_vs_global_var_ratio": 0.8746,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 100,
+              "val_loss": 4.994445,
+              "val_ppl": 147.591,
+              "centroid_separation": 1.4426,
+              "within_vs_global_var_ratio": 0.8745,
+              "router_entropy": 0.7379
+            }
+          ]
+        },
+        "random_same_mem": {
+          "initial_val_loss": 4.994981,
+          "final_val_loss": 4.994618,
+          "final_val_ppl": 147.6165,
+          "val_loss_drop": 0.000363,
+          "centroid_separation": 1.4426,
+          "within_vs_global_var_ratio": 0.8745,
+          "router_entropy": 0.7379,
+          "mean_border_energy_frac": 0.011983,
+          "steered_group_frac": 1.0,
+          "expert_bytes_per_param": 0.2008,
+          "expert_reduction_vs_fp32_adamw_pct": 97.49,
+          "peak_vram_mb": 3473.8,
+          "elapsed_sec": 20.939,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 4.994981,
+              "val_ppl": 147.6702,
+              "centroid_separation": 1.4441,
+              "within_vs_global_var_ratio": 0.8754,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 25,
+              "val_loss": 4.994832,
+              "val_ppl": 147.6481,
+              "centroid_separation": 1.444,
+              "within_vs_global_var_ratio": 0.8753,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 50,
+              "val_loss": 4.994579,
+              "val_ppl": 147.6108,
+              "centroid_separation": 1.444,
+              "within_vs_global_var_ratio": 0.8751,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 75,
+              "val_loss": 4.994572,
+              "val_ppl": 147.6097,
+              "centroid_separation": 1.4441,
+              "within_vs_global_var_ratio": 0.8754,
+              "router_entropy": 0.7379
+            },
+            {
+              "step": 100,
+              "val_loss": 4.994618,
+              "val_ppl": 147.6165,
+              "centroid_separation": 1.4426,
+              "within_vs_global_var_ratio": 0.8745,
+              "router_entropy": 0.7379
+            }
+          ]
+        }
+      },
+      "777": {
+        "upgraded": {
+          "initial_val_loss": 4.994981,
+          "final_val_loss": 4.993577,
+          "final_val_ppl": 147.463,
+          "val_loss_drop": 0.001404,
+          "centroid_separation": 1.4394,
+          "within_vs_global_var_ratio": 0.8746,
+          "router_entropy": 0.7384,
+          "mean_border_energy_frac": 0.704581,
+          "steered_group_frac": 1.0,
+          "expert_bytes_per_param": 0.2008,
+          "expert_reduction_vs_fp32_adamw_pct": 97.49,
+          "peak_vram_mb": 3504.7,
+          "elapsed_sec": 24.649,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 4.994981,
+              "val_ppl": 147.6702,
+              "centroid_separation": 1.4441,
+              "within_vs_global_var_ratio": 0.8754,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 25,
+              "val_loss": 4.993828,
+              "val_ppl": 147.5,
+              "centroid_separation": 1.4394,
+              "within_vs_global_var_ratio": 0.8744,
+              "router_entropy": 0.738
+            },
+            {
+              "step": 50,
+              "val_loss": 4.994316,
+              "val_ppl": 147.5719,
+              "centroid_separation": 1.4394,
+              "within_vs_global_var_ratio": 0.8746,
+              "router_entropy": 0.7382
+            },
+            {
+              "step": 75,
+              "val_loss": 4.993877,
+              "val_ppl": 147.5072,
+              "centroid_separation": 1.4394,
+              "within_vs_global_var_ratio": 0.8748,
+              "router_entropy": 0.7384
+            },
+            {
+              "step": 100,
+              "val_loss": 4.993577,
+              "val_ppl": 147.463,
+              "centroid_separation": 1.4394,
+              "within_vs_global_var_ratio": 0.8746,
+              "router_entropy": 0.7384
+            }
+          ]
+        },
+        "nosteer": {
+          "initial_val_loss": 4.994981,
+          "final_val_loss": 4.994525,
+          "final_val_ppl": 147.6029,
+          "val_loss_drop": 0.000456,
+          "centroid_separation": 1.4441,
+          "within_vs_global_var_ratio": 0.8751,
+          "router_entropy": 0.7378,
+          "mean_border_energy_frac": 0.0,
+          "steered_group_frac": 0.0,
+          "expert_bytes_per_param": 0.0552,
+          "expert_reduction_vs_fp32_adamw_pct": 99.31,
+          "peak_vram_mb": 3404.2,
+          "elapsed_sec": 14.716,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 4.994981,
+              "val_ppl": 147.6702,
+              "centroid_separation": 1.4441,
+              "within_vs_global_var_ratio": 0.8754,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 25,
+              "val_loss": 4.994713,
+              "val_ppl": 147.6305,
+              "centroid_separation": 1.4427,
+              "within_vs_global_var_ratio": 0.8747,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 50,
+              "val_loss": 4.99485,
+              "val_ppl": 147.6508,
+              "centroid_separation": 1.4426,
+              "within_vs_global_var_ratio": 0.8746,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 75,
+              "val_loss": 4.99464,
+              "val_ppl": 147.6199,
+              "centroid_separation": 1.444,
+              "within_vs_global_var_ratio": 0.8751,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 100,
+              "val_loss": 4.994525,
+              "val_ppl": 147.6029,
+              "centroid_separation": 1.4441,
+              "within_vs_global_var_ratio": 0.8751,
+              "router_entropy": 0.7378
+            }
+          ]
+        },
+        "random_same_mem": {
+          "initial_val_loss": 4.994981,
+          "final_val_loss": 4.994577,
+          "final_val_ppl": 147.6105,
+          "val_loss_drop": 0.000404,
+          "centroid_separation": 1.4426,
+          "within_vs_global_var_ratio": 0.8747,
+          "router_entropy": 0.7378,
+          "mean_border_energy_frac": 0.012201,
+          "steered_group_frac": 1.0,
+          "expert_bytes_per_param": 0.2008,
+          "expert_reduction_vs_fp32_adamw_pct": 97.49,
+          "peak_vram_mb": 3502.7,
+          "elapsed_sec": 20.804,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 4.994981,
+              "val_ppl": 147.6702,
+              "centroid_separation": 1.4441,
+              "within_vs_global_var_ratio": 0.8754,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 25,
+              "val_loss": 4.994662,
+              "val_ppl": 147.623,
+              "centroid_separation": 1.4427,
+              "within_vs_global_var_ratio": 0.8747,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 50,
+              "val_loss": 4.994672,
+              "val_ppl": 147.6246,
+              "centroid_separation": 1.4426,
+              "within_vs_global_var_ratio": 0.8745,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 75,
+              "val_loss": 4.994776,
+              "val_ppl": 147.6398,
+              "centroid_separation": 1.4427,
+              "within_vs_global_var_ratio": 0.8745,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 100,
+              "val_loss": 4.994577,
+              "val_ppl": 147.6105,
+              "centroid_separation": 1.4426,
+              "within_vs_global_var_ratio": 0.8747,
+              "router_entropy": 0.7378
+            }
+          ]
+        },
+        "adamw": {
+          "initial_val_loss": 4.994981,
+          "final_val_loss": 4.996499,
+          "final_val_ppl": 147.8945,
+          "val_loss_drop": -0.001518,
+          "centroid_separation": 1.4318,
+          "within_vs_global_var_ratio": 0.8727,
+          "router_entropy": 0.7407,
+          "mean_border_energy_frac": 0.0,
+          "steered_group_frac": 0.0,
+          "expert_bytes_per_param": 3.9939,
+          "expert_reduction_vs_fp32_adamw_pct": 50.08,
+          "peak_vram_mb": 3440.0,
+          "elapsed_sec": 13.981,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 4.994981,
+              "val_ppl": 147.6702,
+              "centroid_separation": 1.4441,
+              "within_vs_global_var_ratio": 0.8754,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 25,
+              "val_loss": 4.994072,
+              "val_ppl": 147.5359,
+              "centroid_separation": 1.4332,
+              "within_vs_global_var_ratio": 0.8739,
+              "router_entropy": 0.7387
+            },
+            {
+              "step": 50,
+              "val_loss": 4.998621,
+              "val_ppl": 148.2087,
+              "centroid_separation": 1.439,
+              "within_vs_global_var_ratio": 0.8753,
+              "router_entropy": 0.7395
+            },
+            {
+              "step": 75,
+              "val_loss": 4.997023,
+              "val_ppl": 147.972,
+              "centroid_separation": 1.4317,
+              "within_vs_global_var_ratio": 0.8725,
+              "router_entropy": 0.7406
+            },
+            {
+              "step": 100,
+              "val_loss": 4.996499,
+              "val_ppl": 147.8945,
+              "centroid_separation": 1.4318,
+              "within_vs_global_var_ratio": 0.8727,
+              "router_entropy": 0.7407
+            }
+          ]
+        }
+      },
+      "1024": {
+        "nosteer": {
+          "initial_val_loss": 4.994981,
+          "final_val_loss": 4.994433,
+          "final_val_ppl": 147.5893,
+          "val_loss_drop": 0.000548,
+          "centroid_separation": 1.444,
+          "within_vs_global_var_ratio": 0.8753,
+          "router_entropy": 0.7378,
+          "mean_border_energy_frac": 0.0,
+          "steered_group_frac": 0.0,
+          "expert_bytes_per_param": 0.0552,
+          "expert_reduction_vs_fp32_adamw_pct": 99.31,
+          "peak_vram_mb": 3402.9,
+          "elapsed_sec": 18.088,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 4.994981,
+              "val_ppl": 147.6702,
+              "centroid_separation": 1.4441,
+              "within_vs_global_var_ratio": 0.8754,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 25,
+              "val_loss": 4.994604,
+              "val_ppl": 147.6145,
+              "centroid_separation": 1.444,
+              "within_vs_global_var_ratio": 0.8752,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 50,
+              "val_loss": 4.994426,
+              "val_ppl": 147.5883,
+              "centroid_separation": 1.444,
+              "within_vs_global_var_ratio": 0.8752,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 75,
+              "val_loss": 4.994488,
+              "val_ppl": 147.5974,
+              "centroid_separation": 1.444,
+              "within_vs_global_var_ratio": 0.8753,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 100,
+              "val_loss": 4.994433,
+              "val_ppl": 147.5893,
+              "centroid_separation": 1.444,
+              "within_vs_global_var_ratio": 0.8753,
+              "router_entropy": 0.7378
+            }
+          ]
+        },
+        "random_same_mem": {
+          "initial_val_loss": 4.994981,
+          "final_val_loss": 4.9946,
+          "final_val_ppl": 147.6139,
+          "val_loss_drop": 0.000381,
+          "centroid_separation": 1.4426,
+          "within_vs_global_var_ratio": 0.8747,
+          "router_entropy": 0.7379,
+          "mean_border_energy_frac": 0.011972,
+          "steered_group_frac": 1.0,
+          "expert_bytes_per_param": 0.2008,
+          "expert_reduction_vs_fp32_adamw_pct": 97.49,
+          "peak_vram_mb": 3506.0,
+          "elapsed_sec": 22.92,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 4.994981,
+              "val_ppl": 147.6702,
+              "centroid_separation": 1.4441,
+              "within_vs_global_var_ratio": 0.8754,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 25,
+              "val_loss": 4.994674,
+              "val_ppl": 147.6249,
+              "centroid_separation": 1.444,
+              "within_vs_global_var_ratio": 0.8753,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 50,
+              "val_loss": 4.994451,
+              "val_ppl": 147.5918,
+              "centroid_separation": 1.4441,
+              "within_vs_global_var_ratio": 0.8754,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 75,
+              "val_loss": 4.994653,
+              "val_ppl": 147.6217,
+              "centroid_separation": 1.4427,
+              "within_vs_global_var_ratio": 0.8746,
+              "router_entropy": 0.7379
+            },
+            {
+              "step": 100,
+              "val_loss": 4.9946,
+              "val_ppl": 147.6139,
+              "centroid_separation": 1.4426,
+              "within_vs_global_var_ratio": 0.8747,
+              "router_entropy": 0.7379
+            }
+          ]
+        },
+        "adamw": {
+          "initial_val_loss": 4.994981,
+          "final_val_loss": 4.995369,
+          "final_val_ppl": 147.7274,
+          "val_loss_drop": -0.000388,
+          "centroid_separation": 1.4314,
+          "within_vs_global_var_ratio": 0.8741,
+          "router_entropy": 0.7398,
+          "mean_border_energy_frac": 0.0,
+          "steered_group_frac": 0.0,
+          "expert_bytes_per_param": 3.9939,
+          "expert_reduction_vs_fp32_adamw_pct": 50.08,
+          "peak_vram_mb": 3441.3,
+          "elapsed_sec": 17.348,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 4.994981,
+              "val_ppl": 147.6702,
+              "centroid_separation": 1.4441,
+              "within_vs_global_var_ratio": 0.8754,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 25,
+              "val_loss": 4.995829,
+              "val_ppl": 147.7954,
+              "centroid_separation": 1.4318,
+              "within_vs_global_var_ratio": 0.8737,
+              "router_entropy": 0.7375
+            },
+            {
+              "step": 50,
+              "val_loss": 4.995649,
+              "val_ppl": 147.7688,
+              "centroid_separation": 1.4316,
+              "within_vs_global_var_ratio": 0.8742,
+              "router_entropy": 0.739
+            },
+            {
+              "step": 75,
+              "val_loss": 4.995181,
+              "val_ppl": 147.6997,
+              "centroid_separation": 1.4316,
+              "within_vs_global_var_ratio": 0.8742,
+              "router_entropy": 0.7395
+            },
+            {
+              "step": 100,
+              "val_loss": 4.995369,
+              "val_ppl": 147.7274,
+              "centroid_separation": 1.4314,
+              "within_vs_global_var_ratio": 0.8741,
+              "router_entropy": 0.7398
+            }
+          ]
+        },
+        "upgraded": {
+          "initial_val_loss": 4.994981,
+          "final_val_loss": 4.993631,
+          "final_val_ppl": 147.4709,
+          "val_loss_drop": 0.00135,
+          "centroid_separation": 1.4395,
+          "within_vs_global_var_ratio": 0.8745,
+          "router_entropy": 0.7382,
+          "mean_border_energy_frac": 0.704815,
+          "steered_group_frac": 1.0,
+          "expert_bytes_per_param": 0.2008,
+          "expert_reduction_vs_fp32_adamw_pct": 97.49,
+          "peak_vram_mb": 3506.8,
+          "elapsed_sec": 30.224,
+          "val_curve": [
+            {
+              "step": 0,
+              "val_loss": 4.994981,
+              "val_ppl": 147.6702,
+              "centroid_separation": 1.4441,
+              "within_vs_global_var_ratio": 0.8754,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 25,
+              "val_loss": 4.994603,
+              "val_ppl": 147.6143,
+              "centroid_separation": 1.4393,
+              "within_vs_global_var_ratio": 0.8746,
+              "router_entropy": 0.7378
+            },
+            {
+              "step": 50,
+              "val_loss": 4.994016,
+              "val_ppl": 147.5278,
+              "centroid_separation": 1.4346,
+              "within_vs_global_var_ratio": 0.8744,
+              "router_entropy": 0.7381
+            },
+            {
+              "step": 75,
+              "val_loss": 4.993613,
+              "val_ppl": 147.4683,
+              "centroid_separation": 1.4394,
+              "within_vs_global_var_ratio": 0.8747,
+              "router_entropy": 0.7381
+            },
+            {
+              "step": 100,
+              "val_loss": 4.993631,
+              "val_ppl": 147.4709,
+              "centroid_separation": 1.4395,
+              "within_vs_global_var_ratio": 0.8745,
+              "router_entropy": 0.7382
+            }
+          ]
+        }
+      }
+    }
+  }
+}

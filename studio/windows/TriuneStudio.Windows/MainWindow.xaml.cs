@@ -183,7 +183,7 @@ public partial class MainWindow : Window
         StatusText.Text = "Opening Studio…";
         var userDataFolder = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Triune", "WebView2");
+            "LucidMachines", "PolysomStudio", "WebView2");
         Directory.CreateDirectory(userDataFolder);
 
         var options = new CoreWebView2EnvironmentOptions
@@ -219,7 +219,7 @@ public partial class MainWindow : Window
 
         try
         {
-            StudioView.CoreWebView2.AddHostObjectToScript("triuneNative", new TriuneNativeBridge(_workspaceRoot));
+            StudioView.CoreWebView2.AddHostObjectToScript("polysomNative", new PolysomNativeBridge(_workspaceRoot));
         }
         catch { }
 
@@ -241,7 +241,7 @@ public partial class MainWindow : Window
                 return directory.FullName;
         }
 
-        throw new DirectoryNotFoundException("Could not locate TriuneTransformer. Build or run this app from the repository installation.");
+        throw new DirectoryNotFoundException("Could not locate the Lucid Machines workspace. Build or run this app from the repository installation.");
     }
 
     private static string FindPython(string root)
@@ -310,7 +310,7 @@ public partial class MainWindow : Window
     {
         var logsDirectory = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Triune", "logs");
+            "LucidMachines", "PolysomStudio", "logs");
         Directory.CreateDirectory(logsDirectory);
         _logPath = Path.Combine(logsDirectory, $"studio-native-{DateTime.Now:yyyyMMdd-HHmmss}.log");
 
@@ -388,7 +388,7 @@ public partial class MainWindow : Window
         string? setupLog = null;
         try
         {
-            var logsDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Triune", "logs");
+            var logsDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "LucidMachines", "PolysomStudio", "logs");
             Directory.CreateDirectory(logsDirectory);
             var setupLogPath = Path.Combine(logsDirectory, $"studio-setup-{DateTime.Now:yyyyMMdd-HHmmss}.log");
             setupLog = setupLogPath;
@@ -563,14 +563,14 @@ internal static class JobTracker
 
 internal static class NativeCoreInterop
 {
-    [DllImport("triune_core.dll", CallingConvention = CallingConvention.Cdecl)]
-    private static extern IntPtr triune_engine_version();
+    [DllImport("lucid_machines_core.dll", CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr lucid_machines_engine_version();
 
-    [DllImport("triune_core.dll", CallingConvention = CallingConvention.Cdecl)]
-    private static extern int triune_has_cuda_runtime();
+    [DllImport("lucid_machines_core.dll", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int lucid_machines_has_cuda_runtime();
 
-    [DllImport("triune_core.dll", CallingConvention = CallingConvention.Cdecl)]
-    public static extern void triune_compute_neuron_heatmap_f32(
+    [DllImport("lucid_machines_core.dll", CallingConvention = CallingConvention.Cdecl)]
+    public static extern void lucid_machines_compute_neuron_heatmap_f32(
         IntPtr activations,
         IntPtr binsOut,
         IntPtr rgbaOut,
@@ -584,13 +584,13 @@ internal static class NativeCoreInterop
     {
         try
         {
-            var opsDir = Path.Combine(workspaceRoot, "triune", "ops");
+            var opsDir = Path.Combine(workspaceRoot, "lucid_machines", "ops");
             if (Directory.Exists(opsDir))
                 SetDllDirectory(opsDir);
 
-            var versionPtr = triune_engine_version();
-            var version = versionPtr != IntPtr.Zero ? Marshal.PtrToStringAnsi(versionPtr) : "2.1.0";
-            var cudaReady = triune_has_cuda_runtime() != 0;
+            var versionPtr = lucid_machines_engine_version();
+            var version = versionPtr != IntPtr.Zero ? Marshal.PtrToStringAnsi(versionPtr) : "1.0.0";
+            var cudaReady = lucid_machines_has_cuda_runtime() != 0;
             return cudaReady ? $"C/CUDA {version}" : $"Native C {version}";
         }
         catch
@@ -603,10 +603,10 @@ internal static class NativeCoreInterop
     {
         try
         {
-            var opsDir = Path.Combine(workspaceRoot, "triune", "ops");
+            var opsDir = Path.Combine(workspaceRoot, "lucid_machines", "ops");
             if (Directory.Exists(opsDir))
                 SetDllDirectory(opsDir);
-            return triune_has_cuda_runtime() != 0;
+            return lucid_machines_has_cuda_runtime() != 0;
         }
         catch { return false; }
     }
@@ -614,13 +614,13 @@ internal static class NativeCoreInterop
 
 [ClassInterface(ClassInterfaceType.AutoDual)]
 [ComVisible(true)]
-public class TriuneNativeBridge
+public class PolysomNativeBridge
 {
     private readonly string? _workspaceRoot;
 
-    public TriuneNativeBridge(string? workspaceRoot) => _workspaceRoot = workspaceRoot;
+    public PolysomNativeBridge(string? workspaceRoot) => _workspaceRoot = workspaceRoot;
 
-    public string GetEngineVersion() => NativeCoreInterop.TryGetEngineStatus(_workspaceRoot ?? "") ?? "Native C 2.1.0";
+    public string GetEngineVersion() => NativeCoreInterop.TryGetEngineStatus(_workspaceRoot ?? "") ?? "Native C 1.0.0";
     public bool HasCudaRuntime() => NativeCoreInterop.HasCudaRuntime(_workspaceRoot ?? "");
     public string GetGraphicsStatus() => NativeCoreInterop.HasCudaRuntime(_workspaceRoot ?? "") ? "CUDA Zero-Copy Interop Ready (120 FPS)" : "Vulkan Zero-Copy Interop Ready (120 FPS)";
     public string GetDirectXStatus() => GetGraphicsStatus();

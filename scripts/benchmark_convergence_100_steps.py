@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Industry Standard Multi-Seed 100-Step Convergence & Loss Trajectory Benchmark.
 
-Trains identical Triune Universal Dense Transformer models (43.5M parameters)
+Trains identical Lucid Universal Dense Transformer models (43.5M parameters)
 on real FineWeb educational text across multiple independent random seeds for 100
 continuous steps under core optimizer regimes and component ablations:
 1. Standard AdamW (torch.optim.AdamW)
 2. BitsAndBytes 8-bit AdamW (bitsandbytes.optim.AdamW8bit)
 3. Muon Baseline (Muon on 2D weights + fused AdamW base on 1D/vocab)
 4. CentroidSteer without Muon (Adaptive Subspace Steering + fused AdamW base)
-5. Triune Stack (Muon + CentroidSteer + fused AdamW base)
+5. Lucid Machines Stack (Muon + CentroidSteer + fused AdamW base)
 
 Methodological Rigor & Parity Guarantees:
 - Multi-seed evaluation (e.g. seeds [42, 1337, 2026]) reporting mean ± std
@@ -42,9 +42,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from triune.kernels.fast_cross_entropy import chunked_cross_entropy_from_hidden
-from triune.optim.centroid import CentroidSteerOptimizer
-from triune.universal import UniversalDenseTransformer
+from lucid_machines.kernels.fast_cross_entropy import chunked_cross_entropy_from_hidden
+from lucid_machines.optim.centroid import CentroidSteerOptimizer
+from lucid_machines.universal import UniversalDenseTransformer
 
 try:
     import bitsandbytes as bnb
@@ -63,13 +63,13 @@ def compute_sha256(path: Path) -> str:
 def compute_source_hashes() -> Dict[str, str]:
     files = [
         "scripts/benchmark_convergence_100_steps.py",
-        "triune/kernels/fast_gla.py",
-        "triune/kernels/fast_muon.py",
-        "triune/kernels/fast_triangular.py",
-        "triune/optim/centroid.py",
-        "triune/optim/muon.py",
-        "triune/universal.py",
-        "triune/model/config.py",
+        "lucid_machines/kernels/fast_gla.py",
+        "lucid_machines/kernels/fast_muon.py",
+        "lucid_machines/kernels/fast_triangular.py",
+        "lucid_machines/optim/centroid.py",
+        "lucid_machines/optim/muon.py",
+        "lucid_machines/universal.py",
+        "lucid_machines/model/config.py",
         "triune_tokenizer.json",
         "data/fineweb_edu_real.jsonl",
     ]
@@ -546,7 +546,7 @@ def generate_convergence_report(
         "bnb_8bit": "BitsAndBytes 8-bit AdamW (`AdamW8bit`)",
         "muon": "Muon Baseline (Muon 2D + Fused AdamW Base)",
         "centroid_no_muon": "CentroidSteer (No Muon: Subspace + AdamW)",
-        "triune": "**Triune Stack** (Muon + CentroidSteer + AdamW Base)",
+        "triune": "**Lucid Machines Stack** (Muon + CentroidSteer + AdamW Base)",
     }
 
     agg_tri = summary.get("triune", {})
@@ -563,11 +563,11 @@ def generate_convergence_report(
         f"{agg_adam['final_val_loss']['mean']:.4f} ± {agg_adam['final_val_loss']['std']:.4f}" if agg_adam else "N/A"
     )
 
-    md = f"""# Triune Multi-Seed 100-Step Convergence & Loss Trajectory Report
+    md = f"""# Lucid Machines Multi-Seed 100-Step Convergence & Loss Trajectory Report
 **Empirical Multi-Seed Optimizer Evaluation & Component Ablation on Real FineWeb-Edu**
 
 - **Date / Timestamp**: `{time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())}`
-- **Git Commit**: [`{git_c[:10]}`](https://github.com/Yasho4867/triune/commit/{git_c}){git_dirty_str}
+- **Git Commit**: [`{git_c[:10]}`](https://github.com/Yasho4867/lucid_machines/commit/{git_c}){git_dirty_str}
 - **Hardware**: `{hw.get("device_name", "GPU")}` ({hw.get("total_vram_gb", 0)} GB VRAM, CC {hw.get("compute_capability", "N/A")})
 - **Software**: PyTorch `{sw.get("torch", "N/A")}` | CUDA `{sw.get("cuda", "N/A")}` | Python `{sw.get("python", "N/A")}`
 - **Dataset**: Real FineWeb-Edu educational text (`{ds.get("dataset_path", "data/fineweb_edu_real.jsonl")}`, SHA-256 `{ds.get("dataset_sha256", "N/A")[:12]}...`)
@@ -584,7 +584,7 @@ def generate_convergence_report(
 
 ## 1. Active Parameter Tier Distribution Across Regimes
 
-The Triune optimization architecture dynamically partitions model weights into three specialized mathematical tiers:
+The Lucid Machines optimization architecture dynamically partitions model weights into three specialized mathematical tiers:
 - **Tier 1 (Muon)**: Newton-Schulz 5th-order orthogonalization for 2D hidden linear weights.
 - **Tier 2 (CentroidSteer)**: Low-rank triangular subspace projection ($R$) along router activation centroids for MoE routed experts.
 - **Tier 3 (Base AdamW)**: Fused AdamW (or 8-bit AdamW) for 1D parameters, layer norms, biases, and protected vocabulary embeddings.
@@ -640,7 +640,7 @@ On `UniversalDenseTransformer` (43,456,896 total parameters):
 
 Evaluated over the held-out validation set (2,560 tokens) at intervals of 20 steps:
 
-| Step | Metric | Standard AdamW | BitsAndBytes 8-bit | Muon Baseline | CentroidSteer (No Muon) | Triune Stack |
+| Step | Metric | Standard AdamW | BitsAndBytes 8-bit | Muon Baseline | CentroidSteer (No Muon) | Lucid Machines Stack |
 | :---: | :--- | :---: | :---: | :---: | :---: | :---: |
 """
 
@@ -670,13 +670,13 @@ Evaluated over the held-out validation set (2,560 tokens) at intervals of 20 ste
 
 ## 4. Component Ablation & Mechanistic Isolation
 
-This benchmark rigorously evaluates the component tiers of the Triune optimization stack and yields four key empirical and architectural insights:
+This benchmark rigorously evaluates the component tiers of the Lucid Machines optimization stack and yields four key empirical and architectural insights:
 
 1. **Architecture-Specific Tier Partitioning & Dense Model Equivalence**:
    - `UniversalDenseTransformer` is a dense transformer architecture featuring standard multi-head attention and dense feed-forward blocks; it contains **no mixture-of-experts (`MoE_FFN`) modules**.
    - In `CentroidSteerOptimizer`, routed expert weights are assigned to Tier 2 (CentroidSteer subspace projection), while 2D hidden linear weights (attention projections and MLP up/down projections) are routed to Tier 1 (Muon orthogonalization) when `use_muon=True`.
-   - Consequently, on dense models, Tier 2 contains **0 parameters** ($0.0\\%$). The "Full Triune Stack" and the "Muon Baseline" execute the **exact same code paths** with identical parameter partitions: $4,718,592$ parameters ($10.86\\%$) in Tier 1 (Muon) and $38,738,304$ parameters ($89.14\\%$) in Tier 3 (Fused AdamW for embeddings, lm_head, layer norms, and biases).
-   - This architectural reality fully accounts for the close convergence agreement observed between the Full Triune Stack ({tri_fin}) and the Muon baseline ({muon_fin}).
+   - Consequently, on dense models, Tier 2 contains **0 parameters** ($0.0\\%$). The "Full Lucid Machines Stack" and the "Muon Baseline" execute the **exact same code paths** with identical parameter partitions: $4,718,592$ parameters ($10.86\\%$) in Tier 1 (Muon) and $38,738,304$ parameters ($89.14\\%$) in Tier 3 (Fused AdamW for embeddings, lm_head, layer norms, and biases).
+   - This architectural reality fully accounts for the close convergence agreement observed between the Full Lucid Machines Stack ({tri_fin}) and the Muon baseline ({muon_fin}).
 
 2. **CentroidSteer (No Muon) vs. Muon and Standard AdamW**:
    - When Muon is disabled (`use_muon=False`), all $4,718,592$ 2D hidden weights are routed to Tier 2 low-rank triangular subspace projection (GaLore fallback with steering scale $0.20$).
@@ -721,7 +721,7 @@ python scripts/benchmark_convergence_100_steps.py --steps 100 --seeds 42 1337 20
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Triune Multi-Seed 100-Step Convergence Benchmark")
+    parser = argparse.ArgumentParser(description="Lucid Machines Multi-Seed 100-Step Convergence Benchmark")
     parser.add_argument("--steps", type=int, default=100, help="Total training steps")
     parser.add_argument("--batch-size", type=int, default=2, help="Batch size")
     parser.add_argument("--seq-len", type=int, default=256, help="Sequence length")
@@ -763,7 +763,7 @@ def main():
     tokenizer_path = REPO_ROOT / "triune_tokenizer.json"
 
     print("================================================================================")
-    print(" TRIUNE MULTI-SEED 100-STEP CONVERGENCE & LOSS TRAJECTORY BENCHMARK")
+    print(" LUCID MACHINES MULTI-SEED 100-STEP CONVERGENCE & LOSS TRAJECTORY BENCHMARK")
     print(f" Hardware: {device} | Precision: {dtype}")
     print(f" Steps: {args.steps} | Batch Size: {args.batch_size} | Seq Len: {args.seq_len} | GLA: {args.use_gla}")
     print(f" Seeds: {args.seeds} | Val Batches: {args.num_val_batches} | Loss Mode: {args.loss_mode}")

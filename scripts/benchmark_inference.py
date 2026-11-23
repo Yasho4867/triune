@@ -1,4 +1,4 @@
-"""Measure steady-state Triune CLI or Studio inference on one checkpoint.
+"""Measure steady-state Lucid Machines CLI or Polysom Studio inference on one checkpoint.
 
 Run one mode at a time so a second copy of the checkpoint does not compete for
 GPU memory. Use identical checkpoint, prompt, depth, temperature, and token
@@ -22,7 +22,7 @@ def _depth(value: str) -> int | None:
 def benchmark_cli(args: argparse.Namespace) -> dict[str, object]:
     import torch
 
-    from triune.inference import generate_response, load_checkpoint_model
+    from lucid_machines.inference import generate_response, load_checkpoint_model
 
     load_started = time.perf_counter()
     model, tokenizer, checkpoint, device, pad_id, eos_id = load_checkpoint_model(
@@ -117,7 +117,7 @@ def _studio_generation(args: argparse.Namespace, base: str, max_tokens: int) -> 
                 if "content" in delta:
                     if first_token_ms is None and delta["content"]:
                         first_token_ms = round((time.perf_counter() - started) * 1000, 1)
-                    if chunk.get("triune_snapshot"):
+                    if chunk.get("lucid_machines_snapshot") or chunk.get("triune_snapshot"):
                         text_parts[:] = [str(delta["content"])]
                     else:
                         text_parts.append(str(delta["content"]))

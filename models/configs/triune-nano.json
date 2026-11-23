@@ -1,5 +1,9 @@
 {
   "model_name": "triune-nano",
+  "name": "triune-nano",
+  "model_id": "triune-nano",
+  "architecture": "TriuneTransformer",
+  "model_type": "triune",
   "vocab_size": 32000,
   "hidden_dim": 512,
   "num_layers": 8,

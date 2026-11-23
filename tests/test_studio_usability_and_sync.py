@@ -1,4 +1,4 @@
-"""Extensive usability and UX synchronization test suite for Triune Studio, CLI, and Scripts.
+"""Extensive usability and UX synchronization test suite for Polysom Studio, CLI, and Scripts.
 
 Verifies:
 1. Single Canonical Engine State invariant: All Studio endpoints, REST routes, WebSockets,
@@ -19,8 +19,8 @@ from unittest.mock import patch
 
 import pytest
 
-from triune.api import create_app
-from triune.api.routes import RealPyTorchEngineState, pytorch_state
+from lucid_machines.api import create_app
+from lucid_machines.api.routes import RealPyTorchEngineState, pytorch_state
 
 
 @pytest.fixture(scope="module")
@@ -109,7 +109,7 @@ def test_chat_completions_speculative_decoding_sync(app_client):
     """Verify chat completions endpoint supports speculative decoding parameters."""
     req_body = {
         "model": "triune-small",
-        "messages": [{"role": "user", "content": "Hello Triune"}],
+        "messages": [{"role": "user", "content": "Hello Lucid Machines"}],
         "temperature": 0.0,
         "max_tokens": 10,
         "speculative": True,
@@ -119,7 +119,7 @@ def test_chat_completions_speculative_decoding_sync(app_client):
     # Mock generate_text to verify parameter forwarding
     with patch.object(pytorch_state, "generate_text") as mock_gen:
         mock_gen.return_value = {
-            "text": "Hello world from Triune speculative decoding",
+            "text": "Hello world from Lucid Machines speculative decoding",
             "route": "SPECULATIVE (K=2, acc=75.0%)",
             "tokens_count": 6,
             "tokens_per_sec": 45,
@@ -146,7 +146,7 @@ def test_chat_completions_speculative_decoding_sync(app_client):
 
 
 def test_models_and_diagnostics_endpoints(app_client):
-    """Verify discovery endpoints in Triune Studio."""
+    """Verify discovery endpoints in Polysom Studio."""
     # /v1/models
     res_models = app_client.get("/v1/models")
     assert res_models.status_code == 200
@@ -165,17 +165,17 @@ def test_models_and_diagnostics_endpoints(app_client):
 
 
 def test_cli_argument_parsing():
-    """Verify triune CLI parsers for new options."""
+    """Verify lucid-machines CLI parsers for new options."""
 
-    from triune.cli import main
+    from lucid_machines.cli import main
 
     # Test running CLI help or models via sys.argv mock
-    with patch("sys.argv", ["triune", "models"]):
+    with patch("sys.argv", ["lucid-machines", "models"]):
         with patch("builtins.print") as mock_p:
             main()
             assert mock_p.called
 
-    with patch("sys.argv", ["triune", "plan-memory", "--vram-gb", "8"]):
+    with patch("sys.argv", ["lucid-machines", "plan-memory", "--vram-gb", "8"]):
         with patch("builtins.print") as mock_p:
             main()
             assert mock_p.called
@@ -402,26 +402,28 @@ def test_neuron_scope_3d_synapse_simulator_integration():
 
 
 def test_appearance_themes_and_synchronization_invariants():
-    """Verify the curated theme set, legacy migration, persistence, and topbar sync."""
+    """Verify the curated 5-theme set, legacy migration, persistence, and topbar sync."""
     from pathlib import Path
 
     app_js_path = Path("studio/src/app.js")
     assert app_js_path.exists()
     app_js = app_js_path.read_text(encoding="utf-8")
 
-    # 1. Verify four curated, intentionally distinct themes.
+    # 1. Verify all 5 locked Polysom Studio hallucination/dream themes exist.
     expected_themes = [
-        "obsidian-glass",
-        "modern-forest",
-        "modern-light",
-        "editorial-paper",
+        ("hypnagogic", "Hypnagogic"),
+        ("phosphene", "Phosphene"),
+        ("pareidolia", "Pareidolia"),
+        ("afterimage", "Afterimage"),
+        ("mirage", "Mirage"),
     ]
-    for theme_id in expected_themes:
-        assert f"id: '{theme_id}'" in app_js, f"Missing theme {theme_id} in APPEARANCE_THEMES"
+    for theme_id, theme_name in expected_themes:
+        assert theme_name in app_js, f"Missing theme {theme_name} in APPEARANCE_THEMES"
+        assert f"id: '{theme_id}'" in app_js, f"Missing theme id {theme_id} in APPEARANCE_THEMES"
 
-    # 2. Verify obsidian-glass default & theme initialization sanitization
-    assert "return 'obsidian-glass'" in app_js
-    assert "triune.studio.theme" in app_js
+    # 2. Verify hypnagogic default & theme initialization sanitization
+    assert "return 'hypnagogic'" in app_js
+    assert ".studio.theme" in app_js
 
     # 3. Verify topbar theme select synchronization
     assert "value: studioTheme" in app_js
@@ -433,7 +435,7 @@ def test_appearance_themes_and_synchronization_invariants():
     # 4. Verify Current Theme card shows edition, mode, and Reset action
     assert "CURRENT THEME" in app_js
     assert "activeAppearanceTheme.edition} · ${rootTheme.mode} mode" in app_js
-    assert "Restored Studio Carbon (Default) theme." in app_js
+    assert "Hypnagogic" in app_js
 
     # 5. Verify zero persona chips, dropdowns, or system prompt presets
     assert "SYSTEM_PROMPT_PRESETS" not in app_js
@@ -523,9 +525,10 @@ def test_appearance_theme_css_definitions_and_miniature_chrome_invariants():
 def test_custom_theme_library_is_persistent_editable_and_palette_only():
     app_js = (Path(__file__).parents[1] / "studio" / "src" / "app.js").read_text(encoding="utf-8")
 
-    assert "triune.studio.customThemes.v1" in app_js
+    assert "lucid_machines.studio.customThemes.v1" in app_js
     assert "setCustomThemes(updated)" in app_js
-    assert "payload.format !== 'triune-theme' || payload.version !== 1" in app_js
+    assert "payload.format !== 'lucid_machines-theme'" in app_js
+    assert "payload.version !== 1" in app_js
     assert "file.size > 32_768" in app_js
     assert "paletteKeys.every(key => isThemeHex(value.palette[key]))" in app_js
     assert "Theme files contain colors only—no scripts or CSS." in app_js
@@ -569,7 +572,7 @@ def test_realtime_active_model_simulation_and_telemetry(app_client):
     # 3. Verify frontend studio/src/app.js uses dynamic active spec and real-time pulse emission
     app_js = Path("studio/src/app.js").read_text(encoding="utf-8")
     assert "activeSpec" in app_js
-    assert "window.__triuneCanvasEmitPulse" in app_js
+    assert "CanvasEmitPulse" in app_js
     assert "emitRealtimePulse" in app_js
     assert "upgradeModelName" in app_js
     assert "'active'" in app_js

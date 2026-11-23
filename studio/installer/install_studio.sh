@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ===============================================================================
-# Triune Studio & AI Engine - Automated Linux / macOS / WSL Installer
+# Polysom Studio & AI Engine - Automated Linux / macOS / WSL Installer
 # ===============================================================================
 
 set -e
@@ -14,7 +14,7 @@ RED='\033[0;31m'
 NC='\033[0m'
 
 echo -e "${CYAN}===============================================================================${NC}"
-echo -e "${CYAN}         TRIUNE STUDIO - LINUX / MACOS / WSL AUTOMATED INSTALLER${NC}"
+echo -e "${CYAN}        LUCID MACHINES STUDIO - LINUX / MACOS / WSL AUTOMATED INSTALLER${NC}"
 echo -e "${CYAN}===============================================================================${NC}"
 echo ""
 

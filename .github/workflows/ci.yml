@@ -42,7 +42,7 @@ jobs:
 
     - name: Compile source code smoke check
       run: |
-        python -m compileall triune
+        python -m compileall lucid_machines
 
     - name: Run Core Test Suite (CPU)
       run: |
@@ -54,7 +54,7 @@ jobs:
 
     - name: Validate DAG Parser & Typed Port Contracts
       run: |
-        python -c "from triune.plugins.node_schema import PortType, is_port_compatible; from triune.plugins.registry import global_registry; from triune.execution.dag import DAGParser, ExecutionEngine; catalog = global_registry.get_catalog(); assert len(catalog) >= 30, f'Expected at least 30 nodes, got {len(catalog)}'; print(f'Validated {len(catalog)} registered DAG nodes with typed contracts.')"
+        python -c "from lucid_machines.plugins.node_schema import PortType, is_port_compatible; from lucid_machines.plugins.registry import global_registry; from lucid_machines.execution.dag import DAGParser, ExecutionEngine; catalog = global_registry.get_catalog(); assert len(catalog) >= 30, f'Expected at least 30 nodes, got {len(catalog)}'; print(f'Validated {len(catalog)} registered DAG nodes with typed contracts.')"
 
     - name: Build wheel and sdist smoke test
       run: |
@@ -62,9 +62,9 @@ jobs:
 
     - name: Install built wheel and verify packaged CLI modules
       run: |
-        python -m pip install --no-deps --target "$RUNNER_TEMP/triune-wheel" dist/*.whl
-        python -m venv "$RUNNER_TEMP/triune-venv"
-        "$RUNNER_TEMP/triune-venv/bin/pip" install --no-deps dist/*.whl
-        "$RUNNER_TEMP/triune-venv/bin/triune" --help
+        python -m pip install --no-deps --target "$RUNNER_TEMP/lucid-machines-wheel" dist/*.whl
+        python -m venv "$RUNNER_TEMP/lucid-machines-venv"
+        "$RUNNER_TEMP/lucid-machines-venv/bin/pip" install --no-deps dist/*.whl
+        "$RUNNER_TEMP/lucid-machines-venv/bin/lucid-machines" --help
         cd "$RUNNER_TEMP"
-        PYTHONPATH="$RUNNER_TEMP/triune-wheel" python -c "import scripts.train, scripts.chat, triune.cli; print('Wheel CLI modules import from the installed artifact.')"
+        PYTHONPATH="$RUNNER_TEMP/lucid-machines-wheel" python -c "import scripts.train, scripts.chat, lucid_machines.cli; print('Wheel CLI modules import from the installed artifact.')"

@@ -65,8 +65,8 @@ class TestDiskStreamingAndUnifiedHF(unittest.TestCase):
     def test_build_and_load_disk_streamed_qwen2(self):
         from transformers import AutoModelForCausalLM
 
-        from triune.kernels.fast_nvfp4 import NVFP4Linear
-        from triune.runtime.disk_streaming import build_nvfp4_disk_cache, load_disk_streamed_model
+        from lucid_machines.kernels.fast_nvfp4 import NVFP4Linear
+        from lucid_machines.runtime.disk_streaming import build_nvfp4_disk_cache, load_disk_streamed_model
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         with tempfile.TemporaryDirectory() as tmp:
@@ -130,7 +130,7 @@ class TestDiskStreamingAndUnifiedHF(unittest.TestCase):
     def test_init_empty_weights_without_accelerate_preserves_buffers_and_ties(self):
         from unittest.mock import patch
 
-        from triune.runtime.disk_streaming import _init_empty_weights
+        from lucid_machines.runtime.disk_streaming import _init_empty_weights
 
         class TinyRotaryAndLinear(torch.nn.Module):
             def __init__(self):
@@ -155,7 +155,7 @@ class TestDiskStreamingAndUnifiedHF(unittest.TestCase):
     def test_gguf_vectorized_cpu_and_torch_dequant_parity(self):
         import numpy as np
 
-        from triune.runtime.gguf_loader import (
+        from lucid_machines.runtime.gguf_loader import (
             _BLOCK_META,
             _GGML_Q4_0,
             _GGML_Q4_1,
@@ -198,9 +198,9 @@ class TestDiskStreamingAndUnifiedHF(unittest.TestCase):
                 self.assertEqual(float((ref - got).abs().max().item()), 0.0)
 
     def test_disk_streamed_qlora_sft_masking_and_step(self):
-        from triune.inference import generate_response, load_model_for_inference
-        from triune.runtime.disk_streaming import build_nvfp4_disk_cache, load_disk_streamed_model
-        from triune.trainer.finetune import LoRAConfig, TriuneFineTuner
+        from lucid_machines.inference import generate_response, load_model_for_inference
+        from lucid_machines.runtime.disk_streaming import build_nvfp4_disk_cache, load_disk_streamed_model
+        from lucid_machines.trainer.finetune import LoRAConfig, TriuneFineTuner
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         with tempfile.TemporaryDirectory() as tmp:
@@ -293,10 +293,10 @@ class TestDiskStreamingAndUnifiedHF(unittest.TestCase):
                     loaded_model._streaming_engine.detach()
 
     def test_chunked_layer_streaming_with_fp4_readonly_invariance(self):
-        from triune.kernels.fast_nvfp4 import NVFP4Linear
-        from triune.model.fp4 import convert_to_nvfp4
-        from triune.model.transformer import TriuneTransformer
-        from triune.runtime.streaming import enable_layer_streaming
+        from lucid_machines.kernels.fast_nvfp4 import NVFP4Linear
+        from lucid_machines.model.fp4 import convert_to_nvfp4
+        from lucid_machines.model.transformer import TriuneTransformer
+        from lucid_machines.runtime.streaming import enable_layer_streaming
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model = TriuneTransformer(
@@ -347,8 +347,8 @@ class TestDiskStreamingAndUnifiedHF(unittest.TestCase):
             engine.detach()
 
     def test_unified_inference_and_memory_planner_offline(self):
-        from triune.inference import generate_response, load_model_for_inference
-        from triune.runtime.memory_planner import MemoryPlanner
+        from lucid_machines.inference import generate_response, load_model_for_inference
+        from lucid_machines.runtime.memory_planner import MemoryPlanner
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         with tempfile.TemporaryDirectory() as tmp:
@@ -408,13 +408,13 @@ class TestDiskStreamingAndUnifiedHF(unittest.TestCase):
     def test_studio_api_hf_load_and_chat(self):
         from fastapi.testclient import TestClient
 
-        from triune.api.routes import pytorch_state
-        from triune.api.server import create_app
+        from lucid_machines.api.routes import pytorch_state
+        from lucid_machines.api.server import create_app
 
         session_file = Path("checkpoints/session_state.json")
         session_backup = session_file.read_text(encoding="utf-8") if session_file.is_file() else None
-        prev_testing = os.environ.get("TRIUNE_TESTING")
-        os.environ["TRIUNE_TESTING"] = "1"
+        prev_testing = os.environ.get("LUCID_MACHINES_TESTING")
+        os.environ["LUCID_MACHINES_TESTING"] = "1"
 
         saved_model_streaming_engine = getattr(pytorch_state.model, "_streaming_engine", None)
         saved_state = {
@@ -480,9 +480,9 @@ class TestDiskStreamingAndUnifiedHF(unittest.TestCase):
                 self.assertEqual(spec_resp.json()["num_layers"], 2)
         finally:
             if prev_testing is None:
-                os.environ.pop("TRIUNE_TESTING", None)
+                os.environ.pop("LUCID_MACHINES_TESTING", None)
             else:
-                os.environ["TRIUNE_TESTING"] = prev_testing
+                os.environ["LUCID_MACHINES_TESTING"] = prev_testing
             for eng_attr in ("_streaming_engine", "_disk_streaming_engine"):
                 eng = getattr(pytorch_state.model, eng_attr, None)
                 if eng is not None and hasattr(eng, "detach"):
@@ -517,9 +517,9 @@ class TestDiskStreamingAndUnifiedHF(unittest.TestCase):
     def test_studio_saved_models_discovery_and_upgrade(self):
         from fastapi.testclient import TestClient
 
-        from triune.api.server import create_app
-        from triune.model.transformer import TriuneTransformer
-        from triune.runtime.disk_streaming import build_nvfp4_disk_cache
+        from lucid_machines.api.server import create_app
+        from lucid_machines.model.transformer import TriuneTransformer
+        from lucid_machines.runtime.disk_streaming import build_nvfp4_disk_cache
 
         client_kwargs = {}
         if "client" in inspect.signature(TestClient).parameters:
@@ -583,7 +583,7 @@ class TestDiskStreamingAndUnifiedHF(unittest.TestCase):
 
         from fastapi.testclient import TestClient
 
-        from triune.api.server import create_app
+        from lucid_machines.api.server import create_app
 
         def _write_gguf(
             out_path: Path,
@@ -792,8 +792,8 @@ class TestDiskStreamingAndUnifiedHF(unittest.TestCase):
 
         from fastapi.testclient import TestClient
 
-        from triune.api import routes as routes_mod
-        from triune.api.server import create_app
+        from lucid_machines.api import routes as routes_mod
+        from lucid_machines.api.server import create_app
 
         app = create_app()
         client = TestClient(app)
@@ -865,7 +865,7 @@ class TestDiskStreamingAndUnifiedHF(unittest.TestCase):
             with (
                 patch.object(st, "load_model_checkpoint") as mock_load_ckpt,
                 patch(
-                    "triune.inference.generate_response",
+                    "lucid_machines.inference.generate_response",
                     return_value={
                         "text": "ok",
                         "route": "CORTEX",

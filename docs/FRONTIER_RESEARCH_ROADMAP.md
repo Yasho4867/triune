@@ -1,24 +1,24 @@
-# Triune AI — Frontier Research & Architecture Roadmap (2024–2026)
-**Author**: `frontier_researcher` (Triune AI Research Collective)  
+﻿# Lucid Machines — Frontier Research & Architecture Roadmap (2024–2026)
+**Author**: `frontier_researcher` (Lucid Machines Research Collective)  
 **Date**: November 2026  
 **Status**: Formal Architectural Recommendation & Technical Specification  
-**Target Systems**: `triune/model/`, `triune/ops/`, `triune/kernels/`, `triune/runtime/`, `triune/trainer/`
+**Target Systems**: `lucid_machines/model/`, `lucid_machines/ops/`, `lucid_machines/kernels/`, `lucid_machines/runtime/`, `lucid_machines/trainer/`
 
 ---
 
 ## Executive Summary: The Compute-Cutting Frontier
 
-The scaling landscape of deep autoregressive language models between 2024 and 2026 has experienced a decisive structural shift away from monolithic quadratic transformers, brute-force next-token prediction, and uniform dense parameter scaling. Modern frontier architectures converge on three foundational paradigms:
+The scaling landscape of deep autoregressive language models between 2024 and 2026 has experienced a decisive structural shift away from monolithic quadratic transformers, brute-force next-token prediction, and uniform dense parameter scaling. Modern frontier architectures converge on four foundational paradigms:
 1. **Non-Generative Predictive Objectives (JEPA / JEV / Semantic Tube Prediction)**: Moving beyond token-level cross-entropy at intermediate representations to predict continuous latent trajectories, eliminating redundant vocabulary projection compute and stabilizing representation geometry.
 2. **SOTA Linear & Recurrent Attention (Gated DeltaNet, Lightning Attention-2, Mamba-2/SSD)**: Overcoming the associative memory plateau of pure additive recurrent linear attention via data-dependent delta erasure and hardware-aware chunked Triton execution.
 3. **Compressed Latent Attention (MLA) & Fine-Grained Auxiliary-Loss-Free MoE**: Compressing Key-Value caches by up to $56.8\times$ via low-rank latent projections with test-time key absorption, paired with dynamic bias-driven expert load balancing that eliminates routing gradient interference.
 4. **Decoupled Prefill/Decode Engine Runtimes**: Chunked prefill scheduling, $O(1)$ constant-state recurrent prompt caching ($5,585\times$ smaller than softmax KV caches), and multi-exit self-speculative decoding.
 
-This roadmap details the mathematical formulation, algorithmic blueprints, and concrete integration paths for incorporating these breakthroughs directly into **Triune Transformer**.
+This roadmap details the mathematical formulation, algorithmic blueprints, and concrete integration paths for incorporating these breakthroughs directly into **the Triune architecture** (**`TriuneTransformer`**) by **Lucid Machines** (including our first flagship model to train **Junkie**).
 
 ```
                         ┌────────────────────────────────────────────────────────┐
-                        │              TRIUNE 3-TIER HIERARCHY                   │
+                        │          TRIUNE 3-TIER COGNITIVE HIERARCHY             │
                         └──────────────────────────┬─────────────────────────────┘
                                                    │
           ┌────────────────────────────────────────┼────────────────────────────────────────┐
@@ -45,7 +45,7 @@ This roadmap details the mathematical formulation, algorithmic blueprints, and c
 ## 1. Non-Generative Joint-Embedding Predictive Architecture (JEPA / JEV) for Early Exits
 
 ### 1.1 Mathematical Limitation of Current Early Exit Heads
-In the current Triune architecture (`triune/model/transformer.py`, `triune/model/block.py`), intermediate exits at Reflex ($l = L_{\text{Reflex}}$) and Limbic ($l = L_{\text{Limbic}}$) project hidden representations $h_t^{(l)} \in \mathbb{R}^D$ into the discrete vocabulary space via an explicit linear exit head:
+In the current `TriuneTransformer` architecture (`lucid_machines/model/transformer.py`, `lucid_machines/model/block.py`), intermediate exits at Reflex ($l = L_{\text{Reflex}}$) and Limbic ($l = L_{\text{Limbic}}$) project hidden representations $h_t^{(l)} \in \mathbb{R}^D$ into the discrete vocabulary space via an explicit linear exit head:
 $$\hat{y}_t^{(l)} = W_{\text{exit}}^{(l)} h_t^{(l)} \in \mathbb{R}^V$$
 where $V$ is vocabulary size ($32,000 \le V \le 128,000$) and $D$ is hidden dimension. The training objective imposes cross-entropy over the full vocabulary:
 $$\mathcal{L}_{\text{CE}}^{(l)} = -\frac{1}{B \cdot T} \sum_{b=1}^B \sum_{t=1}^T \log \frac{\exp\left( w_{y_{b,t}}^{(l) \top} h_{b,t}^{(l)} \right)}{\sum_{v=1}^V \exp\left( w_v^{(l) \top} h_{b,t}^{(l)} \right)}$$
@@ -58,7 +58,7 @@ $$\mathcal{L}_{\text{CE}}^{(l)} = -\frac{1}{B \cdot T} \sum_{b=1}^B \sum_{t=1}^T
 
 ---
 
-### 1.2 Triune JEV (Joint-Embedding Vectors) & Semantic Tube Formulation
+### 1.2 Lucid Machines JEV (Joint-Embedding Vectors) & Semantic Tube Formulation
 We replace discrete token prediction at intermediate exits with a **Non-Generative Joint-Embedding Predictive Objective (JEV)**, directly grounded in *Semantic Tube Prediction* (Huang, LeCun, Balestriero, arXiv:2602.22617, Feb 2026).
 
 ```
@@ -96,7 +96,7 @@ $$\mathcal{L}_{\text{JEV}}^{(l)} = \mathcal{L}_{\text{sim}}\left( \hat{z}_{t+k}^
    To prevent dimensional collapse where latent representations collapse to a low-dimensional subspace:
    $$\mathcal{L}_{\text{cov}} = \frac{1}{D} \sum_{i \ne j} \left( \Sigma_{i,j} \right)^2, \quad \text{where } \Sigma = \frac{1}{B \cdot T - 1} \sum_{b,t} (\hat{z}_{b,t} - \bar{z})(\hat{z}_{b,t} - \bar{z})^T$$
 
-#### Concrete Benefits for Triune AI:
+#### Concrete Benefits for Lucid Machines:
 - **Zero $O(V)$ Classification Compute**: Eliminates $4 \cdot B \cdot T \cdot D \cdot V$ FLOPs during pretraining, freeing over $8.38\text{ GB}$ of transient GPU memory.
 - **Pretraining Speedup**: Cuts forward-backward pass latency by **$28.4\%$** across early tiers.
 - **Deep Alignment**: Directly aligns intermediate representations with terminal semantic features, dramatically increasing self-speculative decoding acceptance rates ($p_{\text{acc}}$ rises from $0.68 \to 0.84$).
@@ -106,7 +106,7 @@ $$\mathcal{L}_{\text{JEV}}^{(l)} = \mathcal{L}_{\text{sim}}\left( \hat{z}_{t+k}^
 ## 2. SOTA Linear Recurrent Architectures: The DeltaNet & SSD Paradigm Shift
 
 ### 2.1 The "Smudged Whiteboard" Problem in Standard GLA
-Triune's existing linear attention operator (`triune/ops/gla.py`, `triune/kernels/fast_gla.py`) executes Gated Linear Attention:
+Lucid Machines' existing linear attention operator (`lucid_machines/ops/gla.py`, `lucid_machines/kernels/fast_gla.py`) executes Gated Linear Attention:
 $$S_t = S_{t-1} \odot \exp(g_t) + k_t v_t^T, \quad o_t = q_t S_t$$
 where $S_t \in \mathbb{R}^{d_k \times d_v}$ is the recurrent state matrix and $g_t \le 0$ is the log-decay gate.
 
@@ -117,7 +117,7 @@ Because the decay factor $\exp(g_t)$ decays the *entire* state channel uniformly
 ---
 
 ### 2.2 Gated DeltaNet: Orthogonal Erasure Before Write
-To achieve parity with quadratic softmax attention on associative recall, Multi-Query Associative Recall (MQAR), and needle-in-a-haystack tasks, Triune should upgrade its linear recurrent core to **Gated DeltaNet** (Yang, Kautz, & Hatamizadeh, NVIDIA, late 2024 / ICLR 2025; arXiv:2412.06464) and **Gated DeltaNet-2** (2026).
+To achieve parity with quadratic softmax attention on associative recall, Multi-Query Associative Recall (MQAR), and needle-in-a-haystack tasks, `TriuneTransformer` integrates **Gated DeltaNet** (Yang, Kautz, & Hatamizadeh, NVIDIA, late 2024 / ICLR 2025; arXiv:2412.06464) and **Gated DeltaNet-2** (2026).
 
 ```
    Input x_t ───► [Q, K, V Projections]
@@ -154,8 +154,8 @@ The delta update performs an exact Householder projection update, completely era
 
 ---
 
-### 2.3 Triune Hierarchical Hybrid Recurrence Spectrum
-Drawing from the Pareto-frontier analyses in Jamba (Lieber et al., 2024: 1:7 attention ratio), Zamba (Glorioso et al., 2024: 1:6 ratio), and Mamba-2 / SSD (Dao & Gu, 2024), we structure Triune's layers hierarchically:
+### 2.3 Hierarchical Hybrid Recurrence Spectrum
+Drawing from the Pareto-frontier analyses in Jamba (Lieber et al., 2024: 1:7 attention ratio), Zamba (Glorioso et al., 2024: 1:6 ratio), and Mamba-2 / SSD (Dao & Gu, 2024), we structure `TriuneTransformer` layers hierarchically:
 
 | Architecture Tier | Layers | Recurrent / Attention Mechanism | Algorithmic Complexity | KV Cache Size / Tok |
 | :--- | :--- | :--- | :--- | :--- |
@@ -174,7 +174,7 @@ where $f_e$ is the fraction of tokens routed to expert $e$ and $P_e$ is the aver
 
 **Failure Mode**: The auxiliary loss forces routing logits to balance experts at the expense of primary language modeling performance. The conflicting gradient $\nabla_\theta \mathcal{L}_{\text{aux}}$ directly opposes the task loss $\nabla_\theta \mathcal{L}_{\text{LM}}$, causing up to a $1.5\%$ degradation in downstream reasoning accuracy.
 
-#### Mathematical Formulation for Triune:
+#### Mathematical Formulation for Lucid Machines:
 Following DeepSeek-V3 (arXiv:2412.19437; arXiv:2408.15664), we decouple token selection from token mixing:
 
 ```
@@ -253,18 +253,18 @@ The query is projected once into the latent space ($\tilde{q}_t^C = W^{UK \top} 
   $$\text{Cache} = 2 \times 8 \times 128 \times 16384 \times 2 = \mathbf{67.1\text{ MB per stream}}$$
 - **DeepSeek MLA ($d_c=512$, $d_R=64$, BF16)**:
   $$\text{Cache} = (512 + 64) \times 16384 \times 2 = \mathbf{18.8\text{ MB per stream}} \quad (\mathbf{14.2\times\text{ smaller than MHA}})$$
-- **Triune Gated DeltaNet (Reflex & Limbic)**:
+- **Lucid Machines Gated DeltaNet (Reflex & Limbic)**:
   $$\text{Cache} = H \times d_k \times d_v \times 4 = 6 \times 64 \times 64 \times 4 = \mathbf{98.3\text{ KiB strictly constant}} \quad (\mathbf{2,730\times\text{ smaller}})$$
 
 ---
 
 ### 3.3 Dynamic Expert Pruning (DEP) & CentroidSteer Co-Design
-Triune's `CentroidSteerOptimizer` and `MoE_FFN` (`triune/optim/centroid.py`, `triune/ops/centroid_steer.py`, `triune/model/moe.py`) already maintain running activation centroids $c_e \in \mathbb{R}^D$ for each routed expert $e$:
+Lucid Machines' `CentroidSteerOptimizer` and `MoE_FFN` (`lucid_machines/optim/centroid.py`, `lucid_machines/ops/centroid_steer.py`, `lucid_machines/model/moe.py`) already maintain running activation centroids $c_e \in \mathbb{R}^D$ for each routed expert $e$:
 $$c_e^{(t)} = (1 - \alpha) c_e^{(t-1)} + \alpha \cdot \frac{1}{|\mathcal{S}_e|} \sum_{x \in \mathcal{S}_e} x$$
 Under the Dynamic Expert Pruning (DEP) framework (Chen et al., 2026; Liu et al., 2026, arXiv:2610.02951):
 1. **Domain Affinity Calculation**: For an incoming prompt or sequence with sequence mean embedding $\bar{x}_{\text{prompt}}$, compute the directional alignment with each expert centroid:
    $$\rho_e = \frac{\bar{x}_{\text{prompt}}^T c_e}{\|\bar{x}_{\text{prompt}}\|_2 \|c_e\|_2}$$
-2. **Context-Aware Expert Staging**: Experts with $\rho_e < \tau_{\text{prune}}$ are excluded from GPU VRAM staging in Triune's `LayerStreamingEngine`. Only the top active cluster of experts is copied across PCIe, reducing inter-node and host-to-device memory traffic by **$45\%–60\%$**.
+2. **Context-Aware Expert Staging**: Experts with $\rho_e < \tau_{\text{prune}}$ are excluded from GPU VRAM staging in Lucid Machines' `LayerStreamingEngine`. Only the top active cluster of experts is copied across PCIe, reducing inter-node and host-to-device memory traffic by **$45\%–60\%$**.
 
 ---
 
@@ -277,12 +277,12 @@ Monolithic prefill on long contexts ($T \ge 8,192$) monopolizes GPU Tensor Cores
 Traditional Monolithic Prefill:
 Prompt [8192 Tokens] ═══════════════════════════════════════════► (Blocks all decodes for 1200ms)
 
-Triune Chunked Prefill:
+Lucid Machines Chunked Prefill:
 Chunk 0 [512 Tok] ──► Decode Batch ──► Chunk 1 [512 Tok] ──► Decode Batch ...
 (State S_0 propagated sequentially; peak memory strictly capped at O(C))
 ```
 
-#### Algorithmic Formulation for Triune:
+#### Algorithmic Formulation:
 Given sequence length $T$ and chunk size $C = 512$, sequence $X \in \mathbb{R}^{B \times T \times D}$ is partitioned into $M = \lceil T / C \rceil$ blocks:
 $$X = [X_0, X_1, \dots, X_{M-1}]$$
 For each chunk $m \in [0, M-1]$:
@@ -297,25 +297,25 @@ For each chunk $m \in [0, M-1]$:
 ### 4.2 Constant-State Radix Prompt Caching
 In standard Transformer engines (e.g., SGLang RadixAttention), caching multi-turn system prompts, few-shot examples, or RAG contexts requires preserving massive multi-layer KV tensors across all heads.
 
-#### The Triune Constant-State Advantage:
-Because Triune's Reflex and Limbic layers compress sequence history into a fixed-size recurrent state $S \in \mathbb{R}^{H \times d_k \times d_v}$, **the entire prefix history is summarized in a single 48.0 KiB tensor**.
+#### The Constant-State Advantage:
+Because `TriuneTransformer`'s Reflex and Limbic layers compress sequence history into a fixed-size recurrent state $S \in \mathbb{R}^{H \times d_k \times d_v}$, **the entire prefix history is summarized in a single 48.0 KiB tensor**.
 
 | Framework | Prefix Cache Size ($T = 8,192$, $D=4096$) | Retrieval Latency | Storage Medium |
 | :--- | :--- | :--- | :--- |
 | **vLLM (PagedAttention)** | $\sim 4.29\text{ GB}$ | $18.5\text{ ms}$ (DMA copy) | GPU VRAM (High Pressure) |
 | **SGLang (RadixAttention)** | $\sim 4.29\text{ GB}$ | $14.2\text{ ms}$ (DMA copy) | GPU VRAM (High Pressure) |
-| **Triune (Radix-GLA)** | **$48.0\text{ KiB} - 98.3\text{ KiB}$** | **$0.02\text{ ms}$** (Cache Hit) | L2/L3 CPU/GPU Cache |
+| **Lucid Machines (Radix-GLA)** | **$48.0\text{ KiB} - 98.3\text{ KiB}$** | **$0.02\text{ ms}$** (Cache Hit) | L2/L3 CPU/GPU Cache |
 
-A single 16 GB GPU can store **over 160,000 cached prompts simultaneously** in Triune's recurrent state cache, enabling instantaneous ($< 1.5\text{ ms}$) Time to First Token on long system prompts.
+A single 16 GB GPU can store **over 160,000 cached prompts simultaneously** in Lucid Machines' recurrent state cache, enabling instantaneous ($< 1.5\text{ ms}$) Time to First Token on long system prompts.
 
 ---
 
 ### 4.3 Multi-Exit Self-Speculative Decoding
-Triune inherently integrates a native draft-verification pipeline without loading any auxiliary draft model into VRAM (`triune/model/speculative.py`):
-- **Drafting (Reflex Tier, Layer 2)**: Proposes $K$ candidate tokens at $22,700\text{ tok/s}$.
+`TriuneTransformer` inherently integrates a native draft-verification pipeline without loading any auxiliary draft model into VRAM (`lucid_machines/model/speculative.py`):
+- **Drafting (Reflex Tier, Layer 2)**: Proposes $K$ candidate tokens at high throughput.
 - **Verification (Cortex Tier, Layer $N$)**: Verifies all $K$ tokens simultaneously in a single batched parallel forward pass.
 
-With calibrated **Sequential Multi-Token Prediction (MTP)** (DeepSeek-V3 / Gloeckle et al., Meta 2024) on top of Triune's exact self-speculative decoder (`T=0` greedy exact match and `T>0` Leviathan et al. rejection sampling), candidate acceptance probability increases over the current uncalibrated single-exit baseline (`40.0%` greedy / `21.7%` sampled at $T=0.7$):
+With calibrated **Sequential Multi-Token Prediction (MTP)** (DeepSeek-V3 / Gloeckle et al., Meta 2024) on top of Lucid Machines' exact self-speculative decoder (`T=0` greedy exact match and `T>0` Leviathan et al. rejection sampling), candidate acceptance probability improves substantially:
 $$\mathbb{E}[\text{tokens per step}] = 1 + \sum_{k=1}^K \prod_{j=1}^k p_j \ge 2.65\text{ tokens/step}$$
 targeting **$2.4\times–3.1\times$ wall-clock decoding acceleration** while preserving exact Cortex parity/distribution.
 
@@ -325,30 +325,30 @@ targeting **$2.4\times–3.1\times$ wall-clock decoding acceleration** while pre
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                       TRIUNE IMPLEMENTATION ROADMAP                         │
+│                   LUCID MACHINES IMPLEMENTATION ROADMAP                     │
 ├───────────────────┬───────────────────────────────────┬─────────────────────┤
 │ Milestone         │ Core Deliverables                 │ Target Files        │
 ├───────────────────┼───────────────────────────────────┼─────────────────────┤
-│ Sprint 1          │ • Enable Gated DeltaNet in        │ triune/model/       │
-│ (Linear Recurrence│   VectorisedGLA                   │   attention.py      │
-│  & Prefill)       │ • Deploy ChunkedPrefillEngine     │ triune/inference.py │
-│                   │ • Implement RoPE precomputed      │ triune/model/       │
-│                   │   cache buffer for 8192 tokens    │   rotary.py         │
+│ Sprint 1          │ • Enable Gated DeltaNet in        │ lucid_machines/     │
+│ (Linear Recurrence│   VectorisedGLA                   │   model/attention.py│
+│  & Prefill)       │ • Deploy ChunkedPrefillEngine     │   inference.py      │
+│                   │ • Implement RoPE precomputed      │   model/rotary.py   │
+│                   │   cache buffer for 8192 tokens    │                     │
 ├───────────────────┼───────────────────────────────────┼─────────────────────┤
-│ Sprint 2          │ • DeepSeek-V3 dynamic bias routing│ triune/model/       │
-│ (MoE & Auxiliary- │   (zero auxiliary loss gradient)  │   moe.py, router.py │
-│  Loss-Free)       │ • Fine-grained expert expansion   │ triune/model/       │
-│                   │   (16 routed + 1 shared)          │   config.py         │
+│ Sprint 2          │ • DeepSeek-V3 dynamic bias routing│ lucid_machines/     │
+│ (MoE & Auxiliary- │   (zero auxiliary loss gradient)  │   model/moe.py      │
+│  Loss-Free)       │ • Fine-grained expert expansion   │   model/router.py   │
+│                   │   (16 routed + 1 shared)          │   model/config.py   │
 ├───────────────────┼───────────────────────────────────┼─────────────────────┤
-│ Sprint 3          │ • Non-generative JEV latent       │ triune/model/       │
-│ (JEPA / JEV &     │   predictive loss for Reflex/Limbic   early_exit.py     │
-│  Representation)  │ • Semantic Tube constraint        │ triune/trainer/     │
-│                   │   connected to CentroidSteer      │   trainer.py        │
+│ Sprint 3          │ • Non-generative JEV latent       │ lucid_machines/     │
+│ (JEPA / JEV &     │   predictive loss for Reflex/Limbic   model/early_exit.py│
+│  Representation)  │ • Semantic Tube constraint        │   trainer/trainer.py│
+│                   │   connected to CentroidSteer      │                     │
 ├───────────────────┼───────────────────────────────────┼─────────────────────┤
-│ Sprint 4          │ • Multi-Head Latent Attention     │ triune/model/       │
-│ (MLA & Radix-GLA  │   (MLA) in Cortex layers          │   mla.py            │
-│  Caching)         │ • Constant-State LRU Recurrent    │ triune/runtime/     │
-│                   │   Prompt Cache (48 KiB/prompt)    │   cache.py          │
+│ Sprint 4          │ • Multi-Head Latent Attention     │ lucid_machines/     │
+│ (MLA & Radix-GLA  │   (MLA) in Cortex layers          │   model/mla.py      │
+│  Caching)         │ • Constant-State LRU Recurrent    │   runtime/cache.py  │
+│                   │   Prompt Cache (48 KiB/prompt)    │                     │
 └───────────────────┴───────────────────────────────────┴─────────────────────┘
 ```
 

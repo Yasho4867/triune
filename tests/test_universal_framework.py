@@ -1,6 +1,6 @@
-"""Automated Tests for Triune Universal Multi-Architecture Framework.
+"""Automated Tests for Lucid Machines Universal Multi-Architecture Framework.
 
-Verifies that Triune can seamlessly train, fine-tune (LoRA/QLoRA), and serve:
+Verifies that Lucid Machines can seamlessly train, fine-tune (LoRA/QLoRA), and serve:
 1. Universal Dense Transformers
 2. Universal MoE Transformers
 3. FastLoRA Adapters with Zero Full-Vocab Logits Materialization
@@ -12,9 +12,9 @@ import unittest
 
 import torch
 
-from triune.trainer.finetune import LoRAConfig
-from triune.universal import (
-    TriuneUniversalEngine,
+from lucid_machines.trainer.finetune import LoRAConfig
+from lucid_machines.universal import (
+    LucidMachinesUniversalEngine,
     UniversalDenseTransformer,
     UniversalMoETransformer,
 )
@@ -35,7 +35,7 @@ class TestUniversalFramework(unittest.TestCase):
             num_heads=4,
             use_gla=True,
         )
-        engine = TriuneUniversalEngine(model, mode="pretrain", lr=1e-3, device=self.device, dtype=self.dtype)
+        engine = LucidMachinesUniversalEngine(model, mode="pretrain", lr=1e-3, device=self.device, dtype=self.dtype)
 
         x = torch.randint(0, 1000, (2, 32), device=self.device)
         y = torch.randint(0, 1000, (2, 32), device=self.device)
@@ -57,7 +57,7 @@ class TestUniversalFramework(unittest.TestCase):
             reflex_exit_layer=2,
             limbic_exit_layer=3,
         )
-        engine = TriuneUniversalEngine(model, mode="pretrain", lr=1e-3, device=self.device, dtype=self.dtype)
+        engine = LucidMachinesUniversalEngine(model, mode="pretrain", lr=1e-3, device=self.device, dtype=self.dtype)
 
         x = torch.randint(0, 1000, (2, 32), device=self.device)
         y = torch.randint(0, 1000, (2, 32), device=self.device)
@@ -69,7 +69,7 @@ class TestUniversalFramework(unittest.TestCase):
     def test_universal_finetune_lora_attach_and_train(self):
         """Verify LoRA adapters attach cleanly, freeze base weights, and train adapters only."""
         model = UniversalDenseTransformer(vocab_size=1000, dim=128, num_layers=4, num_heads=4)
-        engine = TriuneUniversalEngine(
+        engine = LucidMachinesUniversalEngine(
             model,
             mode="finetune",
             lora_config=LoRAConfig(rank=8, target_modules=["q_proj", "v_proj"]),
@@ -94,7 +94,7 @@ class TestUniversalFramework(unittest.TestCase):
     def test_universal_inference_generation(self):
         """Verify autoregressive token generation across both Dense and MoE."""
         model = UniversalDenseTransformer(vocab_size=1000, dim=128, num_layers=2, num_heads=2)
-        engine = TriuneUniversalEngine(model, mode="inference", device=self.device, dtype=self.dtype)
+        engine = LucidMachinesUniversalEngine(model, mode="inference", device=self.device, dtype=self.dtype)
 
         prompt = torch.randint(0, 1000, (1, 8), device=self.device)
         out = engine.generate(prompt, max_new_tokens=6)

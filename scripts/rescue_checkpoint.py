@@ -21,9 +21,9 @@ if str(REPO_ROOT / "scripts") not in sys.path:
 
 from benchmark_full_model_e2e import load_trained_model  # noqa: E402
 
-from triune.data.tokenizer import load_tokenizer  # noqa: E402
-from triune.kernels.fast_cross_entropy import fast_cross_entropy  # noqa: E402
-from triune.optim.centroid import CentroidSteerOptimizer  # noqa: E402
+from lucid_machines.data.tokenizer import load_tokenizer  # noqa: E402
+from lucid_machines.kernels.fast_cross_entropy import fast_cross_entropy  # noqa: E402
+from lucid_machines.optim.centroid import CentroidSteerOptimizer  # noqa: E402
 
 
 def build_packed_blocks(
@@ -183,12 +183,12 @@ def main() -> None:
 
     s1_executed = 0
     resumed_tokens = 0
-    ckpt_raw = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+    ckpt_raw = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
     has_opt_state = (
         (not args.resume_stage1) and isinstance(ckpt_raw, dict) and isinstance(ckpt_raw.get("optimizer_state"), dict)
     )
     if args.resume_stage1:
-        s1_payload = torch.load(args.resume_stage1, map_location="cpu", weights_only=False)
+        s1_payload = torch.load(args.resume_stage1, map_location="cpu", weights_only=True)
         model.load_state_dict(s1_payload["model_state"], strict=False)
         model.float()
         s1_executed = int(s1_payload.get("s1_executed", args.stage1_steps))
@@ -451,7 +451,7 @@ def main() -> None:
         f"Expected Cortex < Limbic < Reflex PPL, got {final_eval}"
     )
 
-    raw_ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+    raw_ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
     rescued_cfg = dict(raw_ckpt.get("config", {}) or {})
     rescued_cfg["depth_mode"] = "joint"
     rescued_cfg["exit_distill_coef"] = 0.25

@@ -1,18 +1,18 @@
-# Triune AI — Mathematical Foundations
+﻿# Lucid Machines — Mathematical Foundations
 
-This document details the mathematical formulations, invariants, and derivations for **Triune AI**'s optimization algorithms (`CentroidSteer` Universal Triangular Core and `Muon`), Gated Linear Attention (GLA), differentiable depth routing, and runtime memory bounds.
+This document details the mathematical formulations, invariants, and derivations for **Lucid Machines** (`lucid_machines`) optimization algorithms (`CentroidSteer` Universal Triangular Core and `Muon`), Gated Linear Attention (GLA), differentiable depth routing, and runtime memory bounds for **Triune** (`TriuneTransformer` / `TriuneModel` / `TriuneConfig`) architectures (including our first flagship model to train **Junkie**).
 
 ---
 
-## 1. Batched sCholQR2 Triangular Core & Centroid-Steered Stiefel Optimization
+## 1. Batched sCholQR2 Triangular Core & Multi-Directional Centroid-Steered Stiefel Optimization
 
 ### 1.1 Alternating Krylov Subspace Iteration on the Stiefel Manifold
 
-Let $W \in \mathbb{R}^{m \times n}$ denote a routed expert weight matrix ($m \le n$ WLOG) and $G = \nabla_W \mathcal{L} \in \mathbb{R}^{m \times n}$ denote its stochastic gradient. Rather than computing slow single-matrix SVDs, `CentroidSteerOptimizer` (`triune/optim/centroid.py`, `triune/ops/centroid_steer.py`) constructs left and right orthonormal projection bases $Q_L \in \operatorname{St}(r, m)$ and $Q_R \in \operatorname{St}(r, n)$ via three alternating Krylov subspace passes with a Gaussian sketch $\Omega \in \mathbb{R}^{n \times r}$:
+Let $W \in \mathbb{R}^{m \times n}$ denote a routed expert weight matrix ($m \le n$ WLOG) and $G = \nabla_W \mathcal{L} \in \mathbb{R}^{m \times n}$ denote its stochastic gradient. Rather than computing slow single-matrix SVDs, `CentroidSteerOptimizer` (`lucid_machines/optim/centroid.py`, `lucid_machines/ops/centroid_steer.py`) constructs left and right orthonormal projection bases $Q_L \in \operatorname{St}(r, m)$ and $Q_R \in \operatorname{St}(r, n)$ via centroid-deflated Krylov subspace passes with seeded secondary probes and Gaussian sketch $\Omega \in \mathbb{R}^{n \times r}$:
 
-$$Y_0 = G\Omega \in \mathbb{R}^{m \times r}, \quad Q_L^{(0)} = \operatorname{sCholQR2}(Y_0)$$
-$$Z = G^T Q_L^{(0)} \in \mathbb{R}^{n \times r}, \quad Q_R = \operatorname{sCholQR2}(Z)$$
-$$Y = G Q_R \in \mathbb{R}^{m \times r}, \quad Q_L, R_L = \operatorname{qr}(Y)$$
+$$Y_0 = G_{\text{defl}}\Omega \in \mathbb{R}^{m \times r}, \quad Q_L^{(0)} = \operatorname{sCholQR2}(Y_0)$$
+$$Z = G_{\text{defl}}^T Q_L^{(0)} \in \mathbb{R}^{n \times r}, \quad Q_R = \operatorname{sCholQR2}(Z)$$
+$$Y = G_{\text{defl}} Q_R \in \mathbb{R}^{m \times r}, \quad Q_L, R_L = \operatorname{qr}(Y)$$
 
 where $\operatorname{sCholQR2}(Y)$ performs two-pass shifted Cholesky-QR with positive shift regularization $\epsilon_{\text{shift}} = 10^{-7}$ across column-normalized iterates:
 $$\tilde{Y} = Y D^{-1}, \quad A_1 = \tilde{Y}^T \tilde{Y} + \epsilon_{\text{shift}} I_r = L_1 L_1^T, \quad Q_1 = \tilde{Y} L_1^{-T}$$
@@ -22,11 +22,11 @@ For rank-deficient routed experts ($k_{\text{tokens}} < r$) or conditioning fail
 
 ---
 
-### 1.2 Kahan-Parlett Centroid Steering & Basis Augmentation
+### 1.2 Contrastive Multi-Directional Steering & Basis Augmentation
 
-Let $c_e = \frac{1}{|\mathcal{S}_e|} \sum_{i \in \mathcal{S}_e} x_i \in \mathbb{R}^m$ denote the empirical activation centroid of tokens routed to expert $e$. To inject active routing geometry without perturbing existing gradient principal directions, $c_e$ is projected into the orthogonal complement of $Q_L$ via twice re-orthogonalization (Kahan-Parlett):
+Let $\mu_e = \frac{1}{|\mathcal{S}_e|} \sum_{i \in \mathcal{S}_e} x_i \in \mathbb{R}^m$ denote the empirical activation centroid of tokens routed to expert $e$ (and `last_hidden_centroids` $[E, H]$ for true post-SwiGLU `w2` / `e[2]` down-projections), and $\Delta\mu_e = \mu_e - \bar{\mu}$ denote the mean-centered contrastive centroid alongside $k_c = 4$ orthonormal subspace directions. Deflating $G$ along $\hat{c}_e$ prior to Krylov iteration preserves 100% of $\hat{c}_e$ for the $(r+1)$-th border while Kahan-Parlett re-orthogonalization projects:
 
-$$c_\perp = (I - Q_L Q_L^T)^2 c_e, \quad \tilde{c}_\perp = \begin{cases} c_\perp / \|c_\perp\|_2 & \text{if } \|c_\perp\|_2 > \tau \\ \mathbf{0}_{m \times 1} & \text{otherwise} \end{cases}$$
+$$c_\perp = (I - Q_L Q_L^T)^2 \Delta\mu_e, \quad \tilde{c}_\perp = \begin{cases} c_\perp / \|c_\perp\|_2 & \text{if } \|c_\perp\|_2 > \tau \\ \mathbf{0}_{m \times 1} & \text{otherwise} \end{cases}$$
 
 with stability threshold $\tau = 10^{-8}$. The dual right steering direction is constructed via gradient action $v = G^T \tilde{c}_\perp$:
 $$v_\perp = (I - Q_R Q_R^T)^2 v, \quad \tilde{v}_\perp = \begin{cases} v_\perp / \|v_\perp\|_2 & \text{if } \|c_\perp\|_2 > \tau \text{ and } \|v_\perp\|_2 > \tau \\ \mathbf{0}_{n \times 1} & \text{otherwise} \end{cases}$$
@@ -38,7 +38,7 @@ When either threshold fails, $\tilde{c}_\perp = \mathbf{0}$ and $\tilde{v}_\perp
 
 ---
 
-### 1.3 Augmented Upper-Triangular Core & Moment-Zeroing Invariant
+### 1.3 Augmented Upper-Triangular Core & Independent `steer_step` Moment-Zeroing Invariant
 
 #### Theorem 1 (Upper-Triangular Krylov Projection Core)
 Given $\tilde{c}_\perp \perp \operatorname{col}(Q_L)$ and thin QR $G Q_R = Q_L R_L$, the projected core matrix $\bar{S} = \bar{Q}_L^T G \bar{Q}_R \in \mathbb{R}^{(r+1) \times (r+1)}$ is algebraically upper triangular:
@@ -47,10 +47,10 @@ $$\bar{S} = \begin{bmatrix} Q_L^T G Q_R & Q_L^T G \tilde{v}_\perp \\ \tilde{c}_\
 
 Because $R_L$ is upper triangular and $\tilde{c}_\perp^T Q_L = \mathbf{0}_{1 \times r}$, $\bar{S}_{ij} = 0$ for all $i > j$. Computing $R = \operatorname{triu}(\bar{S})$ suppresses subdiagonal FP32 rounding noise prior to Triton-fused adaptive moment updates.
 
-#### Non-Refresh Steering Moment-Zeroing Invariant
-Between full Krylov refreshes (non-refresh steps execute with zero QR calls and zero host-device synchronizations), if an updated activation centroid rotates $(\tilde{c}_\perp, \tilde{v}_\perp)$ (`needs_steer_refresh`), `CentroidSteerOptimizer` unconditionally zeroes both the first and second triangular core moments along the $(r+1)$-th column and row:
+#### Independent `steer_step` & Moment-Zeroing Invariant
+Between full Krylov refreshes, whenever an updated activation centroid rotates $(\tilde{c}_\perp, \tilde{v}_\perp)$ (`needs_steer_refresh`), `CentroidSteerOptimizer` unconditionally zeroes both the first and second triangular core moments along the $(r+1)$-th column and row:
 $$M_{:, r+1} = M_{r+1, :} = \mathbf{0}, \quad V_{:, r+1} = V_{r+1, :} = \mathbf{0}$$
-prior to moment accumulation, preventing stale second-moment statistics from discarded directions from corrupting adaptation along the newly rotated steering axis. The steering direction is accelerated by $(1 + \alpha)$, yielding reconstruction $\Delta W = \bar{Q}_L \Delta_R \bar{Q}_R^T$.
+and resets an independent `steer_step` bias-correction counter alongside border RMS regularization (`rms_reg=0.35`) and Fisher-alignment-weighted live out-of-core updates (`live_ortho_updates`).
 
 ---
 
@@ -63,7 +63,10 @@ For a Tier 2 expert matrix $W \in \mathbb{R}^{m \times n}$ ($m = 384, n = 1024, 
 - **CentroidSteer Tier 2** ($2(r+1)^2$ FP32 core moments $= 2,312\text{ B}$ + $(m+n)(r+1)$ BF16 bases $= 47,872\text{ B}$):
   $$50,184\text{ B} \implies \mathbf{0.128\text{ B/param}} \quad (\mathbf{-98.4\%}\text{ vs.\ AdamW})$$
 
-Model-wide across our $90.79\text{M}$ MoE model (Tier 1 Muon $6.5\%$, Tier 2 CentroidSteer $39.0\%$, Tier 3 AdamW $54.5\%$): persistent optimizer state memory is $4.54\text{ B/param}$ with FP32 Tier 3 AdamW ($-43.3\%$), or $1.27\text{ B/param}$ with 8-bit Tier 3 AdamW ($-84.1\%$).
+Measured across `N=5` seeds (`[42, 1337, 2026, 777, 1024]`, `benchmarks/CENTROIDSTEER_UPGRADE_VALIDATION_REPORT.md`):
+- **Suite 3 (FineWeb-Edu 4-Layer Pure-Routed MoE Cold-Start, $r=4, k_c=8$):** **`0.264 B/p`** (`96.70%` reduction / `30.3x` compression vs. `8.000 B/p` FP32 AdamW), improving Val Loss to **`2.2012 ± 0.0178`** vs. `2.2472 ± 0.0069` `nosteer` ($p = 0.0112$) and `2.2585 ± 0.0131` `random_same_mem` ($p = 0.0006$), capturing **`92.23%`** gradient energy ($51.24\times$ vs. random).
+- **Suite 4 (FineWeb-Edu 75.8M MoE Continuation from `step_36500`, $r=8, k_c=8$):** **`0.201 B/p`** (`97.49%` reduction / `39.8x` compression vs. `8.000 B/p` FP32 AdamW), improving Val Loss to **`4.9934 ± 0.0003`** vs. `4.9945 ± 0.0001` `nosteer` ($p = 0.0004$), `4.9945 ± 0.0001` `random_same_mem` ($p = 0.0005$), and `4.9954 ± 0.0008` `adamw` ($p = 0.0038$), capturing **`70.54%`** gradient energy.
+- **Full `90.79M` MoE & `Junkie` Configurations:** Across the `90.79M` MoE model (`3.78 MB` / `0.1118 B/p` vs. `135.21 MB` FP32 AdamW on Tier 2), model-wide persistent optimizer state is $4.54\text{ B/param}$ with FP32 Tier 3 AdamW ($-43.3\%$), or $1.27\text{ B/param}$ with 8-bit Tier 3 AdamW ($-84.1\%$). On `Junkie-Mini` (`535.10M`), `Junkie-1B` (`1.16B`), and `Junkie-3B` (`2.99B`, 16 experts), Tier 2 expert state is **`0.1992 B/p`** ($r=64, k_c=4$); on `Junkie-7B` (`7.40B`), Tier 2 expert state is **`0.3678 B/p`** ($r=256, k_c=4$).
 
 ---
 
@@ -123,7 +126,7 @@ AdamW maintains both first moment $m_t$ and second moment $v_t$ (8 bytes per par
 Intermediate exit heads take activations from intermediate layers where representation scale $\operatorname{Var}(x_l)$ differs from the terminal layer $x_{\text{Cortex}}$:
 $$\operatorname{Var}(x_l) \ne \operatorname{Var}(x_{\text{Cortex}})$$
 
-Triune applies parameter-free `RMSNorm` prior to exit projections:
+Junkie / `TriuneTransformer` applies parameter-free `RMSNorm` prior to exit projections:
 $$\tilde{x}_l = \operatorname{RMSNorm}(x_l) = \frac{x_l}{\sqrt{\frac{1}{D} \sum_{i=1}^D x_{l, i}^2 + \epsilon}}$$
 $$\operatorname{logits}_l = W_{\text{exit}, l} \cdot \tilde{x}_l$$
 
@@ -137,7 +140,7 @@ $$\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{LM}}(\text{selected}) + \lambd
 
 ## 5. Layer Streaming Memory Bounds
 
-Under Triune's Layer Streaming engine:
+Under Lucid Machines' Layer Streaming engine:
 
 1. Root parameters (embeddings, router prefix, exit heads) remain pinned in GPU memory ($V_{\text{root}}$).
 2. Transformer layer parameters are stored in host RAM in `float8_e4m3fn`.
@@ -148,15 +151,15 @@ Under Triune's Layer Streaming engine:
 
 $$V_{\text{peak}} = V_{\text{root}} + \max_l \left( V_{\text{param}, l} + V_{\text{param}, l+1} + V_{\text{ckpt}, l}(B, T) + V_{\text{opt}, l} \right)$$
 
-With `activation_checkpointing=True`, `_is_bwd_staged` reentry guards, and cuBLAS workspace release (`triune/runtime/streaming.py`, `triune/runtime/staging.py`), peak allocated memory stays invariant in total model depth ($\Theta(1)$ weight/optimizer scaling): empirically measured on an $8\text{ GB}$ RTX 5070 ($B=2, T=512, V=4096$, BF16) at `1,033.6 MB` (`102M`), `1,498.1 MB` (`271M`, `1.97x` faster than WDDM paging), `2,115.7 MB` (`695M`, vs. OOM), and `3,132.6 MB` (`1.52B + CentroidSteer r=16`, vs. OOM).
+With `activation_checkpointing=True`, `_is_bwd_staged` reentry guards, and cuBLAS workspace release (`lucid_machines/runtime/streaming.py`, `lucid_machines/runtime/staging.py`), peak allocated memory stays invariant in total model depth ($\Theta(1)$ weight/optimizer scaling): empirically measured on an $8\text{ GB}$ RTX 5070 ($B=2, T=512, V=4096$, BF16) at `1,033.6 MB` (`102M`), `1,498.1 MB` (`271M`, `1.97x` faster than WDDM paging), `2,115.7 MB` (`695M`, vs. OOM), and `3,132.6 MB` (`1.52B + CentroidSteer r=16`, vs. OOM).
 
-**Buffer Write-Once Staging Invariant (`triune/runtime/staging.py`)**: Parameters maintain write-once forward snapshots and non-clobbering offload checks (`_cpu_data`), while non-parameter model buffers (`is_buffer=True`, e.g., MoE EMA load counters or `CentroidSteer` running centroids) copy device mutations back to host storage during `release_gpu(clear_snapshot=False)`, ensuring layer streaming never drops state updates across offloads.
+**Buffer Write-Once Staging Invariant (`lucid_machines/runtime/staging.py`)**: Parameters maintain write-once forward snapshots and non-clobbering offload checks (`_cpu_data`), while non-parameter model buffers (`is_buffer=True`, e.g., MoE EMA load counters or `CentroidSteer` running centroids) copy device mutations back to host storage during `release_gpu(clear_snapshot=False)`, ensuring layer streaming never drops state updates across offloads.
 
 ---
 
 ## 6. Per-Token Confidence, Sample-Level Compaction, & Conformal CALM Gating
 
-Under `exit_policy="calm"`, `TriuneTransformer` (`triune/model/transformer.py`) separates **decision granularity** from **batch compaction granularity**:
+Under `exit_policy="calm"`, `TriuneTransformer` (`lucid_machines/model/transformer.py`) separates **decision granularity** from **batch compaction granularity**:
 
 1. Given intermediate logits $Z_t^{(l)} \in \mathbb{R}^V$, compute top-2 softmax margin per token position:
    $$\Delta p_{b,t} = p_{(1), b,t} - p_{(2), b,t}, \quad p = \operatorname{softmax}(Z_{b,t}^{(l)})$$
@@ -168,7 +171,7 @@ Under `exit_policy="calm"`, `TriuneTransformer` (`triune/model/transformer.py`) 
 
 ## 7. Exact Self-Speculative Decoding & Rejection Sampling
 
-`SelfSpeculativeGenerator` (`triune/model/speculative.py`) drafts $K$ tokens with the Reflex exit and verifies all $K$ positions in a single Cortex pass under two provably sound regimes:
+`SelfSpeculativeGenerator` (`lucid_machines/model/speculative.py`) drafts $K$ tokens with the Reflex exit and verifies all $K$ positions in a single Cortex pass under two provably sound regimes:
 
 - **Greedy Decoding ($T = 0.0$, `sampling_mode="greedy_exact_match"`)**: Accepts the longest matching prefix where $\arg\max q_i = \arg\max p_i$, achieving 100% token-for-token parity with Cortex decoding.
 - **Stochastic Sampling ($T > 0$, `sampling_mode="rejection_sampling_exact_distribution"`, Leviathan et al., ICML 2023)**: For each draft token $x_i \sim q_i$, accept with probability

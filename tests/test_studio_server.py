@@ -1,4 +1,4 @@
-"""Regression tests for the Studio static-app/API boundary."""
+"""Regression tests for the Polysom Studio static-app/API boundary."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from triune.api.server import create_app
+from lucid_machines.api.server import create_app
 
 
 class TestStudioServer(unittest.TestCase):
@@ -43,18 +43,18 @@ class TestStudioServer(unittest.TestCase):
     def test_spa_fallback_does_not_serve_files_outside_studio_assets(self) -> None:
         response = self.client.get("/%2e%2e/pyproject.toml")
         self.assertEqual(response.status_code, 200)
-        self.assertNotIn('name = "triune"', response.text)
+        self.assertNotIn('name = "lucid-machines"', response.text)
 
     def test_remote_api_access_requires_a_valid_bearer_token(self) -> None:
         if "client" not in inspect.signature(TestClient).parameters:
             self.skipTest("Installed Starlette TestClient cannot override the client IP")
         remote_client = TestClient(create_app(), client=("203.0.113.10", 43210))
-        with patch.dict("os.environ", {"TRIUNE_API_TOKEN": ""}):
+        with patch.dict("os.environ", {"LUCID_MACHINES_API_TOKEN": "", "TRIUNE_API_TOKEN": ""}):
             unconfigured = remote_client.get("/v1/nodes/catalog")
         self.assertEqual(unconfigured.status_code, 503)
 
         api_token = "t" * 40
-        with patch.dict("os.environ", {"TRIUNE_API_TOKEN": api_token}):
+        with patch.dict("os.environ", {"LUCID_MACHINES_API_TOKEN": api_token}):
             unauthorized = remote_client.get("/v1/nodes/catalog")
             allowed = remote_client.get("/v1/nodes/catalog", headers={"Authorization": f"Bearer {api_token}"})
         self.assertEqual(unauthorized.status_code, 401)

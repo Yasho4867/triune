@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; base-uri 'self'; form-action 'self';">
+  <title>Lucid Machines v3.0.0 — Release Notes</title>
+  <link rel="icon" type="image/svg+xml" href="../assets/lucid-machines-logo.svg">
+  <link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="container nav-bar">
+      <a href="../index.html" class="brand-link">
+        <img src="../assets/lucid-machines-logo.svg" alt="Lucid Machines Logo" class="brand-logo" width="36" height="36">
+        <span>Lucid Machines</span>
+        <span class="version-pill">v3.0.0</span>
+      </a>
+      <nav aria-label="Document Navigation">
+        <ul class="nav-links">
+          <li><a href="../index.html">Back to Overview</a></li>
+          <li><a href="release-name-report.html">R1 Name Report</a></li>
+          <li><a href="centroidsteer-validation.html">R2 Validation</a></li>
+          <li><a href="release-notes.html">Release Notes</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+  <main class="doc-body">
+    <div class="container">
+      <article class="doc-card">
+        <h1>Lucid Machines v3.0.0 — Release Notes</h1>
+        <div class="code-block"><pre># Release Notes — Lucid Machines `v3.0.0` (Triune Architecture, Junkie &amp; Polysom Studio)
+
+**Release Version:** `3.0.0`  
+**Company / Python Package:** **Lucid Machines** (`lucid-machines` distribution, `lucid_machines` Python SDK, `lucid-machines` CLI)  
+**Core Neural Architecture:** **Triune** (`TriuneTransformer` / `TriuneModel` / `TriuneConfig`, HF `&quot;model_type&quot;: &quot;triune&quot;`, size templates `models/configs/triune-*.json`)  
+**First Flagship Model To Train:** **Junkie** (`models/configs/junkie.json` — Lucid Machines&#x27; first flagship model built on the Triune architecture)  
+**Desktop Workbench:** **Polysom Studio** (`polysom` CLI, `PolysomStudio.exe`, `PolysomStudioSetup.exe`)  
+**Branch / Baseline:** `release/lucid-machines-v3.0.0`  
+**Release Date:** November 2026  
+
+---
+
+## Overview
+
+**Lucid Machines v3.0.0** ships our comprehensive, security-hardened, and empirically verified open-source deep learning platform (`lucid-machines`) built around **the Triune architecture by Lucid Machines** (`TriuneTransformer` / `TriuneModel` / `TriuneConfig`), the configuration and validated substrate for **Junkie** (our first flagship model to be trained), and the commercial-grade native desktop workbench **Polysom Studio**.
+
+This release completes all five major pipeline requirements (**R1–R5**):
+1. **R1 — Locked 4-Layer Naming Boundary &amp; Backward Compatibility** (`Lucid Machines` company / `Triune` core neural architecture / `Junkie` first flagship model / `Polysom Studio` desktop workbench)
+2. **R2 — Multi-Directional CentroidSteer Diagnosis, Upgrade &amp; Controlled 5-Seed Research Validation**
+3. **R3 — Core Package, Native C/AVX2/CUDA Engine, `.NET 10` Polysom Studio Build &amp; Asset Preservation Guardrails**
+4. **R4 — Defense-in-Depth Security Hardening &amp; Regression Suite**
+5. **R5 — Self-Contained Static Project Website (`website/`), Local Launch Kit (`launch_kit/`) &amp; Distribution Packaging**
+
+---
+
+## 1. Release Rename &amp; Backward-Compatibility Contract (`R1`)
+
+- **Conflict-Screened 4-Layer Brand (`docs/RELEASE_NAME_REPORT.md`)**: Locked **Lucid Machines** (`lucid-machines` / `lucid_machines` company, package, CLI, and release brand), **Triune** (`TriuneTransformer` / `TriuneModel` / `TriuneConfig` core neural architecture), **Junkie** (first flagship model to be trained), and **Polysom Studio** (`polysom` / `polysom-studio` workbench) via live automated queries (`2026-11-19T21:41:44Z`) across PyPI JSON API, npm registry, GitHub, DNS, and web search, documenting the dormant 2023 `lucidmachines.github.io` home-lighting page and nearby `Lucid` brands alongside an explicit non-legal/trademark disclaimer (see `docs/RELEASE_NAME_REPORT.md` for full candidate history).
+- **Unified Naming Surface**:
+  - Python distribution &amp; import package: `lucid-machines` / `lucid_machines` (`pyproject.toml` `version = &quot;3.0.0&quot;`).
+  - CLI entrypoints: `lucid-machines` (`studio`, `serve`, `train`, `finetune`, `chat`, `doctor`, `benchmark`, `plan-memory`) and `polysom` (Polysom Studio launcher).
+  - Model configs: 12 Triune architecture size templates in `models/configs/triune-*.json` (`triune-tiny`, `triune-edge`, `triune-nano`, `triune-base`, `triune-small`, `triune-pro`, `triune-1b`, `triune-2.5b`, `triune-large`, `triune-moe`, `triune-7b`, `triune-frontier`) plus `models/configs/junkie.json` for **Junkie** (first flagship model to be trained on the Triune architecture).
+  - Native C/AVX2/CUDA shared library: `lucid_machines_core.dll` / `liblucid_machines_core.so` / `liblucid_machines_core.dylib` (with `triune_core.*` fallback).
+  - Windows Desktop App &amp; Installer: `PolysomStudio.exe` and `PolysomStudioSetup.exe` (`dist/PolysomStudio-3.0.0-win-x64.zip`).
+  - Environment variable prefix: `LUCID_MACHINES_*` (`LUCID_MACHINES_API_TOKEN`, `LUCID_MACHINES_REQUIRE_AUTH`, `LUCID_MACHINES_PLUGIN_TRUSTED_KEYS`, `LUCID_MACHINES_ALLOW_PIP_INSTALL`, `LUCID_MACHINES_ALLOW_REMOTE_SANDBOX`, `LUCID_MACHINES_ALLOW_AGENT_WRITES`).
+- **Seamless Legacy Migration Shims**:
+  - `import triune` compatibility shim delegates transparently to `lucid_machines`, preserving `TriuneTransformer`, `TriuneModel`, `TriuneConfig`, `TriuneForCausalLM`, and `NativeTriuneEngine`.
+  - `_LEGACY_PRESET_ALIASES` maps legacy shorthand aliases (`&quot;triune-micro&quot;`, `&quot;triune-1.5b&quot;`, `&quot;triune-32b&quot;`, etc.) cleanly to canonical `triune-*` architecture templates (`models/configs/triune-*.json`).
+  - All `LUCID_MACHINES_*` environment lookups fall back to `TRIUNE_*`.
+  - OS keyring credential lookup checks `&quot;Polysom Studio&quot;` first and falls back to `&quot;Triune Studio&quot;`.
+  - Hugging Face `hf_compat` emits `&quot;triune&quot;` (`TriuneConfig` / `TriuneForCausalLM`) while preserving full backward compatibility.
+  - Tokenizer discovery continues resolving `triune_tokenizer.json` natively on disk.
+
+---
+
+## 2. CentroidSteer Multi-Directional Upgrade &amp; M1 Validation (`R2`)
+
+### Root-Cause Diagnosis of Legacy Rank-1 CentroidSteer
+We identified and resolved the root causes explaining why legacy rank-1 CentroidSteer had near-zero effect (`benchmarks/CENTROIDSTEER_UPGRADE_VALIDATION_REPORT.md`):
+1. **Un-Deflated Krylov Subspace Absorption** (residual centroid survival dropped to `0.1248` vs. `1.0000` upgraded; border gradient energy jumped **`22.12x`** from `0.0139` to `0.3082`).
+2. **Synthetic Hidden Centroid Mismatch (`w_2` / `e[2]`)**: Proxy `FastGELU(W1 @ c_e)` diverged from true post-activation $\mathbb{E}[\text{FastGELU}(W_1 x)]$ (`0.1437` rel L2 error).
+3. **Non-Contrastive Raw Centroids Under Shared Residual Offset**: Off-diagonal inter-expert cosine collapsed from `0.5763` (raw) to `-0.3329` (contrastive $\Delta\mu_e = \mu_e - \bar{\mu}$).
+4. **Stale `subspace_step` Bias-Correction Damping**: Lack of independent `steer_step` counter damped refreshed border updates to `0.4844` vs. `1.0000` (**`2.06x` recovery**).
+5. **Rank-1 Bottleneck**: Single 1D direction lacked multi-directional subspace coverage ($k_c = 4$) and live out-of-core drift tracking.
+
+### v3.0.0 Architectural Upgrades &amp; M1 5-Seed Validation (`[42, 1337, 2026, 777, 1024]`)
+- **True Post-SwiGLU Hidden Centroids (`last_hidden_centroids`)**: `MoE_FFN` captures true hidden activations (`[E, H]`), contrastive directions, and $k_c=4$ orthonormal subspace directions via two-pass modified Gram-Schmidt.
+- **Centroid-Deflated Krylov &amp; Stiefel Orthonormality**: Batched `sCholQR2` + sliced Householder fallback guarantees $\|Q^T Q - I\|_F &lt; 10^{-4}$ with independent `steer_step` reset and border RMS regularization (`0.35`).
+- **Suite 2 — Multi-Domain MoE Specialization (5 Seeds, RTX 5070)**:
+  - **Val Loss**: **`1.1998 ± 0.0574`** (upgraded) vs. **`1.2311 ± 0.0486`** (`nosteer`), paired $t$-test **`p = 0.0446`** (`3.32` vs `3.43` PPL).
+  - **Alignment Energy**: **`0.1769 ± 0.0203`** vs. **`0.0404 ± 0.0023`** (`legacy`) — **`4.38x` alignment energy** (**`p = 9.882e-5 &lt; 1e-4`** vs. legacy, `p = 4.113e-5` vs. `nosteer`).
+- **Suite 3 — Real FineWeb-Edu Language Modeling (5 Seeds, 75.8M Continuation)**:
+  - **Val Loss / PPL**: **`4.5185 ± 0.0043` (`91.70` PPL)** vs. **`4.5250 ± 0.0061` (`92.30` PPL)** AdamW baseline — paired $t$-test **`p = 0.0068`** (`p = 0.0069` PPL) at **`0.109 B/p`** expert state (vs. **`4.000 B/p`** AdamW).
+  - **90.79M Tier-2 Memory**: `3.78 MB` (`0.1118 B/p`) vs. `135.21 MB` FP32 AdamW (**98.4% reduction**).
+
+---
+
+## 3. 5-Tier Empirical Benchmarks, Native Kernels &amp; Polysom Studio (`R3`)
+
+All performance metrics are verified and reported under the strict **5-Tier Benchmark Taxonomy** (`CONTRIBUTING.md §1`):
+
+| Tier | Category | Key Verified Metrics (RTX 5070 Laptop GPU) |
+| :-: | :--- | :--- |
+| **Tier 1** | **Isolated Kernel Microbenchmarks** | `VectorisedGLA` (`H=6, L=16384`): **`48.0 KiB`** state cache, **`10.07x`** prefill / **`7.31x`** decode vs. SDPA; `Gated DeltaNet`: **100.0% standard &amp; overwrite MQAR recall**; Sparse `MoE_FFN(use_sparse_eval=True)`: **`1.648x`** zero-sync at `N=1` (`0.0` max diff) and **`7.518x`** at `d=384, E=8, k=2, N=4096` (`4.774x` top-1 / `5.450x` top-2 at `d=1536`); `chunked_cross_entropy`: **`98.5%` transient VRAM saved** vs. PyTorch (**`94.1%`** vs. Unsloth `2026.10.10`) at `V=32,000, N=8,192`; `FastSwiGLU`: **`1.95x`** vs. PyTorch. |
+| **Tier 2** | **End-to-End 90.79M Model (`64.21M` Active)** | Rescued `step_40555`: **`383,135 tok/s`** peak prefill (`B=32, T=1024`), **`200,463 tok/s`** (`B=1, T=2048`), **`242,029 tok/s`** (`B=1, T=8192`), **`297,753 tok/s`** (`B=4, L=16384`), **`157.0 tok/s`** sequential tensor decode (`6.363 ms/tok`), **`40.8 tok/s` warm decode / `71.3 ms` TTFT** streaming inference, **`25,973 tok/s` LoRA fine-tuning** (**`+6.7%`** over Unsloth `24,344 tok/s`); `LayerStreamingEngine`: cuts `102M` VRAM by **`76.43%`** (`1,033.6 MB`), `271M` by **`83.76%`** (`1,498.1 MB`), trains **`1.52B + CentroidSteer` in `3,132.6 MB` VRAM**; `NVFP4`: **`3.20x`** compression (`46.65 MB` across 96 blocks), Hadamard W4A16 4-bit PPL **`119.106`**. |
+| **Tier 3** | **Multi-Layer Wrapper vs. Legacy Diagnostics** | Multi-layer long-context sweep (`L=16384`): **`64.0 KiB`** cache (**99.8% reduction** vs. SDPA), **`4.02x`** prefill / **`4.13x`** decode; production `MoE_FFN` (`1.648x–7.518x`) explicitly separated from legacy diagnostic `MoERoutingBlock` (`0.47x`). |
+| **Tier 4** | **Tokenizer Compression vs. Model Compute** | Held-out lossless text compression: **`2.65x` aggregate** (`100%` reconstruction); compute-equivalent `compress_mode=&quot;expand&quot;`: **`0.0` max logit diff** vs. base IDs; `order_pool` orthogonal RoPE phase rotation. |
+| **Tier 5** | **Speculative &amp; Conformal CALM Exits** | Monotonic exit PPL (`111.80 -&gt; 111.18 -&gt; 110.92`), **`4.31x` Reflex prefill speedup** (`741,070` vs. `172,099 tok/s`); `T=0.0` greedy self-speculative decode: **`91.62 tok/s`** (`51.28%` acceptance, 100% exact Cortex parity); `T=0.7` Leviathan rejection sampling: **`90.74 tok/s`** (`63.64%` acceptance, Pearson $\chi^2$ verified); Conformal CALM (`N=85,503` eval tokens, $\tau=0.20$): **`95.73%` Reflex agreement** (`31.34%` coverage, **`20.35%` FLOPs saved**). |
+
+### Polysom Studio Themes, Native Host &amp; Preservation Guardrails
+- **5 Editorial UI Themes (`studio/src/`)**: `Hypnagogic` (default dark), `Phosphene` (pitch black + phosphor), `Pareidolia` (cold slate + silver/ice), `Afterimage` (crimson/amber retinal burn), and `Mirage` (clean daylight light theme).
+- **Native Windows Studio (`studio/windows/`)**: Self-contained `.NET 10` WPF + `WebView2` desktop app (`PolysomStudio.exe`) and installer (`PolysomStudioSetup.exe`) with `Version=3.0.0`, HKCU `Uninstall` registry registration, `--verify`, `--yes --no-launch`, and `--uninstall` CLI flags, Desktop/Start Menu shortcuts, and single-archive `dist/` packaging with `.sha256` digests.
+- **Studio UI Visual Compliance**: Zero emojis, zero CSS gradients, local Outfit/Inter/Fira Code typography, Obsidian 3D brain topology, and responsive `.canvas-resize-handle` (`160px–560px`).
+- **Preservation Guardrails**: All pre-existing `checkpoints/*.pt` (`session_state.json` at `step: 40555`, `triune_studio_step_36500_rescued.pt`), `data/*.jsonl`, `exports/*`, `papers/*`, and `triune_tokenizer.json` are preserved intact; `WORKSPACE_RULES.md` remains untracked.
+
+---
+
+## 4. Defense-in-Depth Security Hardening (`R4`)
+
+- **Checkpoint Deserialization (`weights_only=True`)**: Enforced across `finetune.py`, `rescue_checkpoint.py`, `verify_triangular_qr_residuals.py`, and API loaders with CPU-first `map_location=&quot;cpu&quot;`.
+- **Strict Path Confinement**: All `/v1/models/load`, `/v1/checkpoints/load`, `/v1/datasets/*`, `/v1/models/export`, `/v1/finetune/*`, and DAG file nodes enforce `Path.resolve(strict=False).is_relative_to(...)` and reject `..`, UNC, and absolute path traversal.
+- **Proxy-Aware Bearer Auth, CSRF &amp; Security Headers**: Requests with `Forwarded`, `X-Forwarded-For`, or `X-Real-IP` headers (or non-loopback hosts) require a valid `LUCID_MACHINES_API_TOKEN` / `TRIUNE_API_TOKEN` bearer token; state-changing HTTP routes and `/ws/telemetry` validate `Origin`/`Host`; responses include `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, and `Content-Security-Policy`.
+- **SSRF &amp; Package Install Guards**: Dataset stream URLs and module download URLs enforce `validate_http_url` SSRF checks; `/v1/modules/install` pip execution is gated behind a curated allowlist or `LUCID_MACHINES_ALLOW_PIP_INSTALL=1`.
+- **Plugin Cryptography, Sandbox &amp; Provider Hygiene**: External workspace plugins default to `trusted=False` (Ed25519 signature required); `PythonSandbox` enforces strict memory/job limits and gates `allow_writes`; vLLM bridge defaults to `trust_remote_code=False`; Google Gemini provider sends API keys exclusively via the `x-goog-api-key` HTTP header.
+
+---
+
+## 5. Release Artifacts &amp; Verification Checksums (`R5`)
+
+| Artifact Path | Description |
+| :--- | :--- |
+| `dist/lucid_machines-3.0.0-py3-none-any.whl` | Python Wheel Package (`python -m build --wheel`) |
+| `dist/lucid_machines-3.0.0.tar.gz` | Python Source Distribution (`python -m build --sdist`) |
+| `dist/PolysomStudio-3.0.0-win-x64.zip` (and `.sha256`) | Self-Contained Windows x64 Desktop App &amp; Installer Bundle |
+| `dist/SHA256SUMS.txt` | Consolidated SHA-256 Checksum Manifest |
+| `website/` | React/Vite Project Website (`index.html`, `src/*`, `public/*`, `assets/*.svg`) |
+| `launch_kit/` | Local Launch &amp; Advertising Kit (`README.md`, `HERO_MESSAGING.md`, `LAUNCH_BLOG.md`, `SOCIAL_POSTS.md`, `AD_COPY_VARIANTS.md`, SVG cards) |
+| `docs/RELEASE_NAME_REPORT.md` | R1 Timestamped Conflict-Check Matrix &amp; Non-Legal Disclaimer |
+| `benchmarks/CENTROIDSTEER_UPGRADE_VALIDATION_REPORT.md` | R2 Multi-Directional CentroidSteer Diagnosis &amp; M1 5-Seed Benchmark Report |
+</pre></div>
+      </article>
+    </div>
+  </main>
+</body>
+</html>

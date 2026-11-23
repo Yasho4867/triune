@@ -9,9 +9,9 @@ from unittest.mock import patch
 import torch
 from torch import nn
 
-from triune.api import routes
-from triune.api.routes import _apply_model_gpu_residency
-from triune.runtime.streaming import StreamingConfig
+from lucid_machines.api import routes
+from lucid_machines.api.routes import _apply_model_gpu_residency
+from lucid_machines.runtime.streaming import StreamingConfig
 
 
 class _FakeStreamingEngine:
@@ -57,7 +57,7 @@ class TestHardwareTuning(unittest.TestCase):
         )
 
         with (
-            patch("triune.runtime.streaming.LayerStreamingEngine", _FakeStreamingEngine),
+            patch("lucid_machines.runtime.streaming.LayerStreamingEngine", _FakeStreamingEngine),
             patch("torch.cuda.mem_get_info", return_value=(8 * 1024**3, 8 * 1024**3)),
         ):
             applied = _apply_model_gpu_residency(state, 4)

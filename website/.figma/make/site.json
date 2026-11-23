@@ -1,0 +1,14 @@
+{
+  "description": "Explore Lucid Machines, an AI and machine learning research company, and discover Junkie, its upcoming frontier model.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  },
+  "title": "Lucid Machines — Intelligence, in a new light",
+  "icons": {
+    "icon": "/lucid-symbol.svg"
+  }
+}

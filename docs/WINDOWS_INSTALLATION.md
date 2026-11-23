@@ -1,56 +1,50 @@
-# Triune AI Studio — Windows Setup
+﻿# Polysom Studio (Lucid Machines) — Windows Setup & Portable Packaging (`v1.0.0`)
 
-**Triune AI Studio** runs its Python backend and native C/AVX2 engine (`triune_core.dll`) natively on Windows; WSL is not required.
-The Windows desktop shell (`TriuneStudio.exe` at the repository root) is published as a self-contained single-file executable bundling `.NET 10`, `WebView2`, and `triune_core.dll`. Its first-launch
-**Install / repair Studio environment** action provisions the managed Python
-environment, PyTorch, CUDA-compatible dependencies, W&B, and Studio packages.
-An NVIDIA driver is still required for CUDA acceleration. If Python is missing,
-the setup launcher installs Python 3.12 through Windows Package Manager (`winget`)
-for the current user.
+**Polysom Studio** (by **Lucid Machines**) runs its Python backend and native C/AVX2 engine (`lucid_machines_core.dll`, with `triune_core.dll` fallback) natively on Windows; WSL is not required.
 
-## Build a portable Windows package
+The Windows desktop shell (`PolysomStudio.exe`) is published as a self-contained single-file executable bundling `.NET 10`, `WebView2`, all 6 Polysom Studio themes (`Hypnagogic`, `Phosphene`, `Pareidolia`, `Afterimage`, `Mirage`, `Euphoria`), and the native C/AVX2 shared library. Its first-launch **Install / repair Studio environment** action (or the standalone `PolysomStudioSetup.exe` installer) provisions the managed Python environment (`studio/studio_env`), PyTorch, CUDA-compatible dependencies, W&B, and Studio packages. If Python is missing, the setup launcher can bootstrap Python 3.12 via Windows Package Manager (`winget`) for the current user.
 
-From a developer checkout with the .NET 10 SDK and Windows WebView2 Runtime:
+---
+
+## 1. Build a Portable Windows Package
+
+From a developer checkout with the `.NET 10 SDK` and Windows WebView2 Runtime:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/publish_studio_windows.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish_studio_windows.ps1
 ```
 
-This creates a versioned folder and ZIP under `dist/` as well as local binaries in `studio/publish/` (`TriuneStudio.exe` and `TriuneStudioSetup.exe`); it does not delete or
-overwrite earlier packages. Extract the ZIP and launch
-`TriuneStudio.exe` (or run `TriuneStudioSetup.exe` to install). If the Python/CUDA environment has
-not yet been provisioned, use **Install / repair Studio environment** on the
-startup screen. The package contains the framework and UI sources but not user
-checkpoints, credentials, datasets, or model weights.
+This publishes the self-contained executables to `studio/publish/` and creates the versioned portable ZIP archive (`dist/PolysomStudio-1.0.0-win-x64.zip`) plus a `.sha256` checksum file under `dist/`. Extract the ZIP and launch `PolysomStudio.exe` or run `PolysomStudioSetup.exe` to register Desktop/Start Menu shortcuts and the Windows `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall` entry.
 
-## Repair an existing checkout
+---
 
-Close Studio first, then run:
+## 2. Unattended Verification, Repair & Uninstall Flags
 
 ```powershell
+# Verify existing environment health (exits with code 0 when all subsystems pass)
+studio\publish\PolysomStudioSetup.exe --verify
+
+# Unattended install/repair without auto-launching Polysom Studio
+studio\publish\PolysomStudioSetup.exe --yes --no-launch
+
+# Fast dependency repair keeping existing PyTorch/CUDA wheels
 studio\installer\install_studio.bat --skip-torch --yes --no-launch
+
+# Unattended removal of shortcuts and HKCU Uninstall registry entry (preserves checkpoints/data)
+studio\publish\PolysomStudioSetup.exe --uninstall --yes
 ```
 
-This keeps the existing PyTorch installation and refreshes Studio dependencies.
-To reinstall/probe PyTorch and CUDA too, omit `--skip-torch` (the default), then
-complete the installer's hardware verification before launching Studio again.
-Startup and setup logs are stored under `%LOCALAPPDATA%\Triune\logs`.
+Startup and setup logs are stored under `%LOCALAPPDATA%\Lucid Machines\logs` (with legacy `%LOCALAPPDATA%\Triune\logs` fallback).
 
-## Measure local inference
+---
 
-Load the same checkpoint in Studio before running its mode. Run the two modes
-sequentially on the same machine and settings, rather than loading duplicate
-model copies at once on a memory-limited GPU:
+## 3. Measure Local Inference Parity (CLI vs. Polysom Studio Server)
+
+Load the same checkpoint in Polysom Studio before running its mode. Run the two modes sequentially on the same machine and settings rather than loading duplicate model copies at once on a memory-limited GPU:
 
 ```powershell
 python scripts/benchmark_inference.py --mode cli --checkpoint checkpoints\triune_studio_step_25500.pt --prompt "Explain the model's routing hierarchy." --max-tokens 128
 python scripts/benchmark_inference.py --mode studio --checkpoint checkpoints\triune_studio_step_25500.pt --prompt "Explain the model's routing hierarchy." --max-tokens 128
 ```
 
-The report includes the short kernel-warmup cost, first-token latency, decode
-tokens/second, total latency, device, and checkpoint. Studio mode refuses to
-run if a different checkpoint is active. The tokenizer, prompt, depth,
-temperature, and output budget should match for a useful comparison. Studio
-also warms the active CUDA inference path in the background at startup, so the
-first interactive request does not normally pay the one-time FLA/Triton kernel
-compilation cost.
+The report includes the short kernel-warmup cost, first-token latency (TTFT, e.g., `71.3 ms` warm on RTX 5070), decode tokens/second (`40.8 tok/s` warm decode), total latency, device, and checkpoint.

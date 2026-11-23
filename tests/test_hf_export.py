@@ -7,8 +7,8 @@ from pathlib import Path
 
 import torch
 
-from triune.export.hf_compat import export_to_huggingface, extract_triune_hf_config
-from triune.model.transformer import TriuneTransformer
+from lucid_machines.export.hf_compat import export_to_huggingface, extract_triune_hf_config
+from lucid_machines.model.transformer import TriuneTransformer
 
 
 class TestHuggingFaceExport(unittest.TestCase):

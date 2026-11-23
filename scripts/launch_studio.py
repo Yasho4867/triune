@@ -1,4 +1,4 @@
-"""Native Desktop Launcher for Triune Studio."""
+"""Native Desktop Launcher for Polysom Studio."""
 
 from __future__ import annotations
 
@@ -26,10 +26,10 @@ if sys.platform == "win32":
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from triune.desktop import launch_desktop_app
+from lucid_machines.desktop import launch_desktop_app
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Triune Studio Launcher")
+    parser = argparse.ArgumentParser(description="Polysom Studio Launcher")
     parser.add_argument("--port", type=int, default=8000, help="Port to bind Studio on (default: 8000)")
     parser.add_argument(
         "--browser", action="store_true", help="Launch directly in default web browser instead of desktop window"

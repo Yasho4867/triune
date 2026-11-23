@@ -1,5 +1,5 @@
 /**
- * Triune Studio v2.0 – Classic Papery & Beige Editorial AI Research IDE
+ * Polysom Studio v1.0.0 by Lucid Machines – Visual AI Research IDE & DAG Harness
  * Built with Pixel-Perfect Wire Alignment, Instant Wire Disconnecting & Live Hardware Telemetry Sync.
  */
 (function () {
@@ -123,7 +123,7 @@
       name: 'TrainingStep',
       title: 'Autograd Training Step',
       category: 'Evaluation',
-      description: 'Runs one real CLI-equivalent training step through the shared Triune TrainingEngine, including configured routing, balancing, gradient accumulation, clipping, optimizer, and telemetry.',
+      description: 'Runs one real CLI-equivalent training step through the shared Lucid Machines TrainingEngine, including configured routing, balancing, gradient accumulation, clipping, optimizer, and telemetry.',
       inputs: ['dataset_stream'],
       outputs: ['step_metrics', 'loss', 'model_handle'],
       details: 'grad_accum_steps=4\nmax_grad_norm=1.0'
@@ -143,7 +143,7 @@
       name: 'VectorisedGLA',
       title: 'Vectorised GLA Attention',
       category: 'Model',
-      description: 'Executes Triune Gated Linear Attention on connected hidden states.',
+      description: 'Executes Lucid Machines Gated Linear Attention on connected hidden states.',
       inputs: ['hidden_states'],
       outputs: ['attention_out'],
       details: 'num_heads=4'
@@ -152,7 +152,7 @@
       name: 'HybridAttention',
       title: 'Hybrid GLA + RoPE Attention',
       category: 'Model',
-      description: 'Executes Triune GLA attention on connected hidden states.',
+      description: 'Executes Lucid Machines GLA attention on connected hidden states.',
       inputs: ['hidden_states'],
       outputs: ['attention_out'],
       details: 'hidden_dim=256\nnum_heads=4'
@@ -161,7 +161,7 @@
       name: 'MoE_FFN',
       title: 'Sparse MoE FFN Layer',
       category: 'Model',
-      description: 'Executes the configured Triune sparse MoE feed-forward layer on connected hidden states.',
+      description: 'Executes the configured Lucid Machines sparse MoE feed-forward layer on connected hidden states.',
       inputs: ['hidden_states'],
       outputs: ['moe_out'],
       details: 'num_experts=4\ntop_k=2\nshared_expert=True'
@@ -170,7 +170,7 @@
       name: 'DepthRouter',
       title: 'Hierarchical Depth Router',
       category: 'Model',
-      description: 'Runs the Triune three-way depth router and returns selected exit choices and router logits.',
+      description: 'Runs the Lucid Machines three-way depth router and returns selected exit choices and router logits.',
       inputs: ['hidden_states'],
       outputs: ['exit_choice', 'router_logits', 'balance_loss'],
       details: 'target_depth_dist=[0.34, 0.33, 0.33]\ntemperature=1.0'
@@ -365,7 +365,7 @@
       name: 'LayerStreamingEngine',
       title: 'Layer Streaming Engine',
       category: 'Runtime',
-      description: 'Attaches Triune layer streaming to the connected live model and optimizer.',
+      description: 'Attaches Lucid Machines layer streaming to the connected live model and optimizer.',
       inputs: ['model_handle'],
       outputs: ['streaming_model'],
       details: 'prefetch=True\npin_memory=True\nchunk_size=1'
@@ -441,7 +441,7 @@
       name: 'GGUFExport',
       title: 'GGUF Export (Configuration Only)',
       category: 'Export',
-      description: 'Configuration-only placeholder. Triune GGUF conversion is not implemented; this node does not create a GGUF file.',
+      description: 'Configuration-only placeholder. Lucid Machines GGUF conversion is not implemented; this node does not create a GGUF file.',
       inputs: ['model_handle'],
       outputs: ['gguf_file'],
       details: 'quantization=Q4_K_M\nfilename=model.gguf'
@@ -510,7 +510,7 @@
     },
     moe_training: {
       name: 'Research: explicit MoE loss and optimizer update',
-      description: 'Exposes tokenization, next-token batching, Triune forward pass, balancing and router losses, CentroidSteer update, and checkpointing as editable stages.',
+      description: 'Exposes tokenization, next-token batching, TriuneTransformer forward pass, balancing and router losses, CentroidSteer update, and checkpointing as editable stages.',
       requirements: 'local corpus at data/fineweb_sample.jsonl and triune_tokenizer.json; model must fit the selected device.',
       nodes: [
         { id: 'node_data', title: 'Local File Reader', type: 'Data', x: 20, y: 150, details: 'file_path=data/fineweb_sample.jsonl\nconfigure_runtime=false' },
@@ -586,7 +586,7 @@
     },
     depth_routing_inference: {
       name: 'Evaluate Reflex, Limbic, and Cortex exits',
-      description: 'Runs a held-out token batch through the active Triune model and reports perplexity and per-exit metrics.',
+      description: 'Runs a held-out token batch through the active Lucid Machines model and reports perplexity and per-exit metrics.',
       requirements: 'local corpus and tokenizer; initialize the model before executing.',
       nodes: [
         { id: 'node_data', title: 'Local File Reader', type: 'Data', x: 30, y: 150, details: 'file_path=data/fineweb_sample.jsonl\nconfigure_runtime=false' },
@@ -626,7 +626,7 @@
     },
     hybrid_gla_rope: {
       name: 'Generate from a local corpus prompt',
-      description: 'Uses the first local text sample as a prompt and generates with the active Triune model’s cached autoregressive path.',
+      description: 'Uses the first local text sample as a prompt and generates with the active Lucid Machines model’s cached autoregressive path.',
       requirements: 'local corpus, initialized model, and an available tokenizer.',
       nodes: [
         { id: 'node_prompt', title: 'Local File Reader', type: 'Data', x: 80, y: 150, details: 'file_path=data/fineweb_sample.jsonl\nconfigure_runtime=false' },
@@ -685,7 +685,7 @@
 
   const readSavedWorkflow = () => {
     try {
-      const raw = window.localStorage.getItem('triune.studio.workflow.v1');
+      const raw = window.localStorage.getItem('lucid_machines.studio.workflow.v1') || window.localStorage.getItem('triune.studio.workflow.v1');
       const saved = raw ? JSON.parse(raw) : null;
       if (saved && saved.version === 1 && Array.isArray(saved.nodes) && Array.isArray(saved.edges)) {
         return { ...saved, frames: Array.isArray(saved.frames) ? saved.frames : [] };
@@ -694,10 +694,10 @@
     return null;
   };
 
-  const renderTriuneLogo = (size = 32, extraStyle = {}) => {
+  const renderPolysomLogo = (size = 32, extraStyle = {}) => {
     return e('img', {
-      src: 'triune-logo.svg',
-      alt: 'Triune AI Emblem',
+      src: 'polysom-logo.svg',
+      alt: 'Polysom Studio Emblem',
       width: size,
       height: size,
       style: {
@@ -709,12 +709,14 @@
         ...extraStyle
       },
       onError: (ev) => {
-        if (ev && ev.target && !ev.target.src.endsWith('.png')) {
-          ev.target.src = 'triune-logo.png';
+        if (ev && ev.target && !ev.target.dataset.fallback) {
+          ev.target.dataset.fallback = '1';
+          ev.target.src = 'assets/polysom-logo.svg';
         }
       }
     });
   };
+  const renderTriuneLogo = renderPolysomLogo;
 
   const renderIcon = (name, size = 18, extraStyle = {}) => {
     const iconPaths = {
@@ -958,6 +960,43 @@
       ],
       chevronDown: [
         e('polyline', { key: '1', points: '6 9 12 15 18 9' })
+      ],
+      chevronRight: [
+        e('polyline', { key: '1', points: '9 18 15 12 9 6' })
+      ],
+      folder: [
+        e('path', { key: '1', d: 'M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z' })
+      ],
+      file: [
+        e('path', { key: '1', d: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z' }),
+        e('polyline', { key: '2', points: '14 2 14 8 20 8' })
+      ],
+      terminal: [
+        e('polyline', { key: '1', points: '4 17 10 11 4 5' }),
+        e('line', { key: '2', x1: '12', y1: '19', x2: '20', y2: '19' })
+      ],
+      save: [
+        e('path', { key: '1', d: 'M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z' }),
+        e('polyline', { key: '2', points: '17 21 17 13 7 13 7 21' }),
+        e('polyline', { key: '3', points: '7 3 7 8 15 8' })
+      ],
+      send: [
+        e('line', { key: '1', x1: '22', y1: '2', x2: '11', y2: '13' }),
+        e('polygon', { key: '2', points: '22 2 15 22 11 13 2 9 22 2' })
+      ],
+      shield: [
+        e('path', { key: '1', d: 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z' })
+      ],
+      stop: [
+        e('rect', { key: '1', x: '6', y: '6', width: '12', height: '12', rx: '2', fill: 'currentColor' })
+      ],
+      activity: [
+        e('polyline', { key: '1', points: '22 12 18 12 15 21 9 3 6 12 2 12' })
+      ],
+      layout: [
+        e('rect', { key: '1', x: '3', y: '3', width: '18', height: '18', rx: '2' }),
+        e('line', { key: '2', x1: '3', y1: '9', x2: '21', y2: '9' }),
+        e('line', { key: '3', x1: '9', y1: '21', x2: '9', y2: '9' })
       ]
     };
     return e('svg', {
@@ -976,14 +1015,14 @@
   };
 
   const UPGRADEABLE_MODELS = [
-    { id: 'llama-3-8b', name: 'LLaMA 3 8B', layers: '32L Dense', fullLabel: 'LLaMA 3 8B (32L Dense → Triune 3-Tier)', desc: 'Meta LLaMA 3 8B (32L Dense)' },
-    { id: 'mistral-7b', name: 'Mistral 7B', layers: '32L Dense', fullLabel: 'Mistral 7B (32L Dense → Triune 3-Tier)', desc: 'Mistral 7B v0.3 (32L Dense)' },
-    { id: 'qwen-2.5-7b', name: 'Qwen 2.5 7B', layers: '28L Dense', fullLabel: 'Qwen 2.5 7B (28L Dense → Triune 3-Tier)', desc: 'Qwen 2.5 7B (28L Dense)' },
-    { id: 'gpt2', name: 'GPT-2 Small', layers: '12L Dense', fullLabel: 'GPT-2 Small (12L Dense → Triune 3-Tier)', desc: 'OpenAI GPT-2 Small (12L Dense)' },
-    { id: 'llama-70b', name: 'LLaMA 3 70B', layers: '80L Dense', fullLabel: 'LLaMA 3 70B (80L Dense → Triune 3-Tier)', desc: 'Meta LLaMA 3 70B (80L Dense)' },
-    { id: 'deepseek-v3', name: 'DeepSeek V3', layers: '61L Dense', fullLabel: 'DeepSeek V3 (61L Dense → Triune 3-Tier)', desc: 'DeepSeek V3 (61L Dense)' },
-    { id: 'gemma-2-9b', name: 'Gemma 2 9B', layers: '42L Dense', fullLabel: 'Gemma 2 9B (42L Dense → Triune 3-Tier)', desc: 'Google Gemma 2 9B (42L Dense)' },
-    { id: 'gpt2-medium', name: 'GPT-2 Medium', layers: '24L Dense', fullLabel: 'GPT-2 Medium (24L Dense → Triune 3-Tier)', desc: 'OpenAI GPT-2 Medium (24L Dense)' },
+    { id: 'llama-3-8b', name: 'LLaMA 3 8B', layers: '32L Dense', fullLabel: 'LLaMA 3 8B (32L Dense -> Triune 3-Tier)', desc: 'Meta LLaMA 3 8B (32L Dense)' },
+    { id: 'mistral-7b', name: 'Mistral 7B', layers: '32L Dense', fullLabel: 'Mistral 7B (32L Dense -> Triune 3-Tier)', desc: 'Mistral 7B v0.3 (32L Dense)' },
+    { id: 'qwen-2.5-7b', name: 'Qwen 2.5 7B', layers: '28L Dense', fullLabel: 'Qwen 2.5 7B (28L Dense -> Triune 3-Tier)', desc: 'Qwen 2.5 7B (28L Dense)' },
+    { id: 'gpt2', name: 'GPT-2 Small', layers: '12L Dense', fullLabel: 'GPT-2 Small (12L Dense -> Triune 3-Tier)', desc: 'OpenAI GPT-2 Small (12L Dense)' },
+    { id: 'llama-70b', name: 'LLaMA 3 70B', layers: '80L Dense', fullLabel: 'LLaMA 3 70B (80L Dense -> Triune 3-Tier)', desc: 'Meta LLaMA 3 70B (80L Dense)' },
+    { id: 'deepseek-v3', name: 'DeepSeek V3', layers: '61L Dense', fullLabel: 'DeepSeek V3 (61L Dense -> Triune 3-Tier)', desc: 'DeepSeek V3 (61L Dense)' },
+    { id: 'gemma-2-9b', name: 'Gemma 2 9B', layers: '42L Dense', fullLabel: 'Gemma 2 9B (42L Dense -> Triune 3-Tier)', desc: 'Google Gemma 2 9B (42L Dense)' },
+    { id: 'gpt2-medium', name: 'GPT-2 Medium', layers: '24L Dense', fullLabel: 'GPT-2 Medium (24L Dense -> Triune 3-Tier)', desc: 'OpenAI GPT-2 Medium (24L Dense)' },
     { id: 'triune-small', name: 'Triune Baseline', layers: '6L Canonical', fullLabel: 'Triune Baseline (6L Canonical)', desc: 'Triune Baseline (6L Canonical)' }
   ];
 
@@ -998,9 +1037,9 @@
       head_dim: 64,
       experts_routed: 2,
       experts_shared: 1,
-      exits: 'Prefix L0 → Reflex L2 → Limbic L3 → Cortex L4',
+      exits: 'Prefix L0 -> Reflex L2 -> Limbic L3 -> Cortex L4',
       params: '21.0M params (21.0M active)',
-      desc: 'Minimal 4-layer Triune architecture (3 dense prefix/reflex blocks + 1 Sparse MoE block). Built for instant CPU debugging, pipeline verification, and zero-wait iteration.'
+      desc: 'Minimal 4-layer TriuneTransformer architecture (3 dense prefix/reflex blocks + 1 Sparse MoE block). Built for instant CPU debugging, pipeline verification, and zero-wait iteration.'
     },
     {
       id: 'triune-small',
@@ -1012,9 +1051,9 @@
       head_dim: 64,
       experts_routed: 4,
       experts_shared: 1,
-      exits: 'Prefix L0 → Reflex L2 → Limbic L4 → Cortex L6',
+      exits: 'Prefix L0 -> Reflex L2 -> Limbic L4 -> Cortex L6',
       params: '36.0M params (32.9M active)',
-      desc: 'Reference 6-layer Triune Transformer from config.py. Combines 3 dense early layers (L0–L2) and 3 Top-2 Sparse MoE layers (L3–L5) with Vectorised GLA + RoPE and 3-stage Gumbel exit routing.'
+      desc: 'Reference 6-layer TriuneTransformer from config.py. Combines 3 dense early layers (L0–L2) and 3 Top-2 Sparse MoE layers (L3–L5) with Vectorised GLA + RoPE and 3-stage Gumbel exit routing.'
     },
     {
       id: 'triune-base',
@@ -1026,9 +1065,9 @@
       head_dim: 64,
       experts_routed: 4,
       experts_shared: 1,
-      exits: 'Prefix L0 → Reflex L2 → Limbic L5 → Cortex L8',
+      exits: 'Prefix L0 -> Reflex L2 -> Limbic L5 -> Cortex L8',
       params: '75.8M params (64.0M active)',
-      desc: 'Balanced 8-layer architecture expanding the Sparse MoE stack to 5 layers (L3–L7) at 384 hidden width. Ideal for training from scratch on TinyStories or FineWeb-Edu on a single 8GB GPU.'
+      desc: 'Balanced 8-layer Triune architecture expanding the Sparse MoE stack to 5 layers (L3–L7) at 384 hidden width. Built for rapid TinyStories and FineWeb-Edu runs on a single 8GB GPU.'
     },
     {
       id: 'triune-medium',
@@ -1040,9 +1079,9 @@
       head_dim: 64,
       experts_routed: 8,
       experts_shared: 1,
-      exits: 'Prefix L0–L1 → Reflex L4 → Limbic L8 → Cortex L12',
+      exits: 'Prefix L0-L1 -> Reflex L4 -> Limbic L8 -> Cortex L12',
       params: '207.5M params (119.4M active)',
-      desc: '12-layer architecture scaling to 8 routed experts per MoE block across 7 MoE layers (L5–L11). Top-2 gating + 1 shared expert activates only 3 of 9 experts per token (57% active parameters).'
+      desc: '12-layer Triune architecture scaling to 8 routed experts per MoE block across 7 MoE layers (L5–L11). Top-2 gating + 1 shared expert activates only 3 of 9 experts per token (57% active parameters).'
     },
     {
       id: 'triune-large',
@@ -1054,9 +1093,9 @@
       head_dim: 64,
       experts_routed: 8,
       experts_shared: 1,
-      exits: 'Prefix L0–L1 → Reflex L5 → Limbic L10 → Cortex L16',
+      exits: 'Prefix L0-L1 -> Reflex L5 -> Limbic L10 -> Cortex L16',
       params: '573.9M params (290.8M active)',
-      desc: '16-layer half-billion parameter MoE (6 dense layers + 10 Sparse MoE layers). Designed for GaLore low-rank subspace projection and CentroidSteer + Muon training on 12GB–16GB GPUs.'
+      desc: '16-layer half-billion parameter Triune MoE (6 dense layers + 10 Sparse MoE layers). Designed for GaLore low-rank subspace projection and CentroidSteer + Muon training on 12GB–16GB GPUs.'
     },
     {
       id: 'triune-1b',
@@ -1068,9 +1107,37 @@
       head_dim: 64,
       experts_routed: 8,
       experts_shared: 1,
-      exits: 'Prefix L0–L2 → Reflex L7 → Limbic L16 → Cortex L24',
+      exits: 'Prefix L0-L2 -> Reflex L7 -> Limbic L16 -> Cortex L24',
       params: '1.50B params (696M active)',
       desc: 'Entry billion-parameter Sparse MoE (8 dense + 16 MoE layers). Activates only 696M parameters per token via Top-2 expert routing; trains on 16GB GPUs with GaLore + Muon or 8GB GPUs via Layer Streaming.'
+    },
+    {
+      id: 'junkie',
+      name: 'Junkie (7.40B · 32L / 2048D / 8E · Flagship)',
+      tier: 'Flagship Release · Inaugural Lucid Machines Model',
+      layers: 32,
+      hidden_dim: 2048,
+      heads: 16,
+      head_dim: 128,
+      experts_routed: 8,
+      experts_shared: 1,
+      exits: 'Prefix L0-L3 -> Reflex L18 -> Limbic L25 -> Cortex L32',
+      params: '7.40B params (~1.95B expected active)',
+      desc: 'Junkie is Lucid Machines’ inaugural flagship 7.40B model to train on the 32-layer TriuneTransformer Sparse MoE architecture (2048D, 8 routed + 1 shared expert, Reflex/Limbic/Cortex early-exit heads, VectorisedGLA, and CentroidSteer).'
+    },
+    {
+      id: 'junkie-mini',
+      name: 'Junkie-Mini (535.10M · 12L / 1024D / 4E · Fast Single-GPU)',
+      tier: 'Fast Single-GPU Target · Inaugural Junkie-Mini Config',
+      layers: 12,
+      hidden_dim: 1024,
+      heads: 8,
+      head_dim: 128,
+      experts_routed: 4,
+      experts_shared: 1,
+      exits: 'Prefix L0-L1 -> Reflex L6 -> Limbic L9 -> Cortex L12',
+      params: '535.10M params (230.8M expected active)',
+      desc: 'Junkie-Mini is the fast single-GPU inaugural training configuration for Junkie on the 12-layer TriuneTransformer Sparse MoE architecture (1024D, 4 routed + 1 shared expert, VectorisedGLA, RoPE 4096, and CentroidSteer).'
     },
     {
       id: 'triune-3b',
@@ -1082,23 +1149,23 @@
       head_dim: 64,
       experts_routed: 8,
       experts_shared: 1,
-      exits: 'Prefix L0–L2 → Reflex L7 → Limbic L19 → Cortex L30',
+      exits: 'Prefix L0-L2 -> Reflex L7 -> Limbic L19 -> Cortex L30',
       params: '3.07B params (1.33B active)',
-      desc: '3.07B parameter Sparse MoE across 30 layers (8 dense + 22 MoE blocks) with 1.33B active parameters per token. Built for 24GB single-GPU workstations or 8GB–12GB PCIe Layer Streaming.'
+      desc: '3.07B parameter Triune Sparse MoE across 30 layers (8 dense + 22 MoE blocks) with 1.33B active parameters per token. Built for 24GB single-GPU workstations or 8GB–12GB PCIe Layer Streaming.'
     },
     {
       id: 'triune-7b',
       name: 'Triune-7B (7.38B · 32L / 1920D / 8E)',
-      tier: 'Multi-Billion · 7B Flagship MoE (24–48GB VRAM / Layer Stream)',
+      tier: 'Multi-Billion · 7B MoE (24–48GB VRAM / Layer Stream)',
       layers: 32,
       hidden_dim: 1920,
       heads: 30,
       head_dim: 64,
       experts_routed: 8,
       experts_shared: 1,
-      exits: 'Prefix L0–L3 → Reflex L7 → Limbic L20 → Cortex L32',
+      exits: 'Prefix L0-L3 -> Reflex L7 -> Limbic L20 -> Cortex L32',
       params: '7.38B params (3.13B active)',
-      desc: '7.38B parameter Flagship Sparse MoE (32 layers, 1920 hidden dim, 30 GLA heads) activating 3.13B parameters per token (42% active). Supports 4-bit NF4 QLoRA and asynchronous CPU-to-GPU Layer Streaming.'
+      desc: '7.38B parameter Triune Sparse MoE (32 layers, 1920 hidden dim, 30 GLA heads) activating 3.13B parameters per token (42% active). Supports 4-bit NF4 QLoRA and asynchronous CPU-to-GPU Layer Streaming.'
     },
     {
       id: 'triune-14b',
@@ -1110,9 +1177,9 @@
       head_dim: 128,
       experts_routed: 12,
       experts_shared: 1,
-      exits: 'Prefix L0–L3 → Reflex L9 → Limbic L25 → Cortex L40',
+      exits: 'Prefix L0-L3 -> Reflex L9 -> Limbic L25 -> Cortex L40',
       params: '14.5B params (4.39B active)',
-      desc: '14.5B parameter high-sparsity MoE (40 layers, 12 routed experts + 1 shared expert per MoE block). Top-2 routing keeps active compute to just 4.39B parameters per token (30% active ratio).'
+      desc: '14.5B parameter high-sparsity Triune MoE (40 layers, 12 routed experts + 1 shared expert per MoE block). Top-2 routing keeps active compute to just 4.39B parameters per token (30% active ratio).'
     },
     {
       id: 'triune-32b',
@@ -1124,23 +1191,23 @@
       head_dim: 128,
       experts_routed: 16,
       experts_shared: 1,
-      exits: 'Prefix L0–L4 → Reflex L11 → Limbic L30 → Cortex L48',
+      exits: 'Prefix L0-L4 -> Reflex L11 -> Limbic L30 -> Cortex L48',
       params: '34.5B params (8.11B active)',
-      desc: '34.5B parameter 16-expert Sparse MoE (48 layers, 2560 dim, 12 dense + 36 MoE blocks). Combines ultra-sparse Top-2 routing (only 8.11B active params/token, 23% active) with FP8/NVFP4 quantization.'
+      desc: '34.5B parameter 16-expert Triune Sparse MoE (48 layers, 2560 dim, 12 dense + 36 MoE blocks). Combines ultra-sparse Top-2 routing (only 8.11B active params/token, 23% active) with FP8/NVFP4 quantization.'
     },
     {
       id: 'triune-70b',
       name: 'Triune-70B (71.0B · 64L / 3072D / 16E)',
-      tier: 'Multi-Billion · 70B Ultra-Scale Flagship MoE (Multi-GPU / H100)',
+      tier: 'Multi-Billion · 70B Ultra-Scale MoE (Multi-GPU / H100)',
       layers: 64,
       hidden_dim: 3072,
       heads: 24,
       head_dim: 128,
       experts_routed: 16,
       experts_shared: 1,
-      exits: 'Prefix L0–L5 → Reflex L11 → Limbic L40 → Cortex L64',
+      exits: 'Prefix L0-L5 -> Reflex L11 -> Limbic L40 -> Cortex L64',
       params: '71.0B params (16.0B active)',
-      desc: '71.0B parameter Datacenter Flagship MoE (64 layers, 3072 dim, 12 dense + 52 Sparse MoE blocks with 16 routed + 1 shared expert). Activates 16.0B parameters per token (22.5% active) with 3-stage early exits.'
+      desc: '71.0B parameter Datacenter Triune MoE (64 layers, 3072 dim, 12 dense + 52 Sparse MoE blocks with 16 routed + 1 shared expert). Activates 16.0B parameters per token (22.5% active) with 3-stage early exits.'
     }
   ];
 
@@ -1152,7 +1219,29 @@
     { name: 'Blackwell / Ada FP8 (r=32)', rank: 32, alpha: 64, quantization: 'FP8 E4M3', lr: '0.0002', epochs: 3, batch_size: 4, dropout: 0.05 }
   ];
 
-  const DEFAULT_SYSTEM_PROMPT = 'You are Triune Transformer, an advanced Mixture-of-Experts AI engine with dynamic exit-head routing.';
+  const DEFAULT_SYSTEM_PROMPT = 'You are Junkie, Lucid Machines’ inaugural flagship model built on the Triune (TriuneTransformer) 3-Tier Mixture-of-Experts architecture with dynamic Reflex, Limbic, and Cortex exit-head routing.';
+  const SYSTEM_TEMPLATES = [
+    {
+      id: 'junkie-default',
+      label: 'Junkie / Triune Default',
+      prompt: DEFAULT_SYSTEM_PROMPT
+    },
+    {
+      id: 'deep-reasoning',
+      label: 'Step-by-Step Reasoning (<think>)',
+      prompt: 'You are Junkie on the Triune architecture. Think carefully inside <think>...</think> tags before giving a concise, verified final answer.'
+    },
+    {
+      id: 'kernel-architect',
+      label: 'Systems & Kernel Architect',
+      prompt: 'You are a principal CUDA/C++ and PyTorch systems engineer. Provide exact numerical invariants, tensor shapes, and minimal verified code.'
+    },
+    {
+      id: 'concise-analyst',
+      label: 'Concise Research Analyst',
+      prompt: 'Respond concisely with direct technical facts, explicit assumptions, and zero filler.'
+    }
+  ];
   const CLOUD_BYOK_MODEL_IDS = new Set([
     'gpt-4o-mini',
     'claude-3-5-sonnet-latest',
@@ -1179,6 +1268,7 @@
 
   const TAB_TITLES = {
     chat: 'Inference Console & Playground',
+    workspace: 'Workspace & Agent IDE',
     nodegraph: 'Visual Node Canvas & Architecture Composer',
     training: 'Real-Time Training Monitor & Telemetry',
     checkpoints: 'Model Checkpoints & Weights Archive',
@@ -1194,8 +1284,9 @@
 
   const TAB_DESCRIPTIONS = {
     chat: 'Send prompts to your selected local model or provider.',
-    nodegraph: 'Compose, inspect, and apply a model execution graph.',
-    training: 'Configure a run and monitor live training metrics.',
+    workspace: 'Open a project folder, inspect Git diffs, edit files, run terminal commands, and steer live agentic loops.',
+    nodegraph: 'Compose Triune architecture blueprints and executable agentic workflows.',
+    training: 'Configure a run and monitor live multi-channel Polysomnograph telemetry.',
     checkpoints: 'Save, restore, and manage model checkpoints.',
     finetune: 'Configure and attach LoRA or QLoRA adapters.',
     modules: 'Discover curated integrations, local plugins, and community repositories.',
@@ -1207,26 +1298,196 @@
     byok: 'Configure and test external model-provider credentials.'
   };
 
-  const CUSTOM_THEME_STORAGE_KEY = 'triune.studio.customThemes.v1';
+  // Real-time analytical Triune param & VRAM estimator for Architecture Mode
+  function estimateTriuneArchBudget(spec) {
+    const L = Math.max(2, Number(spec.num_layers) || 8);
+    const D = Math.max(64, Number(spec.hidden_dim) || 384);
+    const H = Math.max(1, Number(spec.num_heads) || 6);
+    const hd = Math.max(16, Number(spec.head_dim) || Math.floor(D / H));
+    const E = Math.max(1, Number(spec.num_experts) || 4);
+    const topK = Math.max(1, Math.min(E, Number(spec.top_k_experts) || 2));
+    const vocab = Math.max(1000, Number(spec.vocab_size) || 32000);
+    const prefixLayers = Math.max(1, Math.min(L - 1, Number(spec.router_prefix_layers) || Math.max(1, Math.floor(L / 8))));
+    const moeLayers = Math.max(0, L - prefixLayers);
+    const ffnMult = Number(spec.expert_hidden_multiplier) || 4;
+    const ffnD = Math.round(D * ffnMult);
+
+    const embParams = vocab * D * 2;
+    const attnPerLayer = 4 * D * (H * hd) + 2 * D;
+    const denseFfn = 3 * D * (D * 4);
+    const singleExpert = 3 * D * ffnD;
+    const sharedExpert = singleExpert;
+    const gateParams = D * E;
+    const perMoeLayer = attnPerLayer + E * singleExpert + sharedExpert + gateParams;
+    const perDenseLayer = attnPerLayer + denseFfn;
+
+    const totalParams = embParams + prefixLayers * perDenseLayer + moeLayers * perMoeLayer;
+    const activeMoeLayer = attnPerLayer + topK * singleExpert + sharedExpert + gateParams;
+    const activeParams = embParams + prefixLayers * perDenseLayer + moeLayers * activeMoeLayer;
+
+    const prec = String(spec.precision || 'bf16').toLowerCase();
+    const weightBytes = prec === 'fp4' ? 0.5 : (prec === 'fp8' ? 1.0 : (prec === 'fp32' ? 4.0 : 2.0));
+    const weightGb = (totalParams * weightBytes) / (1024 ** 3);
+    const adamwOptGb = (totalParams * 8.0) / (1024 ** 3); // m + v FP32
+    const centroidOptGb = ((totalParams - moeLayers * E * singleExpert) * 4.0 + (moeLayers * E * singleExpert) * 0.45) / (1024 ** 3);
+    const gradGb = (totalParams * 2.0) / (1024 ** 3);
+    return {
+      totalParams,
+      activeParams,
+      totalLabel: totalParams >= 1e9 ? `${(totalParams / 1e9).toFixed(2)}B` : `${(totalParams / 1e6).toFixed(1)}M`,
+      activeLabel: activeParams >= 1e9 ? `${(activeParams / 1e9).toFixed(2)}B` : `${(activeParams / 1e6).toFixed(1)}M`,
+      activePct: totalParams > 0 ? Math.round((activeParams / totalParams) * 100) : 100,
+      adamwVramGb: (weightGb + gradGb + adamwOptGb).toFixed(2),
+      centroidVramGb: (weightGb + gradGb + centroidOptGb).toFixed(2),
+      savingsPct: Math.max(0, Math.round((1 - (weightGb + gradGb + centroidOptGb) / Math.max(0.01, weightGb + gradGb + adamwOptGb)) * 100))
+    };
+  }
+
+  const ARCHITECTURE_BLUEPRINTS = {
+    junkie_3b: {
+      id: 'junkie_3b',
+      name: 'Junkie-3B (16E Dynamic-Exit Blueprint)',
+      preset_id: 'triune-3b',
+      spec: { num_layers: 30, hidden_dim: 1280, num_heads: 20, head_dim: 64, num_experts: 16, top_k_experts: 2, reflex_exit_layer: 7, limbic_exit_layer: 19, precision: 'bf16' },
+      nodes: [
+        { id: 'arch_tok', title: 'BPE Tokenizer', type: 'Data', x: 40, y: 180, details: 'vocab_size=32000\nseq_len=2048' },
+        { id: 'arch_prefix', title: 'Hybrid GLA + RoPE Attention', type: 'Model', x: 340, y: 80, details: 'hidden_dim=1280\nnum_heads=20\nprefix_layers=4' },
+        { id: 'arch_router', title: 'Hierarchical Depth Router', type: 'Model', x: 340, y: 310, details: 'reflex_exit_layer=7\nlimbic_exit_layer=19\ntarget_depth_dist=[0.34, 0.33, 0.33]' },
+        { id: 'arch_moe', title: 'Sparse MoE FFN Layer', type: 'Model', x: 660, y: 180, details: 'num_experts=16\ntop_k=2\nshared_expert=True' },
+        { id: 'arch_triune', title: 'Triune MoE Transformer', type: 'Model', x: 980, y: 180, details: 'preset_id=triune-3b\nnum_layers=30\nhidden_dim=1280\nheads=20\nhead_dim=64\nexperts_routed=16\ndepth_mode=dynamic\nprecision=bf16' },
+        { id: 'arch_opt', title: 'CentroidSteer Optimizer', type: 'Optimizer', x: 1300, y: 180, details: 'lr=0.0004\nsteer_scale=0.20\ngalore_rank=64' }
+      ],
+      edges: [
+        { id: 'ab1', source: 'arch_tok', source_port: 'tokens', target: 'arch_prefix', target_port: 'hidden_states', port_type: 'tensor' },
+        { id: 'ab2', source: 'arch_tok', source_port: 'tokens', target: 'arch_router', target_port: 'hidden_states', port_type: 'tensor' },
+        { id: 'ab3', source: 'arch_prefix', source_port: 'attention_out', target: 'arch_moe', target_port: 'hidden_states', port_type: 'tensor' },
+        { id: 'ab4', source: 'arch_router', source_port: 'exit_choice', target: 'arch_triune', target_port: 'input_ids', port_type: 'tokens' },
+        { id: 'ab5', source: 'arch_moe', source_port: 'moe_out', target: 'arch_triune', target_port: 'model_handle', port_type: 'model' },
+        { id: 'ab6', source: 'arch_triune', source_port: 'model_handle', target: 'arch_opt', target_port: 'model_handle', port_type: 'model' }
+      ]
+    },
+    junkie_7b: {
+      id: 'junkie_7b',
+      name: 'Junkie-7B (7.40B Flagship Blueprint)',
+      preset_id: 'junkie',
+      spec: { num_layers: 32, hidden_dim: 2048, num_heads: 16, head_dim: 128, num_experts: 8, top_k_experts: 2, reflex_exit_layer: 18, limbic_exit_layer: 25, precision: 'bf16' },
+      nodes: [
+        { id: 'arch7_tok', title: 'BPE Tokenizer', type: 'Data', x: 40, y: 180, details: 'vocab_size=32000\nseq_len=8192' },
+        { id: 'arch7_gla', title: 'Vectorised GLA Attention', type: 'Model', x: 340, y: 80, details: 'num_heads=16\nhead_dim=128' },
+        { id: 'arch7_router', title: 'Hierarchical Depth Router', type: 'Model', x: 340, y: 310, details: 'reflex_exit_layer=18\nlimbic_exit_layer=25' },
+        { id: 'arch7_moe', title: 'Sparse MoE FFN Layer', type: 'Model', x: 660, y: 180, details: 'num_experts=8\ntop_k=2\nshared_expert=True' },
+        { id: 'arch7_triune', title: 'Triune MoE Transformer', type: 'Model', x: 980, y: 180, details: 'preset_id=junkie\nnum_layers=32\nhidden_dim=2048\nheads=16\nhead_dim=128\nexperts_routed=8\ndepth_mode=dynamic\nprecision=bf16' },
+        { id: 'arch7_opt', title: 'CentroidSteer Optimizer', type: 'Optimizer', x: 1300, y: 180, details: 'lr=0.0003\nsteer_scale=0.20\ngalore_rank=64' }
+      ],
+      edges: [
+        { id: 'a7_1', source: 'arch7_tok', source_port: 'tokens', target: 'arch7_gla', target_port: 'hidden_states', port_type: 'tensor' },
+        { id: 'a7_2', source: 'arch7_tok', source_port: 'tokens', target: 'arch7_router', target_port: 'hidden_states', port_type: 'tensor' },
+        { id: 'a7_3', source: 'arch7_gla', source_port: 'attention_out', target: 'arch7_moe', target_port: 'hidden_states', port_type: 'tensor' },
+        { id: 'a7_4', source: 'arch7_router', source_port: 'exit_choice', target: 'arch7_triune', target_port: 'input_ids', port_type: 'tokens' },
+        { id: 'a7_5', source: 'arch7_moe', source_port: 'moe_out', target: 'arch7_triune', target_port: 'model_handle', port_type: 'model' },
+        { id: 'a7_6', source: 'arch7_triune', source_port: 'model_handle', target: 'arch7_opt', target_port: 'model_handle', port_type: 'model' }
+      ]
+    },
+    triune_base: {
+      id: 'triune_base',
+      name: 'Triune-Base (75.8M Research Blueprint)',
+      preset_id: 'triune-base',
+      spec: { num_layers: 8, hidden_dim: 384, num_heads: 6, head_dim: 64, num_experts: 4, top_k_experts: 2, reflex_exit_layer: 2, limbic_exit_layer: 5, precision: 'bf16' },
+      nodes: [
+        { id: 'archb_tok', title: 'BPE Tokenizer', type: 'Data', x: 40, y: 180, details: 'vocab_size=32000\nseq_len=512' },
+        { id: 'archb_gla', title: 'Vectorised GLA Attention', type: 'Model', x: 340, y: 80, details: 'num_heads=6\nhead_dim=64' },
+        { id: 'archb_router', title: 'Hierarchical Depth Router', type: 'Model', x: 340, y: 310, details: 'reflex_exit_layer=2\nlimbic_exit_layer=5' },
+        { id: 'archb_moe', title: 'Sparse MoE FFN Layer', type: 'Model', x: 660, y: 180, details: 'num_experts=4\ntop_k=2\nshared_expert=True' },
+        { id: 'archb_triune', title: 'Triune MoE Transformer', type: 'Model', x: 980, y: 180, details: 'preset_id=triune-base\nnum_layers=8\nhidden_dim=384\nheads=6\nhead_dim=64\nexperts_routed=4\ndepth_mode=dynamic\nprecision=bf16' },
+        { id: 'archb_opt', title: 'CentroidSteer Optimizer', type: 'Optimizer', x: 1300, y: 180, details: 'lr=0.0005\nsteer_scale=0.20\ngalore_rank=64' }
+      ],
+      edges: [
+        { id: 'ab_1', source: 'archb_tok', source_port: 'tokens', target: 'archb_gla', target_port: 'hidden_states', port_type: 'tensor' },
+        { id: 'ab_2', source: 'archb_tok', source_port: 'tokens', target: 'archb_router', target_port: 'hidden_states', port_type: 'tensor' },
+        { id: 'ab_3', source: 'archb_gla', source_port: 'attention_out', target: 'archb_moe', target_port: 'hidden_states', port_type: 'tensor' },
+        { id: 'ab_4', source: 'archb_router', source_port: 'exit_choice', target: 'archb_triune', target_port: 'input_ids', port_type: 'tokens' },
+        { id: 'ab_5', source: 'archb_moe', source_port: 'moe_out', target: 'archb_triune', target_port: 'model_handle', port_type: 'model' },
+        { id: 'ab_6', source: 'archb_triune', source_port: 'model_handle', target: 'archb_opt', target_port: 'model_handle', port_type: 'model' }
+      ]
+    }
+  };
+
+  const AGENT_WORKFLOW_TEMPLATES = {
+    train_monitor_eval: {
+      id: 'train_monitor_eval',
+      name: 'Train -> Monitor -> Eval',
+      description: 'Stream corpus, run an autograd training step, evaluate perplexity, and snapshot checkpoint.',
+      nodes: [
+        { id: 'wf_stream', title: 'Local File Reader', type: 'Data', x: 40, y: 160, details: 'file_path=data/fineweb_sample.jsonl\nconfigure_runtime=false' },
+        { id: 'wf_tok', title: 'BPE Tokenizer', type: 'Data', x: 340, y: 160, details: 'tokenizer_path=triune_tokenizer.json' },
+        { id: 'wf_step', title: 'TrainingStep', type: 'Evaluation', x: 640, y: 160, details: 'grad_accum_steps=4\nmax_grad_norm=1.0' },
+        { id: 'wf_eval', title: 'Tensor Inspector', type: 'Analysis', x: 960, y: 160, details: '' }
+      ],
+      edges: [
+        { id: 'w1', source: 'wf_stream', source_port: 'dataset_stream', target: 'wf_step', target_port: 'dataset_stream', port_type: 'stream' },
+        { id: 'w2', source: 'wf_stream', source_port: 'text_sample', target: 'wf_tok', target_port: 'text', port_type: 'tokens' },
+        { id: 'w3', source: 'wf_step', source_port: 'loss', target: 'wf_eval', target_port: 'x', port_type: 'loss' }
+      ]
+    },
+    code_pytest_diff: {
+      id: 'code_pytest_diff',
+      name: 'Code -> Pytest -> Diff Approval Loop',
+      description: 'Inspect source batch, verify token invariants, and gate changes behind diff inspection.',
+      nodes: [
+        { id: 'cp_read', title: 'Local File Reader', type: 'Data', x: 40, y: 160, details: 'file_path=data/fineweb_sample.jsonl\nconfigure_runtime=false' },
+        { id: 'cp_tok', title: 'BPE Tokenizer', type: 'Data', x: 350, y: 160, details: 'tokenizer_path=triune_tokenizer.json\nconfigure_runtime=false' },
+        { id: 'cp_check', title: 'Token Batch Inspector', type: 'Analysis', x: 670, y: 160, details: '' },
+        { id: 'cp_tensor', title: 'Tensor Inspector', type: 'Analysis', x: 990, y: 160, details: '' }
+      ],
+      edges: [
+        { id: 'c1', source: 'cp_read', source_port: 'text_sample', target: 'cp_tok', target_port: 'text', port_type: 'tokens' },
+        { id: 'c2', source: 'cp_tok', source_port: 'tokens', target: 'cp_check', target_port: 'tokens', port_type: 'tokens' },
+        { id: 'c3', source: 'cp_check', source_port: 'metrics', target: 'cp_tensor', target_port: 'x', port_type: 'scalar' }
+      ]
+    },
+    dual_model_arena: {
+      id: 'dual_model_arena',
+      name: 'Dual Model Arena',
+      description: 'Compare shallow Reflex exit routing against full Cortex routing on the same prompt batch.',
+      nodes: [
+        { id: 'da_in', title: 'Local File Reader', type: 'Data', x: 40, y: 160, details: 'file_path=data/fineweb_sample.jsonl\nconfigure_runtime=false' },
+        { id: 'da_reflex', title: 'DepthRouter', type: 'Model', x: 360, y: 60, details: 'target_depth_dist=[0.8, 0.15, 0.05]\ntemperature=0.5' },
+        { id: 'da_cortex', title: 'Triune MoE Transformer', type: 'Model', x: 360, y: 270, details: 'use_node_config=false\nreturn_all_exits=true\nevaluation_mode=true' },
+        { id: 'da_cmp', title: 'Tensor Inspector', type: 'Analysis', x: 700, y: 160, details: '' }
+      ],
+      edges: [
+        { id: 'd1', source: 'da_in', source_port: 'text_sample', target: 'da_reflex', target_port: 'hidden_states', port_type: 'tokens' },
+        { id: 'd2', source: 'da_in', source_port: 'text_sample', target: 'da_cortex', target_port: 'input_ids', port_type: 'tokens' },
+        { id: 'd3', source: 'da_cortex', source_port: 'logits', target: 'da_cmp', target_port: 'x', port_type: 'tensor' }
+      ]
+    }
+  };
+
+  const CUSTOM_THEME_STORAGE_KEY = 'lucid_machines.studio.customThemes.v1';
+  const LEGACY_CUSTOM_THEME_STORAGE_KEY = 'triune.studio.customThemes.v1';
   const DEFAULT_THEME_DRAFT = {
     id: '',
-    name: 'My Triune Theme',
+    name: 'My Polysom Theme',
     mode: 'Dark',
     edition: 'Custom',
     description: 'A personal workspace theme.',
     palette: {
-      bg: '#0d1117', surface: '#151b23', card: '#1b232d', hover: '#25303d', input: '#111820',
-      text: '#edf2f7', muted: '#a9b5c3', dim: '#8190a1', border: '#303c4a', accent: '#8b83ff'
+      bg: '#0b0a14', surface: '#121020', card: '#18162b', hover: '#221f3b', input: '#0e0c19',
+      text: '#f2f0ff', muted: '#a6a2c7', dim: '#7e79a3', border: '#2d294a', accent: '#8b7cff'
     }
   };
 
   const legacyThemeIds = {
-    'cyberpunk-dark': 'obsidian-glass',
-    'emerald-terminal': 'obsidian-glass',
-    'modern-dark': 'obsidian-glass',
-    'classic-dark': 'obsidian-glass',
-    'editorial-cream': 'modern-light',
-    'classic-light': 'editorial-paper'
+    'obsidian-glass': 'hypnagogic',
+    'cyberpunk-dark': 'hypnagogic',
+    'emerald-terminal': 'phosphene',
+    'modern-dark': 'hypnagogic',
+    'modern-forest': 'pareidolia',
+    'classic-dark': 'afterimage',
+    'modern-light': 'mirage',
+    'editorial-cream': 'mirage',
+    'classic-light': 'mirage',
+    'editorial-paper': 'mirage'
   };
 
   function isThemeHex(value) {
@@ -1266,7 +1527,8 @@
 
   function readCustomThemes() {
     try {
-      const records = JSON.parse(window.localStorage.getItem(CUSTOM_THEME_STORAGE_KEY) || '[]');
+      const raw = window.localStorage.getItem(CUSTOM_THEME_STORAGE_KEY) || window.localStorage.getItem(LEGACY_CUSTOM_THEME_STORAGE_KEY) || '[]';
+      const records = JSON.parse(raw);
       return Array.isArray(records) ? records.map(normalizeThemeRecord).filter(Boolean).slice(0, 50) : [];
     } catch (_) {
       return [];
@@ -1300,10 +1562,12 @@
   }
 
   const APPEARANCE_THEMES = [
-    { id: 'obsidian-glass', name: 'Carbon', mode: 'Dark', edition: 'Studio', description: 'Quiet graphite surfaces with a restrained violet signal color.', palette: { bg: '#0d1117', surface: '#151b23', card: '#1b232d', hover: '#25303d', input: '#111820', text: '#edf2f7', muted: '#a9b5c3', dim: '#8190a1', border: '#303c4a', accent: '#8b83ff' } },
-    { id: 'modern-light', name: 'Porcelain', mode: 'Light', edition: 'Studio', description: 'Clear neutral surfaces, cool ink, and focused indigo actions.', palette: { bg: '#f3f5f8', surface: '#e9edf2', card: '#ffffff', hover: '#f5f7fa', input: '#ffffff', text: '#17212d', muted: '#536273', dim: '#728092', border: '#d5dde6', accent: '#4f67d8' } },
-    { id: 'modern-forest', name: 'Verdant', mode: 'Dark', edition: 'Studio', description: 'Low-glare evergreen surfaces with a measured mint accent.', palette: { bg: '#0d1512', surface: '#141e19', card: '#1a2821', hover: '#23352b', input: '#111b16', text: '#edf4ef', muted: '#aebfb3', dim: '#82968a', border: '#304438', accent: '#62bd91' } },
-    { id: 'editorial-paper', name: 'Fieldnote', mode: 'Light', edition: 'Studio', description: 'Warm mineral paper and deep botanical ink for long sessions.', palette: { bg: '#f4f1e9', surface: '#e9e5da', card: '#fffdf8', hover: '#f7f4ec', input: '#fffdf8', text: '#252a27', muted: '#58615b', dim: '#778079', border: '#d9d4c8', accent: '#35685b' } }
+    { id: 'hypnagogic', name: 'Hypnagogic', mode: 'Dark', edition: 'Polysom', description: 'Vivid lucid-twilight threshold with deep violet-indigo surfaces.', palette: { bg: '#0b0a14', surface: '#121020', card: '#18162b', hover: '#221f3b', input: '#0e0c19', text: '#f2f0ff', muted: '#b2aed1', dim: '#9490bc', border: '#2d294a', accent: '#8b7cff' } },
+    { id: 'phosphene', name: 'Phosphene', mode: 'Dark', edition: 'Polysom', description: 'Pitch-black void illuminated by crisp cyan phosphor luminescence.', palette: { bg: '#020304', surface: '#070b0d', card: '#0d1418', hover: '#132026', input: '#05080a', text: '#ecfeff', muted: '#92bccd', dim: '#749db0', border: '#1a2b34', accent: '#22d3ee' } },
+    { id: 'pareidolia', name: 'Pareidolia', mode: 'Dark', edition: 'Polysom', description: 'Cold mineral slate with glacial silver and ice-blue signal lines.', palette: { bg: '#0f141b', surface: '#171e28', card: '#1e2734', hover: '#283445', input: '#121821', text: '#eef2f7', muted: '#b0bdd0', dim: '#92a2b6', border: '#324054', accent: '#94c5ff' } },
+    { id: 'afterimage', name: 'Afterimage', mode: 'Dark', edition: 'Polysom', description: 'High-contrast crimson and amber retinal burn for deep focus.', palette: { bg: '#12090b', surface: '#1b0e11', card: '#241317', hover: '#331b21', input: '#160b0e', text: '#fff1f2', muted: '#dfbac1', dim: '#c697a0', border: '#45232b', accent: '#fb7185' } },
+    { id: 'mirage', name: 'Mirage', mode: 'Light', edition: 'Polysom', description: 'Clean high-contrast daylight surfaces with crisp indigo ink.', palette: { bg: '#f5f7fa', surface: '#eaedf2', card: '#ffffff', hover: '#f0f3f7', input: '#ffffff', text: '#111827', muted: '#374151', dim: '#4b5563', border: '#d1d5db', accent: '#4f46e5' } },
+    { id: 'euphoria', name: 'Euphoria', mode: 'Light', edition: 'Polysom', description: 'Warm luminous sunlit vellum with vermilion ink and rich editorial contrast.', palette: { bg: '#faf5ec', surface: '#f2e9da', card: '#fffdf8', hover: '#f7efe1', input: '#fffcf5', text: '#231410', muted: '#5e4338', dim: '#6e5044', border: '#dfd0ba', accent: '#b23808' } }
   ];
 
   let activeApiBase = '';
@@ -1319,7 +1583,7 @@
   function requestApiAuthToken() {
     if (apiAuthToken) return Promise.resolve(apiAuthToken);
     if (!apiAuthPrompt) {
-      apiAuthPrompt = Promise.resolve(window.prompt('Enter the Triune remote API bearer token:'))
+      apiAuthPrompt = Promise.resolve(window.prompt('Enter the Lucid Machines remote API bearer token:'))
         .then(token => {
           apiAuthToken = (token || '').trim();
           return apiAuthToken;
@@ -1339,22 +1603,37 @@
     // made a healthy backend appear offline when a loaded model was busy.
     if (activeApiBase) return activeApiBase;
     if (apiDiscoveryPromise) return apiDiscoveryPromise;
+    const isValidHealthz = (data) => Boolean(
+      data && data.status === 'ok' && (
+        data.service === 'polysom-studio' ||
+        data.service === 'lucid_machines-studio' ||
+        data.service === 'triune-studio'
+      )
+    );
+    const probeHealthz = async (base) => {
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 700);
+      try {
+        const res = await fetch(base + '/healthz', { signal: controller.signal });
+        if (!res.ok) return null;
+        const data = await res.json();
+        return isValidHealthz(data) ? base : null;
+      } catch (e) {
+        return null;
+      } finally {
+        clearTimeout(tid);
+      }
+    };
     apiDiscoveryPromise = (async () => {
-      const candidates = await Promise.all(Array.from({ length: 21 }, async (_, index) => {
-        const candidate = `http://127.0.0.1:${8000 + index}`;
-        const controller = new AbortController();
-        const tid = setTimeout(() => controller.abort(), 700);
-        try {
-          const res = await fetch(candidate + '/healthz', { signal: controller.signal });
-          if (!res.ok) return null;
-          const data = await res.json();
-          return data && data.status === 'ok' && data.service === 'triune-studio' ? candidate : null;
-        } catch (e) {
-          return null;
-        } finally {
-          clearTimeout(tid);
+      if ((window.location.protocol === 'http:' || window.location.protocol === 'https:') && window.location.origin && window.location.origin !== 'null') {
+        const sameOrigin = await probeHealthz(window.location.origin);
+        if (sameOrigin) {
+          console.log('[ApiFetch] Connected to same-origin PyTorch Engine:', sameOrigin);
+          activeApiBase = sameOrigin;
+          return sameOrigin;
         }
-      }));
+      }
+      const candidates = await Promise.all(Array.from({ length: 21 }, (_, index) => probeHealthz(`http://127.0.0.1:${8000 + index}`)));
       const candidate = candidates.find(Boolean) || '';
       if (candidate) {
         console.log('[ApiFetch] Discovered PyTorch Engine on:', candidate);
@@ -1373,7 +1652,7 @@
     const isRemoteOrigin = (window.location.protocol === 'http:' || window.location.protocol === 'https:') && !isLocalStudioHost(window.location.hostname);
     const apiBase = isRemoteOrigin ? '' : await discoverApiBase();
     if (!isRemoteOrigin && !apiBase) {
-      throw new Error('Triune backend was not found on localhost ports 8000–8020. Check Studio startup and open the startup log.');
+      throw new Error('Polysom Studio backend was not found on localhost ports 8000–8020. Check Studio startup and open the startup log.');
     }
     const url = apiBase ? (apiBase + path) : path;
     const send = (token) => {
@@ -1687,40 +1966,14 @@
   function tokenizeTextWithEntropy(text) {
     if (!text) return [];
     const matches = text.match(/<\|[a-zA-Z0-9_-]+\|>|[A-Za-z]+|[0-9]+|\s+|[^\s\w]/g) || [text];
-    return matches.map((tok, idx) => {
-      const isWhitespace = /^\s+$/.test(tok);
-      const isSpecial = tok.startsWith('<|');
-      const isPunct = /^[^\s\w]$/.test(tok);
-      const isCommon = /^(the|and|is|in|to|of|that|it|for|on|with|as|at|by|from)$/i.test(tok.trim());
-
-      let entropy;
-      let confidence;
-      if (isWhitespace || isSpecial || isPunct || isCommon) {
-        entropy = +(0.08 + (Math.sin(idx * 7) * 0.5 + 0.5) * 0.25).toFixed(2);
-        confidence = +(92 + (Math.cos(idx * 3) * 0.5 + 0.5) * 7.5).toFixed(1);
-      } else if (tok.length > 5 || /^(def|class|return|function|import|export|const|let|var)$/.test(tok)) {
-        entropy = +(1.2 + (Math.sin(idx * 11) * 0.5 + 0.5) * 0.9).toFixed(2);
-        confidence = +(35 + (Math.cos(idx * 5) * 0.5 + 0.5) * 30).toFixed(1);
-      } else {
-        entropy = +(0.4 + (Math.sin(idx * 13) * 0.5 + 0.5) * 0.6).toFixed(2);
-        confidence = +(65 + (Math.cos(idx * 7) * 0.5 + 0.5) * 22).toFixed(1);
-      }
-
-      const topCandidates = [
-        { text: tok, prob: confidence },
-        { text: isWhitespace ? ' ' : `${tok}s`, prob: +((100 - confidence) * 0.55).toFixed(1) },
-        { text: isWhitespace ? '\n' : `${tok}_alt`, prob: +((100 - confidence) * 0.28).toFixed(1) },
-        { text: '...', prob: +((100 - confidence) * 0.17).toFixed(1) }
-      ];
-
-      return {
-        id: (Math.abs(tok.split('').reduce((acc, c) => (acc << 5) - acc + c.charCodeAt(0), 0)) % 32000) || (idx + 100),
-        text: tok,
-        entropy,
-        confidence,
-        topCandidates
-      };
-    });
+    return matches.map((tok, idx) => ({
+      id: idx,
+      text: tok,
+      logprob: null,
+      entropy: null,
+      prob: null,
+      topCandidates: []
+    }));
   }
 
   function NeuronSynapseCanvas3D(props) {
@@ -1730,11 +1983,11 @@
     const [isExpanded, setIsExpanded] = useState(false);
     const [fps, setFps] = useState(0);
     const [layoutMode, setLayoutMode] = useState(() => {
-      try { return localStorage.getItem('triune_canvas_layout') || 'obsidian'; } catch (_) { return 'obsidian'; }
+      try { return localStorage.getItem('lucid_machines_canvas_layout') || localStorage.getItem('triune_canvas_layout') || 'obsidian'; } catch (_) { return 'obsidian'; }
     });
     const [customCanvasHeight, setCustomCanvasHeight] = useState(() => {
       try {
-        const saved = localStorage.getItem('triune_canvas_height');
+        const saved = localStorage.getItem('lucid_machines_canvas_height') || localStorage.getItem('triune_canvas_height');
         return saved ? Math.max(160, Math.min(560, parseInt(saved, 10))) : 240;
       } catch (_) { return 240; }
     });
@@ -2473,10 +2726,13 @@
     };
 
     useEffect(() => {
-      window.__triuneCanvasEmitPulse = (telemetry) => {
+      const emit = (telemetry) => {
         emitRealtimePulse(telemetry);
       };
+      window.__lucid_machinesCanvasEmitPulse = emit;
+      window.__triuneCanvasEmitPulse = emit;
       return () => {
+        delete window.__lucid_machinesCanvasEmitPulse;
         delete window.__triuneCanvasEmitPulse;
       };
     }, []);
@@ -3032,7 +3288,7 @@
           style: { color: '#10b981', borderColor: 'rgba(16, 185, 129, 0.4)', fontWeight: 600 }
         }, [
           renderIcon('branch', 10, { marginRight: '4px', color: '#10b981' }),
-          `${(upgradeResult.model_name || 'Triune').toUpperCase()}: architecture estimate · not benchmarked`
+          `${(upgradeResult.model_name || 'TriuneTransformer').toUpperCase()}: architecture estimate · not benchmarked`
         ]),
         e('div', {
           className: 'neuron-hud-item',
@@ -3059,7 +3315,7 @@
           onClick: () => {
             const next = layoutMode === 'obsidian' ? 'pipeline' : 'obsidian';
             setLayoutMode(next);
-            try { localStorage.setItem('triune_canvas_layout', next); } catch (_) {}
+            try { localStorage.setItem('lucid_machines_canvas_layout', next); } catch (_) {}
           }
         }, [renderIcon('hub', 11, { marginRight: '3px' }), layoutMode === 'obsidian' ? 'Obsidian Brain' : 'Pipeline']),
         e('button', {
@@ -3085,7 +3341,7 @@
             const dy = moveEv.clientY - resizeStartYRef.current;
             const newH = Math.max(160, Math.min(560, resizeStartHRef.current + dy));
             setCustomCanvasHeight(newH);
-            try { localStorage.setItem('triune_canvas_height', String(newH)); } catch (_) {}
+            try { localStorage.setItem('lucid_machines_canvas_height', String(newH)); } catch (_) {}
           };
           const onUp = () => {
             setIsResizing(false);
@@ -3096,6 +3352,578 @@
           window.addEventListener('pointerup', onUp);
         }
       }, e('div', { className: 'canvas-resize-bar' }))
+    );
+  }
+
+  // ============================================================================
+  // A1. Live Multi-Channel Polysomnograph Monitor (4 Synchronized Traces + Crosshair)
+  // ============================================================================
+  function PolysomnographMonitorCanvas({ metricsHistory, mindTelemetry, gpuTelemetry, exitUsage, vramUsage, studioTheme }) {
+    const canvasRef = useRef(null);
+    const wrapRef = useRef(null);
+    const [hoverIdx, setHoverIdx] = useState(null);
+    const [canvasEpoch, setCanvasEpoch] = useState(0);
+
+    const samples = useMemo(() => {
+      const hist = Array.isArray(metricsHistory) ? metricsHistory : [];
+      const csEnergy = mindTelemetry?.centroid_steer?.alignment_energy;
+      const fallbackEnergyPct = typeof csEnergy === 'number' ? Math.min(100, Math.max(0, csEnergy * 100)) : null;
+      const curVram = Number(gpuTelemetry?.vram?.allocated_gb ?? vramUsage?.allocated ?? 0);
+      return hist.map((m, idx) => {
+        const lossVal = typeof m.loss === 'number' ? m.loss : null;
+        const valLossVal = typeof m.val_loss === 'number' ? m.val_loss : (typeof m.lm_loss === 'number' ? m.lm_loss : null);
+        const energyPct = typeof m.subspace_energy_pct === 'number'
+          ? m.subspace_energy_pct
+          : (typeof m.centroid_energy_pct === 'number' ? m.centroid_energy_pct : fallbackEnergyPct);
+        const ex = m.exit_usage || exitUsage || {};
+        const r = Number(ex.reflex || 0);
+        const li = Number(ex.limbic || 0);
+        const co = Number(ex.cortex || 0);
+        const tierLevel = co >= li && co >= r ? 2 : (li >= r ? 1 : 0);
+        const vramVal = typeof m.vram_gb === 'number' ? m.vram_gb : curVram;
+        const tps = Number(m.throughput || 0);
+        return {
+          step: m.step ?? idx + 1,
+          loss: lossVal,
+          valLoss: valLossVal,
+          energyPct,
+          tierLevel,
+          reflex: r,
+          limbic: li,
+          cortex: co,
+          vram: vramVal,
+          tps
+        };
+      });
+    }, [metricsHistory, mindTelemetry, gpuTelemetry, exitUsage, vramUsage]);
+
+    useEffect(() => {
+      const el = wrapRef.current;
+      if (!el || typeof ResizeObserver === 'undefined') return undefined;
+      const ro = new ResizeObserver(() => setCanvasEpoch(x => x + 1));
+      ro.observe(el);
+      return () => ro.disconnect();
+    }, []);
+
+    useEffect(() => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      const w = Math.max(360, Math.floor(rect.width || 760));
+      const h = Math.max(240, Math.floor(rect.height || 300));
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = w * dpr;
+      canvas.height = h * dpr;
+      const ctx = canvas.getContext('2d');
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      const cs = window.getComputedStyle(canvas);
+      const col = (k, fb) => cs.getPropertyValue(k).trim() || fb;
+      const cBg = col('--bg-dark', '#0b0a14');
+      const cGrid = col('--chart-grid', 'rgba(167,155,255,0.12)');
+      const cAxis = col('--chart-axis', '#a6a2c7');
+      const cLoss = col('--chart-loss', '#f43f5e');
+      const cLm = col('--chart-lm-loss', '#10b981');
+      const cPrimary = col('--primary', '#8b7cff');
+      const cAmber = col('--accent-amber', '#f59e0b');
+      const cEmerald = col('--accent-emerald', '#10b981');
+      const cThroughput = col('--chart-throughput', '#38bdf8');
+      const cText = col('--text-main', '#f2f0ff');
+
+      ctx.fillStyle = cBg;
+      ctx.fillRect(0, 0, w, h);
+
+      const padL = 74;
+      const padR = 16;
+      const padT = 10;
+      const padB = 22;
+      const plotW = Math.max(60, w - padL - padR);
+      const plotH = Math.max(120, h - padT - padB);
+      const chGap = 6;
+      const chH = (plotH - chGap * 3) / 4;
+
+      const channels = [
+        { label: 'CH1 LOSS/EMA', sub: 'Train & Val', color: cLoss },
+        { label: 'CH2 SUBSPACE', sub: '||G Ce||^2/||G||^2', color: cPrimary },
+        { label: 'CH3 HYPNOGRAM', sub: 'Reflex/Limbic/Cortex', color: cAmber },
+        { label: 'CH4 GPU/TPS', sub: 'VRAM GB + tok/s', color: cThroughput }
+      ];
+
+      channels.forEach((ch, ci) => {
+        const y0 = padT + ci * (chH + chGap);
+        ctx.strokeStyle = cGrid;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(padL, y0, plotW, chH);
+        for (let gx = 1; gx < 6; gx++) {
+          const x = padL + (gx / 6) * plotW;
+          ctx.beginPath();
+          ctx.moveTo(x, y0);
+          ctx.lineTo(x, y0 + chH);
+          ctx.stroke();
+        }
+        ctx.fillStyle = ch.color;
+        ctx.font = '700 9.5px monospace';
+        ctx.textAlign = 'left';
+        ctx.fillText(ch.label, 8, y0 + 16);
+        ctx.fillStyle = cAxis;
+        ctx.font = '9px monospace';
+        ctx.fillText(ch.sub, 8, y0 + 28);
+      });
+
+      const n = samples.length;
+      if (n === 0) {
+        ctx.fillStyle = cAxis;
+        ctx.font = '12px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('Polysomnograph armed — run training steps or forward passes to stream synchronized waveforms.', padL + plotW / 2, padT + plotH / 2);
+        return;
+      }
+
+      const xFor = (i) => (n === 1 ? padL + plotW * 0.5 : padL + (i / (n - 1)) * plotW);
+
+      // Ch1: Train Loss + Val/LM Loss + EMA
+      {
+        const y0 = padT;
+        const losses = samples.map(s => s.loss).filter(v => typeof v === 'number');
+        const vals = samples.map(s => s.valLoss).filter(v => typeof v === 'number');
+        const all = [...losses, ...vals];
+        const minV = all.length ? Math.min(...all) : 0;
+        const maxV = all.length ? Math.max(...all) : 1;
+        const span = Math.max(maxV - minV, 1e-4);
+        const yFor = (v) => y0 + chH - 6 - ((v - minV) / span) * (chH - 12);
+
+        const drawTrace = (arr, strokeCol, widthPx, dashed) => {
+          ctx.save();
+          ctx.strokeStyle = strokeCol;
+          ctx.lineWidth = widthPx;
+          if (dashed) ctx.setLineDash([4, 3]);
+          ctx.beginPath();
+          let started = false;
+          arr.forEach((v, i) => {
+            if (typeof v !== 'number') return;
+            const px = xFor(i);
+            const py = yFor(v);
+            if (!started) { ctx.moveTo(px, py); started = true; }
+            else ctx.lineTo(px, py);
+          });
+          ctx.stroke();
+          ctx.restore();
+        };
+        drawTrace(samples.map(s => s.loss), cLoss, 1.8, false);
+        drawTrace(samples.map(s => s.valLoss), cLm, 1.5, true);
+        let ema = null;
+        const emaSeries = samples.map(s => {
+          if (typeof s.loss !== 'number') return null;
+          ema = ema === null ? s.loss : 0.7 * ema + 0.3 * s.loss;
+          return ema;
+        });
+        drawTrace(emaSeries, cText, 1.2, false);
+      }
+
+      // Ch2: CentroidSteer Subspace Energy %
+      {
+        const y0 = padT + (chH + chGap);
+        const energies = samples.map(s => (typeof s.energyPct === 'number' ? s.energyPct : 0));
+        const maxE = Math.max(100, ...energies);
+        ctx.strokeStyle = cPrimary;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        energies.forEach((v, i) => {
+          const px = xFor(i);
+          const py = y0 + chH - 6 - (Math.max(0, v) / maxE) * (chH - 12);
+          if (i === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        });
+        ctx.stroke();
+      }
+
+      // Ch3: Triune Stepped Hypnogram (Reflex=0, Limbic=1, Cortex=2)
+      {
+        const y0 = padT + 2 * (chH + chGap);
+        const tierY = (lvl) => y0 + chH - 8 - (lvl / 2) * (chH - 16);
+        ctx.strokeStyle = cAmber;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        samples.forEach((s, i) => {
+          const px = xFor(i);
+          const py = tierY(s.tierLevel);
+          if (i === 0) {
+            ctx.moveTo(px, py);
+          } else {
+            const prevY = tierY(samples[i - 1].tierLevel);
+            ctx.lineTo(px, prevY);
+            ctx.lineTo(px, py);
+          }
+        });
+        ctx.stroke();
+        samples.forEach((s, i) => {
+          ctx.fillStyle = s.tierLevel === 0 ? cEmerald : (s.tierLevel === 1 ? cAmber : cPrimary);
+          ctx.fillRect(xFor(i) - 2, tierY(s.tierLevel) - 2, 4, 4);
+        });
+      }
+
+      // Ch4: GPU VRAM + tok/s spark traces
+      {
+        const y0 = padT + 3 * (chH + chGap);
+        const tpsVals = samples.map(s => s.tps);
+        const maxTps = Math.max(1, ...tpsVals);
+        const vramVals = samples.map(s => s.vram);
+        const maxVram = Math.max(1, Number(gpuTelemetry?.vram?.total_gb || 8), ...vramVals);
+
+        ctx.strokeStyle = cThroughput;
+        ctx.lineWidth = 1.8;
+        ctx.beginPath();
+        tpsVals.forEach((v, i) => {
+          const px = xFor(i);
+          const py = y0 + chH - 6 - (Math.max(0, v) / maxTps) * (chH - 12);
+          if (i === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        });
+        ctx.stroke();
+
+        ctx.strokeStyle = cEmerald;
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        vramVals.forEach((v, i) => {
+          const px = xFor(i);
+          const py = y0 + chH - 6 - (Math.max(0, v) / maxVram) * (chH - 12);
+          if (i === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        });
+        ctx.stroke();
+      }
+
+      // X-axis labels
+      ctx.fillStyle = cAxis;
+      ctx.font = '10px monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText(`Step ${samples[0].step}`, padL, h - 6);
+      ctx.textAlign = 'right';
+      ctx.fillText(`Step ${samples[n - 1].step}`, padL + plotW, h - 6);
+
+      // Interactive synchronized hover crosshair
+      if (hoverIdx !== null && hoverIdx >= 0 && hoverIdx < n) {
+        const cx = xFor(hoverIdx);
+        ctx.save();
+        ctx.strokeStyle = cText;
+        ctx.globalAlpha = 0.75;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(cx, padT);
+        ctx.lineTo(cx, padT + plotH);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }, [samples, hoverIdx, studioTheme, canvasEpoch, gpuTelemetry]);
+
+    const activeSample = hoverIdx !== null && samples[hoverIdx] ? samples[hoverIdx] : (samples.length ? samples[samples.length - 1] : null);
+    const tierNames = ['Reflex', 'Limbic', 'Cortex'];
+
+    return e('div', { className: 'ps-polysom-monitor', ref: wrapRef },
+      e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' } },
+        e('strong', { style: { fontSize: '12.5px', fontFamily: 'var(--font-heading)' } }, '4-Channel Synchronized Polysomnograph Monitor'),
+        e('span', { style: { fontSize: '11px', fontFamily: 'var(--font-mono)', color: 'var(--text-dim)' } },
+          samples.length ? `${samples.length} synchronized samples · hover for crosshair` : 'Waiting for training / forward step'
+        )
+      ),
+      e('canvas', {
+        ref: canvasRef,
+        className: 'ps-polysom-canvas',
+        onMouseMove: (ev) => {
+          if (!samples.length || !canvasRef.current) return;
+          const rect = canvasRef.current.getBoundingClientRect();
+          const padL = 74;
+          const padR = 16;
+          const plotW = Math.max(60, rect.width - padL - padR);
+          const relX = Math.max(0, Math.min(plotW, ev.clientX - rect.left - padL));
+          const idx = samples.length === 1 ? 0 : Math.round((relX / plotW) * (samples.length - 1));
+          setHoverIdx(idx);
+        },
+        onMouseLeave: () => setHoverIdx(null)
+      }),
+      e('div', { className: 'ps-polysom-crosshair-bar' },
+        activeSample ? [
+          e('span', { key: 'st' }, `Step: ${activeSample.step}`),
+          e('span', { key: 'l' }, `Ch1 Loss: ${typeof activeSample.loss === 'number' ? activeSample.loss.toFixed(4) : '--'} / Val: ${typeof activeSample.valLoss === 'number' ? activeSample.valLoss.toFixed(4) : '--'}`),
+          e('span', { key: 'e' }, `Ch2 Subspace Energy: ${typeof activeSample.energyPct === 'number' ? activeSample.energyPct.toFixed(1) + '%' : '--'}`),
+          e('span', { key: 'h' }, `Ch3 Exit: ${tierNames[activeSample.tierLevel] || 'Reflex'} (R:${activeSample.reflex}% L:${activeSample.limbic}% C:${activeSample.cortex}%)`),
+          e('span', { key: 'g' }, `Ch4 VRAM: ${Number(activeSample.vram || 0).toFixed(2)} GB · ${Math.round(activeSample.tps || 0)} tok/s`)
+        ] : e('span', null, 'Crosshair Readout: Start training or step once to inspect live 4-channel waveforms.')
+      )
+    );
+  }
+
+  // ============================================================================
+  // A2. MoE Expert Specialization Heatmap & 2D Centroid Constellation Canvas
+  // ============================================================================
+  function MoERoutingMatrixCanvas({ mindTelemetry, studioTheme }) {
+    const heatRef = useRef(null);
+    const constRef = useRef(null);
+    const wrapRef = useRef(null);
+    const [hoverCell, setHoverCell] = useState(null);
+    const [hoverNode, setHoverNode] = useState(null);
+    const [epoch, setEpoch] = useState(0);
+
+    const moe = mindTelemetry?.moe_routing || {};
+    const layers = Array.isArray(moe.layers) ? moe.layers : [];
+
+    useEffect(() => {
+      const el = wrapRef.current;
+      if (!el || typeof ResizeObserver === 'undefined') return undefined;
+      const ro = new ResizeObserver(() => setEpoch(x => x + 1));
+      ro.observe(el);
+      return () => ro.disconnect();
+    }, []);
+
+    // Draw Layer x Expert Routing Heatmap
+    useEffect(() => {
+      const canvas = heatRef.current;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      const w = Math.max(240, Math.floor(rect.width || 360));
+      const h = Math.max(180, Math.floor(rect.height || 220));
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = w * dpr;
+      canvas.height = h * dpr;
+      const ctx = canvas.getContext('2d');
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      const cs = window.getComputedStyle(canvas);
+      const col = (k, fb) => cs.getPropertyValue(k).trim() || fb;
+      const cBg = col('--bg-dark', '#0b0a14');
+      const cBorder = col('--border-dark', '#2d294a');
+      const cText = col('--text-main', '#f2f0ff');
+      const cMuted = col('--text-muted', '#a6a2c7');
+      const cPrimary = col('--primary', '#8b7cff');
+      const cEmerald = col('--accent-emerald', '#10b981');
+      const cAmber = col('--accent-amber', '#f59e0b');
+
+      ctx.fillStyle = cBg;
+      ctx.fillRect(0, 0, w, h);
+
+      if (!layers.length) {
+        ctx.fillStyle = cMuted;
+        ctx.font = '11px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('Awaiting MoE layer telemetry (initialize model & run step).', w / 2, h / 2);
+        return;
+      }
+
+      const maxE = Math.max(1, ...layers.map(l => l.num_experts || (l.accepted_counts || []).length || 4));
+      const padL = 56;
+      const padT = 22;
+      const padR = 10;
+      const padB = 12;
+      const cellW = (w - padL - padR) / maxE;
+      const cellH = (h - padT - padB) / layers.length;
+
+      ctx.fillStyle = cMuted;
+      ctx.font = '9.5px monospace';
+      ctx.textAlign = 'center';
+      for (let ei = 0; ei < maxE; ei++) {
+        ctx.fillText(`E${ei}`, padL + ei * cellW + cellW / 2, 14);
+      }
+
+      layers.forEach((layer, li) => {
+        const ly = padT + li * cellH;
+        ctx.fillStyle = cMuted;
+        ctx.font = '9px monospace';
+        ctx.textAlign = 'right';
+        const shortName = String(layer.layer_name || `L${li}`).split('.').slice(-2).join('.');
+        ctx.fillText(shortName.slice(0, 8), padL - 6, ly + cellH / 2 + 3);
+
+        const acc = layer.accepted_counts || [];
+        const totalAcc = acc.reduce((a, b) => a + Number(b || 0), 0);
+        for (let ei = 0; ei < (layer.num_experts || maxE); ei++) {
+          const cx = padL + ei * cellW + 2;
+          const cy = ly + 2;
+          const cw = Math.max(4, cellW - 4);
+          const ch = Math.max(4, cellH - 4);
+          const cnt = Number(acc[ei] || 0);
+          const ratio = totalAcc > 0 ? cnt / totalAcc : 0;
+          ctx.fillStyle = ratio > 0.25 ? cPrimary : (ratio > 0.12 ? cEmerald : (ratio > 0 ? cAmber : cBg));
+          ctx.globalAlpha = totalAcc > 0 ? Math.min(1, 0.22 + ratio * 2.2) : 0.25;
+          ctx.fillRect(cx, cy, cw, ch);
+          ctx.globalAlpha = 1;
+          ctx.strokeStyle = (hoverCell && hoverCell.li === li && hoverCell.ei === ei) ? cText : cBorder;
+          ctx.lineWidth = (hoverCell && hoverCell.li === li && hoverCell.ei === ei) ? 1.8 : 1;
+          ctx.strokeRect(cx, cy, cw, ch);
+        }
+      });
+    }, [layers, hoverCell, studioTheme, epoch]);
+
+    // Draw 2D Centroid Constellation
+    useEffect(() => {
+      const canvas = constRef.current;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      const w = Math.max(200, Math.floor(rect.width || 280));
+      const h = Math.max(180, Math.floor(rect.height || 220));
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = w * dpr;
+      canvas.height = h * dpr;
+      const ctx = canvas.getContext('2d');
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      const cs = window.getComputedStyle(canvas);
+      const col = (k, fb) => cs.getPropertyValue(k).trim() || fb;
+      const cBg = col('--bg-dark', '#0b0a14');
+      const cGrid = col('--chart-grid', 'rgba(167,155,255,0.14)');
+      const cMuted = col('--text-muted', '#a6a2c7');
+      const cText = col('--text-main', '#f2f0ff');
+      const cPrimary = col('--primary', '#8b7cff');
+      const cEmerald = col('--accent-emerald', '#10b981');
+      const cAmber = col('--accent-amber', '#f59e0b');
+
+      ctx.fillStyle = cBg;
+      ctx.fillRect(0, 0, w, h);
+
+      const cx = w / 2;
+      const cy = h / 2;
+      const maxR = Math.min(w, h) * 0.38;
+
+      // Polar coordinate rings
+      [0.33, 0.66, 1.0].forEach(frac => {
+        ctx.beginPath();
+        ctx.arc(cx, cy, maxR * frac, 0, Math.PI * 2);
+        ctx.strokeStyle = cGrid;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      });
+      ctx.beginPath();
+      ctx.moveTo(cx - maxR, cy); ctx.lineTo(cx + maxR, cy);
+      ctx.moveTo(cx, cy - maxR); ctx.lineTo(cx, cy + maxR);
+      ctx.strokeStyle = cGrid;
+      ctx.stroke();
+
+      const util = Array.isArray(moe.utilization_pct) ? moe.utilization_pct : [];
+      const nExp = Math.max(util.length, layers[0]?.num_experts || 0);
+      if (!nExp) {
+        ctx.fillStyle = cMuted;
+        ctx.font = '10.5px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('2D Centroid Constellation', cx, cy - 6);
+        ctx.fillText('(awaiting model)', cx, cy + 10);
+        return;
+      }
+
+      const avgEnergy = Number(mindTelemetry?.centroid_steer?.alignment_energy || 0);
+      const pts = [];
+      for (let i = 0; i < nExp; i++) {
+        const angle = (i / nExp) * Math.PI * 2 - Math.PI / 2;
+        const load = Number(util[i] || (100 / nExp));
+        const layerEnergy = layers.reduce((acc, l) => acc + Number(l.alignment_energy || 0), 0) / Math.max(1, layers.length);
+        const radius = maxR * Math.min(0.95, Math.max(0.28, 0.35 + (load / 100) * 0.55 + Math.min(0.25, (layerEnergy || avgEnergy) * 0.5)));
+        const px = cx + Math.cos(angle) * radius;
+        const py = cy + Math.sin(angle) * radius;
+        pts.push({ i, px, py, load, energy: layerEnergy || avgEnergy, cosSep: Math.cos(angle).toFixed(2) });
+      }
+
+      // Connect centroid spokes
+      pts.forEach(p => {
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(p.px, p.py);
+        ctx.strokeStyle = cGrid;
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+      });
+
+      pts.forEach((p, idx) => {
+        const nodeCol = idx % 3 === 0 ? cPrimary : (idx % 3 === 1 ? cEmerald : cAmber);
+        const r = Math.max(5, Math.min(11, 4 + p.load * 0.14));
+        ctx.beginPath();
+        ctx.arc(p.px, p.py, r, 0, Math.PI * 2);
+        ctx.fillStyle = nodeCol;
+        ctx.fill();
+        ctx.strokeStyle = hoverNode && hoverNode.i === p.i ? cText : cBg;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        ctx.fillStyle = cText;
+        ctx.font = '700 9.5px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText(`E${p.i}`, p.px, p.py - r - 4);
+      });
+    }, [layers, moe, mindTelemetry, hoverNode, studioTheme, epoch]);
+
+    return e('div', { ref: wrapRef, style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
+      e('div', { className: 'ps-moe-matrix-wrap' },
+        e('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
+          e('div', { style: { display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-muted)' } },
+            e('strong', null, 'Layer x Expert Routing Matrix'),
+            e('span', { style: { fontFamily: 'var(--font-mono)' } }, `${layers.length} MoE layers`)
+          ),
+          e('canvas', {
+            ref: heatRef,
+            className: 'ps-moe-canvas',
+            onMouseMove: (ev) => {
+              if (!layers.length || !heatRef.current) return;
+              const rect = heatRef.current.getBoundingClientRect();
+              const padL = 56, padT = 22, padR = 10, padB = 12;
+              const maxE = Math.max(1, ...layers.map(l => l.num_experts || 4));
+              const cellW = (rect.width - padL - padR) / maxE;
+              const cellH = (rect.height - padT - padB) / layers.length;
+              const ei = Math.floor((ev.clientX - rect.left - padL) / cellW);
+              const li = Math.floor((ev.clientY - rect.top - padT) / cellH);
+              if (li >= 0 && li < layers.length && ei >= 0 && ei < (layers[li].num_experts || maxE)) {
+                const layer = layers[li];
+                const acc = Number((layer.accepted_counts || [])[ei] || 0);
+                const req = Number((layer.requested_counts || [])[ei] || 0);
+                const tot = (layer.accepted_counts || []).reduce((a, b) => a + Number(b || 0), 0);
+                setHoverCell({
+                  li, ei,
+                  layerName: layer.layer_name || `Layer ${li}`,
+                  loadRatio: tot > 0 ? ((acc / tot) * 100).toFixed(1) + '%' : '0.0%',
+                  accepted: acc,
+                  requested: req,
+                  energy: layer.alignment_energy
+                });
+              } else {
+                setHoverCell(null);
+              }
+            },
+            onMouseLeave: () => setHoverCell(null)
+          })
+        ),
+        e('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
+          e('div', { style: { display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-muted)' } },
+            e('strong', null, '2D Centroid Constellation'),
+            e('span', { style: { fontFamily: 'var(--font-mono)' } },
+              `Energy: ${mindTelemetry?.centroid_steer?.alignment_energy ?? '--'}`
+            )
+          ),
+          e('canvas', {
+            ref: constRef,
+            className: 'ps-moe-canvas',
+            onMouseMove: (ev) => {
+              const util = Array.isArray(moe.utilization_pct) ? moe.utilization_pct : [];
+              const nExp = Math.max(util.length, layers[0]?.num_experts || 0);
+              if (!nExp || !constRef.current) return;
+              const rect = constRef.current.getBoundingClientRect();
+              const cx = rect.width / 2, cy = rect.height / 2;
+              const ang = Math.atan2(ev.clientY - rect.top - cy, ev.clientX - rect.left - cx);
+              const norm = (ang + Math.PI / 2 + Math.PI * 2) % (Math.PI * 2);
+              const idx = Math.round((norm / (Math.PI * 2)) * nExp) % nExp;
+              setHoverNode({
+                i: idx,
+                load: Number(util[idx] || (100 / nExp)).toFixed(1),
+                cosSep: Math.cos((idx / nExp) * Math.PI * 2).toFixed(3),
+                energy: mindTelemetry?.centroid_steer?.alignment_energy ?? '--'
+              });
+            },
+            onMouseLeave: () => setHoverNode(null)
+          })
+        )
+      ),
+      e('div', { className: 'ps-polysom-crosshair-bar' },
+        hoverCell
+          ? e('span', null, `${hoverCell.layerName} | Expert E${hoverCell.ei} | Load Ratio: ${hoverCell.loadRatio} (Acc: ${hoverCell.accepted}, Req: ${hoverCell.requested}) | Energy: ${hoverCell.energy ?? '--'}`)
+          : (hoverNode
+            ? e('span', null, `Constellation E${hoverNode.i} | Routing Load: ${hoverNode.load}% | Cosine Separation: ${hoverNode.cosSep} | Active Energy: ${hoverNode.energy}`)
+            : e('span', null, 'Hover any Heatmap cell or Constellation node for routing load ratio, cosine separation, and active energy.'))
+      )
     );
   }
 
@@ -3492,15 +4320,42 @@
   }
 
   const ChatMessageBubble = React.memo(function ChatMessageBubble(props) {
-    const { m, idx, isLastAssistant, isGenerating, isThoughtExpanded, onToggleThought, onFork, onCopy } = props;
+    const { m, idx, isLastAssistant, isGenerating, isThoughtExpanded, onToggleThought, onFork, onCopy, onInspectMessageTokens } = props;
     const parsedThought = m.isAssistant ? parseReasoningThought(m.text, isGenerating && isLastAssistant) : null;
     const thoughtExpanded = isThoughtExpanded !== undefined ? isThoughtExpanded : (parsedThought ? parsedThought.isLiveThinking : false);
+    const [thoughtElapsedSec, setThoughtElapsedSec] = useState(0);
+    const thoughtStartRef = useRef(null);
+    const [selectedInlineTokenIdx, setSelectedInlineTokenIdx] = useState(null);
+
+    useEffect(() => {
+      if (parsedThought && parsedThought.isLiveThinking) {
+        if (!thoughtStartRef.current) thoughtStartRef.current = performance.now();
+        const tid = setInterval(() => {
+          if (thoughtStartRef.current) {
+            setThoughtElapsedSec(+((performance.now() - thoughtStartRef.current) / 1000).toFixed(1));
+          }
+        }, 100);
+        return () => clearInterval(tid);
+      }
+      if (thoughtStartRef.current) {
+        setThoughtElapsedSec(+((performance.now() - thoughtStartRef.current) / 1000).toFixed(1));
+        thoughtStartRef.current = null;
+      }
+      return undefined;
+    }, [parsedThought ? parsedThought.isLiveThinking : false]);
+
+    const msgTokenData = m.tokenLogprobs && m.tokenLogprobs.available ? m.tokenLogprobs.tokens : null;
 
     return e('div', { key: m.id || idx, className: `chat-bubble ${m.isAssistant ? 'assistant' : 'user'}` },
       e('div', { className: 'bubble-header' },
         e('span', { className: 'bubble-sender' }, m.sender),
         e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
           e('span', { className: 'bubble-time' }, m.time),
+          m.isAssistant && onInspectMessageTokens && e('button', {
+            className: 'btn-fork-bubble',
+            title: 'Inspect token logprobs & entropy in Token Lab',
+            onClick: () => onInspectMessageTokens(m)
+          }, [renderIcon('tokens', 11, { marginRight: '4px' }), 'Inspect Tokens']),
           e('button', {
             className: 'btn-fork-bubble',
             title: 'Fork conversation from this turn into a new branch',
@@ -3514,10 +4369,11 @@
         )
       ),
       parsedThought && parsedThought.hasThought && e('div', {
-        className: `reasoning-accordion ${parsedThought.isLiveThinking ? 'active' : 'completed'} ${thoughtExpanded ? 'expanded' : 'collapsed'}`
+        className: `ps-thought-accordion reasoning-accordion ${parsedThought.isLiveThinking ? 'active' : 'completed'} ${thoughtExpanded ? 'expanded' : 'collapsed'}`
       },
-        e('div', {
-          className: 'reasoning-header',
+        e('button', {
+          type: 'button',
+          className: 'ps-thought-header reasoning-header',
           onClick: onToggleThought
         },
           e('div', { className: 'reasoning-header-left' },
@@ -3525,13 +4381,11 @@
               renderIcon('brain', 13, { marginRight: '5px' }),
               parsedThought.isLiveThinking ? 'Thinking live...' : 'Reasoning Process'
             ]),
-            parsedThought.isLiveThinking ? (
-              e('span', { className: 'reasoning-timer' },
-                e('span', { className: 'velocity-gauge-dot streaming', style: { display: 'inline-block', marginRight: '4px' } }),
-                'Active reasoning'
-              )
-            ) : (
-              e('span', { className: 'reasoning-badge' }, `${parsedThought.steps.length > 0 ? `${parsedThought.steps.length} steps` : 'Complete'} · verified`)
+            e('span', { className: 'ps-thought-timer reasoning-timer' },
+              parsedThought.isLiveThinking && e('span', { className: 'velocity-gauge-dot streaming', style: { display: 'inline-block', marginRight: '4px' } }),
+              parsedThought.isLiveThinking
+                ? `${thoughtElapsedSec.toFixed(1)}s`
+                : `${parsedThought.steps.length > 0 ? `${parsedThought.steps.length} steps` : 'Complete'}${thoughtElapsedSec > 0 ? ` · ${thoughtElapsedSec.toFixed(1)}s` : ''}`
             )
           ),
           e('div', { className: 'reasoning-header-right' },
@@ -3539,7 +4393,7 @@
             e('span', { className: `reasoning-chevron ${thoughtExpanded ? 'up' : 'down'}` }, renderIcon(thoughtExpanded ? 'chevronUp' : 'chevronDown', 11))
           )
         ),
-        thoughtExpanded && e('div', { className: 'reasoning-body' },
+        thoughtExpanded && e('div', { className: 'ps-thought-body reasoning-body' },
           parsedThought.steps.length > 0 && e('div', { className: 'reasoning-steps-section' },
             e('div', { className: 'reasoning-steps-title' }, 'Step Breakdown & Deductions:'),
             e('div', { className: 'reasoning-step-list' },
@@ -3554,20 +4408,50 @@
               })
             )
           ),
-          parsedThought.cleanText && e('div', { className: 'reasoning-synthesis-section' },
-            e('div', { className: 'reasoning-synthesis-title' }, 'Deductive Synthesis:'),
-            e('div', { className: 'reasoning-synthesis-content' }, renderFormattedText(parsedThought.cleanText))
+          parsedThought.thoughtText && e('div', { className: 'reasoning-synthesis-section' },
+            e('div', { className: 'reasoning-synthesis-title' }, 'Raw Reasoning Trace:'),
+            e('div', { className: 'reasoning-synthesis-content' }, parsedThought.thoughtText)
           )
         )
       ),
       e('div', { className: 'bubble-text' }, renderFormattedText(parsedThought && parsedThought.hasThought ? parsedThought.cleanText : m.text)),
+      msgTokenData && msgTokenData.length > 0 && e('div', { style: { marginTop: '8px' } },
+        e('div', { className: 'ps-token-inspector' },
+          msgTokenData.slice(0, 64).map((tok, tIdx) => {
+            const ent = typeof tok.entropy === 'number' ? tok.entropy : null;
+            const cls = ent === null ? '' : (ent < 0.8 ? 'low-entropy' : (ent < 2.2 ? 'mid-entropy' : 'high-entropy'));
+            return e('button', {
+              key: tIdx,
+              type: 'button',
+              className: `ps-token-chip ${cls} ${selectedInlineTokenIdx === tIdx ? 'selected' : ''}`,
+              onClick: () => setSelectedInlineTokenIdx(selectedInlineTokenIdx === tIdx ? null : tIdx),
+              title: ent !== null ? `Token #${tok.id} · prob ${tok.prob}% · entropy ${ent} bits` : `Token #${tok.id}`
+            }, tok.text === '\n' ? '\\n' : tok.text);
+          })
+        ),
+        selectedInlineTokenIdx !== null && msgTokenData[selectedInlineTokenIdx] && (() => {
+          const sel = msgTokenData[selectedInlineTokenIdx];
+          return e('div', { className: 'ps-token-popover', style: { marginTop: '6px' } },
+            e('div', { style: { fontWeight: 700, marginBottom: '6px' } }, `Token #${sel.id}: "${String(sel.text || '').replace(/\n/g, '\\n')}"`),
+            e('div', { style: { fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-muted)', marginBottom: '6px' } },
+              sel.entropy !== null ? `Prob: ${sel.prob}% | Logprob: ${sel.logprob} | Entropy: ${sel.entropy} bits` : 'Prefix token (conditioning start)'
+            ),
+            Array.isArray(sel.top_candidates) && sel.top_candidates.length > 0 && e('div', { style: { display: 'flex', flexDirection: 'column', gap: '3px' } },
+              sel.top_candidates.map((c, ci) => e('div', { key: ci, style: { display: 'flex', justifyContent: 'space-between', fontSize: '11px', fontFamily: 'var(--font-mono)' } },
+                e('span', null, `"${String(c.text || '').replace(/\n/g, '\\n')}"`),
+                e('span', null, `${c.prob}% (${c.logprob})`)
+              ))
+            )
+          );
+        })()
+      ),
       m.telemetry && e('div', { className: 'bubble-telemetry-pill' },
         e('span', { className: 'telem-route-tag' }, m.telemetry.route ? m.telemetry.route.toUpperCase() : 'REFLEX'),
-        m.telemetry.throughput > 0 && e('span', { className: 'telem-item' }, `${m.telemetry.throughput} t/s`),
-        m.telemetry.ttft > 0 && e('span', { className: 'telem-item' }, `TTFT ${m.telemetry.ttft}ms`),
-        m.telemetry.vram_gb && e('span', { className: 'telem-item' }, `${m.telemetry.vram_gb} GB`),
-        m.telemetry.latency_ms > 0 && e('span', { className: 'telem-item' }, `${m.telemetry.latency_ms.toFixed(0)}ms`),
-        m.telemetry.tokens > 0 && e('span', { className: 'telem-item dim' }, `${m.telemetry.tokens} toks`)
+        m.telemetry.speed && e('span', { className: 'telem-item' }, m.telemetry.speed),
+        m.telemetry.ttft && e('span', { className: 'telem-item' }, m.telemetry.ttft),
+        m.telemetry.vram && e('span', { className: 'telem-item' }, m.telemetry.vram),
+        m.telemetry.latency && e('span', { className: 'telem-item' }, m.telemetry.latency),
+        m.telemetry.tokens_count > 0 && e('span', { className: 'telem-item dim' }, `${m.telemetry.tokens_count} toks`)
       )
     );
   }, (prev, next) => {
@@ -3578,7 +4462,8 @@
       prev.isThoughtExpanded === next.isThoughtExpanded &&
       prev.isGenerating === next.isGenerating &&
       prev.isLastAssistant === next.isLastAssistant &&
-      prev.m.telemetry === next.m.telemetry
+      prev.m.telemetry === next.m.telemetry &&
+      prev.m.tokenLogprobs === next.m.tokenLogprobs
     );
   });
 
@@ -3597,6 +4482,16 @@
       activeAdapter,
       temperature,
       setTemperature,
+      topP,
+      setTopP,
+      topK,
+      setTopK,
+      repPenalty,
+      setRepPenalty,
+      inspectLogprobs,
+      setInspectLogprobs,
+      systemPrompt,
+      setSystemPrompt,
       maxTokens,
       setMaxTokens,
       hasRetryableMessage,
@@ -3604,6 +4499,7 @@
       onStopGeneration
     } = props;
     const [chatInput, setChatInput] = useState(() => (chatInputRef && chatInputRef.current) || '');
+    const [showSystemDrawer, setShowSystemDrawer] = useState(false);
     const handleSendMessage = () => {
       const trimmed = chatInput.trim();
       if (!trimmed || isGenerating) return;
@@ -3611,12 +4507,73 @@
       if (chatInputRef) chatInputRef.current = '';
       onSubmitPrompt(trimmed);
     };
-    const isTriuneEngine = String(activeModel || '').startsWith('triune');
+    const isTriuneEngine = /^(triune|junkie|lucid_machines|lucid)/i.test(String(activeModel || ''));
     return e('div', { className: 'chat-input-container' },
+      showSystemDrawer && e('div', {
+        style: {
+          padding: '10px 12px',
+          marginBottom: '8px',
+          borderRadius: '8px',
+          background: 'var(--bg-surface)',
+          border: '1px solid var(--border-color)',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '8px'
+        }
+      },
+        e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
+          e('span', { style: { fontSize: '11.5px', fontWeight: 700, color: 'var(--text-main)' } }, 'System Prompt & Sampling Parameters'),
+          e('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' } },
+            e('select', {
+              className: 'chat-meta-select',
+              'aria-label': 'System prompt template',
+              value: (SYSTEM_TEMPLATES.find(t => t.prompt === systemPrompt) || {}).id || 'custom',
+              onChange: ev => {
+                const found = SYSTEM_TEMPLATES.find(t => t.id === ev.target.value);
+                if (found) setSystemPrompt(found.prompt);
+              }
+            },
+              SYSTEM_TEMPLATES.map(t => e('option', { key: t.id, value: t.id }, t.label)),
+              e('option', { value: 'custom' }, 'Custom Prompt')
+            ),
+            e('label', { className: 'chat-param-control', title: 'Top-P Nucleus Sampling' },
+              e('span', { className: 'chat-param-label' }, 'Top-P:'),
+              e('input', {
+                type: 'number', min: 0.05, max: 1.0, step: 0.05, value: topP,
+                onChange: ev => { const v = parseFloat(ev.target.value); if (!isNaN(v)) setTopP(Math.max(0.05, Math.min(1.0, v))); },
+                className: 'chat-param-number'
+              })
+            ),
+            e('label', { className: 'chat-param-control', title: 'Top-K Vocabulary Filter' },
+              e('span', { className: 'chat-param-label' }, 'Top-K:'),
+              e('input', {
+                type: 'number', min: 1, max: 500, step: 5, value: topK,
+                onChange: ev => { const v = parseInt(ev.target.value, 10); if (!isNaN(v)) setTopK(Math.max(1, Math.min(500, v))); },
+                className: 'chat-param-number'
+              })
+            ),
+            e('label', { className: 'chat-param-control', title: 'Repetition Penalty' },
+              e('span', { className: 'chat-param-label' }, 'Rep:'),
+              e('input', {
+                type: 'number', min: 0.5, max: 3.0, step: 0.05, value: repPenalty,
+                onChange: ev => { const v = parseFloat(ev.target.value); if (!isNaN(v)) setRepPenalty(Math.max(0.5, Math.min(3.0, v))); },
+                className: 'chat-param-number'
+              })
+            )
+          )
+        ),
+        e('textarea', {
+          rows: 2,
+          value: systemPrompt,
+          onChange: ev => setSystemPrompt(ev.target.value),
+          placeholder: 'System instructions for active model...',
+          style: { width: '100%', padding: '6px 8px', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-input)', color: 'var(--text-main)', fontSize: '12px', fontFamily: 'var(--font-mono)' }
+        })
+      ),
       e('div', { className: 'chat-input-area-wrap' },
         e('textarea', {
           className: 'chat-input-textarea',
-          placeholder: isGenerating ? 'Generating response…' : 'Ask a research question or enter prompt… (Enter to send, Shift+Enter for newline)',
+          placeholder: isGenerating ? 'Generating response...' : 'Ask a research question or enter prompt... (Enter to send, Shift+Enter for newline)',
           value: chatInput,
           disabled: isGenerating,
           rows: 2,
@@ -3662,6 +4619,25 @@
             style: { fontSize: '10.5px' },
             title: `LoRA: ${activeAdapter.name}`
           }, [renderIcon('finetune', 11, { marginRight: '3px' }), activeAdapter.name]),
+          e('button', {
+            type: 'button',
+            className: `btn-clear-chat ${showSystemDrawer ? 'active' : ''}`,
+            style: { padding: '2px 8px', fontSize: '11px' },
+            onClick: () => setShowSystemDrawer(v => !v),
+            title: 'Configure System Prompt, Top-P, Top-K, and Repetition Penalty'
+          }, showSystemDrawer ? 'Hide Sampling' : 'System & Sampling'),
+          e('label', {
+            className: 'chat-param-control',
+            style: { cursor: 'pointer' },
+            title: 'Return real token logprobs and entropy per generated token'
+          },
+            e('input', {
+              type: 'checkbox',
+              checked: Boolean(inspectLogprobs),
+              onChange: ev => setInspectLogprobs(ev.target.checked)
+            }),
+            e('span', { className: 'chat-param-label' }, 'Logprobs')
+          ),
           e('div', { className: 'chat-param-control', title: 'Sampling Temperature (0.00 - 2.00)' },
             e('span', { className: 'chat-param-label' }, 'Temp:'),
             e('input', {
@@ -3726,13 +4702,13 @@
             onClick: () => {
               handleSendMessage();
             }
-          }, [renderIcon('arrowRight', 12, { marginRight: '5px' }), 'Send', e('kbd', { className: 'kbd-hint' }, '↵')])
+          }, [renderIcon('arrowRight', 12, { marginRight: '5px' }), 'Send', e('kbd', { className: 'kbd-hint' }, 'Enter')])
         )
       )
     );
   });
 
-  function TriuneStudio() {
+  function PolysomStudio() {
     const cleanText = (str) => {
       if (!str) return '';
       return String(str)
@@ -3746,8 +4722,8 @@
         .replace(/â€”/g, '--')
         .replace(/â€¦/g, '...')
         .replace(/[\ufffd\uFFFD]/g, '')
-        .replace(/Ġ/g, ' ')
-        .replace(/Ċ/g, '\n')
+        .replace(/G/g, ' ')
+        .replace(/C/g, '\n')
         .replace(/\r\n?/g, '\n')
         .replace(/[ \t]+/g, ' ')
         .replace(/ *\n */g, '\n')
@@ -3758,7 +4734,7 @@
       try {
         const hash = window.location.hash ? window.location.hash.replace('#', '') : '';
         if (hash && Object.prototype.hasOwnProperty.call(TAB_TITLES, hash)) return hash;
-        const savedTab = window.localStorage.getItem('triune.studio.activeTab');
+        const savedTab = window.localStorage.getItem('lucid_machines.studio.activeTab') || window.localStorage.getItem('triune.studio.activeTab');
         return Object.prototype.hasOwnProperty.call(TAB_TITLES, savedTab) ? savedTab : 'chat';
       } catch (e) {
         return 'chat';
@@ -3786,7 +4762,7 @@
     const [optimizerTelemetry, setOptimizerTelemetry] = useState(null);
     const [activeModel, setActiveModel] = useState(() => {
     try {
-      const saved = window.localStorage.getItem('triune.studio.activeModel');
+      const saved = window.localStorage.getItem('lucid_machines.studio.activeModel') || window.localStorage.getItem('triune.studio.activeModel');
       if (saved && saved !== 'gemini-3.8-flash') return saved;
       if (saved === 'gemini-3.8-flash') return 'gemini-2.5-flash';
     } catch (_) {}
@@ -3801,46 +4777,49 @@
     const [editingThemeId, setEditingThemeId] = useState('');
     const [studioTheme, setStudioTheme] = useState(() => {
       try {
-        const migrated = window.localStorage.getItem('triune.studio.theme_migrated_v2');
-        let saved = window.localStorage.getItem('triune.studio.theme');
+        const migrated = window.localStorage.getItem('lucid_machines.studio.theme_migrated_v3');
+        let saved = window.localStorage.getItem('lucid_machines.studio.theme') || window.localStorage.getItem('triune.studio.theme');
         if (!migrated) {
-          window.localStorage.setItem('triune.studio.theme_migrated_v2', 'true');
-          if (!saved) saved = 'obsidian-glass';
+          window.localStorage.setItem('lucid_machines.studio.theme_migrated_v3', 'true');
+          if (!saved) saved = 'hypnagogic';
           if (legacyThemeIds[saved]) saved = legacyThemeIds[saved];
-          window.localStorage.setItem('triune.studio.theme', saved);
+          window.localStorage.setItem('lucid_machines.studio.theme', saved);
         }
         if (legacyThemeIds[saved]) {
           saved = legacyThemeIds[saved];
-          window.localStorage.setItem('triune.studio.theme', saved);
+          window.localStorage.setItem('lucid_machines.studio.theme', saved);
         }
         if (saved && (APPEARANCE_THEMES.some(theme => theme.id === saved) || readCustomThemes().some(theme => theme.id === saved))) {
           return saved;
         }
-        window.localStorage.setItem('triune.studio.theme', 'obsidian-glass');
-        return 'obsidian-glass';
-      } catch (e) { return 'obsidian-glass'; }
+        window.localStorage.setItem('lucid_machines.studio.theme', 'hypnagogic');
+        return 'hypnagogic';
+      } catch (e) { return 'hypnagogic'; }
     });
     const [appearanceFilter, setAppearanceFilter] = useState('All');
     const [customAccent, setCustomAccent] = useState(() => {
-      try { return window.localStorage.getItem('triune.studio.customAccent') || ''; }
+      try { return window.localStorage.getItem('lucid_machines.studio.customAccent') || window.localStorage.getItem('triune.studio.customAccent') || ''; }
       catch (e) { return ''; }
     });
     const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
-      try { return window.localStorage.getItem('triune.studio.sidebarCollapsed') === 'true'; }
+      try { return (window.localStorage.getItem('lucid_machines.studio.sidebarCollapsed') || window.localStorage.getItem('triune.studio.sidebarCollapsed')) === 'true'; }
       catch (e) { return false; }
     });
 
     useEffect(() => {
-      try { window.localStorage.setItem('triune.studio.activeTab', activeTab); } catch (e) {}
+      try { window.localStorage.setItem('lucid_machines.studio.activeTab', activeTab); } catch (e) {}
     }, [activeTab]);
     useEffect(() => {
-      try { window.localStorage.setItem('triune.studio.sidebarCollapsed', String(sidebarCollapsed)); } catch (e) {}
+      try { window.localStorage.setItem('lucid_machines.studio.sidebarCollapsed', String(sidebarCollapsed)); } catch (e) {}
     }, [sidebarCollapsed]);
     useEffect(() => {
       try {
-        window.localStorage.setItem('triune.studio.theme', studioTheme);
-        if (customAccent) window.localStorage.setItem('triune.studio.customAccent', customAccent);
-        else window.localStorage.removeItem('triune.studio.customAccent');
+        if (typeof document !== 'undefined' && document.documentElement) {
+          document.documentElement.setAttribute('data-theme', studioTheme);
+        }
+        window.localStorage.setItem('lucid_machines.studio.theme', studioTheme);
+        if (customAccent) window.localStorage.setItem('lucid_machines.studio.customAccent', customAccent);
+        else window.localStorage.removeItem('lucid_machines.studio.customAccent');
       } catch (e) {}
     }, [studioTheme, customAccent]);
     useEffect(() => {
@@ -3850,7 +4829,7 @@
     // Chat State & Conversation History
     const [chatSessions, setChatSessions] = useState(() => {
       try {
-        const stored = localStorage.getItem('triune_chat_sessions');
+        const stored = localStorage.getItem('lucid_machines_chat_sessions') || localStorage.getItem('triune_chat_sessions');
         if (stored) {
           const parsed = JSON.parse(stored);
           if (Array.isArray(parsed) && parsed.length > 0) return parsed;
@@ -3861,8 +4840,8 @@
         title: 'Initial Research Session',
         messages: [
           {
-            sender: 'Triune Studio',
-            text: 'Welcome. Choose a model or provider, then send a prompt to begin. Backend connection status is shown above.',
+            sender: 'Polysom Studio',
+            text: 'Welcome to Polysom Studio by Lucid Machines. Choose a model or provider, then send a prompt to begin. Backend connection status is shown above.',
             time: 'Just now',
             isAssistant: true
           }
@@ -3873,7 +4852,7 @@
     });
     const [activeSessionId, setActiveSessionId] = useState(() => {
       try {
-        const storedId = localStorage.getItem('triune_active_session_id');
+        const storedId = localStorage.getItem('lucid_machines_active_session_id') || localStorage.getItem('triune_active_session_id');
         if (storedId) return storedId;
       } catch (_) {}
       return 'session_default';
@@ -3885,8 +4864,8 @@
 
     const [messages, setMessages] = useState([
       {
-        sender: 'Triune Studio',
-        text: 'Welcome. Choose a model or provider, then send a prompt to begin. Backend connection status is shown above.',
+        sender: 'Polysom Studio',
+        text: 'Welcome to Polysom Studio by Lucid Machines. Choose a model or provider, then send a prompt to begin. Backend connection status is shown above.',
         time: 'Just now',
         isAssistant: true
       }
@@ -3898,43 +4877,51 @@
     const [route, setRoute] = useState('auto');
     const [systemPrompt, setSystemPrompt] = useState(DEFAULT_SYSTEM_PROMPT);
     const [temperature, setTemperature] = useState(0.7);
+    const [topP, setTopP] = useState(0.95);
+    const [topK, setTopK] = useState(50);
+    const [repPenalty, setRepPenalty] = useState(1.2);
+    const [inspectLogprobs, setInspectLogprobs] = useState(false);
     const [maxTokens, setMaxTokens] = useState(256);
+    const [gpuTelemetry, setGpuTelemetry] = useState(null);
+    const [mindTelemetry, setMindTelemetry] = useState(null);
+    const [isLoadingMind, setIsLoadingMind] = useState(false);
     const chatBottomRef = useRef(null);
     const chatScrollAreaRef = useRef(null);
     const chatAbortControllerRef = useRef(null);
     const [neuronScopeData, setNeuronScopeData] = useState(null);
     const [showNeuralConsole, setShowNeuralConsole] = useState(() => {
       try {
-        const val = window.localStorage.getItem('triune.playground.neuralConsoleOpen');
+        const val = window.localStorage.getItem('lucid_machines.playground.neuralConsoleOpen') ?? window.localStorage.getItem('triune.playground.neuralConsoleOpen');
         if (val !== null) return val === 'true';
         return true;
       } catch (_) { return true; }
     });
     const [neuralConsoleView, setNeuralConsoleView] = useState(() => {
       try {
-        return window.localStorage.getItem('triune.playground.neuralConsoleView') || '3d';
+        return window.localStorage.getItem('lucid_machines.playground.neuralConsoleView') || window.localStorage.getItem('triune.playground.neuralConsoleView') || '3d';
       } catch (_) { return '3d'; }
     });
     const [neuralConsoleDock, setNeuralConsoleDock] = useState(() => {
       try {
-        return window.localStorage.getItem('triune.playground.neuralConsoleDock') || 'dock-right';
+        return window.localStorage.getItem('lucid_machines.playground.neuralConsoleDock') || window.localStorage.getItem('triune.playground.neuralConsoleDock') || 'dock-right';
       } catch (_) { return 'dock-right'; }
     });
     const [neuralConsoleWidth, setNeuralConsoleWidth] = useState(() => {
       try {
-        const w = parseInt(window.localStorage.getItem('triune.playground.neuralConsoleWidth'), 10);
+        const w = parseInt(window.localStorage.getItem('lucid_machines.playground.neuralConsoleWidth') || window.localStorage.getItem('triune.playground.neuralConsoleWidth'), 10);
         return (!isNaN(w) && w >= 320 && w <= 1100) ? w : 500;
       } catch (_) { return 500; }
     });
     const [neuralConsoleHeight, setNeuralConsoleHeight] = useState(() => {
       try {
-        const h = parseInt(window.localStorage.getItem('triune.playground.neuralConsoleHeight'), 10);
+        const h = parseInt(window.localStorage.getItem('lucid_machines.playground.neuralConsoleHeight') || window.localStorage.getItem('triune.playground.neuralConsoleHeight'), 10);
         return (!isNaN(h) && h >= 165 && h <= 800) ? h : 360;
       } catch (_) { return 360; }
     });
     const [neuralConsolePos, setNeuralConsolePos] = useState(() => {
       try {
-        const p = JSON.parse(window.localStorage.getItem('triune.playground.neuralConsolePos'));
+        const rawPos = window.localStorage.getItem('lucid_machines.playground.neuralConsolePos') || window.localStorage.getItem('triune.playground.neuralConsolePos');
+        const p = JSON.parse(rawPos);
         if (p && typeof p.x === 'number' && typeof p.y === 'number') return p;
       } catch (_) {}
       return { x: Math.max(20, (typeof window !== 'undefined' ? window.innerWidth - 540 : 700)), y: 80 };
@@ -3944,10 +4931,13 @@
     const consoleDragOffsetRef = useRef({ x: 0, y: 0 });
 
     const [playgroundMode, setPlaygroundMode] = useState(() => {
-      try { return window.localStorage.getItem('triune.playground.mode') || 'chat'; } catch (_) { return 'chat'; }
+      try { return window.localStorage.getItem('lucid_machines.playground.mode') || window.localStorage.getItem('triune.playground.mode') || 'chat'; } catch (_) { return 'chat'; }
     });
     const [audioFeedback, setAudioFeedback] = useState(() => {
-      try { return window.localStorage.getItem('triune.playground.audio') === 'true'; } catch (_) { return false; }
+      try {
+        const val = window.localStorage.getItem('lucid_machines.playground.audio') ?? window.localStorage.getItem('triune.playground.audio');
+        return val === 'true';
+      } catch (_) { return false; }
     });
     const [streamVelocity, setStreamVelocity] = useState({ current: 0, peak: 0, totalTokens: 0, isStreaming: false });
     const [expandedThoughts, setExpandedThoughts] = useState({});
@@ -3962,9 +4952,96 @@
     const [isArenaBattling, setIsArenaBattling] = useState(false);
     const arenaAbortRef = useRef(null);
 
-    const [tokenLabText, setTokenLabText] = useState('Triune MoE dynamic routing activates shallow Reflex for high confidence tokens.');
-    const [tokenLabTokens, setTokenLabTokens] = useState(() => tokenizeTextWithEntropy('Triune MoE dynamic routing activates shallow Reflex for high confidence tokens.'));
+    const [tokenLabText, setTokenLabText] = useState('TriuneTransformer dynamic routing activates shallow Reflex for high confidence tokens.');
+    const [tokenLabTokens, setTokenLabTokens] = useState(() => tokenizeTextWithEntropy('TriuneTransformer dynamic routing activates shallow Reflex for high confidence tokens.'));
+    const [tokenLabLogprobsAvailable, setTokenLabLogprobsAvailable] = useState(false);
+    const [tokenLabStatusMsg, setTokenLabStatusMsg] = useState('Click "Inspect Token Entropy" to query real model logprobs or BPE tokenization.');
+    const [isInspectingTokens, setIsInspectingTokens] = useState(false);
     const [selectedTokenIdx, setSelectedTokenIdx] = useState(null);
+
+    // Agentic Workflow Studio & DAG Trace History State
+    const [dagSideTab, setDagSideTab] = useState('inspector'); // 'inspector' | 'traces' | 'agents'
+    const [dagEditorMode, setDagEditorMode] = useState('workflow'); // 'architecture' | 'workflow'
+    const [dagArchSpec, setDagArchSpec] = useState({
+      preset_id: 'triune-base',
+      num_layers: 8,
+      hidden_dim: 384,
+      num_heads: 6,
+      head_dim: 64,
+      num_experts: 4,
+      top_k_experts: 2,
+      reflex_exit_layer: 2,
+      limbic_exit_layer: 5,
+      precision: 'bf16',
+      vocab_size: 32000
+    });
+    const [dagUndoStack, setDagUndoStack] = useState([]);
+    const [dagRedoStack, setDagRedoStack] = useState([]);
+    const [dagHistory, setDagHistory] = useState([]);
+    const [selectedDagRunId, setSelectedDagRunId] = useState(null);
+    const [isReplayingDag, setIsReplayingDag] = useState(false);
+    const [agentState, setAgentState] = useState(null);
+    const [agentHistory, setAgentHistory] = useState([]);
+    const [agentGoalInput, setAgentGoalInput] = useState('');
+    const [agentPersona, setAgentPersona] = useState('auto');
+    const [agentDepth, setAgentDepth] = useState('auto');
+    const [agentMode, setAgentMode] = useState('single'); // 'single' | 'orchestrate'
+    const [isRunningAgent, setIsRunningAgent] = useState(false);
+
+    // Workspace / Agent IDE & Live Agentic Loop Cockpit State
+    const [wsRoot, setWsRoot] = useState('');
+    const [wsFolderInput, setWsFolderInput] = useState('');
+    const [wsRecentWorkspaces, setWsRecentWorkspaces] = useState([]);
+    const [wsGitInfo, setWsGitInfo] = useState({ is_git: false, branch: '', dirty_count: 0, entries: [], diff: '' });
+    const [wsSidebarOpen, setWsSidebarOpen] = useState(true);
+    const [wsSideTab, setWsSideTab] = useState('explorer'); // 'explorer' | 'search'
+    const [wsTreeEntries, setWsTreeEntries] = useState([]);
+    const [wsExpandedDirs, setWsExpandedDirs] = useState({});
+    const [wsNewFileName, setWsNewFileName] = useState('');
+    const [wsSearchQuery, setWsSearchQuery] = useState('');
+    const [wsSearchRegex, setWsSearchRegex] = useState(false);
+    const [wsSearchMatches, setWsSearchMatches] = useState([]);
+    const [wsIsSearching, setWsIsSearching] = useState(false);
+    const [wsOpenTabs, setWsOpenTabs] = useState([]); // { path, relPath, name, content, savedContent, language, size, dirty, targetLine }
+    const [wsActiveTabPath, setWsActiveTabPath] = useState('');
+    const [wsCursorPos, setWsCursorPos] = useState({ line: 1, col: 1 });
+    const [wsShowGitDiff, setWsShowGitDiff] = useState(false);
+    const [wsLastSaveDiff, setWsLastSaveDiff] = useState('');
+    const [wsIsSaving, setWsIsSaving] = useState(false);
+    const [wsTerminalOpen, setWsTerminalOpen] = useState(true);
+    const [wsTerminalCmd, setWsTerminalCmd] = useState('git status');
+    const [wsTerminalLogs, setWsTerminalLogs] = useState([]);
+    const [wsTerminalExitCode, setWsTerminalExitCode] = useState(null);
+    const [wsTerminalRunning, setWsTerminalRunning] = useState(false);
+    const [wsAgentMode, setWsAgentMode] = useState('react'); // 'react' | 'pev' | 'multi_agent' | 'training_supervisor'
+    const [wsAgentAutonomy, setWsAgentAutonomy] = useState('supervised'); // 'supervised' | 'autonomous_sandbox'
+    const [wsAgentGoal, setWsAgentGoal] = useState('');
+    const [wsAgentContextFile, setWsAgentContextFile] = useState('');
+    const [wsLoopRunning, setWsLoopRunning] = useState(false);
+    const [wsLoopRunId, setWsLoopRunId] = useState('');
+    const [wsLoopEvents, setWsLoopEvents] = useState([]);
+    const [wsLoopThoughtsOpen, setWsLoopThoughtsOpen] = useState({});
+    const [wsPendingApprovals, setWsPendingApprovals] = useState({});
+    const [wsSupervisorStatus, setWsSupervisorStatus] = useState({ running: false, inspections: 0, anomalies: [], diagnostics: [], recommendations: [] });
+    const wsLoopAbortRef = useRef(null);
+    const wsEditorRef = useRef(null);
+    const wsGutterRef = useRef(null);
+    const wsGoalInputRef = useRef(null);
+
+    // Training & Junkie Launchpad / Config Editor / Dataset Preview State
+    const [modelConfigsList, setModelConfigsList] = useState([]);
+    const [selectedConfigName, setSelectedConfigName] = useState('junkie.json');
+    const [configEditorText, setConfigEditorText] = useState('');
+    const [isSavingConfig, setIsSavingConfig] = useState(false);
+    const [isLaunchingJunkie, setIsLaunchingJunkie] = useState(false);
+    const [datasetPreview, setDatasetPreview] = useState(null);
+    const [isLoadingDatasetPreview, setIsLoadingDatasetPreview] = useState(false);
+
+    // Command Palette (Ctrl+K) & Non-Intrusive Toast Stack
+    const [showCommandPalette, setShowCommandPalette] = useState(false);
+    const [cmdQuery, setCmdQuery] = useState('');
+    const [cmdActiveIdx, setCmdActiveIdx] = useState(0);
+    const [toastStack, setToastStack] = useState([]);
 
     const recordStreamToken = (tokenCount = 1) => {
       const now = performance.now();
@@ -3991,9 +5068,500 @@
       } catch (_) {}
     };
 
+    const refreshMindTelemetry = async () => {
+      setIsLoadingMind(true);
+      try {
+        const [mindRes, gpuRes] = await Promise.all([
+          apiFetch('/v1/telemetry/mind'),
+          apiFetch('/v1/telemetry/gpu')
+        ]);
+        if (mindRes.ok) {
+          const mindData = await mindRes.json();
+          setMindTelemetry(mindData);
+        }
+        if (gpuRes.ok) {
+          const gpuData = await gpuRes.json();
+          setGpuTelemetry(gpuData);
+        }
+      } catch (_) {}
+      setIsLoadingMind(false);
+    };
+
+    const handleInspectTokens = async (textOverride = null) => {
+      const targetText = textOverride !== null ? textOverride : tokenLabText;
+      if (!String(targetText || '').trim()) {
+        setTokenLabTokens([]);
+        setTokenLabLogprobsAvailable(false);
+        setTokenLabStatusMsg('Enter text to inspect tokens.');
+        return;
+      }
+      setIsInspectingTokens(true);
+      setSelectedTokenIdx(null);
+      try {
+        const res = await apiFetch('/v1/tokenizer/inspect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: targetText, top_k: 5, max_tokens: 128 })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.available && Array.isArray(data.tokens) && data.tokens.length > 0) {
+            setTokenLabTokens(data.tokens);
+            setTokenLabLogprobsAvailable(true);
+            setTokenLabStatusMsg(`Real model logprobs & Shannon entropy computed (${data.tokens.length} tokens).`);
+            setIsInspectingTokens(false);
+            return;
+          }
+          // Fall back to real BPE tokenizer IDs if model isn't loaded yet
+          const tokRes = await apiFetch('/v1/tokenizer/tokenize', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: targetText })
+          });
+          if (tokRes.ok) {
+            const tokData = await tokRes.json();
+            if (Array.isArray(tokData.tokens) && tokData.tokens.length > 0) {
+              setTokenLabTokens(tokData.tokens.map(t => ({ ...t, logprob: null, prob: null, entropy: null, top_candidates: [] })));
+              setTokenLabLogprobsAvailable(false);
+              setTokenLabStatusMsg(data.reason || 'Real BPE token IDs loaded (initialize or load a model for logprobs/entropy).');
+              setIsInspectingTokens(false);
+              return;
+            }
+          }
+          setTokenLabTokens(tokenizeTextWithEntropy(targetText));
+          setTokenLabLogprobsAvailable(false);
+          setTokenLabStatusMsg(data.reason || 'Model/tokenizer not loaded; showing structural token split.');
+        }
+      } catch (err) {
+        setTokenLabTokens(tokenizeTextWithEntropy(targetText));
+        setTokenLabLogprobsAvailable(false);
+        setTokenLabStatusMsg(`Token inspection error: ${err.message || 'backend unreachable'}`);
+      } finally {
+        setIsInspectingTokens(false);
+      }
+    };
+
+    const fetchDagAndAgentHistory = async () => {
+      try {
+        const [dRes, aStateRes, aHistRes] = await Promise.all([
+          apiFetch('/v1/dag/history'),
+          apiFetch('/v1/agents/state'),
+          apiFetch('/v1/agents/history')
+        ]);
+        if (dRes.ok) {
+          const d = await dRes.json();
+          if (Array.isArray(d.runs)) setDagHistory(d.runs);
+        }
+        if (aStateRes.ok) {
+          const a = await aStateRes.json();
+          setAgentState(a);
+        }
+        if (aHistRes.ok) {
+          const ah = await aHistRes.json();
+          if (Array.isArray(ah.runs)) setAgentHistory(ah.runs);
+        }
+      } catch (_) {}
+    };
+
+    const fetchModelConfigs = async (loadName = null) => {
+      try {
+        const res = await apiFetch('/v1/configs');
+        if (res.ok) {
+          const data = await res.json();
+          const list = Array.isArray(data.configs) ? data.configs : [];
+          setModelConfigsList(list);
+          const targetName = loadName || selectedConfigName || (list[0] && list[0].filename) || 'junkie.json';
+          if (targetName) {
+            const cRes = await apiFetch(`/v1/configs/${encodeURIComponent(targetName)}`);
+            if (cRes.ok) {
+              const cData = await cRes.json();
+              setSelectedConfigName(cData.filename || targetName);
+              setConfigEditorText(JSON.stringify(cData.config || {}, null, 2));
+            }
+          }
+        }
+      } catch (_) {}
+    };
+
+    const refreshWorkspaceState = async () => {
+      try {
+        const [stRes, gitRes, treeRes, supRes] = await Promise.all([
+          apiFetch('/v1/workspace/state'),
+          apiFetch('/v1/workspace/git'),
+          apiFetch('/v1/workspace/tree?depth=2'),
+          apiFetch('/v1/agents/supervisor/status')
+        ]);
+        if (stRes.ok) {
+          const st = await stRes.json();
+          setWsRoot(st.root || '');
+          setWsFolderInput(st.root || '');
+          if (Array.isArray(st.recent)) setWsRecentWorkspaces(st.recent);
+        }
+        if (gitRes.ok) {
+          const g = await gitRes.json();
+          setWsGitInfo(g);
+        }
+        if (treeRes.ok) {
+          const tr = await treeRes.json();
+          setWsTreeEntries(Array.isArray(tr.entries) ? tr.entries : []);
+        }
+        if (supRes.ok) {
+          const sup = await supRes.json();
+          setWsSupervisorStatus(sup);
+        }
+      } catch (_) {}
+    };
+
+    const handleWorkspaceOpenFolder = async (folderPath = null) => {
+      const target = (folderPath !== null ? folderPath : wsFolderInput).trim();
+      if (!target) {
+        showToast('Enter a workspace folder path to open.');
+        return;
+      }
+      try {
+        const res = await apiFetch('/v1/workspace/open', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: target })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || data.message || `Open failed (${res.status})`);
+        setWsRoot(data.root || target);
+        setWsFolderInput(data.root || target);
+        if (Array.isArray(data.recent)) setWsRecentWorkspaces(data.recent);
+        setWsOpenTabs([]);
+        setWsActiveTabPath('');
+        setWsExpandedDirs({});
+        await refreshWorkspaceState();
+        showToast(`Opened workspace: ${data.root || target}`);
+      } catch (err) {
+        showToast(`Open workspace failed: ${err.message}`);
+      }
+    };
+
+    const handleWorkspacePickFolder = async () => {
+      try {
+        const res = await apiFetch('/v1/workspace/pick', { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || `Picker failed (${res.status})`);
+        if (data.headless) {
+          showToast('Headless session detected; enter a folder path directly in the Open Folder bar.');
+          return;
+        }
+        if (data.cancelled) return;
+        if (data.ok && data.root) {
+          setWsRoot(data.root);
+          setWsFolderInput(data.root);
+          if (Array.isArray(data.recent)) setWsRecentWorkspaces(data.recent);
+          setWsOpenTabs([]);
+          setWsActiveTabPath('');
+          await refreshWorkspaceState();
+          showToast(`Opened workspace: ${data.root}`);
+        }
+      } catch (err) {
+        showToast(`Browse folder failed: ${err.message}`);
+      }
+    };
+
+    const handleWorkspaceToggleDir = async (dirEntry) => {
+      const rel = dirEntry.rel_path || dirEntry.path;
+      const nextOpen = !wsExpandedDirs[rel];
+      setWsExpandedDirs(prev => ({ ...prev, [rel]: nextOpen }));
+      if (nextOpen && (!Array.isArray(dirEntry.children) || dirEntry.children.length === 0)) {
+        try {
+          const res = await apiFetch(`/v1/workspace/tree?path=${encodeURIComponent(rel)}&depth=2`);
+          if (res.ok) {
+            const data = await res.json();
+            const children = Array.isArray(data.entries) ? data.entries : [];
+            const patchEntries = (list) => list.map(item => {
+              if ((item.rel_path || item.path) === rel) return { ...item, children };
+              if (Array.isArray(item.children) && item.children.length > 0) {
+                return { ...item, children: patchEntries(item.children) };
+              }
+              return item;
+            });
+            setWsTreeEntries(prev => patchEntries(prev));
+          }
+        } catch (_) {}
+      }
+    };
+
+    const handleWorkspaceOpenFile = async (relOrAbsPath, targetLine = null) => {
+      if (!relOrAbsPath) return;
+      const existing = wsOpenTabs.find(t => t.relPath === relOrAbsPath || t.path === relOrAbsPath);
+      if (existing) {
+        setWsActiveTabPath(existing.relPath);
+        setWsShowGitDiff(false);
+        if (targetLine && wsEditorRef.current) {
+          setWsCursorPos({ line: targetLine, col: 1 });
+        }
+        return;
+      }
+      try {
+        const res = await apiFetch(`/v1/workspace/file?path=${encodeURIComponent(relOrAbsPath)}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || `Read failed (${res.status})`);
+        const rel = data.rel_path || relOrAbsPath;
+        const name = rel.split('/').pop() || rel;
+        const tabObj = {
+          path: data.path || rel,
+          relPath: rel,
+          name,
+          content: data.content || '',
+          savedContent: data.content || '',
+          language: data.language || 'plaintext',
+          size: data.size || 0,
+          dirty: false
+        };
+        setWsOpenTabs(prev => [...prev.filter(t => t.relPath !== rel), tabObj]);
+        setWsActiveTabPath(rel);
+        setWsShowGitDiff(false);
+        setWsCursorPos({ line: targetLine || 1, col: 1 });
+      } catch (err) {
+        showToast(`Could not open file: ${err.message}`);
+      }
+    };
+
+    const handleWorkspaceSaveFile = async (tabPath = null) => {
+      const targetRel = tabPath || wsActiveTabPath;
+      const tab = wsOpenTabs.find(t => t.relPath === targetRel);
+      if (!tab || wsIsSaving) return;
+      setWsIsSaving(true);
+      try {
+        const res = await apiFetch('/v1/workspace/file', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: tab.relPath, content: tab.content })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || `Save failed (${res.status})`);
+        setWsOpenTabs(prev => prev.map(t => t.relPath === tab.relPath
+          ? { ...t, savedContent: t.content, dirty: false, size: data.bytes_written ?? t.size }
+          : t));
+        if (data.diff) setWsLastSaveDiff(data.diff);
+        else setWsLastSaveDiff(`Saved ${tab.relPath} (${data.bytes_written ?? 0} bytes, no line diff).`);
+        const gRes = await apiFetch('/v1/workspace/git');
+        if (gRes.ok) setWsGitInfo(await gRes.json());
+        showToast(`Saved ${tab.relPath}`);
+      } catch (err) {
+        showToast(`Save failed: ${err.message}`);
+      } finally {
+        setWsIsSaving(false);
+      }
+    };
+
+    const handleWorkspaceCreateFile = async () => {
+      const rel = wsNewFileName.trim();
+      if (!rel) return;
+      try {
+        const res = await apiFetch('/v1/workspace/file/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: rel, content: '', is_dir: false })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || `Create failed (${res.status})`);
+        setWsNewFileName('');
+        await refreshWorkspaceState();
+        await handleWorkspaceOpenFile(data.rel_path || rel);
+        showToast(`Created ${data.rel_path || rel}`);
+      } catch (err) {
+        showToast(`Create file failed: ${err.message}`);
+      }
+    };
+
+    const handleWorkspaceDeleteFile = async (relPath) => {
+      if (!relPath) return;
+      try {
+        const res = await apiFetch(`/v1/workspace/file?path=${encodeURIComponent(relPath)}`, {
+          method: 'DELETE'
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || `Delete failed (${res.status})`);
+        setWsOpenTabs(prev => prev.filter(t => t.relPath !== relPath));
+        if (wsActiveTabPath === relPath) setWsActiveTabPath('');
+        await refreshWorkspaceState();
+        showToast(`Deleted ${data.deleted || relPath}`);
+      } catch (err) {
+        showToast(`Delete failed: ${err.message}`);
+      }
+    };
+
+    const handleWorkspaceSearch = async () => {
+      const q = wsSearchQuery.trim();
+      if (!q) {
+        setWsSearchMatches([]);
+        return;
+      }
+      setWsIsSearching(true);
+      try {
+        const res = await apiFetch('/v1/workspace/search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: q, regex: wsSearchRegex, case_sensitive: false, max_results: 150 })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || `Search failed (${res.status})`);
+        setWsSearchMatches(Array.isArray(data.matches) ? data.matches : []);
+      } catch (err) {
+        showToast(`Search failed: ${err.message}`);
+      } finally {
+        setWsIsSearching(false);
+      }
+    };
+
+    const handleWorkspaceTerminalRun = async (cmdOverride = null) => {
+      const cmd = (cmdOverride !== null ? cmdOverride : wsTerminalCmd).trim();
+      if (!cmd || wsTerminalRunning) return;
+      setWsTerminalOpen(true);
+      setWsTerminalRunning(true);
+      try {
+        const res = await apiFetch('/v1/workspace/terminal/run', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ command: cmd, timeout: 15 })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          const msg = data.detail || `Command blocked (${res.status})`;
+          setWsTerminalExitCode(res.status);
+          setWsTerminalLogs(prev => [...prev.slice(-30), { cmd, stdout: '', stderr: msg, exitCode: res.status, durationMs: 0 }]);
+          showToast(msg);
+          return;
+        }
+        setWsTerminalExitCode(data.exit_code);
+        setWsTerminalLogs(prev => [...prev.slice(-30), {
+          cmd,
+          stdout: data.stdout || '',
+          stderr: data.stderr || '',
+          exitCode: data.exit_code,
+          durationMs: data.duration_ms || 0
+        }]);
+      } catch (err) {
+        setWsTerminalLogs(prev => [...prev.slice(-30), { cmd, stdout: '', stderr: err.message, exitCode: 1, durationMs: 0 }]);
+      } finally {
+        setWsTerminalRunning(false);
+      }
+    };
+
+    const handleRunWorkspaceAgentLoop = async () => {
+      const goal = wsAgentGoal.trim();
+      if (!goal || wsLoopRunning) return;
+      setWsLoopRunning(true);
+      setWsLoopEvents([]);
+      setWsPendingApprovals({});
+      setWsLoopRunId('');
+      const controller = new AbortController();
+      wsLoopAbortRef.current = controller;
+
+      try {
+        const res = await apiFetch('/v1/agents/loop/stream', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
+          body: JSON.stringify({
+            goal,
+            mode: wsAgentMode,
+            autonomy: wsAgentAutonomy,
+            active_file: wsAgentContextFile || wsActiveTabPath || null,
+            max_steps: 10
+          })
+        });
+        if (!res.ok || !res.body) {
+          const txt = await res.text().catch(() => '');
+          throw new Error(txt || `Loop failed (${res.status})`);
+        }
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith('data:')) continue;
+            const rawPayload = trimmed.slice(5).trim();
+            if (!rawPayload || rawPayload === '[DONE]') continue;
+            let evObj;
+            try { evObj = JSON.parse(rawPayload); } catch (_) { continue; }
+            if (evObj.run_id) setWsLoopRunId(evObj.run_id);
+            if (evObj.type === 'approval_required' && evObj.action_id) {
+              setWsPendingApprovals(prev => ({ ...prev, [evObj.action_id]: 'pending' }));
+            }
+            setWsLoopEvents(prev => [...prev, { ...evObj, _uid: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}` }]);
+          }
+        }
+        await refreshWorkspaceState();
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          setWsLoopEvents(prev => [...prev, { type: 'error', error: err.message || 'Loop stream error', _uid: `err-${Date.now()}` }]);
+          showToast(`Agent loop error: ${err.message}`);
+        }
+      } finally {
+        setWsLoopRunning(false);
+        wsLoopAbortRef.current = null;
+      }
+    };
+
+    const handleCancelWorkspaceAgentLoop = async () => {
+      if (wsLoopRunId) {
+        try {
+          await apiFetch(`/v1/agents/loop/cancel/${encodeURIComponent(wsLoopRunId)}`, { method: 'POST' });
+        } catch (_) {}
+      }
+      if (wsLoopAbortRef.current) wsLoopAbortRef.current.abort();
+      setWsLoopRunning(false);
+      showToast('Cancelled agent loop');
+    };
+
+    const handleResolveAgentApproval = async (actionId, approved) => {
+      if (!actionId) return;
+      setWsPendingApprovals(prev => ({ ...prev, [actionId]: approved ? 'approved' : 'rejected' }));
+      try {
+        const res = await apiFetch(`/v1/agents/approve/${encodeURIComponent(actionId)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ approved: Boolean(approved), reason: approved ? 'Approved in Studio IDE' : 'Rejected in Studio IDE' })
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        showToast(approved ? `Approved action ${actionId}` : `Rejected action ${actionId}`);
+      } catch (err) {
+        showToast(`Approval error: ${err.message}`);
+      }
+    };
+
+    const handleSupervisorControl = async (action) => {
+      try {
+        const endpoint = action === 'start' ? '/v1/agents/supervisor/start' : '/v1/agents/supervisor/stop';
+        const res = await apiFetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: action === 'start' ? JSON.stringify({ poll_interval_s: 2.0, auto_checkpoint: true }) : undefined
+        });
+        if (res.ok) {
+          const st = await res.json();
+          setWsSupervisorStatus(st);
+          showToast(action === 'start' ? 'Training Supervisor started' : 'Training Supervisor stopped');
+        }
+      } catch (err) {
+        showToast(`Supervisor error: ${err.message}`);
+      }
+    };
+
     useEffect(() => {
       if (activeTab === 'chat') {
         refreshNeuronScope();
+        refreshMindTelemetry();
+      } else if (activeTab === 'nodegraph') {
+        fetchDagAndAgentHistory();
+      } else if (activeTab === 'training') {
+        refreshMindTelemetry();
+        fetchModelConfigs();
+      } else if (activeTab === 'workspace') {
+        refreshWorkspaceState();
       }
     }, [activeTab]);
 
@@ -4026,7 +5594,7 @@
     const [chartSmoothing, setChartSmoothing] = useState(0.6);
     const [chartXAxis, setChartXAxis] = useState('steps'); // 'steps' | 'tokens'
     const [chartScale, setChartScale] = useState('linear'); // 'linear' | 'log'
-    const [runName, setRunName] = useState('triune-canonical-run-1');
+    const [runName, setRunName] = useState('junkie-triune-baseline-1');
     const [chartHoverInfo, setChartHoverInfo] = useState(null);
 
     // Hardware Tuner & Auto-Offload State (LM Studio / Ollama Style)
@@ -4064,7 +5632,7 @@
     const [nodes, setNodes] = useState(() => (readSavedWorkflow() || DAG_PRESETS.triune_canonical_hierarchical).nodes);
     const [edges, setEdges] = useState(() => (readSavedWorkflow() || DAG_PRESETS.triune_canonical_hierarchical).edges);
     const [activePresetKey, setActivePresetKey] = useState(null);
-    const [workflowName, setWorkflowName] = useState(() => (readSavedWorkflow() || {}).name || 'My Triune Workflow');
+    const [workflowName, setWorkflowName] = useState(() => (readSavedWorkflow() || {}).name || 'My Polysom Workflow');
     const [workflowSaveState, setWorkflowSaveState] = useState('Saved locally');
     const [canvasPan, setCanvasPan] = useState({ x: 0, y: 0 });
     const canvasPanRef = useRef(canvasPan);
@@ -4190,7 +5758,15 @@
     // Global Key Listener for Blender / Unreal Controls: Shift+A (Quick Add), M (Mute), Ctrl+J (Frame), Escape (Close)
     useEffect(() => {
       const handleGlobalKeyDown = (ev) => {
+        if ((ev.ctrlKey || ev.metaKey) && (ev.key === 'k' || ev.key === 'K')) {
+          ev.preventDefault();
+          setShowCommandPalette(prev => !prev);
+          setCmdQuery('');
+          setCmdActiveIdx(0);
+          return;
+        }
         if (ev.key === 'Escape') {
+          setShowCommandPalette(false);
           setShowOmnibarDropdown(false);
           setShowCustomNodeModal(false);
           setShowNodeLibraryModal(false);
@@ -4200,10 +5776,36 @@
           return;
         }
 
+        if ((ev.ctrlKey || ev.metaKey) && (ev.key === 's' || ev.key === 'S') && activeTab === 'workspace') {
+          ev.preventDefault();
+          handleWorkspaceSaveFile();
+          return;
+        }
+
         const tag = (ev.target && ev.target.tagName) ? ev.target.tagName.toLowerCase() : '';
         const isTyping = tag === 'input' || tag === 'textarea' || tag === 'select';
 
         if (!isTyping && activeTab === 'nodegraph') {
+          if ((ev.ctrlKey || ev.metaKey) && !ev.shiftKey && (ev.key === 'z' || ev.key === 'Z')) {
+            ev.preventDefault();
+            handleDagUndo();
+            return;
+          }
+          if ((ev.ctrlKey || ev.metaKey) && ((ev.key === 'y' || ev.key === 'Y') || (ev.shiftKey && (ev.key === 'z' || ev.key === 'Z')))) {
+            ev.preventDefault();
+            handleDagRedo();
+            return;
+          }
+          if ((ev.key === 'l' || ev.key === 'L') && !ev.ctrlKey && !ev.metaKey) {
+            ev.preventDefault();
+            handleAutoLayoutDAG();
+            return;
+          }
+          if ((ev.key === 'f' || ev.key === 'F') && !ev.ctrlKey && !ev.metaKey) {
+            ev.preventDefault();
+            handleFitCanvasView();
+            return;
+          }
           // Shift + A -> Quick Add Menu
           if ((ev.key === 'A' || ev.key === 'a') && ev.shiftKey) {
             ev.preventDefault();
@@ -4243,7 +5845,7 @@
       };
       window.addEventListener('keydown', handleGlobalKeyDown);
       return () => window.removeEventListener('keydown', handleGlobalKeyDown);
-    }, [activeTab, selectedNodeId, selectedNodeIds, frames, nodes, edges]);
+    }, [activeTab, selectedNodeId, selectedNodeIds, frames, nodes, edges, wsActiveTabPath, wsOpenTabs, wsIsSaving, dagUndoStack, dagRedoStack]);
 
     // LoRA Fine-Tuner State
     const [loraConfig, setLoraConfig] = useState({
@@ -4264,7 +5866,7 @@
     const [activeAdapter, setActiveAdapter] = useState(null);
 
     // Dataset Manager State
-    const [sampleText, setSampleText] = useState('Triune Engine accelerates local transformer training with MoE exit heads.');
+    const [sampleText, setSampleText] = useState('Lucid Machines Engine accelerates local transformer training with MoE exit heads.');
     const [tokens, setTokens] = useState([]);
     const [tokenizerStatus, setTokenizerStatus] = useState('Loading the configured tokenizer…');
     const [datasetList, setDatasetList] = useState([]);
@@ -4279,7 +5881,7 @@
 
     // Notebook State
     const [notebookCode, setNotebookCode] = useState(
-      `import torch\nimport triune\n\n# Query VRAM Profiler\nprint("VRAM Profile:", triune.VRAMProfiler.get_vram_stats())\n\n# Test PyTorch Engine\nprint("Engine Active:", torch.cuda.is_available())`
+      `import torch\nimport lucid_machines\n\n# Query VRAM Profiler\nprint("VRAM Profile:", lucid_machines.VRAMProfiler.get_vram_stats())\n\n# Test PyTorch Engine\nprint("Engine Active:", torch.cuda.is_available())`
     );
     const [notebookOutput, setNotebookOutput] = useState('Click "Run Code in PythonSandbox" to execute on backend engine...');
     const [isExecutingNotebook, setIsExecutingNotebook] = useState(false);
@@ -4294,10 +5896,10 @@
     // System Scanner & Module Marketplace State
     const [systemScan, setSystemScan] = useState(null);
     const [systemConfig, setSystemConfig] = useState({
-      installation_path: 'C:\\TriuneStudio',
-      models_path: 'C:\\TriuneStudio\\models',
-      datasets_path: 'C:\\TriuneStudio\\datasets',
-      checkpoints_path: 'C:\\TriuneStudio\\checkpoints',
+      installation_path: 'C:\\PolysomStudio',
+      models_path: 'C:\\PolysomStudio\\models',
+      datasets_path: 'C:\\PolysomStudio\\datasets',
+      checkpoints_path: 'C:\\PolysomStudio\\checkpoints',
       python_executable: '',
       hardware_mode: 'Auto Detect',
       auto_check_updates: true
@@ -4320,7 +5922,7 @@
     // Checkpoints & Dataset Telemetry State (Project-Clubbed)
     const [checkpoints, setCheckpoints] = useState([]);
     const [checkpointProjects, setCheckpointProjects] = useState([]);
-    const [activeProjectName, setActiveProjectName] = useState('Triune-Base · Adaptive CentroidSteer');
+    const [activeProjectName, setActiveProjectName] = useState('Junkie · Triune-Base Adaptive CentroidSteer');
     const [expandedProjects, setExpandedProjects] = useState({});
     const [projectFilter, setProjectFilter] = useState('all');
     const [isCreatingProject, setIsCreatingProject] = useState(false);
@@ -4339,13 +5941,139 @@
     });
     const [activeBatchPreview, setActiveBatchPreview] = useState('');
 
-    // Toast helper — uses ref to prevent rapid-fire timeout conflicts
+    // Toast helper — supports stacked .ps-toast-stack notifications and legacy statusToast
     const toastTimerRef = useRef(null);
     const showToast = (msg) => {
       if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
       setStatusToast(msg);
-      const isErr = /\b(error|failed|failure|unable|could not|invalid|unavailable|denied|rejected|refused)\b/i.test(String(msg || ''));
-      toastTimerRef.current = setTimeout(() => setStatusToast(null), isErr ? 6500 : 3200);
+      const text = String(msg || '');
+      const isErr = /\b(error|failed|failure|unable|could not|invalid|unavailable|denied|rejected|refused)\b/i.test(text);
+      const isWarn = !isErr && /\b(warning|notice|caution|paused|untrained|idle)\b/i.test(text);
+      const kind = isErr ? 'error' : (isWarn ? 'warning' : 'success');
+      const id = `toast-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const ttl = isErr ? 6500 : 3500;
+      setToastStack(prev => [...prev.slice(-3), { id, text, kind }]);
+      setTimeout(() => {
+        setToastStack(prev => prev.filter(t => t.id !== id));
+      }, ttl);
+      toastTimerRef.current = setTimeout(() => setStatusToast(null), ttl);
+    };
+
+    const handleSaveModelConfig = async (applyToEngine = false) => {
+      if (!selectedConfigName) return;
+      let parsed;
+      try {
+        parsed = JSON.parse(configEditorText);
+      } catch (err) {
+        showToast(`Invalid JSON in config editor: ${err.message}`);
+        return;
+      }
+      setIsSavingConfig(true);
+      try {
+        const res = await apiFetch(`/v1/configs/${encodeURIComponent(selectedConfigName)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ config: parsed, apply_to_engine: Boolean(applyToEngine) })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || data.message || `Save failed (${res.status})`);
+        if (applyToEngine) {
+          setActiveModel(selectedConfigName.replace(/\.json$/i, ''));
+          refreshMindTelemetry();
+        }
+        fetchModelConfigs(selectedConfigName);
+        showToast(applyToEngine ? `Saved & activated ${selectedConfigName}` : `Saved ${selectedConfigName}`);
+      } catch (err) {
+        showToast(`Config save failed: ${err.message}`);
+      } finally {
+        setIsSavingConfig(false);
+      }
+    };
+
+    const handleLaunchJunkie = async (startTrainingNow = false) => {
+      setIsLaunchingJunkie(true);
+      try {
+        const res = await apiFetch('/v1/training/launch_junkie', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            batch_size: trainBatchSize || 1,
+            seq_len: trainSeqLen || 128,
+            grad_accum_steps: trainGradAccum || 4,
+            precision: trainPrecision || 'bf16',
+            depth_mode: trainDepthMode || 'dynamic',
+            start: Boolean(startTrainingNow)
+          })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || data.message || `Launch failed (${res.status})`);
+        setActiveModel('junkie');
+        setActiveProjectName('Junkie · Inaugural Triune Flagship');
+        setIsTraining(Boolean(data.is_training));
+        refreshMindTelemetry();
+        showToast(data.message || 'Junkie architecture configured.');
+      } catch (err) {
+        showToast(`Junkie launch failed: ${err.message}`);
+      } finally {
+        setIsLaunchingJunkie(false);
+      }
+    };
+
+    const handlePreviewDataset = async (dsPath) => {
+      if (!dsPath) return;
+      setIsLoadingDatasetPreview(true);
+      try {
+        const res = await apiFetch(`/v1/datasets/preview?path=${encodeURIComponent(dsPath)}&limit=8`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || data.message || `Preview failed (${res.status})`);
+        setDatasetPreview(data);
+      } catch (err) {
+        showToast(`Dataset preview failed: ${err.message}`);
+      } finally {
+        setIsLoadingDatasetPreview(false);
+      }
+    };
+
+    const handleReplayDagRun = async (runId) => {
+      if (!runId || isReplayingDag) return;
+      setIsReplayingDag(true);
+      try {
+        const res = await apiFetch(`/v1/dag/replay/${encodeURIComponent(runId)}`, { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || data.message || `Replay failed (${res.status})`);
+        setDagExecutionStatus(`Replayed run ${runId} -> ${data.run_id || 'ok'} (${data.status})`);
+        fetchDagAndAgentHistory();
+        showToast(`Replayed DAG run (${data.status})`);
+      } catch (err) {
+        showToast(`DAG replay failed: ${err.message}`);
+      } finally {
+        setIsReplayingDag(false);
+      }
+    };
+
+    const handleRunAgentGoal = async () => {
+      const goal = agentGoalInput.trim();
+      if (!goal || isRunningAgent) return;
+      setIsRunningAgent(true);
+      try {
+        const endpoint = agentMode === 'orchestrate' ? '/v1/agents/orchestrate' : '/v1/agents/run';
+        const payload = agentMode === 'orchestrate'
+          ? { goal, personas: ['architect', 'researcher', 'reviewer'], mode: 'sequential', max_steps: 6, allow_writes: false }
+          : { goal, persona: agentPersona, reasoning_depth: agentDepth, max_steps: 8, allow_writes: false };
+        const res = await apiFetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (!res.ok || data.status === 'error') throw new Error(data.detail || data.message || 'Agent run failed');
+        await fetchDagAndAgentHistory();
+        showToast(`Agent run completed (${data.elapsed_ms || 0} ms)`);
+      } catch (err) {
+        showToast(`Agent run failed: ${err.message}`);
+      } finally {
+        setIsRunningAgent(false);
+      }
     };
 
     const handleUpgradeModel = async (customName = null, applyAsActive = false, opts = {}) => {
@@ -4360,7 +6088,7 @@
       const transferMode = opts.transferMode || upgradeTransferMode || 'early_exit';
       setIsUpgradingModel(true);
       if (transferWeights) {
-        showToast(`Transferring real weights from ${targetModel} into Triune (${transferMode})…`);
+        showToast(`Transferring real weights from ${targetModel} into TriuneTransformer (${transferMode})…`);
       }
       try {
         const res = await apiFetch('/v1/models/upgrade_to_triune', {
@@ -4417,10 +6145,10 @@
             } else {
               setWeightsLoaded(false);
               setActiveCheckpointName(null);
-              showToast('Triune architecture activated with fresh weights. Use Transfer Weights & Run or Load Saved Weights for trained inference.');
+              showToast('TriuneTransformer architecture activated with fresh weights. Use Transfer Weights & Run or Load Saved Weights for trained inference.');
             }
             try {
-              window.localStorage.setItem('triune.studio.activeModel', nextActiveId);
+              window.localStorage.setItem('lucid_machines.studio.activeModel', nextActiveId);
             } catch (_) {}
             refreshNeuronScope();
           } else {
@@ -4484,7 +6212,7 @@
 
     const handleSetConsoleDock = (newDock) => {
       setNeuralConsoleDock(newDock);
-      try { window.localStorage.setItem('triune.playground.neuralConsoleDock', newDock); } catch (_) {}
+      try { window.localStorage.setItem('lucid_machines.playground.neuralConsoleDock', newDock); } catch (_) {}
     };
 
     const handleSetConsoleSizePreset = (preset) => {
@@ -4492,22 +6220,22 @@
         setNeuralConsoleWidth(380);
         setNeuralConsoleHeight(220);
         try {
-          window.localStorage.setItem('triune.playground.neuralConsoleWidth', '380');
-          window.localStorage.setItem('triune.playground.neuralConsoleHeight', '220');
+          window.localStorage.setItem('lucid_machines.playground.neuralConsoleWidth', '380');
+          window.localStorage.setItem('lucid_machines.playground.neuralConsoleHeight', '220');
         } catch (_) {}
       } else if (preset === 'expanded') {
         setNeuralConsoleWidth(720);
         setNeuralConsoleHeight(520);
         try {
-          window.localStorage.setItem('triune.playground.neuralConsoleWidth', '720');
-          window.localStorage.setItem('triune.playground.neuralConsoleHeight', '520');
+          window.localStorage.setItem('lucid_machines.playground.neuralConsoleWidth', '720');
+          window.localStorage.setItem('lucid_machines.playground.neuralConsoleHeight', '520');
         } catch (_) {}
       } else {
         setNeuralConsoleWidth(500);
         setNeuralConsoleHeight(360);
         try {
-          window.localStorage.setItem('triune.playground.neuralConsoleWidth', '500');
-          window.localStorage.setItem('triune.playground.neuralConsoleHeight', '360');
+          window.localStorage.setItem('lucid_machines.playground.neuralConsoleWidth', '500');
+          window.localStorage.setItem('lucid_machines.playground.neuralConsoleHeight', '360');
         } catch (_) {}
       }
     };
@@ -4543,7 +6271,7 @@
           const maxW = Math.max(400, Math.floor((window.innerWidth || 1200) * 0.75));
           const finalW = Math.max(320, Math.min(maxW, startW + delta));
           setNeuralConsoleWidth(finalW);
-          window.localStorage.setItem('triune.playground.neuralConsoleWidth', String(finalW));
+          window.localStorage.setItem('lucid_machines.playground.neuralConsoleWidth', String(finalW));
         } catch (_) {}
       };
       window.addEventListener('pointermove', onMove);
@@ -4579,7 +6307,7 @@
           const maxH = Math.max(300, Math.floor((window.innerHeight || 800) * 0.75));
           const finalH = Math.max(165, Math.min(maxH, startH + delta));
           setNeuralConsoleHeight(finalH);
-          window.localStorage.setItem('triune.playground.neuralConsoleHeight', String(finalH));
+          window.localStorage.setItem('lucid_machines.playground.neuralConsoleHeight', String(finalH));
         } catch (_) {}
       };
       window.addEventListener('pointermove', onMove);
@@ -4619,8 +6347,8 @@
           const finalH = Math.max(220, Math.min((window.innerHeight || 800) - 80, startH + (upEv.clientY - startY)));
           setNeuralConsoleWidth(finalW);
           setNeuralConsoleHeight(finalH);
-          window.localStorage.setItem('triune.playground.neuralConsoleWidth', String(finalW));
-          window.localStorage.setItem('triune.playground.neuralConsoleHeight', String(finalH));
+          window.localStorage.setItem('lucid_machines.playground.neuralConsoleWidth', String(finalW));
+          window.localStorage.setItem('lucid_machines.playground.neuralConsoleHeight', String(finalH));
         } catch (_) {}
       };
       window.addEventListener('pointermove', onMove);
@@ -4655,7 +6383,7 @@
       if (isDraggingConsoleWindow) {
         setIsDraggingConsoleWindow(false);
         try { e.currentTarget.releasePointerCapture(e.pointerId); } catch (_) {}
-        try { window.localStorage.setItem('triune.playground.neuralConsolePos', JSON.stringify(neuralConsolePos)); } catch (_) {}
+        try { window.localStorage.setItem('lucid_machines.playground.neuralConsolePos', JSON.stringify(neuralConsolePos)); } catch (_) {}
       }
     };
 
@@ -4667,9 +6395,9 @@
       setWorkflowSaveState('Saving…');
       const timer = setTimeout(() => {
         try {
-          window.localStorage.setItem('triune.studio.workflow.v1', JSON.stringify({
-            format: 'triune-workflow', version: 1,
-            name: workflowName || 'My Triune Workflow',
+          window.localStorage.setItem('lucid_machines.studio.workflow.v1', JSON.stringify({
+            format: 'lucid_machines-workflow', version: 1,
+            name: workflowName || 'My Polysom Workflow',
             nodes, edges, frames, saved_at: new Date().toISOString()
           }));
           setWorkflowSaveState('Saved locally');
@@ -4682,16 +6410,16 @@
 
     const handleExportWorkflow = () => {
       const payload = {
-        format: 'triune-workflow', version: 1,
-        name: workflowName || 'My Triune Workflow',
+        format: 'lucid_machines-workflow', version: 1,
+        name: workflowName || 'My Polysom Workflow',
         nodes, edges, frames, exported_at: new Date().toISOString()
       };
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
-      const safeName = (payload.name || 'triune-workflow').replace(/[^a-z0-9_-]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'triune-workflow';
+      const safeName = (payload.name || 'lucid_machines-workflow').replace(/[^a-z0-9_-]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'lucid_machines-workflow';
       link.href = url;
-      link.download = `${safeName}.triune.json`;
+      link.download = `${safeName}.lucid_machines.json`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -4707,8 +6435,8 @@
       }
       try {
         const payload = JSON.parse(await file.text());
-        if (payload.format !== 'triune-workflow' || payload.version !== 1 || !Array.isArray(payload.nodes) || !Array.isArray(payload.edges)) {
-          throw new Error('This is not a supported Triune workflow file.');
+        if ((payload.format !== 'lucid_machines-workflow' && payload.format !== 'triune-workflow') || payload.version !== 1 || !Array.isArray(payload.nodes) || !Array.isArray(payload.edges)) {
+          throw new Error('This is not a supported Polysom Studio workflow file.');
         }
         const ids = new Set();
         for (const node of payload.nodes) {
@@ -4730,7 +6458,7 @@
         setEdges(payload.edges);
         setFrames(importedFrames);
         setActivePresetKey(null);
-        setWorkflowName(typeof payload.name === 'string' && payload.name.trim() ? payload.name.trim() : file.name.replace(/\.triune\.json$|\.json$/i, ''));
+        setWorkflowName(typeof payload.name === 'string' && payload.name.trim() ? payload.name.trim() : file.name.replace(/\.(lucid_machines|triune)\.json$|\.json$/i, ''));
         setNodeExecOutputs({});
         setSelectedNodeId(null);
         setSelectedNodeIds([]);
@@ -4907,7 +6635,7 @@
             wsReconnectDelay = 1000;
             wsConnectedRef.current = true;
             // Cloudflare Access authenticates the browser at the edge and the
-            // tunnel reaches this server over loopback. Only send a Triune
+            // tunnel reaches this server over loopback. Only send a Polysom Studio
             // bearer token when a direct-remote API request has already needed it.
             if (!isLocalStudioHost(window.location.hostname) && apiAuthToken && ws.readyState === WebSocket.OPEN) {
               ws.send(apiAuthToken);
@@ -5081,14 +6809,19 @@
           const needEnvOrTrain = forceHeavy || pollCounter === 0 || curTab === 'environment' || curTab === 'training' || (pollCounter % 4 === 0);
           pollCounter += 1;
 
-          const [dataVram, statusData, dataDiag, dataHw, dataKern, dataOpt] = await Promise.all([
+          const [dataVram, statusData, dataGpu, dataDiag, dataHw, dataKern, dataOpt] = await Promise.all([
             fetchJsonQuiet('/v1/vram/stats'),
             fetchJsonQuiet('/v1/training/status'),
+            fetchJsonQuiet('/v1/telemetry/gpu'),
             needEnvOrTrain ? fetchJsonQuiet('/v1/system/diagnostics') : Promise.resolve(null),
             needEnvOrTrain ? fetchJsonQuiet('/v1/hardware/profile') : Promise.resolve(null),
             (forceHeavy || pollCounter === 1 || curTab === 'environment') ? fetchJsonQuiet('/v1/engine/kernels') : Promise.resolve(null),
             (forceHeavy || pollCounter === 1 || curTab === 'training' || curTab === 'environment') ? fetchJsonQuiet('/v1/training/optimizer') : Promise.resolve(null)
           ]);
+
+          if (dataGpu && (dataGpu.device_name || dataGpu.device_type)) {
+            setGpuTelemetry(dataGpu);
+          }
 
           if (dataDiag && dataDiag.device_name) {
             const diagSig = `${dataDiag.device_name}|${dataDiag.cuda_available}|${dataDiag.model_weights_loaded}|${dataDiag.active_checkpoint || ''}`;
@@ -5277,7 +7010,7 @@
         if (data && Array.isArray(data.sessions) && data.sessions.length > 0) {
           setChatSessions(data.sessions);
           try {
-            localStorage.setItem('triune_chat_sessions', JSON.stringify(data.sessions));
+            localStorage.setItem('lucid_machines_chat_sessions', JSON.stringify(data.sessions));
           } catch (_) {}
           const activeSession = data.sessions.find(s => s.id === activeSessionId) || data.sessions[0];
           if (activeSession && Array.isArray(activeSession.messages) && activeSession.messages.length > 0) {
@@ -5296,7 +7029,7 @@
     useEffect(() => {
       if (!activeSessionId) return;
       try {
-        localStorage.setItem('triune_active_session_id', activeSessionId);
+        localStorage.setItem('lucid_machines_active_session_id', activeSessionId);
       } catch (_) {}
 
       setChatSessions(prevSessions => {
@@ -5332,7 +7065,7 @@
         }
 
         try {
-          localStorage.setItem('triune_chat_sessions', JSON.stringify(updated));
+          localStorage.setItem('lucid_machines_chat_sessions', JSON.stringify(updated));
         } catch (_) {}
 
         const cur = updated.find(s => s.id === activeSessionId);
@@ -5352,7 +7085,7 @@
       const newId = `session_${Date.now()}`;
       const defaultGreeting = [
         {
-          sender: 'Triune Studio',
+          sender: 'Polysom Studio',
           text: 'Welcome. Choose a model or provider, then send a prompt to begin. Backend connection status is shown above.',
           time: new Date().toLocaleTimeString(),
           isAssistant: true
@@ -5403,7 +7136,7 @@
       const remaining = chatSessions.filter(s => s.id !== sessionId);
       setChatSessions(remaining);
       try {
-        localStorage.setItem('triune_chat_sessions', JSON.stringify(remaining));
+        localStorage.setItem('lucid_machines_chat_sessions', JSON.stringify(remaining));
         await apiFetch(`/v1/chat/sessions/${sessionId}`, { method: 'DELETE' });
       } catch (_) {}
 
@@ -6379,7 +8112,7 @@
             if (data.exit_usage) setExitUsage(data.exit_usage);
           }
           if (data.logs && data.logs.length > 0) setTelemetryLogs(data.logs);
-          if (data.last_sample) setLastSample(data.last_sample.replace(/Ġ/g, ' ').replace(/\s+/g, ' ').trim());
+          if (data.last_sample) setLastSample(data.last_sample.replace(/G/g, ' ').replace(/\s+/g, ' ').trim());
         } catch (err) {
         } finally {
           trainPollInFlight = false;
@@ -6644,7 +8377,7 @@
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `${runName || 'triune-run'}_${Date.now()}.csv`;
+      link.download = `${runName || 'junkie-triune-run'}_${Date.now()}.csv`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -6681,7 +8414,7 @@
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `${runName || 'triune-run'}_wandb.json`;
+      link.download = `${runName || 'junkie-triune-run'}_wandb.json`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -6701,9 +8434,12 @@
     };
 
     const handleLoadDAGPreset = (presetKey) => {
-      const preset = DAG_PRESETS[presetKey];
+      const resolvedKey = DAG_PRESETS[presetKey]
+        ? presetKey
+        : (presetKey === 'lucid_canonical_hierarchical' ? 'triune_canonical_hierarchical' : presetKey);
+      const preset = DAG_PRESETS[resolvedKey];
       if (preset) {
-        setActivePresetKey(presetKey);
+        setActivePresetKey(resolvedKey);
         setShowDAGPresetLibrary(false);
         setWorkflowName(preset.name);
         setNodes(preset.nodes.map(node => ({ ...node })));
@@ -7066,7 +8802,7 @@
               'Hardware Acceleration & GPU Offload (Ollama / LM Studio Tuner)'
             ),
             e('span', { className: 'hw-device-badge' },
-              `● ${deviceTitle} (${totalVram > 0 ? `${totalVram} GB VRAM` : 'VRAM capacity unavailable'})`
+              `? ${deviceTitle} (${totalVram > 0 ? `${totalVram} GB VRAM` : 'VRAM capacity unavailable'})`
             )
           ),
           e('button', {
@@ -7403,7 +9139,7 @@
           param_pct: 0,
           target: '2D Attention Projections & Shared Weights',
           vram_saving: 'Not measured',
-          kernel: 'triune/kernels/fast_muon.py'
+          kernel: 'lucid_machines/kernels/fast_muon.py'
         },
         tier2_centroid: {
           name: 'Steered Triangular Subspace (sCholQR2)',
@@ -7491,7 +9227,7 @@
                 style: { width: '100%' }
               }),
               e('div', { className: 'optimizer-slider-label', style: { marginTop: '8px' } },
-                e('span', null, 'Momentum (β):'),
+                e('span', null, 'Momentum (ß):'),
                 e('span', { className: 'optimizer-slider-val' }, Number(opt.muon_momentum || 0.95).toFixed(2))
               ),
               e('input', {
@@ -7527,7 +9263,7 @@
             ),
             e('div', { className: 'optimizer-slider-group' },
               e('div', { className: 'optimizer-slider-label' },
-                e('span', null, 'Steer Scale (α):'),
+                e('span', null, 'Steer Scale (a):'),
                 e('span', { className: 'optimizer-slider-val' }, Number(opt.steer_scale !== undefined ? opt.steer_scale : 0.20).toFixed(2))
               ),
               e('input', {
@@ -7598,7 +9334,7 @@
         // Comparative Analysis Table vs Unsloth (Collapsible)
         e('details', { style: { marginTop: '16px', background: 'var(--bg-surface)', padding: '12px 16px', borderRadius: '8px', border: '1px solid var(--border-color)' } },
           e('summary', { style: { display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', outline: 'none', userSelect: 'none' } },
-            e('span', { style: { fontWeight: 700, fontSize: '13px', color: 'var(--accent-sage, #3f8f70)' } }, '▼ Compare Architectural Moat vs Unsloth Baseline'),
+            e('span', { style: { fontWeight: 700, fontSize: '13px', color: 'var(--accent-sage, #3f8f70)' } }, 'Compare Architectural Moat vs Unsloth Baseline'),
             e('span', { className: 'benchmark-badge', style: { background: 'rgba(43, 76, 63, 0.15)', color: 'var(--accent-olive, #2b4c3f)' } }, 'Research design · not benchmarked')
           ),
           e('table', { className: 'optimizer-unsloth-table' },
@@ -7612,32 +9348,32 @@
             e('tbody', null,
               e('tr', null,
                 e('td', { style: { fontWeight: 600 } }, 'Optimizer Architecture'),
-                e('td', { className: 'triune-cell' }, '3-Tier Partitioned (Muon + CentroidSteer + AdamW)'),
+                e('td', { className: 'lucid_machines-cell' }, '3-Tier Partitioned (Muon + CentroidSteer + AdamW)'),
                 e('td', { className: 'unsloth-cell' }, 'Standard 8-bit / FP32 AdamW')
               ),
               e('tr', null,
                 e('td', { style: { fontWeight: 600 } }, 'MoE Expert Memory Compression'),
-                e('td', { className: 'triune-cell' }, '83.3% State Reduction (Low-Rank SVD Subspace)'),
+                e('td', { className: 'lucid_machines-cell' }, '83.3% State Reduction (Low-Rank SVD Subspace)'),
                 e('td', { className: 'unsloth-cell' }, '0% (Full coordinate M & V states stored for all weights)')
               ),
               e('tr', null,
                 e('td', { style: { fontWeight: 600 } }, 'MoE Representation Collapse Prevention'),
-                e('td', { className: 'triune-cell' }, 'Active Gram-Schmidt Centroid Steering (P^T c_orth = 0)'),
+                e('td', { className: 'lucid_machines-cell' }, 'Active Gram-Schmidt Centroid Steering (P^T c_orth = 0)'),
                 e('td', { className: 'unsloth-cell' }, 'None (Subject to expert representation collapse)')
               ),
               e('tr', null,
                 e('td', { style: { fontWeight: 600 } }, 'Attention Matrix Geometry'),
-                e('td', { className: 'triune-cell' }, 'Riemannian 5th-Order Newton-Schulz Orthogonalization'),
+                e('td', { className: 'lucid_machines-cell' }, 'Riemannian 5th-Order Newton-Schulz Orthogonalization'),
                 e('td', { className: 'unsloth-cell' }, 'None (Coordinate-wise element updates)')
               ),
               e('tr', null,
                 e('td', { style: { fontWeight: 600 } }, 'Subspace Basis Transition Continuity'),
-                e('td', { className: 'triune-cell' }, 'Subspace transport T = P_old^T @ P_new (Zero loss spike)'),
+                e('td', { className: 'lucid_machines-cell' }, 'Subspace transport T = P_old^T @ P_new (Zero loss spike)'),
                 e('td', { className: 'unsloth-cell' }, 'N/A (No low-rank basis)')
               ),
               e('tr', null,
                 e('td', { style: { fontWeight: 600 } }, 'Empirical Convergence Efficiency'),
-                e('td', { className: 'triune-cell' }, '+35% faster loss reduction per step'),
+                e('td', { className: 'lucid_machines-cell' }, '+35% faster loss reduction per step'),
                 e('td', { className: 'unsloth-cell' }, 'Standard AdamW baseline')
               )
             )
@@ -8617,12 +10353,196 @@
       setConnectingFromId(nodeId);
     };
 
+    const pushDagUndoSnapshot = (curNodes = nodes, curEdges = edges) => {
+      setDagUndoStack(prev => [...prev.slice(-24), {
+        nodes: curNodes.map(n => ({ ...n })),
+        edges: curEdges.map(ed => ({ ...ed }))
+      }]);
+      setDagRedoStack([]);
+    };
+
+    const handleDagUndo = () => {
+      if (!dagUndoStack.length) {
+        showToast('Nothing to undo');
+        return;
+      }
+      const last = dagUndoStack[dagUndoStack.length - 1];
+      setDagUndoStack(prev => prev.slice(0, -1));
+      setDagRedoStack(prev => [...prev.slice(-24), {
+        nodes: nodes.map(n => ({ ...n })),
+        edges: edges.map(ed => ({ ...ed }))
+      }]);
+      setNodes(last.nodes);
+      setEdges(last.edges);
+      showToast('Undo DAG edit');
+    };
+
+    const handleDagRedo = () => {
+      if (!dagRedoStack.length) {
+        showToast('Nothing to redo');
+        return;
+      }
+      const next = dagRedoStack[dagRedoStack.length - 1];
+      setDagRedoStack(prev => prev.slice(0, -1));
+      setDagUndoStack(prev => [...prev.slice(-24), {
+        nodes: nodes.map(n => ({ ...n })),
+        edges: edges.map(ed => ({ ...ed }))
+      }]);
+      setNodes(next.nodes);
+      setEdges(next.edges);
+      showToast('Redo DAG edit');
+    };
+
+    const handleAutoLayoutDAG = (targetNodes = nodes, targetEdges = edges) => {
+      if (!targetNodes.length) return;
+      pushDagUndoSnapshot(targetNodes, targetEdges);
+      const inDeg = new Map();
+      const adj = new Map();
+      targetNodes.forEach(n => {
+        inDeg.set(n.id, 0);
+        adj.set(n.id, []);
+      });
+      targetEdges.forEach(ed => {
+        if (inDeg.has(ed.target) && adj.has(ed.source)) {
+          inDeg.set(ed.target, inDeg.get(ed.target) + 1);
+          adj.get(ed.source).push(ed.target);
+        }
+      });
+      const layerMap = new Map();
+      const queue = [];
+      inDeg.forEach((deg, id) => {
+        if (deg === 0) {
+          queue.push(id);
+          layerMap.set(id, 0);
+        }
+      });
+      let head = 0;
+      while (head < queue.length) {
+        const cur = queue[head++];
+        const curLvl = layerMap.get(cur) || 0;
+        (adj.get(cur) || []).forEach(nxt => {
+          const nextLvl = Math.max(layerMap.get(nxt) || 0, curLvl + 1);
+          layerMap.set(nxt, nextLvl);
+          inDeg.set(nxt, inDeg.get(nxt) - 1);
+          if (inDeg.get(nxt) <= 0) queue.push(nxt);
+        });
+      }
+      const columns = new Map();
+      targetNodes.forEach(n => {
+        const col = layerMap.has(n.id) ? layerMap.get(n.id) : 0;
+        if (!columns.has(col)) columns.set(col, []);
+        columns.get(col).push(n);
+      });
+      const laidOut = targetNodes.map(n => {
+        const col = layerMap.has(n.id) ? layerMap.get(n.id) : 0;
+        const siblings = columns.get(col) || [n];
+        const rowIdx = siblings.findIndex(s => s.id === n.id);
+        const totalH = siblings.length * 230;
+        const startY = Math.max(40, 220 - totalH / 2);
+        return {
+          ...n,
+          x: 40 + col * 320,
+          y: Math.round(startY + rowIdx * 230)
+        };
+      });
+      setNodes(laidOut);
+      setTimeout(() => handleFitCanvasView(laidOut), 0);
+      showToast('Applied layered topological Auto-Layout (L)');
+    };
+
+    const handleLoadArchBlueprint = (bpKey) => {
+      const bp = ARCHITECTURE_BLUEPRINTS[bpKey];
+      if (!bp) return;
+      pushDagUndoSnapshot();
+      setDagEditorMode('architecture');
+      setDagArchSpec({ ...bp.spec, preset_id: bp.preset_id, vocab_size: 32000 });
+      setWorkflowName(bp.name);
+      setActivePresetKey(null);
+      const nextNodes = bp.nodes.map(n => ({ ...n }));
+      const nextEdges = bp.edges.map(ed => ({ ...ed }));
+      setNodes(nextNodes);
+      setEdges(nextEdges);
+      setFrames([]);
+      setNodeExecOutputs({});
+      setSelectedNodeId(null);
+      setSelectedNodeIds([]);
+      setTimeout(() => handleFitCanvasView(nextNodes), 0);
+      showToast(`Loaded Architecture Blueprint: ${bp.name}`);
+    };
+
+    const handleCompileArchBlueprint = async () => {
+      setIsCompilingTraining(true);
+      const specDetails = [
+        `preset_id=${dagArchSpec.preset_id || 'triune-base'}`,
+        `num_layers=${dagArchSpec.num_layers}`,
+        `hidden_dim=${dagArchSpec.hidden_dim}`,
+        `heads=${dagArchSpec.num_heads}`,
+        `head_dim=${dagArchSpec.head_dim}`,
+        `experts_routed=${dagArchSpec.num_experts}`,
+        `top_k=${dagArchSpec.top_k_experts}`,
+        `reflex_exit_layer=${dagArchSpec.reflex_exit_layer}`,
+        `limbic_exit_layer=${dagArchSpec.limbic_exit_layer}`,
+        `precision=${dagArchSpec.precision}`,
+        `depth_mode=dynamic`
+      ].join('\n');
+      const syncedNodes = nodes.map(n => (
+        n.title.includes('Triune MoE Transformer') || n.type === 'Model'
+          ? (n.title.includes('Triune') ? { ...n, details: specDetails } : n)
+          : n
+      ));
+      setNodes(syncedNodes);
+      try {
+        const res = await apiFetch('/v1/model/compile_dag', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ nodes: syncedNodes.filter(n => !n.muted), edges })
+        });
+        const data = await res.json();
+        if (!res.ok || data.status !== 'success') {
+          throw new Error(data.message || data.detail || `Compile failed (${res.status})`);
+        }
+        if (data.active_model) setActiveModel(data.active_model);
+        setDatasetInfo(prev => ({
+          ...prev,
+          num_layers: dagArchSpec.num_layers,
+          hidden_dim: dagArchSpec.hidden_dim,
+          num_heads: dagArchSpec.num_heads,
+          num_experts: dagArchSpec.num_experts
+        }));
+        refreshMindTelemetry();
+        showToast(data.message || 'Compiled Triune architecture blueprint to live engine.');
+      } catch (err) {
+        showToast(`Blueprint compile failed: ${err.message}`);
+      } finally {
+        setIsCompilingTraining(false);
+      }
+    };
+
+    const handleLoadWorkflowTemplate = (tplKey) => {
+      const tpl = AGENT_WORKFLOW_TEMPLATES[tplKey];
+      if (!tpl) return;
+      pushDagUndoSnapshot();
+      setDagEditorMode('workflow');
+      setWorkflowName(tpl.name);
+      setActivePresetKey(null);
+      const nextNodes = tpl.nodes.map(n => ({ ...n }));
+      const nextEdges = tpl.edges.map(ed => ({ ...ed }));
+      setNodes(nextNodes);
+      setEdges(nextEdges);
+      setFrames([]);
+      setNodeExecOutputs({});
+      setSelectedNodeId(null);
+      setSelectedNodeIds([]);
+      setTimeout(() => handleFitCanvasView(nextNodes), 0);
+      showToast(`Loaded Agentic Workflow: ${tpl.name}`);
+    };
+
     const handleEndWire = (ev, targetNodeId, targetPortName, targetPortType) => {
       ev.stopPropagation();
       ev.preventDefault();
       if (connectingWire && connectingWire.source !== targetNodeId) {
       if (!isPortCompatible(connectingWire.port_type, targetPortType)) {
-        showToast(`Cannot connect ${connectingWire.port_type} to ${targetPortType}.`);
+        showToast(`Incompatible port connection: ${connectingWire.port_type} cannot connect to ${targetPortType}.`);
         setConnectingWire(null);
         setConnectingFromId(null);
         return;
@@ -8643,6 +10563,7 @@
           if (edge.source === current && edge.target !== targetNodeId) pending.push(edge.target);
         });
       }
+      pushDagUndoSnapshot();
       const newEdge = {
           id: `e_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
           source: connectingWire.source,
@@ -8652,13 +10573,14 @@
           port_type: connectingWire.port_type
         };
         setEdges(prev => [...prev.filter(e => !(e.target === targetNodeId && e.target_port === targetPortName)), newEdge]);
-        showToast(`Connected Wire: [${connectingWire.source}:${connectingWire.source_port}] → [${targetNodeId}:${targetPortName}]`);
+        showToast(`Connected Wire: [${connectingWire.source}:${connectingWire.source_port}] -> [${targetNodeId}:${targetPortName}]`);
       }
       setConnectingWire(null);
       setConnectingFromId(null);
     };
 
     const handleDisconnectWire = (edgeId) => {
+      pushDagUndoSnapshot();
       setEdges(prev => prev.filter(e => e.id !== edgeId));
       showToast('Disconnected Wire');
     };
@@ -8685,6 +10607,7 @@
       if (!selectedNodeId) return;
       const src = nodes.find(n => n.id === selectedNodeId);
       if (!src) return;
+      pushDagUndoSnapshot();
       const newId = `node_${Date.now().toString().slice(-4)}_${nodes.length + 1}`;
       const clone = {
         ...src,
@@ -8699,6 +10622,7 @@
     };
 
     const handleAddDatasetNodeToDAG = (ds) => {
+      pushDagUndoSnapshot();
       const dsId = typeof ds === 'string' ? ds : (ds.id || ds.name || 'roneneldan/TinyStories');
       const dsName = typeof ds === 'string' ? ds : (ds.name || dsId);
       const newId = `node_stream_${Date.now().toString().slice(-4)}`;
@@ -8721,6 +10645,7 @@
         handleAddModuleNodesToCanvas(mod);
         return;
       }
+      pushDagUndoSnapshot();
       const newId = `node_mod_${Date.now().toString().slice(-4)}`;
       const category = (mod.type === 'plugin' ? 'Custom' : (mod.type === 'adapter' ? 'Model' : (mod.type === 'dataset' ? 'Data' : 'Runtime')));
       const newNode = {
@@ -8742,6 +10667,7 @@
 
     // Node Deletion Handler
     const handleDeleteNode = (nodeId) => {
+      pushDagUndoSnapshot();
       setNodes(prev => prev.filter(n => n.id !== nodeId));
       setEdges(prev => prev.filter(e => e.source !== nodeId && e.target !== nodeId));
       setSelectedNodeIds(prev => prev.filter(id => id !== nodeId));
@@ -8848,6 +10774,7 @@
           `checkpoints_full/${modelId}.pt`,
           `checkpoints_full/best.pt`,
           `checkpoints_full/latest.pt`,
+          `checkpoints/lucid_machines_studio_step_0.pt`,
           `checkpoints/triune_studio_step_0.pt`
         ];
         let loaded = false;
@@ -8999,6 +10926,7 @@
           ? ` First failure: ${failureName}${failureError ? ` — ${failureError}` : ''}.`
           : '';
         setDagExecutionStatus(`ExecutionEngine finished ${executedCount} node(s); ${specificationCount} specification-only node(s); ${failedCount} failed.${summary}${specNote}${failedNote} Run ${data.run_id || runId.slice(-6)}; queue wait ${data.queue_wait_ms ?? 0} ms.`);
+        fetchDagAndAgentHistory();
         showToast(failedCount > 0 ? `DAG stopped after ${failedCount} node failure(s)` : (specificationCount > 0
           ? `DAG finished with ${specificationCount} specification-only node(s)`
           : 'DAG Engine Pipeline Completed!'));
@@ -9054,6 +10982,11 @@
             model: activeModel,
             messages: requestMessages,
             temperature: temperature,
+            top_p: topP,
+            top_k: topK,
+            repetition_penalty: repPenalty,
+            logprobs: Boolean(inspectLogprobs),
+            top_logprobs: 5,
             max_tokens: maxTokens,
             route: route,
             stream: true
@@ -9066,9 +10999,9 @@
             const rawText = await response.text().catch(() => '');
             throw new Error(rawText.trim() || `Request failed (${response.status})`);
           }
-          streamedMessageId = `triune-stream-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+          streamedMessageId = `lucid_machines-stream-${Date.now()}-${Math.random().toString(36).slice(2)}`;
           const streamingSender = isCloudByokModel(activeModel, weightsLoaded)
-            ? activeModel.toUpperCase() : 'Triune MoE Engine';
+            ? activeModel.toUpperCase() : 'Lucid MoE Engine';
           setMessages(prev => [...prev, {
             id: streamedMessageId,
             sender: streamingSender,
@@ -9132,8 +11065,9 @@
                 playTactileKeyClick();
               }
               recordStreamToken(Math.max(1, Math.round(chunkStr.length / 4)));
-              if (window.__triuneCanvasEmitPulse) {
-                window.__triuneCanvasEmitPulse(chunk.telemetry || { tier: route === 'reflex' ? 0 : (route === 'limbic' ? 1 : 2), route });
+              const emitCanvasPulse = window.__lucid_machinesCanvasEmitPulse || window.__triuneCanvasEmitPulse;
+              if (emitCanvasPulse) {
+                emitCanvasPulse(chunk.telemetry || { tier: route === 'reflex' ? 0 : (route === 'limbic' ? 1 : 2), route });
               }
               scheduleBatchedRender();
             }
@@ -9176,7 +11110,7 @@
           ? data.choices[0].message.content
           : (data.error ? `[API Key Notice]: ${data.error}` : 'Engine processing completed.');
         const reply = cleanText(rawReply);
-        const senderName = isExternal ? activeModel.toUpperCase() : 'Triune MoE Engine';
+        const senderName = isExternal ? activeModel.toUpperCase() : 'Lucid MoE Engine';
         const tele = data.telemetry || { route: route.toUpperCase(), vram: `${vramUsage.allocated} GB`, latency: '18ms' };
         if (tele.weights_loaded !== undefined && !isExternal) setWeightsLoaded(Boolean(tele.weights_loaded));
         if (tele.checkpoint !== undefined && !isExternal) setActiveCheckpointName(tele.checkpoint || null);
@@ -9187,6 +11121,7 @@
             text: reply,
             time: new Date().toLocaleTimeString(),
             isAssistant: true,
+            tokenLogprobs: tele.token_logprobs || null,
             telemetry: {
               route: isExternal ? 'CLOUD API' : (tele.route || route.toUpperCase()),
               vram: isExternal ? '0.0 GB (Cloud)' : (tele.vram_gb !== undefined ? `${tele.vram_gb} GB` : `${vramUsage.allocated} GB`),
@@ -9209,6 +11144,7 @@
         }
         if (!isExternal) {
           refreshNeuronScope();
+          refreshMindTelemetry();
         }
       } catch (err) {
         if (err.name === 'AbortError') {
@@ -9411,7 +11347,7 @@
     };
 
     const handleStopGeneration = async () => {
-      const isLocalModel = activeModel.startsWith('triune');
+      const isLocalModel = /^(triune|junkie|lucid_machines|lucid)/i.test(activeModel);
       if (isLocalModel) {
         try {
           const response = await apiFetch('/v1/chat/cancel', { method: 'POST' });
@@ -9434,7 +11370,7 @@
     const handleClearChat = () => {
       setMessages([
         {
-          sender: 'Triune Engine',
+          sender: 'Polysom Studio',
           text: 'Conversation cleared. Ready for fresh research questions or prompt evaluations.',
           time: new Date().toLocaleTimeString(),
           isAssistant: true,
@@ -9553,7 +11489,7 @@
     const handleActivateModule = async (m) => {
       const needsCodeTrust = m.type === 'plugin' && !String(m.download_url || '').startsWith('builtin://');
       if (needsCodeTrust && !window.confirm(
-        `Activate third-party plugin “${m.name}”?\n\nThis runs Python code inside the Triune process with the same permissions as the current user. The static safety checks are not a sandbox. Only continue if you have reviewed and trust this source.`
+        `Activate third-party plugin “${m.name}”?\n\nThis runs Python code inside the Polysom Studio process with the same permissions as the current user. The static safety checks are not a sandbox. Only continue if you have reviewed and trust this source.`
       )) return;
       setActiveActivatingModId(m.id);
       showToast(`Activating ${m.name}...`);
@@ -9698,11 +11634,11 @@
         showToast('This theme cannot be exported because its palette is invalid.');
         return;
       }
-      const payload = JSON.stringify({ format: 'triune-theme', version: 1, ...normalized }, null, 2);
+      const payload = JSON.stringify({ format: 'lucid_machines-theme', version: 1, ...normalized }, null, 2);
       const url = URL.createObjectURL(new Blob([payload], { type: 'application/json' }));
       const link = document.createElement('a');
       link.href = url;
-      link.download = `${normalized.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.triunetheme`;
+      link.download = `${normalized.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.lucid_machinestheme`;
       link.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     };
@@ -9714,7 +11650,7 @@
       try {
         if (file.size > 32_768) throw new Error('Theme files must be 32 KB or smaller.');
         const payload = JSON.parse(await file.text());
-        if (payload.format !== 'triune-theme' || payload.version !== 1) throw new Error('This is not a supported Triune theme file.');
+        if ((payload.format !== 'lucid_machines-theme' && payload.format !== 'triune-theme') || payload.version !== 1) throw new Error('This is not a supported Polysom Studio theme file.');
         const imported = normalizeThemeRecord({ ...payload, id: `custom-${Date.now().toString(36)}` });
         if (!imported) throw new Error('The file has missing or invalid color values.');
         const updated = [imported, ...customThemes.filter(theme => theme.name.toLowerCase() !== imported.name.toLowerCase())].slice(0, 50);
@@ -9739,7 +11675,7 @@
         setEditingThemeId('');
         setThemeDraft({ ...DEFAULT_THEME_DRAFT, palette: { ...DEFAULT_THEME_DRAFT.palette } });
       }
-      if (studioTheme === theme.id) setStudioTheme('obsidian-glass');
+      if (studioTheme === theme.id) setStudioTheme('hypnagogic');
       showToast(`${theme.name} removed from your library.`);
     };
 
@@ -9749,30 +11685,164 @@
       onMouseMove: handleMouseMove,
       onMouseUp: handleMouseUp
     },
-      // Toast Banner
-      statusToast && e('div', {
-        className: `pill ${/\b(error|failed|failure|unable|could not|invalid|unavailable|denied|rejected|refused)\b/i.test(String(statusToast)) ? 'warning' : 'online'}`,
-        role: 'status',
-        'aria-live': 'polite',
-        title: 'Click to dismiss notification',
-        onClick: () => setStatusToast(null),
-        style: {
-          position: 'fixed',
-          top: '58px',
-          right: '20px',
-          maxWidth: '520px',
-          whiteSpace: 'normal',
-          wordBreak: 'break-word',
-          lineHeight: 1.4,
-          padding: '8px 14px',
-          borderRadius: '10px',
-          zIndex: 100,
-          cursor: 'pointer',
-          background: 'var(--bg-card)',
-          border: '1px solid var(--border-dark)',
-          boxShadow: '0 10px 28px rgba(0, 0, 0, 0.45)'
-        }
-      }, statusToast),
+      // Non-Intrusive Toast Stack (.ps-toast-stack)
+      toastStack.length > 0 && e('div', { className: 'ps-toast-stack', role: 'status', 'aria-live': 'polite' },
+        toastStack.map(t => e('div', {
+          key: t.id,
+          className: `ps-toast ${t.kind || ''}`,
+          title: 'Click to dismiss notification',
+          onClick: () => setToastStack(prev => prev.filter(item => item.id !== t.id))
+        },
+          e('span', null, t.text),
+          e('button', {
+            type: 'button',
+            style: { background: 'transparent', border: 0, color: 'var(--text-dim)', cursor: 'pointer', padding: '0 2px', fontSize: '11px' },
+            onClick: ev => { ev.stopPropagation(); setToastStack(prev => prev.filter(item => item.id !== t.id)); }
+          }, renderIcon('close', 11))
+        ))
+      ),
+
+      // Command Palette (Ctrl+K / Cmd+K)
+      showCommandPalette && (() => {
+        const q = (cmdQuery || '').toLowerCase().trim();
+        const commands = [
+          ...Object.entries(TAB_TITLES).map(([tabId, tabTitle]) => ({
+            id: `nav:${tabId}`,
+            group: 'Navigate',
+            label: tabTitle,
+            hint: `#${tabId}`,
+            action: () => { setActiveTab(tabId); }
+          })),
+          ...allAppearanceThemes.map(th => ({
+            id: `theme:${th.id}`,
+            group: 'Theme',
+            label: `Switch Theme: ${th.name} (${th.mode})`,
+            hint: th.id,
+            action: () => {
+              setStudioTheme(th.id);
+              setPreviewThemeDraft(false);
+              setCustomAccent('');
+              try { window.localStorage.setItem('lucid_machines.studio.theme', th.id); } catch (_) {}
+              showToast(`Theme: ${th.name}`);
+            }
+          })),
+          {
+            id: 'act:new-chat',
+            group: 'Action',
+            label: 'New Conversation',
+            hint: 'Inference',
+            action: () => { setActiveTab('chat'); setPlaygroundMode('chat'); handleNewChat(); }
+          },
+          {
+            id: 'act:mind-montage',
+            group: 'Action',
+            label: 'Open Polysom Mind Montage',
+            hint: 'Telemetry',
+            action: () => { setActiveTab('chat'); setPlaygroundMode('chat'); setShowNeuralConsole(true); setNeuralConsoleView('mind'); refreshMindTelemetry(); }
+          },
+          {
+            id: 'act:compare',
+            group: 'Action',
+            label: 'Open Side-by-Side Compare Arena',
+            hint: 'Compare',
+            action: () => { setActiveTab('chat'); setPlaygroundMode('arena'); }
+          },
+          {
+            id: 'act:tokens',
+            group: 'Action',
+            label: 'Open Token Probability & Entropy Lab',
+            hint: 'Logprobs',
+            action: () => { setActiveTab('chat'); setPlaygroundMode('tokens'); }
+          },
+          {
+            id: 'act:junkie',
+            group: 'Action',
+            label: 'Prepare Junkie Flagship Launchpad',
+            hint: 'Junkie',
+            action: () => { setActiveTab('training'); handleLaunchJunkie(false); }
+          },
+          {
+            id: 'act:dag-run',
+            group: 'Action',
+            label: 'Run One DAG Pass',
+            hint: 'Workflow',
+            action: () => { setActiveTab('nodegraph'); handleExecuteDAG(); }
+          },
+          {
+            id: 'act:workspace-ide',
+            group: 'Action',
+            label: 'Open Workspace & Agent IDE',
+            hint: 'IDE',
+            action: () => { setActiveTab('workspace'); }
+          },
+          {
+            id: 'act:workspace-terminal',
+            group: 'Action',
+            label: 'Toggle Workspace Terminal',
+            hint: 'Terminal',
+            action: () => { setActiveTab('workspace'); setWsTerminalOpen(prev => !prev); }
+          },
+          {
+            id: 'act:dag-autolayout',
+            group: 'Action',
+            label: 'Auto-Layout Node Canvas (L)',
+            hint: 'DAG',
+            action: () => { setActiveTab('nodegraph'); handleAutoLayoutDAG(); }
+          },
+          {
+            id: 'act:purge-vram',
+            group: 'Action',
+            label: 'Purge Unused GPU VRAM Cache',
+            hint: 'GPU',
+            action: () => { handlePurgeVRAM(); }
+          }
+        ].filter(c => !q || c.label.toLowerCase().includes(q) || c.group.toLowerCase().includes(q) || c.hint.toLowerCase().includes(q));
+
+        const runItem = (item) => {
+          if (!item) return;
+          setShowCommandPalette(false);
+          item.action();
+        };
+
+        return e('div', {
+          className: 'ps-cmd-palette-backdrop',
+          onClick: () => setShowCommandPalette(false)
+        },
+          e('div', {
+            className: 'ps-cmd-palette',
+            role: 'dialog',
+            'aria-label': 'Command Palette',
+            onClick: ev => ev.stopPropagation()
+          },
+            e('input', {
+              autoFocus: true,
+              type: 'text',
+              className: 'ps-cmd-input',
+              placeholder: 'Type a command, tab, theme, or action... (Esc to close)',
+              value: cmdQuery,
+              onChange: ev => { setCmdQuery(ev.target.value); setCmdActiveIdx(0); },
+              onKeyDown: ev => {
+                if (ev.key === 'ArrowDown') { ev.preventDefault(); setCmdActiveIdx(i => Math.min(Math.max(0, commands.length - 1), i + 1)); }
+                else if (ev.key === 'ArrowUp') { ev.preventDefault(); setCmdActiveIdx(i => Math.max(0, i - 1)); }
+                else if (ev.key === 'Enter' && commands.length > 0) { ev.preventDefault(); runItem(commands[Math.min(cmdActiveIdx, commands.length - 1)]); }
+              }
+            }),
+            e('div', { className: 'ps-cmd-list', role: 'listbox' },
+              commands.length > 0 ? commands.map((c, idx) => e('button', {
+                key: c.id,
+                type: 'button',
+                role: 'option',
+                'aria-selected': idx === cmdActiveIdx ? 'true' : 'false',
+                className: `ps-cmd-item ${idx === cmdActiveIdx ? 'active' : ''}`,
+                onClick: () => runItem(c)
+              },
+                e('span', null, `[${c.group}] ${c.label}`),
+                e('span', { style: { fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-dim)' } }, c.hint)
+              )) : e('div', { className: 'ps-empty-state', style: { margin: '12px' } }, 'No matching commands found.')
+            )
+          )
+        );
+      })(),
 
       // Custom Node Creation Modal
       showCustomNodeModal && e('div', { className: 'modal-overlay', onClick: () => setShowCustomNodeModal(false) },
@@ -9812,7 +11882,7 @@
         e('div', { className: 'node-library-modal', onClick: ev => ev.stopPropagation() },
           e('div', { className: 'node-library-header' },
             e('div', null,
-              e('h3', { style: { fontFamily: 'var(--font-heading)', fontSize: '20px', margin: 0 } }, 'Triune Architectural Node Library'),
+              e('h3', { style: { fontFamily: 'var(--font-heading)', fontSize: '20px', margin: 0 } }, 'Polysom Architectural Node Library'),
               e('div', { style: { fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' } }, 'Backend-registered operators, specifications, and extensions')
             ),
             e('button', {
@@ -9854,8 +11924,8 @@
                       e('div', { style: { fontWeight: 700, fontSize: '14px', color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '6px' } },
                         item.title,
                         (item.execution_type === 'execution' || item.real_computation)
-                          ? e('span', { style: { fontSize: '9px', background: '#e3ebd8', color: '#2b4c3f', padding: '1px 5px', borderRadius: '4px', fontWeight: 600 } }, '● EXECUTION')
-                          : e('span', { style: { fontSize: '9px', background: '#faeed7', color: '#78350f', padding: '1px 5px', borderRadius: '4px', fontWeight: 600 } }, '○ SPEC')
+                          ? e('span', { style: { fontSize: '9px', background: '#e3ebd8', color: '#2b4c3f', padding: '1px 5px', borderRadius: '4px', fontWeight: 600 } }, 'EXECUTION')
+                          : e('span', { style: { fontSize: '9px', background: '#faeed7', color: '#78350f', padding: '1px 5px', borderRadius: '4px', fontWeight: 600 } }, 'SPEC')
                       ),
                       e('span', { className: 'node-type-tag', style: { fontSize: '10px' } }, item.category)
                     ),
@@ -9919,7 +11989,7 @@
           e('div', { className: 'node-library-header' },
             e('div', null,
               e('h3', { style: { fontFamily: 'var(--font-heading)', fontSize: '20px', margin: 0 } }, 'Scaffold Custom DAG Plugin Script'),
-              e('div', { style: { fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' } }, 'Generates a ready-to-run Python plugin script in triune/plugins/ with @register_node schema')
+              e('div', { style: { fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' } }, 'Generates a ready-to-run Python plugin script in lucid_machines/plugins/ with @register_node schema')
             ),
             e('button', {
               className: 'node-delete-btn',
@@ -9954,7 +12024,7 @@
             ),
             e('div', { style: { background: 'var(--bg-surface)', padding: '10px 12px', borderRadius: '6px', border: '1px solid var(--border-color)', fontSize: '12px', color: 'var(--text-muted)' } },
               'Once generated, your new plugin will be saved to ',
-              e('code', { style: { fontFamily: 'monospace', color: 'var(--primary)' } }, 'triune/plugins/'),
+              e('code', { style: { fontFamily: 'monospace', color: 'var(--primary)' } }, 'lucid_machines/plugins/'),
               '. Review the generated code, then scan the workspace to register it.'
             ),
             e('div', { style: { display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '10px' } },
@@ -9972,10 +12042,10 @@
       // Sidebar Navigation
       e('aside', { className: `react-sidebar ${sidebarCollapsed ? 'collapsed' : ''}` },
         e('div', { className: 'react-brand' },
-          e('div', { className: 'brand-logo-icon' }, renderTriuneLogo(34)),
+          e('div', { className: 'brand-logo-icon' }, renderPolysomLogo(34)),
           !sidebarCollapsed && e('div', { className: 'brand-title-wrap' },
-            e('span', { className: 'brand-title' }, 'Triune AI Studio'),
-            e('span', { className: 'brand-sub' }, 'Triune AI Workspace')
+            e('span', { className: 'brand-title' }, 'Polysom Studio'),
+            e('span', { className: 'brand-sub' }, 'Lucid Machines AI Workspace')
           )
         ),
         e('nav', { className: 'react-nav', 'aria-label': 'Studio sections' },
@@ -9983,6 +12053,11 @@
             e('span', { className: 'nav-icon' }, renderIcon('chat', 17)),
             !sidebarCollapsed && e('span', { className: 'nav-label' }, 'Chat & Playground'),
             !sidebarCollapsed && e('span', { className: 'nav-badge' }, 'MoE')
+          ),
+          e('button', { className: `nav-item ${activeTab === 'workspace' ? 'active' : ''}`, title: 'Workspace & Agent IDE', onClick: () => setActiveTab('workspace') },
+            e('span', { className: 'nav-icon' }, renderIcon('folder', 17)),
+            !sidebarCollapsed && e('span', { className: 'nav-label' }, 'Workspace IDE'),
+            !sidebarCollapsed && e('span', { className: `nav-badge ${wsLoopRunning ? 'pulse' : ''}` }, wsLoopRunning ? 'Loop' : 'IDE')
           ),
           e('button', { className: `nav-item ${activeTab === 'nodegraph' ? 'active' : ''}`, title: 'Visual Node Canvas', onClick: () => setActiveTab('nodegraph') },
             e('span', { className: 'nav-icon' }, renderIcon('nodes', 17)),
@@ -10052,7 +12127,7 @@
             }, sidebarCollapsed ? renderIcon('menu', 16) : renderIcon('arrowRight', 16, { transform: 'rotate(180deg)' })),
             e('div', { className: 'topbar-title-group' },
               e('h2', { className: 'topbar-title' }, TAB_TITLES[activeTab] || (activeTab.charAt(0).toUpperCase() + activeTab.slice(1).replace(/_/g, ' '))),
-              e('span', { className: 'topbar-subtitle' }, TAB_DESCRIPTIONS[activeTab] || 'Triune model workspace')
+              e('span', { className: 'topbar-subtitle' }, TAB_DESCRIPTIONS[activeTab] || 'Polysom Studio workspace')
             )
           ),
 
@@ -10210,6 +12285,33 @@
           ),
 
           e('div', { className: 'topbar-pills' },
+            e('button', {
+              type: 'button',
+              className: 'pill',
+              onClick: () => { setShowCommandPalette(true); setCmdQuery(''); setCmdActiveIdx(0); },
+              title: 'Open Command Palette (Ctrl+K)',
+              style: { cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '5px', fontFamily: 'var(--font-mono)', fontSize: '11px' }
+            }, [renderIcon('search', 11), 'Ctrl+K']),
+            e('div', { className: 'ps-theme-switcher', role: 'group', 'aria-label': 'Studio Theme Quick Switcher' },
+              APPEARANCE_THEMES.map(t => e('button', {
+                key: t.id,
+                type: 'button',
+                className: `ps-theme-pill ${studioTheme === t.id ? 'active' : ''}`,
+                'aria-pressed': studioTheme === t.id ? 'true' : 'false',
+                title: `${t.name} (${t.mode})`,
+                onClick: () => {
+                  setStudioTheme(t.id);
+                  setPreviewThemeDraft(false);
+                  setEditingThemeId('');
+                  setCustomAccent('');
+                  try { window.localStorage.setItem('lucid_machines.studio.theme', t.id); } catch (_) {}
+                  showToast(`Theme: ${t.name}`);
+                }
+              },
+                e('span', { className: 'ps-theme-dot', style: { background: t.palette.accent } }),
+                e('span', null, t.name)
+              ))
+            ),
             e('div', { className: 'pill', style: { display: 'inline-flex', alignItems: 'center', gap: '5px', padding: '2px 8px' }, title: 'Switch Studio Theme' },
               renderIcon('themes', 12, { color: 'var(--text-muted)' }),
               e('select', {
@@ -10222,7 +12324,7 @@
                     setPreviewThemeDraft(false);
                     setEditingThemeId('');
                     setCustomAccent('');
-                    try { window.localStorage.setItem('triune.studio.theme', val); } catch (_) {}
+                    try { window.localStorage.setItem('lucid_machines.studio.theme', val); } catch (_) {}
                     const themeName = allAppearanceThemes.find(t => t.id === val)?.name || val;
                     showToast(`Theme: ${themeName}`);
                   }
@@ -10237,13 +12339,13 @@
               role: 'status',
               'aria-live': 'polite',
               title: backendStatus === 'online' ? 'Studio API is responding' : 'Studio API connection state'
-            }, backendStatus === 'online' ? '● API online' : (backendStatus === 'offline' ? '● API offline' : '◌ Connecting…')),
+            }, backendStatus === 'online' ? 'API online' : (backendStatus === 'offline' ? 'API offline' : 'Connecting...')),
 
             // Engine Status Chip
             e('span', {
               className: `pill ${backendStatus !== 'online' ? 'warning' : (isTraining ? 'online' : ((metrics && metrics.step > 0) ? 'warning' : ''))}`,
               title: backendStatus !== 'online' ? 'Engine status unavailable until the API reconnects' : `Engine: ${isTraining ? 'Running' : ((metrics && metrics.step > 0) ? 'Paused' : 'Idle')}`
-            }, `● ${backendStatus !== 'online' ? 'Unavailable' : (isTraining ? 'Running' : ((metrics && metrics.step > 0) ? 'Paused' : 'Idle'))}`),
+            }, `${backendStatus !== 'online' ? 'Unavailable' : (isTraining ? 'Running' : ((metrics && metrics.step > 0) ? 'Paused' : 'Idle'))}`),
 
             // Step & Loss Telemetry
             (metrics && metrics.step > 0) && e('span', { className: 'pill', title: 'Global Step' }, `Step: ${metrics.step.toLocaleString()}`),
@@ -10415,7 +12517,7 @@
           'aria-live': 'polite'
         },
           e('div', null,
-            e('strong', null, backendStatus === 'offline' ? 'Cannot reach the Triune backend.' : 'Connecting to the Triune backend…'),
+            e('strong', null, backendStatus === 'offline' ? 'Cannot reach the Polysom Studio backend.' : 'Connecting to the Polysom Studio backend…'),
             backendStatus === 'offline' && e('span', null, ' Start or restart Studio’s backend; API features will be unavailable until it reconnects.')
           ),
           backendStatus === 'offline' && e('button', {
@@ -10536,19 +12638,19 @@
                         className: `playground-mode-btn ${playgroundMode === m.id ? 'active' : ''}`,
                         onClick: () => {
                           setPlaygroundMode(m.id);
-                          try { window.localStorage.setItem('triune.playground.mode', m.id); } catch (_) {}
+                          try { window.localStorage.setItem('lucid_machines.playground.mode', m.id); } catch (_) {}
                         }
                       }, [renderIcon(m.icon, 13), m.label]))
                     ),
                   ),
                   e('div', { className: 'playground-toolbar-right' },
-                    activeModel.startsWith('triune') && e('button', {
+                    /^(triune|junkie|lucid_machines|lucid)/i.test(activeModel) && e('button', {
                       className: `btn-clear-chat neural-console-toggle-pill ${showNeuralConsole ? 'active' : ''}`,
                       style: showNeuralConsole ? { borderColor: 'var(--primary)', color: 'var(--primary)', background: 'rgba(139, 92, 246, 0.12)' } : {},
                       onClick: () => {
                         const nextState = !showNeuralConsole;
                         setShowNeuralConsole(nextState);
-                        try { window.localStorage.setItem('triune.playground.neuralConsoleOpen', String(nextState)); } catch (_) {}
+                        try { window.localStorage.setItem('lucid_machines.playground.neuralConsoleOpen', String(nextState)); } catch (_) {}
                         if (nextState) refreshNeuronScope();
                       },
                       title: showNeuralConsole ? 'Collapse Neural Intelligence Console' : 'Expand Neural Intelligence Console'
@@ -10660,7 +12762,7 @@
                                 MODEL_PRESETS.map(p => e('option', { key: p.id, value: p.id }, `${p.name}`))
                               ),
                               e('optgroup', { label: 'Transmute External Dense Architecture' },
-                                UPGRADEABLE_MODELS.map(m => e('option', { key: m.id, value: m.id }, `Transmute: ${m.name} (${m.layers}) → Triune`))
+                                UPGRADEABLE_MODELS.map(m => e('option', { key: m.id, value: m.id }, `Transmute: ${m.name} (${m.layers}) -> Triune`))
                               )
                             ),
                             e('button', {
@@ -10807,21 +12909,29 @@
                                 className: `neural-console-tab-btn ${neuralConsoleView === '3d' ? 'active' : ''}`,
                                 onClick: () => {
                                   setNeuralConsoleView('3d');
-                                  try { window.localStorage.setItem('triune.playground.neuralConsoleView', '3d'); } catch (_) {}
+                                  try { window.localStorage.setItem('lucid_machines.playground.neuralConsoleView', '3d'); } catch (_) {}
                                 }
                               }, [renderIcon('bolt', 11), '3D Synapses']),
+                              e('button', {
+                                className: `neural-console-tab-btn ${neuralConsoleView === 'mind' ? 'active' : ''}`,
+                                onClick: () => {
+                                  setNeuralConsoleView('mind');
+                                  try { window.localStorage.setItem('lucid_machines.playground.neuralConsoleView', 'mind'); } catch (_) {}
+                                  refreshMindTelemetry();
+                                }
+                              }, [renderIcon('brain', 11), 'Polysom Mind']),
                               e('button', {
                                 className: `neural-console-tab-btn ${neuralConsoleView === 'transmute' ? 'active' : ''}`,
                                 onClick: () => {
                                   setNeuralConsoleView('transmute');
-                                  try { window.localStorage.setItem('triune.playground.neuralConsoleView', 'transmute'); } catch (_) {}
+                                  try { window.localStorage.setItem('lucid_machines.playground.neuralConsoleView', 'transmute'); } catch (_) {}
                                 }
                               }, [renderIcon('branch', 11), 'Architecture Transmutation']),
                               e('button', {
                                 className: `neural-console-tab-btn ${neuralConsoleView === 'split' ? 'active' : ''}`,
                                 onClick: () => {
                                   setNeuralConsoleView('split');
-                                  try { window.localStorage.setItem('triune.playground.neuralConsoleView', 'split'); } catch (_) {}
+                                  try { window.localStorage.setItem('lucid_machines.playground.neuralConsoleView', 'split'); } catch (_) {}
                                 }
                               }, [renderIcon('columns', 11), 'Split View'])
                             )
@@ -10831,7 +12941,7 @@
                             style: { padding: '2px 6px', fontSize: '11px', minWidth: 'auto', flexShrink: 0, border: '1px solid rgba(255, 255, 255, 0.08)', background: 'transparent', color: 'var(--text-muted)' },
                             onClick: () => {
                               setShowNeuralConsole(false);
-                              try { window.localStorage.setItem('triune.playground.neuralConsoleOpen', 'false'); } catch (_) {}
+                              try { window.localStorage.setItem('lucid_machines.playground.neuralConsoleOpen', 'false'); } catch (_) {}
                             },
                             title: 'Collapse Neural Console'
                           }, [renderIcon('close', 11)])
@@ -10905,6 +13015,105 @@
                           height: '165px',
                           customHeight: dockMode === 'dock-top' ? '100%' : bodyHeight
                         }),
+                        neuralConsoleView === 'mind' && e('div', { className: 'neural-console-body-panel', style: { height: bodyHeight, overflowY: 'auto', padding: '12px' } },
+                          (() => {
+                            const mt = mindTelemetry;
+                            const tiers = (mt && mt.triune_tiers) || {};
+                            const cs = (mt && mt.centroid_steer) || {};
+                            const moe = (mt && mt.moe_routing) || {};
+                            const exitPct = tiers.exit_usage || exitUsage || { reflex: 0, limbic: 0, cortex: 0 };
+                            const hist = Array.isArray(tiers.router_history) ? tiers.router_history : [];
+                            const util = Array.isArray(moe.utilization_pct) ? moe.utilization_pct : [];
+
+                            return e('div', { style: { display: 'flex', flexDirection: 'column', gap: '12px' } },
+                              e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
+                                e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+                                  e('span', { style: { fontWeight: 700, fontSize: '12.5px', fontFamily: 'var(--font-mono)', textTransform: 'uppercase' } }, 'Polysom "Look Into The Mind" Montage'),
+                                  e('span', { className: `ps-telemetry-chip ${mt && mt.status === 'active' ? 'live' : ''}` },
+                                    mt ? `${mt.status.toUpperCase()} · ${mt.active_model_id || activeModel}` : 'UNLOADED'
+                                  )
+                                ),
+                                e('button', {
+                                  type: 'button',
+                                  className: 'btn-clear-chat',
+                                  disabled: isLoadingMind,
+                                  onClick: refreshMindTelemetry,
+                                  style: { fontSize: '11px', padding: '3px 9px' }
+                                }, isLoadingMind ? 'Refreshing...' : [renderIcon('refresh', 11, { marginRight: '4px' }), 'Refresh Mind'])
+                              ),
+                              (isLoadingMind && !mt) && e('div', { className: 'ps-loading-skeleton', style: { height: '84px', borderRadius: '8px', marginBottom: '10px' } }),
+                              e('div', { className: 'ps-montage-grid' },
+                                e('div', { className: 'ps-montage-card' },
+                                  e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
+                                    e('strong', { style: { fontSize: '12.5px' } }, 'Triune 3-Tier Hypnogram'),
+                                    e('span', { className: 'ps-telemetry-chip' }, `${tiers.active_tier_name || 'Reflex'} (${String(tiers.depth_mode || 'dynamic').toUpperCase()})`)
+                                  ),
+                                  e('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', fontSize: '11px', fontFamily: 'var(--font-mono)' } },
+                                    e('span', { className: 'pill' }, `Reflex: ${exitPct.reflex ?? 0}%`),
+                                    e('span', { className: 'pill' }, `Limbic: ${exitPct.limbic ?? 0}%`),
+                                    e('span', { className: 'pill' }, `Cortex: ${exitPct.cortex ?? 0}%`)
+                                  ),
+                                  e('div', { className: 'ps-hypnogram-strip', title: 'Recent per-forward-pass exit tier sequence' },
+                                    hist.length > 0 ? hist.map((tierVal, hIdx) => {
+                                      const hPx = tierVal === 0 ? 22 : (tierVal === 1 ? 42 : 62);
+                                      const bgCol = tierVal === 0 ? 'var(--accent-emerald, #10b981)' : (tierVal === 1 ? 'var(--accent-amber, #f59e0b)' : 'var(--primary)');
+                                      return e('div', {
+                                        key: hIdx,
+                                        title: `Pass ${hIdx + 1}: ${tierVal === 0 ? 'Reflex' : (tierVal === 1 ? 'Limbic' : 'Cortex')}`,
+                                        style: { width: '10px', height: `${hPx}px`, background: bgCol, borderRadius: '3px', flexShrink: 0 }
+                                      });
+                                    }) : e('span', { style: { fontSize: '11px', color: 'var(--text-dim)', alignSelf: 'center' } },
+                                      mt && mt.model_loaded ? 'No forward passes routed yet — send a prompt or step training.' : 'Model not initialized yet.'
+                                    )
+                                  )
+                                ),
+                                e('div', { className: 'ps-montage-card' },
+                                  e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
+                                    e('strong', { style: { fontSize: '12.5px' } }, 'CentroidSteer Manifold'),
+                                    e('span', { className: `ps-telemetry-chip ${cs.active ? 'live' : ''}` }, cs.active ? 'ACTIVE' : 'IDLE')
+                                  ),
+                                  e('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '8px', fontSize: '11.5px', fontFamily: 'var(--font-mono)' } },
+                                    e('div', null, `Alignment Energy: ${cs.alignment_energy !== null && cs.alignment_energy !== undefined ? cs.alignment_energy : 'unmeasured'}`),
+                                    e('div', null, `Centroid Drift: ${cs.centroid_drift !== null && cs.centroid_drift !== undefined ? cs.centroid_drift : 'unmeasured'}`),
+                                    e('div', null, `Subspace Rank: ${cs.subspace_rank ?? 64}`),
+                                    e('div', null, `Steer Scale: ${cs.steer_scale ?? 0.2}`)
+                                  ),
+                                  e('div', { style: { fontSize: '11px', color: 'var(--text-muted)' } },
+                                    cs.use_triangular_core ? 'Triangular QR Core (sCholQR2) enabled' : 'Standard Steer Core'
+                                  )
+                                ),
+                                e('div', { className: 'ps-montage-card' },
+                                  e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
+                                    e('strong', { style: { fontSize: '12.5px' } }, 'MoE Expert Routing Heatmap'),
+                                    e('span', { className: 'ps-telemetry-chip' }, `${moe.num_moe_layers || 0} MoE layers`)
+                                  ),
+                                  moe.has_routing_data && util.length > 0 ? e('div', { className: 'ps-expert-heatmap' },
+                                    util.map((pct, eIdx) => e('div', {
+                                      key: eIdx,
+                                      title: `Expert ${eIdx}: ${pct}% accepted (${(moe.aggregated_accepted && moe.aggregated_accepted[eIdx]) || 0} tokens)`,
+                                      style: {
+                                        padding: '6px 4px',
+                                        borderRadius: '4px',
+                                        textAlign: 'center',
+                                        fontSize: '10px',
+                                        fontFamily: 'var(--font-mono)',
+                                        fontWeight: 700,
+                                        background: 'var(--primary-glow)',
+                                        border: '1px solid var(--border-glow)',
+                                        color: 'var(--text-main)'
+                                      }
+                                    }, `E${eIdx}: ${pct}%`))
+                                  ) : e('div', { className: 'ps-empty-state', style: { padding: '14px' } },
+                                    e('span', { style: { fontSize: '11.5px' } }, 'No MoE routing counts recorded yet. Run inference or a training step to populate real expert utilization.')
+                                  )
+                                )
+                              ),
+                              e('div', { className: 'ps-montage-card' },
+                                e(MoERoutingMatrixCanvas, { mindTelemetry: mt, studioTheme })
+                              )
+                            );
+                          })()
+                        ),
                         neuralConsoleView === 'transmute' && e('div', { className: 'neural-console-body-panel', style: { height: bodyHeight, overflowY: 'auto' } },
                           renderArchitectureTransmutationPanel(false)
                         ),
@@ -10940,10 +13149,36 @@
                     );
                   };
 
+                  const lastAssistantTelemetry = [...messages].reverse().find(m => m.isAssistant && m.telemetry)?.telemetry;
+                  const lastInf = (gpuTelemetry && gpuTelemetry.last_inference) || null;
+                  const liveTokPerSec = streamVelocity.current > 0
+                    ? streamVelocity.current
+                    : (lastInf && lastInf.tokens_per_sec) || (lastAssistantTelemetry && lastAssistantTelemetry.speed ? String(lastAssistantTelemetry.speed).replace(' t/s', '') : null);
+                  const liveTtftMs = (lastInf && lastInf.ttft_ms !== null && lastInf.ttft_ms !== undefined)
+                    ? lastInf.ttft_ms
+                    : (lastAssistantTelemetry && lastAssistantTelemetry.ttft ? lastAssistantTelemetry.ttft : null);
+
                   const chatColumnContent = e('div', {
                     className: 'chat-column-pane',
                     style: { display: 'flex', flexDirection: 'column', flex: 1, minWidth: '320px', minHeight: 0, overflow: 'hidden' }
                   },
+                    e('div', { className: 'ps-telemetry-bar', style: { margin: '6px 12px 0' } },
+                      e('span', { className: `ps-telemetry-chip ${isGenerating ? 'live' : ''}` },
+                        `Model: ${activeModel}${weightsLoaded ? ' (Weights)' : ' (Untrained)'}`
+                      ),
+                      e('span', { className: `ps-telemetry-chip ${isGenerating ? 'live' : ''}` },
+                        `Speed: ${liveTokPerSec ? `${liveTokPerSec} tok/s` : 'Idle'}`
+                      ),
+                      e('span', { className: 'ps-telemetry-chip' },
+                        `TTFT: ${liveTtftMs !== null && liveTtftMs !== undefined ? (typeof liveTtftMs === 'number' ? `${liveTtftMs} ms` : liveTtftMs) : '--'}`
+                      ),
+                      e('span', { className: `ps-telemetry-chip ${vramUsage.oom_risk ? 'warn' : ''}` },
+                        `VRAM: ${vramUsage.allocated} / ${vramUsage.total || '?'} GB`
+                      ),
+                      e('span', { className: 'ps-telemetry-chip' },
+                        `Device: ${systemDiagnostics.device_name || 'CPU'}`
+                      )
+                    ),
                     lineageBanner,
                     e('div', { className: 'chat-scroll-area', ref: chatScrollAreaRef },
                       messages.map((m, idx) => {
@@ -10960,13 +13195,19 @@
                           isGenerating,
                           isThoughtExpanded,
                           onToggleThought: () => setExpandedThoughts(prev => ({ ...prev, [m.id || idx]: !isThoughtExpanded })),
+                          onInspectMessageTokens: (msgObj) => {
+                            const txt = msgObj.text || '';
+                            setTokenLabText(txt);
+                            setPlaygroundMode('tokens');
+                            handleInspectTokens(txt);
+                          },
                           onFork: () => handleForkSession(idx),
                           onCopy: text => handleCopyMessage(text)
                         });
                       }),
                       isGenerating && e('div', { className: 'chat-bubble assistant generating' },
                         e('div', { className: 'bubble-header' },
-                          e('span', { className: 'bubble-sender' }, activeModel.startsWith('triune') ? 'Triune MoE Engine' : activeModel),
+                          e('span', { className: 'bubble-sender' }, /^(triune|junkie|lucid_machines|lucid)/i.test(activeModel) ? 'Triune MoE Engine' : activeModel),
                           e('span', { className: 'bubble-time' }, 'typing…')
                         ),
                         e('div', { className: 'generating-indicator' },
@@ -11005,6 +13246,16 @@
                       activeAdapter,
                       temperature,
                       setTemperature,
+                      topP,
+                      setTopP,
+                      topK,
+                      setTopK,
+                      repPenalty,
+                      setRepPenalty,
+                      inspectLogprobs,
+                      setInspectLogprobs,
+                      systemPrompt,
+                      setSystemPrompt,
                       maxTokens,
                       setMaxTokens,
                       hasRetryableMessage: messages.some(m => !m.isAssistant && m.sender !== 'System'),
@@ -11019,12 +13270,12 @@
                       style: { display: 'flex', flexDirection: 'row', flex: 1, minHeight: 0, overflow: 'hidden', position: 'relative' }
                     },
                       chatColumnContent,
-                      activeModel.startsWith('triune') && showNeuralConsole && e('div', {
+                      /^(triune|junkie|lucid_machines|lucid)/i.test(activeModel) && showNeuralConsole && e('div', {
                         className: 'neural-console-resizer-col',
                         title: 'Drag horizontally to resize Neural Console width',
                         onPointerDown: handleColResizeStart
                       }, e('div', { className: 'resizer-col-line' })),
-                      activeModel.startsWith('triune') && showNeuralConsole && renderNeuralIntelligenceConsole('dock-right')
+                      /^(triune|junkie|lucid_machines|lucid)/i.test(activeModel) && showNeuralConsole && renderNeuralIntelligenceConsole('dock-right')
                     );
                   }
 
@@ -11033,8 +13284,8 @@
                       className: `playground-chat-layout dock-top ${isResizingConsole ? 'resizing' : ''}`,
                       style: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden', position: 'relative' }
                     },
-                      activeModel.startsWith('triune') && showNeuralConsole && renderNeuralIntelligenceConsole('dock-top'),
-                      activeModel.startsWith('triune') && showNeuralConsole && e('div', {
+                      /^(triune|junkie|lucid_machines|lucid)/i.test(activeModel) && showNeuralConsole && renderNeuralIntelligenceConsole('dock-top'),
+                      /^(triune|junkie|lucid_machines|lucid)/i.test(activeModel) && showNeuralConsole && e('div', {
                         className: 'neural-console-resizer-row',
                         title: 'Drag vertically to resize Neural Console height',
                         onPointerDown: handleRowResizeStart
@@ -11049,7 +13300,7 @@
                       style: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden', position: 'relative' }
                     },
                       chatColumnContent,
-                      activeModel.startsWith('triune') && showNeuralConsole && renderNeuralIntelligenceConsole('float')
+                      /^(triune|junkie|lucid_machines|lucid)/i.test(activeModel) && showNeuralConsole && renderNeuralIntelligenceConsole('float')
                     );
                   }
 
@@ -11059,7 +13310,7 @@
                     style: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden', position: 'relative' }
                   },
                     chatColumnContent,
-                    activeModel.startsWith('triune') && showNeuralConsole && renderNeuralIntelligenceConsole('fullscreen')
+                    /^(triune|junkie|lucid_machines|lucid)/i.test(activeModel) && showNeuralConsole && renderNeuralIntelligenceConsole('fullscreen')
                   );
                 })(),
 
@@ -11102,18 +13353,24 @@
                       e('button', { className: 'btn-clear-chat', style: { fontSize: '11px', padding: '2px 8px' }, onClick: () => setArenaWinner(null) }, 'Dismiss')
                     )
                   ),
-                  e('div', { className: 'arena-grid' },
+                  e('div', { className: 'ps-compare-grid arena-grid' },
                     // Column A
-                    e('div', { className: 'arena-column' },
+                    e('div', { className: `ps-compare-pane arena-column ${arenaWinner === 'A' ? 'winner' : ''}` },
                       e('div', { className: 'arena-col-header' },
                         e('div', { className: 'arena-col-title-row' },
-                          e('div', { className: 'arena-col-badge' }, [renderIcon('bolt', 13), 'Candidate A (Fighter 1)']),
+                          e('div', { className: 'arena-col-badge' }, [renderIcon('bolt', 13), 'Candidate A']),
                           arenaResultA.isStreaming && e('span', { className: 'velocity-gauge-badge' }, [
                             e('span', { className: 'velocity-gauge-dot streaming' }),
                             `${arenaResultA.tokensCount} toks`
                           ])
                         ),
                         e('div', { className: 'arena-col-config-row' },
+                          e('label', { style: { fontWeight: 600 } }, 'Model:'),
+                          e('select', { value: arenaConfigA.model, onChange: ev => setArenaConfigA({ ...arenaConfigA, model: ev.target.value }) },
+                            MODEL_PRESETS.map(p => e('option', { key: `a:${p.id}`, value: p.id }, p.id)),
+                            e('option', { value: 'gpt-4o-mini' }, 'gpt-4o-mini (BYOK)'),
+                            e('option', { value: 'claude-3-5-sonnet-latest' }, 'claude-3.5 (BYOK)')
+                          ),
                           e('label', { style: { fontWeight: 600 } }, 'Route:'),
                           e('select', { value: arenaConfigA.route, onChange: ev => setArenaConfigA({ ...arenaConfigA, route: ev.target.value }) },
                             e('option', { value: 'reflex' }, 'Reflex (Shallow Exit)'),
@@ -11122,7 +13379,7 @@
                             e('option', { value: 'auto' }, 'Auto Adaptive')
                           ),
                           e('label', { style: { fontWeight: 600 } }, `Temp: ${arenaConfigA.temp}`),
-                          e('input', { type: 'range', min: 0.1, max: 1.5, step: 0.1, value: arenaConfigA.temp, style: { width: '80px' }, onChange: ev => setArenaConfigA({ ...arenaConfigA, temp: parseFloat(ev.target.value) }) })
+                          e('input', { type: 'range', min: 0.1, max: 1.5, step: 0.1, value: arenaConfigA.temp, style: { width: '72px' }, onChange: ev => setArenaConfigA({ ...arenaConfigA, temp: parseFloat(ev.target.value) }) })
                         )
                       ),
                       e('div', { className: 'arena-response-scroll' },
@@ -11163,16 +13420,22 @@
                       e('div', { className: 'arena-vs-badge' }, 'VS')
                     ),
                     // Column B
-                    e('div', { className: 'arena-column' },
+                    e('div', { className: `ps-compare-pane arena-column ${arenaWinner === 'B' ? 'winner' : ''}` },
                       e('div', { className: 'arena-col-header' },
                         e('div', { className: 'arena-col-title-row' },
-                          e('div', { className: 'arena-col-badge', style: { color: 'var(--accent-bronze, #d97706)' } }, [renderIcon('bolt', 13), 'Candidate B (Fighter 2)']),
+                          e('div', { className: 'arena-col-badge', style: { color: 'var(--accent-bronze, #d97706)' } }, [renderIcon('bolt', 13), 'Candidate B']),
                           arenaResultB.isStreaming && e('span', { className: 'velocity-gauge-badge' }, [
                             e('span', { className: 'velocity-gauge-dot streaming' }),
                             `${arenaResultB.tokensCount} toks`
                           ])
                         ),
                         e('div', { className: 'arena-col-config-row' },
+                          e('label', { style: { fontWeight: 600 } }, 'Model:'),
+                          e('select', { value: arenaConfigB.model, onChange: ev => setArenaConfigB({ ...arenaConfigB, model: ev.target.value }) },
+                            MODEL_PRESETS.map(p => e('option', { key: `b:${p.id}`, value: p.id }, p.id)),
+                            e('option', { value: 'gpt-4o-mini' }, 'gpt-4o-mini (BYOK)'),
+                            e('option', { value: 'claude-3-5-sonnet-latest' }, 'claude-3.5 (BYOK)')
+                          ),
                           e('label', { style: { fontWeight: 600 } }, 'Route:'),
                           e('select', { value: arenaConfigB.route, onChange: ev => setArenaConfigB({ ...arenaConfigB, route: ev.target.value }) },
                             e('option', { value: 'cortex' }, 'Cortex (Deep Reasoning)'),
@@ -11181,7 +13444,7 @@
                             e('option', { value: 'auto' }, 'Auto Adaptive')
                           ),
                           e('label', { style: { fontWeight: 600 } }, `Temp: ${arenaConfigB.temp}`),
-                          e('input', { type: 'range', min: 0.1, max: 1.5, step: 0.1, value: arenaConfigB.temp, style: { width: '80px' }, onChange: ev => setArenaConfigB({ ...arenaConfigB, temp: parseFloat(ev.target.value) }) })
+                          e('input', { type: 'range', min: 0.1, max: 1.5, step: 0.1, value: arenaConfigB.temp, style: { width: '72px' }, onChange: ev => setArenaConfigB({ ...arenaConfigB, temp: parseFloat(ev.target.value) }) })
                         )
                       ),
                       e('div', { className: 'arena-response-scroll' },
@@ -11243,7 +13506,7 @@
                 // Mode 3: Token Lab
                 playgroundMode === 'tokens' && e('div', { className: 'token-lab-view' },
                   e('div', { className: 'token-lab-toolbar' },
-                    e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+                    e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
                       e('span', { style: { fontWeight: 700, fontSize: '12px' } }, 'Token Lab Samples:'),
                       e('button', {
                         className: 'arena-preset-chip',
@@ -11251,9 +13514,8 @@
                           const lastMsg = [...messages].reverse().find(m => m.isAssistant);
                           if (lastMsg) {
                             setTokenLabText(lastMsg.text);
-                            setTokenLabTokens(tokenizeTextWithEntropy(lastMsg.text));
-                            setSelectedTokenIdx(null);
-                            showToast('Loaded Last Chat Response into Token Lab');
+                            handleInspectTokens(lastMsg.text);
+                            showToast('Inspecting Last Chat Response via backend');
                           } else {
                             showToast('No assistant response found to inspect');
                           }
@@ -11264,9 +13526,7 @@
                         onClick: () => {
                           const sample = '<|thought|>\n1. Route analysis: shallow Reflex exit verified.\n2. Invariant preserved.\n<|end_thought|>\nTriune MoE dynamic routing activates shallow Reflex for high confidence tokens.';
                           setTokenLabText(sample);
-                          setTokenLabTokens(tokenizeTextWithEntropy(sample));
-                          setSelectedTokenIdx(null);
-                          showToast('Loaded MoE Routing Sample');
+                          handleInspectTokens(sample);
                         }
                       }, 'MoE Router Sample'),
                       e('button', {
@@ -11274,24 +13534,13 @@
                         onClick: () => {
                           const sample = 'def lockfree_ring_enqueue(head: int, tail: int, val: float) -> bool:\n    next_head = (head + 1) & RING_MASK\n    return atomic_cas(head, next_head, val)';
                           setTokenLabText(sample);
-                          setTokenLabTokens(tokenizeTextWithEntropy(sample));
-                          setSelectedTokenIdx(null);
-                          showToast('Loaded Code Architecture Sample');
+                          handleInspectTokens(sample);
                         }
                       }, 'Code Kernel Sample')
                     ),
                     e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px', color: 'var(--text-muted)' } },
-                      e('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '4px' } },
-                        e('span', { style: { width: '8px', height: '8px', borderRadius: '50%', background: '#10b981' } }),
-                        'High Confidence'
-                      ),
-                      e('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '4px' } },
-                        e('span', { style: { width: '8px', height: '8px', borderRadius: '50%', background: '#d97706' } }),
-                        'Medium Entropy'
-                      ),
-                      e('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '4px' } },
-                        e('span', { style: { width: '8px', height: '8px', borderRadius: '50%', background: '#ec4899' } }),
-                        'Branch Fork Point'
+                      e('span', { className: `ps-telemetry-chip ${tokenLabLogprobsAvailable ? 'live' : ''}` },
+                        tokenLabLogprobsAvailable ? 'Model Logprobs Active' : 'BPE / Structural Mode'
                       )
                     )
                   ),
@@ -11307,29 +13556,53 @@
                           }),
                           e('button', {
                             className: 'btn-send',
-                            style: { width: '120px', height: '70px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' },
-                            onClick: () => {
-                              setTokenLabTokens(tokenizeTextWithEntropy(tokenLabText));
-                              setSelectedTokenIdx(null);
-                              showToast('Tokenized & calculated entropy!');
-                            }
-                          }, [renderIcon('tokens', 16), 'Tokenize'])
+                            disabled: isInspectingTokens,
+                            style: { width: '140px', height: '70px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' },
+                            onClick: () => handleInspectTokens(tokenLabText)
+                          }, [renderIcon('tokens', 16), isInspectingTokens ? 'Inspecting...' : 'Inspect Entropy'])
                         )
                       ),
-                      e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '6px' } },
+                      e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '6px', gap: '8px', flexWrap: 'wrap' } },
                         e('span', { style: { fontSize: '12px', fontWeight: 700 } }, `Token Stream (${tokenLabTokens.length} tokens):`),
-                        e('span', { style: { fontSize: '11px', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' } }, 'Click any token to inspect alternative candidates or branch')
+                        e('span', { style: { fontSize: '11px', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' } }, tokenLabStatusMsg)
                       ),
-                      e('div', { className: 'token-chips-flow' },
+                      e('div', { className: 'ps-entropy-strip-wrap' },
+                        e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px', color: 'var(--text-muted)' } },
+                          e('span', null, 'Per-Token Entropy Strip (click any bar to inspect uncertainty & candidates)'),
+                          e('span', { style: { fontFamily: 'var(--font-mono)' } },
+                            tokenLabLogprobsAvailable ? 'Green <0.8b | Amber <2.2b | Red >=2.2b' : 'Entropy awaits active model logprobs'
+                          )
+                        ),
+                        e('div', { className: 'ps-entropy-strip' },
+                          tokenLabTokens.map((tok, tIdx) => {
+                            const ent = typeof tok.entropy === 'number' ? tok.entropy : 0.25;
+                            const pctH = Math.max(18, Math.min(100, Math.round((ent / 4.0) * 100)));
+                            const cls = typeof tok.entropy !== 'number' ? '' : (ent < 0.8 ? '' : (ent < 2.2 ? 'mid' : 'high'));
+                            return e('button', {
+                              key: `eb-${tIdx}`,
+                              type: 'button',
+                              className: `ps-entropy-bar ${cls} ${selectedTokenIdx === tIdx ? 'selected' : ''}`,
+                              style: { height: `${pctH}%` },
+                              title: `Token #${tIdx + 1} "${String(tok.text || '').replace(/\n/g, '\\n')}"${typeof tok.entropy === 'number' ? ` · ${tok.entropy} bits` : ''}`,
+                              onClick: () => setSelectedTokenIdx(tIdx)
+                            });
+                          })
+                        )
+                      ),
+                      e('div', { className: 'ps-token-inspector token-chips-flow' },
                         tokenLabTokens.map((tok, tIdx) => {
                           const isSelected = selectedTokenIdx === tIdx;
-                          const entropyClass = tok.entropy < 0.5 ? 'low-entropy' : (tok.entropy < 1.1 ? 'mid-entropy' : 'high-entropy');
-                          return e('span', {
+                          const ent = typeof tok.entropy === 'number' ? tok.entropy : null;
+                          const entropyClass = ent === null ? '' : (ent < 0.8 ? 'low-entropy' : (ent < 2.2 ? 'mid-entropy' : 'high-entropy'));
+                          return e('button', {
                             key: tIdx,
-                            className: `token-chip ${entropyClass} ${isSelected ? 'selected' : ''}`,
-                            title: `Token #${tok.id}: "${tok.text.replace(/\n/g, '\\n')}" · Entropy: ${tok.entropy} bits · Confidence: ${tok.confidence}%`,
+                            type: 'button',
+                            className: `ps-token-chip token-chip ${entropyClass} ${isSelected ? 'selected' : ''}`,
+                            title: ent !== null
+                              ? `Token #${tok.id}: "${String(tok.text || '').replace(/\n/g, '\\n')}" · Entropy: ${ent} bits · Prob: ${tok.prob}%`
+                              : `Token #${tok.id}: "${String(tok.text || '').replace(/\n/g, '\\n')}"`,
                             onClick: () => setSelectedTokenIdx(tIdx)
-                          }, tok.text === '\n' ? '↵' : (tok.text.startsWith(' ') ? `·${tok.text.slice(1)}` : tok.text));
+                          }, tok.text === '\n' ? '\\n' : (String(tok.text || '').startsWith(' ') ? `·${tok.text.slice(1)}` : tok.text));
                         })
                       )
                     ),
@@ -11337,7 +13610,12 @@
                       selectedTokenIdx !== null && tokenLabTokens[selectedTokenIdx] ? (() => {
                         const curTok = tokenLabTokens[selectedTokenIdx];
                         const prefixText = tokenLabTokens.slice(0, selectedTokenIdx + 1).map(t => t.text).join('');
-                        return e('div', { style: { display: 'flex', flexDirection: 'column', gap: '12px' } },
+                        const cands = curTok.top_candidates || curTok.topCandidates || [];
+                        const probVal = curTok.prob !== undefined && curTok.prob !== null
+                          ? `${curTok.prob}%`
+                          : (tokenLabLogprobsAvailable && curTok.prob === null ? 'N/A (context start)' : 'Unmeasured (load model)');
+                        const entVal = curTok.entropy !== undefined && curTok.entropy !== null ? `${curTok.entropy} bits` : 'Unmeasured';
+                        return e('div', { className: 'ps-token-popover', style: { display: 'flex', flexDirection: 'column', gap: '12px', maxWidth: '100%' } },
                           e('div', { style: { fontWeight: 700, fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--primary)' } }, [
                             renderIcon('tokens', 14),
                             `Token Inspector: #${curTok.id}`
@@ -11345,47 +13623,484 @@
                           e('div', { className: 'token-stat-card' },
                             e('div', { className: 'token-stat-row' },
                               e('span', { className: 'token-stat-label' }, 'Token String:'),
-                              e('span', { className: 'token-stat-val', style: { background: 'var(--bg-input)', padding: '2px 6px', borderRadius: '4px' } }, `"${curTok.text.replace(/\n/g, '\\n')}"`)
+                              e('span', { className: 'token-stat-val', style: { background: 'var(--bg-input)', padding: '2px 6px', borderRadius: '4px' } }, `"${String(curTok.text || '').replace(/\n/g, '\\n')}"`)
                             ),
                             e('div', { className: 'token-stat-row' },
-                              e('span', { className: 'token-stat-label' }, 'Confidence:'),
-                              e('span', { className: 'token-stat-val', style: { color: curTok.confidence > 80 ? '#10b981' : '#ec4899' } }, `${curTok.confidence}%`)
+                              e('span', { className: 'token-stat-label' }, 'Probability:'),
+                              e('span', { className: 'token-stat-val' }, probVal)
+                            ),
+                            e('div', { className: 'token-stat-row' },
+                              e('span', { className: 'token-stat-label' }, 'Logprob:'),
+                              e('span', { className: 'token-stat-val' }, curTok.logprob !== undefined && curTok.logprob !== null ? curTok.logprob : 'Unmeasured')
                             ),
                             e('div', { className: 'token-stat-row' },
                               e('span', { className: 'token-stat-label' }, 'Entropy:'),
-                              e('span', { className: 'token-stat-val' }, `${curTok.entropy} bits`)
+                              e('span', { className: 'token-stat-val' }, entVal)
                             ),
                             e('div', { className: 'token-stat-row' },
                               e('span', { className: 'token-stat-label' }, 'Position:'),
                               e('span', { className: 'token-stat-val' }, `Token ${selectedTokenIdx + 1} of ${tokenLabTokens.length}`)
                             )
                           ),
-                          e('div', { style: { fontWeight: 600, fontSize: '11.5px', color: 'var(--text-muted)' } }, 'Alternative Candidates (Top-k):'),
-                          e('div', { className: 'token-candidate-list' },
-                            curTok.topCandidates.map((cand, cIdx) => e('div', { key: cIdx, className: 'token-candidate-item' },
-                              e('div', { style: { display: 'flex', alignItems: 'center', gap: '6px' } },
-                                e('span', { className: 'token-candidate-val' }, `"${cand.text.replace(/\n/g, '\\n')}"`),
-                                e('span', { className: 'token-candidate-prob' }, `${cand.prob}%`)
+                          e('div', { style: { fontWeight: 600, fontSize: '11.5px', color: 'var(--text-muted)' } }, 'Top-K Model Candidates:'),
+                          cands.length > 0 ? e('div', { className: 'token-candidate-list' },
+                            cands.map((cand, cIdx) => e('div', { key: cIdx, className: 'token-candidate-item', style: { flexDirection: 'column', alignItems: 'stretch', gap: '4px' } },
+                              e('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px' } },
+                                e('div', { style: { display: 'flex', alignItems: 'center', gap: '6px' } },
+                                  e('span', { className: 'token-candidate-val' }, `"${String(cand.text || '').replace(/\n/g, '\\n')}"`),
+                                  e('span', { className: 'token-candidate-prob' }, `${cand.prob}%`)
+                                ),
+                                cand.text !== curTok.text && e('button', {
+                                  className: 'btn-substitute-token',
+                                  onClick: () => handleSubstituteToken(selectedTokenIdx, cand.text)
+                                }, 'Substitute')
                               ),
-                              cand.text !== curTok.text && e('button', {
-                                className: 'btn-substitute-token',
-                                onClick: () => handleSubstituteToken(selectedTokenIdx, cand.text)
-                              }, 'Substitute')
+                              e('div', { className: 'ps-prob-bar-track' },
+                                e('div', { className: 'ps-prob-bar-fill', style: { width: `${Math.max(2, Math.min(100, Number(cand.prob) || 0))}%` } })
+                              )
                             ))
+                          ) : e('div', { className: 'ps-empty-state', style: { padding: '12px' } },
+                            e('span', { style: { fontSize: '11.5px' } }, 'Initialize or load a model in the engine and click "Inspect Entropy" for real top-k logprobs.')
                           ),
                           e('button', {
                             className: 'btn-send',
                             style: { marginTop: '8px', padding: '8px 12px', fontSize: '12px' },
                             onClick: () => handleBranchFromToken(prefixText)
-                          }, [renderIcon('branch', 13, { marginRight: '6px' }), 'Branch Conversation Here'])
+                          }, [renderIcon('branch', 13, { marginRight: '6px' }), 'Fork from token'])
                         );
                       })() : (
-                        e('div', { style: { color: 'var(--text-dim)', fontStyle: 'italic', padding: '40px 10px', textAlign: 'center' } },
-                          'Click any token in the stream on the left to inspect probability entropy, top-k candidate distribution, and branch paths.'
+                        e('div', { className: 'ps-empty-state', style: { padding: '24px 12px' } },
+                          'Click any token chip in the stream on the left to inspect its real ID, logprob, Shannon entropy, and top-k candidates.'
                         )
                       )
                     )
                   )
+                )
+              )
+            );
+          })(),
+
+          // Tab: Project Workspace IDE & Live Agentic Loop Cockpit
+          activeTab === 'workspace' && (() => {
+            const activeTabObj = wsOpenTabs.find(t => t.relPath === wsActiveTabPath) || null;
+            const editorLines = activeTabObj ? String(activeTabObj.content || '').split('\n') : [''];
+            const renderTreeList = (entries, depth = 0) => {
+              if (!Array.isArray(entries) || entries.length === 0) return null;
+              return entries.map(item => {
+                const rel = item.rel_path || item.path;
+                const isDir = item.type === 'dir';
+                const isExpanded = Boolean(wsExpandedDirs[rel]);
+                const isActive = !isDir && wsActiveTabPath === rel;
+                return e('div', { key: rel },
+                  e('button', {
+                    type: 'button',
+                    className: `ps-ide-tree-item ${isActive ? 'active' : ''}`,
+                    style: { paddingLeft: `${8 + depth * 12}px` },
+                    title: rel,
+                    onClick: () => isDir ? handleWorkspaceToggleDir(item) : handleWorkspaceOpenFile(rel)
+                  },
+                    e('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+                      renderIcon(isDir ? (isExpanded ? 'chevronDown' : 'chevronRight') : 'file', 12),
+                      isDir && renderIcon('folder', 12),
+                      e('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis' } }, item.name)
+                    ),
+                    !isDir && item.size != null && e('span', { style: { fontSize: '10px', color: 'var(--text-dim)', flexShrink: 0 } },
+                      item.size >= 1024 ? `${(item.size / 1024).toFixed(1)}K` : `${item.size}B`
+                    )
+                  ),
+                  isDir && isExpanded && Array.isArray(item.children) && item.children.length > 0 && renderTreeList(item.children, depth + 1)
+                );
+              });
+            };
+            const diffText = wsLastSaveDiff || (wsGitInfo && wsGitInfo.diff) || '';
+            const diffLines = diffText ? diffText.split('\n') : [];
+
+            return e('div', { className: 'ps-ide-shell' },
+              // Workspace Toolbar
+              e('div', { className: 'ps-ide-toolbar' },
+                e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flex: '1 1 360px', flexWrap: 'wrap' } },
+                  renderIcon('folder', 15, { color: 'var(--primary)' }),
+                  e('input', {
+                    type: 'text',
+                    value: wsFolderInput,
+                    onChange: ev => setWsFolderInput(ev.target.value),
+                    onKeyDown: ev => { if (ev.key === 'Enter') handleWorkspaceOpenFolder(); },
+                    placeholder: 'Enter workspace folder path...',
+                    'aria-label': 'Workspace folder path',
+                    style: { flex: '1 1 240px', minWidth: '180px', padding: '5px 9px', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-input)', color: 'var(--text-main)', fontFamily: 'var(--font-mono)', fontSize: '12px' }
+                  }),
+                  e('button', { type: 'button', className: 'btn-action start', style: { padding: '5px 11px', fontSize: '12px' }, onClick: () => handleWorkspaceOpenFolder() }, 'Open Folder'),
+                  e('button', { type: 'button', className: 'btn-sec', style: { padding: '5px 10px', fontSize: '12px' }, onClick: handleWorkspacePickFolder }, 'Browse'),
+                  wsRecentWorkspaces.length > 1 && e('select', {
+                    'aria-label': 'Recent workspaces',
+                    value: wsRoot,
+                    onChange: ev => { if (ev.target.value) handleWorkspaceOpenFolder(ev.target.value); },
+                    style: { maxWidth: '180px', padding: '5px 7px', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-input)', color: 'var(--text-main)', fontSize: '11.5px' }
+                  }, wsRecentWorkspaces.map(rw => e('option', { key: rw, value: rw }, rw.split(/[\\/]/).pop() || rw)))
+                ),
+                e('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' } },
+                  wsGitInfo && wsGitInfo.is_git && e('span', { className: 'repo-git-pill', style: { display: 'inline-flex', alignItems: 'center', gap: '5px' } },
+                    renderIcon('git', 11),
+                    `${wsGitInfo.branch || 'HEAD'}${wsGitInfo.dirty_count ? ` (${wsGitInfo.dirty_count} modified)` : ' (clean)'}`
+                  ),
+                  e('button', {
+                    type: 'button',
+                    className: 'btn-sec',
+                    style: { padding: '5px 9px', fontSize: '11.5px', display: 'inline-flex', alignItems: 'center', gap: '4px' },
+                    onClick: () => setWsSidebarOpen(p => !p)
+                  }, [renderIcon('columns', 12), wsSidebarOpen ? 'Hide Tree' : 'Show Tree']),
+                  e('button', {
+                    type: 'button',
+                    className: 'btn-sec',
+                    style: { padding: '5px 9px', fontSize: '11.5px', display: 'inline-flex', alignItems: 'center', gap: '4px' },
+                    onClick: () => setWsTerminalOpen(p => !p)
+                  }, [renderIcon('terminal', 12), wsTerminalOpen ? 'Hide Terminal' : 'Terminal']),
+                  e('button', {
+                    type: 'button',
+                    className: 'btn-sec',
+                    style: { padding: '5px 9px', fontSize: '11.5px', display: 'inline-flex', alignItems: 'center', gap: '4px' },
+                    onClick: refreshWorkspaceState
+                  }, [renderIcon('refresh', 12), 'Refresh'])
+                )
+              ),
+
+              // 3-Pane IDE Body: Explorer/Search | Multi-tab Editor | Live Agentic Cockpit
+              e('div', { className: `ps-ide-body ${wsSidebarOpen ? '' : 'sidebar-collapsed'}` },
+                // Left Pane: File Explorer + Workspace Search
+                wsSidebarOpen && e('aside', { className: 'ps-ide-sidebar' },
+                  e('div', { style: { display: 'flex', gap: '4px', padding: '8px', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-card)' } },
+                    e('button', {
+                      type: 'button',
+                      className: `btn-clear-chat ${wsSideTab === 'explorer' ? 'active' : ''}`,
+                      style: { flex: 1, fontSize: '11.5px', padding: '5px 8px', fontWeight: wsSideTab === 'explorer' ? 700 : 500 },
+                      onClick: () => setWsSideTab('explorer')
+                    }, 'Explorer'),
+                    e('button', {
+                      type: 'button',
+                      className: `btn-clear-chat ${wsSideTab === 'search' ? 'active' : ''}`,
+                      style: { flex: 1, fontSize: '11.5px', padding: '5px 8px', fontWeight: wsSideTab === 'search' ? 700 : 500 },
+                      onClick: () => setWsSideTab('search')
+                    }, 'Search')
+                  ),
+                  wsSideTab === 'explorer' ? e('div', { style: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 } },
+                    e('div', { style: { display: 'flex', gap: '4px', padding: '8px', borderBottom: '1px solid var(--border-color)' } },
+                      e('input', {
+                        type: 'text',
+                        value: wsNewFileName,
+                        onChange: ev => setWsNewFileName(ev.target.value),
+                        onKeyDown: ev => { if (ev.key === 'Enter') handleWorkspaceCreateFile(); },
+                        placeholder: 'new/file.py',
+                        'aria-label': 'New file path',
+                        style: { flex: 1, minWidth: 0, padding: '4px 7px', borderRadius: '5px', border: '1px solid var(--border-color)', background: 'var(--bg-input)', color: 'var(--text-main)', fontFamily: 'var(--font-mono)', fontSize: '11px' }
+                      }),
+                      e('button', { type: 'button', className: 'btn-sec', style: { padding: '4px 8px', fontSize: '11px' }, onClick: handleWorkspaceCreateFile, title: 'Create file' }, renderIcon('plus', 12))
+                    ),
+                    e('div', { style: { flex: 1, overflowY: 'auto', padding: '6px' } },
+                      wsTreeEntries.length > 0
+                        ? renderTreeList(wsTreeEntries, 0)
+                        : e('div', { className: 'ps-empty-state', style: { padding: '18px 10px', fontSize: '11.5px' } }, 'No files loaded. Click Refresh or Open Folder.')
+                    )
+                  ) : e('div', { style: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, padding: '8px', gap: '8px' } },
+                    e('div', { style: { display: 'flex', gap: '4px' } },
+                      e('input', {
+                        type: 'text',
+                        value: wsSearchQuery,
+                        onChange: ev => setWsSearchQuery(ev.target.value),
+                        onKeyDown: ev => { if (ev.key === 'Enter') handleWorkspaceSearch(); },
+                        placeholder: 'Search workspace text...',
+                        'aria-label': 'Workspace search query',
+                        style: { flex: 1, minWidth: 0, padding: '5px 8px', borderRadius: '5px', border: '1px solid var(--border-color)', background: 'var(--bg-input)', color: 'var(--text-main)', fontSize: '11.5px' }
+                      }),
+                      e('button', { type: 'button', className: 'btn-action start', style: { padding: '4px 10px', fontSize: '11px' }, onClick: handleWorkspaceSearch, disabled: wsIsSearching }, wsIsSearching ? '...' : 'Go')
+                    ),
+                    e('label', { style: { display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-muted)', cursor: 'pointer' } },
+                      e('input', { type: 'checkbox', checked: wsSearchRegex, onChange: ev => setWsSearchRegex(ev.target.checked) }),
+                      'Use regular expression'
+                    ),
+                    e('div', { style: { flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px' } },
+                      wsSearchMatches.length === 0
+                        ? e('div', { className: 'ps-empty-state', style: { padding: '16px 8px', fontSize: '11.5px' } }, 'Enter a query to search files in the active workspace.')
+                        : wsSearchMatches.map((m, idx) => e('button', {
+                            key: `${m.rel_path}:${m.line}:${idx}`,
+                            type: 'button',
+                            className: 'ps-ide-tree-item',
+                            style: { flexDirection: 'column', alignItems: 'flex-start', gap: '2px' },
+                            onClick: () => handleWorkspaceOpenFile(m.rel_path, m.line)
+                          },
+                            e('span', { style: { fontWeight: 700, color: 'var(--primary)', fontSize: '11px' } }, `${m.rel_path}:${m.line}`),
+                            e('span', { style: { fontSize: '10.5px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' } }, m.text)
+                          ))
+                    )
+                  )
+                ),
+
+                // Center Pane: Multi-tab Editor & Diff Viewer
+                e('section', { className: 'ps-ide-editor-pane' },
+                  e('div', { className: 'ps-ide-tabs' },
+                    wsOpenTabs.length === 0
+                      ? e('span', { style: { fontSize: '11.5px', color: 'var(--text-muted)', padding: '3px 6px' } }, 'No file tabs open')
+                      : wsOpenTabs.map(tab => e('div', {
+                          key: tab.relPath,
+                          className: `ps-ide-tab ${wsActiveTabPath === tab.relPath ? 'active' : ''}`,
+                          onClick: () => { setWsActiveTabPath(tab.relPath); setWsShowGitDiff(false); }
+                        },
+                          tab.dirty && e('span', { className: 'ps-ide-dirty-dot', title: 'Unsaved changes' }),
+                          e('span', null, tab.name),
+                          e('button', {
+                            type: 'button',
+                            'aria-label': `Close ${tab.name}`,
+                            style: { background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer', padding: '0 2px', display: 'inline-flex', alignItems: 'center' },
+                            onClick: (ev) => {
+                              ev.stopPropagation();
+                              const rem = wsOpenTabs.filter(t => t.relPath !== tab.relPath);
+                              setWsOpenTabs(rem);
+                              if (wsActiveTabPath === tab.relPath) setWsActiveTabPath(rem[0] ? rem[0].relPath : '');
+                            }
+                          }, renderIcon('close', 10))
+                        ))
+                  ),
+                  activeTabObj && e('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '6px 10px', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-surface)', flexWrap: 'wrap' } },
+                    e('span', { style: { fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: 'var(--text-muted)' } },
+                      `${activeTabObj.relPath} · ${activeTabObj.language} · Ln ${wsCursorPos.line}, Col ${wsCursorPos.col}`
+                    ),
+                    e('div', { style: { display: 'flex', gap: '6px', alignItems: 'center' } },
+                      e('button', {
+                        type: 'button',
+                        className: 'btn-action start',
+                        style: { padding: '4px 10px', fontSize: '11.5px', display: 'inline-flex', alignItems: 'center', gap: '4px' },
+                        disabled: wsIsSaving,
+                        onClick: () => handleWorkspaceSaveFile(activeTabObj.relPath)
+                      }, [renderIcon('save', 11), wsIsSaving ? 'Saving...' : 'Save (Ctrl+S)']),
+                      e('button', {
+                        type: 'button',
+                        className: `btn-sec ${wsShowGitDiff ? 'active' : ''}`,
+                        style: { padding: '4px 9px', fontSize: '11.5px' },
+                        onClick: () => setWsShowGitDiff(p => !p)
+                      }, wsShowGitDiff ? 'Editor' : 'Diff'),
+                      e('button', {
+                        type: 'button',
+                        className: 'btn-sec',
+                        style: { padding: '4px 9px', fontSize: '11.5px', display: 'inline-flex', alignItems: 'center', gap: '4px' },
+                        onClick: () => {
+                          setWsAgentContextFile(activeTabObj.relPath);
+                          if (wsGoalInputRef.current) wsGoalInputRef.current.focus();
+                          showToast(`Attached ${activeTabObj.relPath} to Agent Cockpit`);
+                        }
+                      }, [renderIcon('send', 11), 'Send to Agent']),
+                      e('button', {
+                        type: 'button',
+                        className: 'btn-purge',
+                        style: { padding: '4px 8px', fontSize: '11px' },
+                        title: 'Delete file',
+                        onClick: () => handleWorkspaceDeleteFile(activeTabObj.relPath)
+                      }, renderIcon('trash', 11))
+                    )
+                  ),
+                  !activeTabObj ? e('div', { className: 'ps-empty-state', style: { flex: 1, margin: '16px' } },
+                    e('strong', { style: { fontSize: '14px', color: 'var(--text-main)' } }, 'Polysom Workspace IDE'),
+                    e('span', { style: { fontSize: '12px', color: 'var(--text-muted)' } }, 'Select any file from the Explorer or Search results to edit with live diffing, Ctrl+S atomic save, and agent loop binding.')
+                  ) : wsShowGitDiff ? e('div', { className: 'ps-ide-diff-view' },
+                    diffLines.length === 0
+                      ? e('div', { style: { color: 'var(--text-muted)' } }, 'No diff captured yet for the active file or repository.')
+                      : diffLines.map((dl, di) => {
+                          const cls = dl.startsWith('@@') ? 'hunk' : (dl.startsWith('+') && !dl.startsWith('+++') ? 'add' : (dl.startsWith('-') && !dl.startsWith('---') ? 'del' : ''));
+                          return e('div', { key: di, className: `ps-ide-diff-line ${cls}` }, dl || ' ');
+                        })
+                  ) : e('div', { className: 'ps-ide-code-wrap' },
+                    e('div', { className: 'ps-ide-gutter', ref: wsGutterRef },
+                      editorLines.map((_, li) => e('div', { key: li }, li + 1))
+                    ),
+                    e('textarea', {
+                      ref: wsEditorRef,
+                      className: 'ps-ide-textarea',
+                      value: activeTabObj.content,
+                      spellCheck: false,
+                      'aria-label': `Code editor for ${activeTabObj.relPath}`,
+                      onScroll: (ev) => {
+                        if (wsGutterRef.current) wsGutterRef.current.scrollTop = ev.target.scrollTop;
+                      },
+                      onChange: (ev) => {
+                        const val = ev.target.value;
+                        setWsOpenTabs(prev => prev.map(t => t.relPath === activeTabObj.relPath
+                          ? { ...t, content: val, dirty: val !== t.savedContent }
+                          : t));
+                      },
+                      onClick: (ev) => {
+                        const pos = ev.target.selectionStart || 0;
+                        const slice = String(ev.target.value || '').slice(0, pos).split('\n');
+                        setWsCursorPos({ line: slice.length, col: slice[slice.length - 1].length + 1 });
+                      },
+                      onKeyUp: (ev) => {
+                        const pos = ev.target.selectionStart || 0;
+                        const slice = String(ev.target.value || '').slice(0, pos).split('\n');
+                        setWsCursorPos({ line: slice.length, col: slice[slice.length - 1].length + 1 });
+                      }
+                    })
+                  )
+                ),
+
+                // Right Pane: Live Agentic Loop Cockpit & Training Supervisor
+                e('aside', { className: 'ps-ide-cockpit' },
+                  e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' } },
+                    e('strong', { style: { fontFamily: 'var(--font-heading)', fontSize: '14px' } }, 'Agentic Loop Cockpit'),
+                    e('span', { className: `ps-telemetry-chip ${wsLoopRunning ? 'live' : ''}` }, wsLoopRunning ? 'STREAMING' : 'READY')
+                  ),
+                  e('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' } },
+                    e('select', {
+                      'aria-label': 'Agent loop mode',
+                      value: wsAgentMode,
+                      onChange: ev => setWsAgentMode(ev.target.value),
+                      style: { padding: '5px 7px', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-input)', color: 'var(--text-main)', fontSize: '11.5px' }
+                    },
+                      e('option', { value: 'react' }, 'ReAct Loop'),
+                      e('option', { value: 'pev' }, 'Plan -> Execute -> Verify'),
+                      e('option', { value: 'multi_agent' }, 'Multi-Agent Pipeline'),
+                      e('option', { value: 'training_supervisor' }, 'Training Supervisor')
+                    ),
+                    e('select', {
+                      'aria-label': 'Agent autonomy mode',
+                      value: wsAgentAutonomy,
+                      onChange: ev => setWsAgentAutonomy(ev.target.value),
+                      style: { padding: '5px 7px', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-input)', color: 'var(--text-main)', fontSize: '11.5px' }
+                    },
+                      e('option', { value: 'supervised' }, 'Supervised (HITL)'),
+                      e('option', { value: 'autonomous_sandbox' }, 'Autonomous Sandbox')
+                    )
+                  ),
+                  (wsAgentContextFile || wsActiveTabPath) && e('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px', fontSize: '11px', padding: '4px 8px', borderRadius: '5px', background: 'var(--bg-card)', border: '1px solid var(--border-color)' } },
+                    e('span', { style: { fontFamily: 'var(--font-mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, `Context: ${wsAgentContextFile || wsActiveTabPath}`),
+                    wsAgentContextFile && e('button', { type: 'button', className: 'btn-sec', style: { padding: '1px 6px', fontSize: '10px' }, onClick: () => setWsAgentContextFile('') }, 'Clear')
+                  ),
+                  e('textarea', {
+                    ref: wsGoalInputRef,
+                    rows: 3,
+                    value: wsAgentGoal,
+                    onChange: ev => setWsAgentGoal(ev.target.value),
+                    placeholder: 'Describe an engineering or training goal (e.g. Inspect workspace tests and verify exports)...',
+                    'aria-label': 'Agent loop goal',
+                    style: { width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-input)', color: 'var(--text-main)', fontSize: '12px', resize: 'vertical' }
+                  }),
+                  e('div', { style: { display: 'flex', gap: '6px' } },
+                    e('button', {
+                      type: 'button',
+                      className: 'btn-action start',
+                      style: { flex: 1, padding: '6px 10px', fontSize: '12px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '5px' },
+                      disabled: wsLoopRunning || !wsAgentGoal.trim(),
+                      onClick: handleRunWorkspaceAgentLoop
+                    }, [renderIcon('play', 12), wsLoopRunning ? 'Running Loop...' : 'Run Agent Loop']),
+                    wsLoopRunning && e('button', {
+                      type: 'button',
+                      className: 'btn-purge',
+                      style: { padding: '6px 10px', fontSize: '12px', display: 'inline-flex', alignItems: 'center', gap: '4px' },
+                      onClick: handleCancelWorkspaceAgentLoop
+                    }, [renderIcon('stop', 12), 'Cancel'])
+                  ),
+
+                  // Live SSE Event Trace Stream + HITL Approval Gates
+                  e('div', { className: 'ps-ide-trace-list' },
+                    wsLoopEvents.length === 0
+                      ? e('div', { className: 'ps-empty-state', style: { padding: '14px 10px', fontSize: '11.5px' } }, 'Live ReAct / PEV / Multi-Agent SSE steps, tool calls, and approval gates will stream here.')
+                      : wsLoopEvents.map((evItem, idx) => {
+                          const evType = evItem.type || 'event';
+                          const cardCls = evType === 'error' || evType === 'cancelled'
+                            ? 'error'
+                            : (evType === 'approval_required' || evType === 'compaction' ? 'warn' : (evType === 'done' || evType === 'reflection' ? 'ok' : ''));
+                          const isThoughtOpen = Boolean(wsLoopThoughtsOpen[evItem._uid || idx]);
+                          const approvalStatus = evItem.action_id ? wsPendingApprovals[evItem.action_id] : null;
+                          return e('div', { key: evItem._uid || idx, className: `ps-ide-trace-card ${cardCls}` },
+                            e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px' } },
+                              e('strong', { style: { fontFamily: 'var(--font-mono)', fontSize: '11px', textTransform: 'uppercase' } },
+                                `${evType}${evItem.step != null ? ` #${evItem.step}` : ''}${evItem.agent ? ` · ${evItem.agent}` : ''}`
+                              ),
+                              evItem.thought && e('button', {
+                                type: 'button',
+                                className: 'btn-sec',
+                                style: { padding: '1px 6px', fontSize: '10px' },
+                                onClick: () => setWsLoopThoughtsOpen(prev => ({ ...prev, [evItem._uid || idx]: !isThoughtOpen }))
+                              }, isThoughtOpen ? 'Hide Thought' : 'Thought')
+                            ),
+                            evItem.thought && isThoughtOpen && e('div', { style: { fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'pre-wrap' } }, evItem.thought),
+                            evItem.tool && e('div', { style: { fontFamily: 'var(--font-mono)', fontSize: '11px' } }, `Tool: ${evItem.tool}`),
+                            evItem.result_preview && e('div', { style: { fontFamily: 'var(--font-mono)', fontSize: '10.5px', color: 'var(--text-muted)', whiteSpace: 'pre-wrap' } }, String(evItem.result_preview).slice(0, 260)),
+                            evItem.summary && e('div', { style: { fontSize: '11.5px', whiteSpace: 'pre-wrap' } }, evItem.summary),
+                            evItem.final_answer && e('div', { style: { fontSize: '11.5px', whiteSpace: 'pre-wrap' } }, evItem.final_answer),
+                            evItem.error && e('div', { style: { fontSize: '11.5px', color: 'var(--accent-terracotta)' } }, evItem.error),
+                            evType === 'approval_required' && evItem.action_id && e('div', { className: 'ps-ide-approval-bar' },
+                              e('span', { style: { fontSize: '11px', fontWeight: 600 } }, `Approval needed: ${evItem.tool || evItem.action_id}`),
+                              approvalStatus === 'pending' ? e('div', { style: { display: 'flex', gap: '6px' } },
+                                e('button', { type: 'button', className: 'btn-action start', style: { padding: '3px 9px', fontSize: '11px' }, onClick: () => handleResolveAgentApproval(evItem.action_id, true) }, 'Approve'),
+                                e('button', { type: 'button', className: 'btn-purge', style: { padding: '3px 9px', fontSize: '11px' }, onClick: () => handleResolveAgentApproval(evItem.action_id, false) }, 'Reject')
+                              ) : e('span', { className: 'pill', style: { fontSize: '10px' } }, approvalStatus || 'resolved')
+                            )
+                          );
+                        })
+                  ),
+
+                  // Autonomous Training Supervisor Card
+                  e('div', { className: 'ps-ide-supervisor-card' },
+                    e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px' } },
+                      e('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '5px', fontWeight: 700, fontSize: '12px' } },
+                        renderIcon('shield', 13, { color: 'var(--primary)' }),
+                        'Training Supervisor'
+                      ),
+                      e('span', { className: `ps-telemetry-chip ${wsSupervisorStatus.running ? 'live' : ''}` },
+                        wsSupervisorStatus.running ? `ACTIVE (${wsSupervisorStatus.inspections || 0})` : `IDLE (${wsSupervisorStatus.inspections || 0})`
+                      )
+                    ),
+                    e('div', { style: { display: 'flex', gap: '6px' } },
+                      e('button', {
+                        type: 'button',
+                        className: 'btn-sec',
+                        style: { flex: 1, padding: '4px 8px', fontSize: '11px' },
+                        disabled: wsSupervisorStatus.running,
+                        onClick: () => handleSupervisorControl('start')
+                      }, 'Start Watchdog'),
+                      e('button', {
+                        type: 'button',
+                        className: 'btn-sec',
+                        style: { flex: 1, padding: '4px 8px', fontSize: '11px' },
+                        disabled: !wsSupervisorStatus.running,
+                        onClick: () => handleSupervisorControl('stop')
+                      }, 'Stop Watchdog')
+                    ),
+                    Array.isArray(wsSupervisorStatus.anomalies) && wsSupervisorStatus.anomalies.length > 0 && e('div', { style: { fontSize: '11px', color: 'var(--accent-terracotta)' } },
+                      `Anomalies: ${wsSupervisorStatus.anomalies.map(a => a.kind || a).join(', ')}`
+                    )
+                  )
+                )
+              ),
+
+              // Collapsible Confined Workspace Terminal
+              wsTerminalOpen && e('div', { className: 'ps-ide-terminal' },
+                e('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', padding: '7px 10px', background: 'var(--bg-surface)', flexWrap: 'wrap' } },
+                  renderIcon('terminal', 13, { color: 'var(--primary)' }),
+                  e('input', {
+                    type: 'text',
+                    value: wsTerminalCmd,
+                    onChange: ev => setWsTerminalCmd(ev.target.value),
+                    onKeyDown: ev => { if (ev.key === 'Enter') handleWorkspaceTerminalRun(); },
+                    placeholder: 'Confined command (e.g. git status, pytest -q, ruff check .)',
+                    'aria-label': 'Workspace terminal command',
+                    style: { flex: '1 1 220px', padding: '4px 8px', borderRadius: '5px', border: '1px solid var(--border-color)', background: 'var(--bg-input)', color: 'var(--text-main)', fontFamily: 'var(--font-mono)', fontSize: '11.5px' }
+                  }),
+                  e('button', { type: 'button', className: 'btn-action start', style: { padding: '4px 10px', fontSize: '11.5px' }, disabled: wsTerminalRunning, onClick: () => handleWorkspaceTerminalRun() }, wsTerminalRunning ? 'Running...' : 'Run'),
+                  ['git status', 'python --version'].map(qcmd => e('button', {
+                    key: qcmd,
+                    type: 'button',
+                    className: 'btn-sec',
+                    style: { padding: '4px 8px', fontSize: '11px', fontFamily: 'var(--font-mono)' },
+                    onClick: () => { setWsTerminalCmd(qcmd); handleWorkspaceTerminalRun(qcmd); }
+                  }, qcmd)),
+                  wsTerminalExitCode !== null && e('span', { className: 'pill', style: { fontSize: '10.5px', fontFamily: 'var(--font-mono)' } }, `exit ${wsTerminalExitCode}`)
+                ),
+                e('div', { className: 'ps-ide-terminal-out' },
+                  wsTerminalLogs.length === 0
+                    ? e('span', { style: { color: 'var(--text-muted)' } }, 'Workspace terminal ready (confined to active workspace, shell=False).')
+                    : wsTerminalLogs.map((entry, ti) => e('div', { key: ti, style: { marginBottom: '6px' } },
+                        e('div', { style: { color: 'var(--primary)', fontWeight: 700 } }, `$ ${entry.cmd} (${entry.durationMs}ms · exit ${entry.exitCode})`),
+                        entry.stdout && e('div', null, entry.stdout),
+                        entry.stderr && e('div', { style: { color: 'var(--accent-terracotta)' } }, entry.stderr)
+                      ))
                 )
               )
             );
@@ -11511,7 +14226,7 @@
                     color: '#d97706',
                     fontWeight: 600
                   }
-                }, ['WandB Dashboard ↗']),
+                }, ['WandB Dashboard ->']),
                 e('button', {
                   className: 'btn-sec',
                   style: { fontSize: '11.5px', padding: '5px 12px' },
@@ -11523,9 +14238,9 @@
             // Active Checkpoint Quick Status Bar
             e('div', { className: 'ckpt-card-header', style: { padding: '10px 16px', marginBottom: '0px' } },
               e('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' } },
-                e('span', { className: 'badge-ckpt-active' }, '● Active Model Weights'),
+                e('span', { className: 'badge-ckpt-active' }, 'Active Model Weights'),
                 e('span', { style: { fontFamily: 'var(--font-mono)', fontSize: '13px', fontWeight: 600 } },
-                  activeCheckpointName || (metrics.step ? `triune_studio_step_${metrics.step}.pt` : 'No Weights Loaded')
+                  activeCheckpointName || (metrics.step ? `lucid_machines_studio_step_${metrics.step}.pt` : 'No Weights Loaded')
                 ),
                 e('span', { style: { fontSize: '12px', color: 'var(--text-muted)' } },
                   `(Global Step ${metrics.step || 0})`
@@ -11606,9 +14321,9 @@
                     className: 'wandb-run-input',
                     value: runName,
                     onChange: (ev) => setRunName(ev.target.value),
-                    placeholder: 'run-name-e.g-triune-baseline'
+                    placeholder: 'run-name-e.g-junkie-triune-baseline'
                   }),
-                  e('span', { className: `pill ${isTraining ? 'online' : ''}` }, isTraining ? '● Tracking Live' : '● Engine Idle')
+                  e('span', { className: `pill ${isTraining ? 'online' : ''}` }, isTraining ? 'Tracking Live' : 'Engine Idle')
                 ),
                 e('div', { className: 'wandb-actions-group' },
                   e('button', { className: `btn-action ${isTraining ? 'pause' : 'start'}`, onClick: handleToggleTraining },
@@ -11688,9 +14403,60 @@
                 )
               ),
 
-              // 3. Canvas Multi-Series Graph
+              // 3. Synchronized 4-Channel Polysomnograph + Multi-Series Canvas + Reactive SVG Telemetry Charts
+              e(PolysomnographMonitorCanvas, {
+                metricsHistory,
+                mindTelemetry,
+                gpuTelemetry,
+                exitUsage,
+                vramUsage,
+                studioTheme
+              }),
               e('div', { style: { padding: '12px 18px' } },
                 e('canvas', { ref: canvasRef, width: 850, height: 260, className: 'loss-canvas' })
+              ),
+              e('div', { className: 'ps-launchpad-grid', style: { padding: '0 18px 14px 18px' } },
+                (() => {
+                  const renderSvgSeriesCard = (title, series, strokeCol, fmtFn) => {
+                    const pts = series.filter(v => typeof v === 'number' && !isNaN(v));
+                    const w = 320;
+                    const h = 88;
+                    let pathD = '';
+                    if (pts.length >= 2) {
+                      const minV = Math.min(...pts);
+                      const maxV = Math.max(...pts);
+                      const span = Math.max(maxV - minV, 1e-6);
+                      pathD = pts.map((val, idx) => {
+                        const x = 6 + (idx / (pts.length - 1)) * (w - 12);
+                        const y = (h - 10) - ((val - minV) / span) * (h - 20);
+                        return `${idx === 0 ? 'M' : 'L'} ${x.toFixed(1)} ${y.toFixed(1)}`;
+                      }).join(' ');
+                    }
+                    const latest = pts.length > 0 ? pts[pts.length - 1] : null;
+                    return e('div', { className: 'ps-chart-surface', style: { minHeight: '130px' } },
+                      e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' } },
+                        e('strong', { style: { fontSize: '12px' } }, title),
+                        e('span', { style: { fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: strokeCol, fontWeight: 700 } },
+                          latest !== null ? fmtFn(latest) : 'No steps yet'
+                        )
+                      ),
+                      pts.length >= 2 ? e('svg', { viewBox: `0 0 ${w} ${h}`, style: { width: '100%', height: '84px', display: 'block' } },
+                        e('path', { d: pathD, fill: 'none', stroke: strokeCol, strokeWidth: 2.2, strokeLinecap: 'round', strokeLinejoin: 'round' })
+                      ) : e('div', { className: 'ps-empty-state', style: { padding: '14px', minHeight: '78px' } },
+                        e('span', { style: { fontSize: '11px' } }, 'Run training steps to stream live SVG telemetry.')
+                      )
+                    );
+                  };
+                  const lossSeries = (metricsHistory || []).map(m => m.loss);
+                  const valLossSeries = (metricsHistory || []).map(m => m.val_loss);
+                  const lrSeries = (metricsHistory || []).map(m => m.lr);
+                  const vramSeries = (metricsHistory || []).map(m => (typeof m.vram_gb === 'number' ? m.vram_gb : (vramUsage.allocated || 0)));
+                  return [
+                    e('div', { key: 'svg-loss' }, renderSvgSeriesCard('Training Loss & Val Loss', valLossSeries.some(v => typeof v === 'number') ? valLossSeries : lossSeries, 'var(--chart-loss, #e11d48)', v => Number(v).toFixed(4))),
+                    e('div', { key: 'svg-lr' }, renderSvgSeriesCard('Learning Rate Schedule', lrSeries, 'var(--chart-throughput, #0d9488)', v => Number(v).toExponential(2))),
+                    e('div', { key: 'svg-vram' }, renderSvgSeriesCard('VRAM Allocation (GB)', vramSeries, 'var(--primary)', v => `${Number(v).toFixed(2)} GB`))
+                  ];
+                })()
               ),
 
               // 4. Latest Model Generation Preview
@@ -11703,8 +14469,82 @@
               e('div', { style: { padding: '0 18px 16px 18px' } },
                 e('div', { className: 'telemetry-box' },
                   telemetryLogs.length > 0
-                    ? telemetryLogs.map((log, idx) => e('div', { key: idx }, log.replace(/Ġ/g, ' ')))
+                    ? telemetryLogs.map((log, idx) => e('div', { key: idx }, log.replace(/G/g, ' ')))
                     : e('div', null, '[TELEMETRY] Training events will appear here when a run starts.')
+                )
+              )
+            ),
+
+            // Junkie Inaugural Flagship Launchpad + Model Config Editor (models/configs/*.json)
+            e('div', { className: 'ps-launchpad-grid', style: { marginTop: '16px' } },
+              e('div', { className: 'ps-junkie-hero-card' },
+                e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
+                  e('div', null,
+                    e('span', { className: 'appearance-eyebrow' }, 'FIRST FLAGSHIP MODEL TO TRAIN'),
+                    e('h3', { style: { margin: '4px 0 0 0', fontFamily: 'var(--font-heading)', fontSize: '18px' } }, 'Train Junkie on Triune Architecture')
+                  ),
+                  e('span', { className: `ps-telemetry-chip ${activeModel === 'junkie' ? 'live' : ''}` },
+                    activeModel === 'junkie' ? 'JUNKIE SELECTED' : 'READY TO CONFIGURE'
+                  )
+                ),
+                e('p', { style: { margin: 0, fontSize: '12.5px', color: 'var(--text-muted)', lineHeight: 1.5 } },
+                  'Junkie (models/configs/junkie.json) is Lucid Machines’ inaugural flagship 7.40B model to train on the 32-layer TriuneTransformer 3-tier MoE architecture (32L / 2048D / 8E, ~1.95B expected active, VectorisedGLA + CentroidSteer), alongside Junkie-Mini (535.10M · 12L / 1024D / 4E) for fast single-GPU runs.'
+                ),
+                e('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap' } },
+                  e('span', { className: 'model-spec-chip' }, '7.40B (~1.95B Active)'),
+                  e('span', { className: 'model-spec-chip' }, '32L / 2048D / 8E (Top-2 + 1 Shared)'),
+                  e('span', { className: 'model-spec-chip' }, 'Junkie-Mini: 535.10M (12L / 1024D / 4E)'),
+                  e('span', { className: 'model-spec-chip' }, '32k BPE Vocab')
+                ),
+                e('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '4px' } },
+                  e('button', {
+                    type: 'button',
+                    className: 'btn-sec',
+                    disabled: isLaunchingJunkie,
+                    onClick: () => handleLaunchJunkie(false)
+                  }, isLaunchingJunkie ? 'Configuring...' : 'Configure Junkie'),
+                  e('button', {
+                    type: 'button',
+                    className: 'btn-action start',
+                    disabled: isLaunchingJunkie,
+                    onClick: () => handleLaunchJunkie(true)
+                  }, [renderIcon('play', 12, { marginRight: '5px' }), isLaunchingJunkie ? 'Launching...' : 'Train Junkie'])
+                )
+              ),
+              e('div', { className: 'ps-montage-card' },
+                e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
+                  e('strong', { style: { fontSize: '14px' } }, 'Architecture Config Editor (models/configs/)'),
+                  e('select', {
+                    value: selectedConfigName,
+                    'aria-label': 'Select model config JSON',
+                    onChange: ev => fetchModelConfigs(ev.target.value),
+                    style: { padding: '4px 8px', borderRadius: '6px', background: 'var(--bg-input)', border: '1px solid var(--border-color)', color: 'var(--text-main)', fontFamily: 'var(--font-mono)', fontSize: '11.5px' }
+                  },
+                    (modelConfigsList.length > 0 ? modelConfigsList : [{ filename: 'junkie.json' }, { filename: 'triune-small.json' }, { filename: 'triune-base.json' }]).map(c =>
+                      e('option', { key: c.filename, value: c.filename }, c.filename)
+                    )
+                  )
+                ),
+                e('textarea', {
+                  rows: 7,
+                  value: configEditorText,
+                  onChange: ev => setConfigEditorText(ev.target.value),
+                  placeholder: 'Select a models/configs/*.json preset to inspect or edit...',
+                  style: { width: '100%', padding: '8px', borderRadius: '6px', background: 'var(--bg-input)', border: '1px solid var(--border-color)', color: 'var(--text-main)', fontFamily: 'var(--font-mono)', fontSize: '11.5px' }
+                }),
+                e('div', { style: { display: 'flex', gap: '8px', justifyContent: 'flex-end', flexWrap: 'wrap' } },
+                  e('button', {
+                    type: 'button',
+                    className: 'btn-sec',
+                    disabled: isSavingConfig || !configEditorText,
+                    onClick: () => handleSaveModelConfig(false)
+                  }, isSavingConfig ? 'Saving...' : 'Save JSON'),
+                  e('button', {
+                    type: 'button',
+                    className: 'btn-action start',
+                    disabled: isSavingConfig || !configEditorText,
+                    onClick: () => handleSaveModelConfig(true)
+                  }, 'Save & Apply to Engine')
                 )
               )
             ),
@@ -11789,7 +14629,7 @@
                   e('input', {
                     ref: workflowImportRef,
                     type: 'file',
-                    accept: '.json,.triune.json,application/json',
+                    accept: '.json,.lucid_machines.json,.triune.json,application/json',
                     style: { display: 'none' },
                     onChange: ev => {
                       const file = ev.target.files && ev.target.files[0];
@@ -11800,7 +14640,7 @@
                   e('button', {
                     className: 'btn-icon-tool',
                     onClick: () => workflowImportRef.current && workflowImportRef.current.click(),
-                    title: 'Import a saved Triune workflow JSON file'
+                    title: 'Import a saved Polysom workflow JSON file'
                   }, [renderIcon('folder', 13, { marginRight: '6px' }), 'Open']),
                   e('button', {
                     className: 'btn-icon-tool',
@@ -11830,9 +14670,77 @@
                     onClick: () => setShowWireList(prev => !prev),
                     style: { display: 'flex', alignItems: 'center', gap: '4px' },
                     title: 'Toggle active wire connections list'
-                  }, [renderIcon('scissors', 13, { marginRight: '5px' }), `Wires (${edges.length}) ${showWireList ? '▲' : '▼'}`])
+                  }, [renderIcon('scissors', 13, { marginRight: '5px' }), `Wires (${edges.length}) ${showWireList ? '^' : 'v'}`])
                 )
               ),
+              // Dual-Mode Node Editor Bar (Architecture Mode vs Agentic Workflow Mode)
+              e('div', { className: 'ps-dag-mode-bar' },
+                e('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' } },
+                  e('button', {
+                    type: 'button',
+                    className: `btn-clear-chat ${dagEditorMode === 'workflow' ? 'active' : ''}`,
+                    style: { fontSize: '11.5px', padding: '4px 10px', fontWeight: dagEditorMode === 'workflow' ? 700 : 500 },
+                    onClick: () => setDagEditorMode('workflow')
+                  }, 'Agentic Workflow Mode'),
+                  e('button', {
+                    type: 'button',
+                    className: `btn-clear-chat ${dagEditorMode === 'architecture' ? 'active' : ''}`,
+                    style: { fontSize: '11.5px', padding: '4px 10px', fontWeight: dagEditorMode === 'architecture' ? 700 : 500 },
+                    onClick: () => setDagEditorMode('architecture')
+                  }, 'Architecture Mode'),
+                  dagEditorMode === 'workflow' && Object.values(AGENT_WORKFLOW_TEMPLATES).map(tpl => e('button', {
+                    key: tpl.id,
+                    type: 'button',
+                    className: 'preset-chip',
+                    style: { fontSize: '11px', padding: '3px 9px' },
+                    title: tpl.description,
+                    onClick: () => handleLoadWorkflowTemplate(tpl.id)
+                  }, tpl.name))
+                ),
+                e('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' } },
+                  e('button', { type: 'button', className: 'btn-sec', style: { fontSize: '11px', padding: '4px 8px' }, onClick: handleDagUndo, disabled: !dagUndoStack.length, title: 'Undo (Ctrl+Z)' }, 'Undo'),
+                  e('button', { type: 'button', className: 'btn-sec', style: { fontSize: '11px', padding: '4px 8px' }, onClick: handleDagRedo, disabled: !dagRedoStack.length, title: 'Redo (Ctrl+Y)' }, 'Redo'),
+                  e('button', { type: 'button', className: 'btn-sec', style: { fontSize: '11px', padding: '4px 8px', display: 'inline-flex', alignItems: 'center', gap: '4px' }, onClick: () => handleAutoLayoutDAG(), title: 'Topological Auto-Layout (L)' }, [renderIcon('layout', 11), 'Auto-Layout (L)']),
+                  e('button', { type: 'button', className: 'btn-sec', style: { fontSize: '11px', padding: '4px 8px' }, onClick: () => handleFitCanvasView(), title: 'Fit to View (F)' }, 'Fit (F)')
+                )
+              ),
+              dagEditorMode === 'architecture' && (() => {
+                const archBudget = estimateTriuneArchBudget(dagArchSpec);
+                return e('div', { className: 'ps-dag-arch-bar' },
+                  e('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' } },
+                    e('span', { style: { fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)' } }, 'Blueprints:'),
+                    Object.values(ARCHITECTURE_BLUEPRINTS).map(bp => e('button', {
+                      key: bp.id,
+                      type: 'button',
+                      className: 'preset-chip',
+                      style: { fontSize: '11px', padding: '3px 9px' },
+                      onClick: () => handleLoadArchBlueprint(bp.id)
+                    }, bp.name.split(' (')[0]))
+                  ),
+                  e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', fontFamily: 'var(--font-mono)', fontSize: '11px' } },
+                    e('span', { className: 'model-spec-chip' }, `Total: ${archBudget.totalLabel}`),
+                    e('span', { className: 'model-spec-chip' }, `Active: ${archBudget.activeLabel} (${archBudget.activePct}%)`),
+                    e('span', { className: 'model-spec-chip' }, `CentroidSteer VRAM: ${archBudget.centroidVramGb} GB vs AdamW ${archBudget.adamwVramGb} GB (-${archBudget.savingsPct}%)`),
+                    e('select', {
+                      'aria-label': 'Architecture precision',
+                      value: dagArchSpec.precision,
+                      onChange: ev => setDagArchSpec(prev => ({ ...prev, precision: ev.target.value })),
+                      style: { padding: '3px 6px', borderRadius: '5px', border: '1px solid var(--border-color)', background: 'var(--bg-input)', color: 'var(--text-main)', fontSize: '11px' }
+                    },
+                      e('option', { value: 'bf16' }, 'BF16'),
+                      e('option', { value: 'fp8' }, 'FP8'),
+                      e('option', { value: 'fp4' }, 'FP4')
+                    ),
+                    e('button', {
+                      type: 'button',
+                      className: 'btn-action start',
+                      style: { padding: '4px 10px', fontSize: '11.5px' },
+                      disabled: isCompilingTraining,
+                      onClick: handleCompileArchBlueprint
+                    }, isCompilingTraining ? 'Compiling...' : 'Compile Blueprint')
+                  )
+                );
+              })(),
               activePresetKey && DAG_PRESETS[activePresetKey] && e('div', { className: 'dag-preset-guide' },
                 e('strong', null, DAG_PRESETS[activePresetKey].name),
                 e('span', null, DAG_PRESETS[activePresetKey].description),
@@ -11863,13 +14771,14 @@
                     style: { border: '1px dashed var(--primary)', color: 'var(--primary)', cursor: 'pointer', fontSize: '11px', padding: '2px 8px' },
                     onClick: () => handleDisconnectWire(edge.id),
                     title: 'Click to disconnect wire'
-                  }, [srcNode ? srcNode.title : edge.source, ' → ', tgtNode ? tgtNode.title : edge.target, ' ', renderIcon('scissors', 11, { marginLeft: '4px' })]);
+                  }, [srcNode ? srcNode.title : edge.source, ' -> ', tgtNode ? tgtNode.title : edge.target, ' ', renderIcon('scissors', 11, { marginLeft: '4px' })]);
                 })
               ),
               dagExecutionStatus && e('div', { className: 'telemetry-box', style: { marginBottom: '8px' } }, dagExecutionStatus),
-              e('div', {
-                className: 'node-grid-area',
-                ref: gridRef,
+              e('div', { className: 'ps-dag-workspace' },
+                e('div', {
+                  className: 'ps-dag-canvas node-grid-area',
+                  ref: gridRef,
                 style: {
                   backgroundPosition: `${canvasPan.x}px ${canvasPan.y}px, ${canvasPan.x}px ${canvasPan.y}px, ${canvasPan.x}px ${canvasPan.y}px, ${canvasPan.x}px ${canvasPan.y}px, ${canvasPan.x}px ${canvasPan.y}px`,
                   backgroundSize: `${20 * canvasZoom}px ${20 * canvasZoom}px, ${20 * canvasZoom}px ${20 * canvasZoom}px, ${20 * canvasZoom}px ${20 * canvasZoom}px, ${100 * canvasZoom}px ${100 * canvasZoom}px, ${100 * canvasZoom}px ${100 * canvasZoom}px`
@@ -11970,7 +14879,7 @@
                             strokeWidth: 16,
                             fill: 'none',
                             style: { pointerEvents: 'stroke', cursor: 'pointer' },
-                            title: `Connection: [${srcNode.title}:${edge.source_port}] → [${tgtNode.title}:${edge.target_port}] (Click to disconnect)`,
+                            title: `Connection: [${srcNode.title}:${edge.source_port}] -> [${tgtNode.title}:${edge.target_port}] (Click to disconnect)`,
                             onClick: (ev) => { ev.stopPropagation(); handleDisconnectWire(edge.id); }
                           }),
                           // High-contrast themed wire
@@ -12334,6 +15243,55 @@
                     })()
                   )
                 ),
+                // Corner Minimap for Pan/Zoom Overview
+                nodes.length > 0 && (() => {
+                  const minX = Math.min(...nodes.map(n => n.x)) - 80;
+                  const maxX = Math.max(...nodes.map(n => n.x + NODE_WIDTH)) + 80;
+                  const minY = Math.min(...nodes.map(n => n.y)) - 80;
+                  const maxY = Math.max(...nodes.map(n => n.y + 180)) + 80;
+                  const spanX = Math.max(400, maxX - minX);
+                  const spanY = Math.max(300, maxY - minY);
+                  const mapW = 172;
+                  const mapH = 112;
+                  const scale = Math.min((mapW - 12) / spanX, (mapH - 12) / spanY);
+                  const vpW = gridRef.current ? gridRef.current.clientWidth / Math.max(0.25, canvasZoom) : 800;
+                  const vpH = gridRef.current ? gridRef.current.clientHeight / Math.max(0.25, canvasZoom) : 500;
+                  const vpX = (-canvasPan.x / Math.max(0.25, canvasZoom));
+                  const vpY = (-canvasPan.y / Math.max(0.25, canvasZoom));
+                  return e('div', {
+                    className: 'ps-dag-minimap',
+                    title: 'Click minimap to recenter canvas',
+                    onClick: (ev) => {
+                      ev.stopPropagation();
+                      const r = ev.currentTarget.getBoundingClientRect();
+                      const gx = minX + (ev.clientX - r.left - 6) / scale;
+                      const gy = minY + (ev.clientY - r.top - 6) / scale;
+                      const gw = gridRef.current ? gridRef.current.clientWidth : 800;
+                      const gh = gridRef.current ? gridRef.current.clientHeight : 500;
+                      setCanvasPan({ x: gw / 2 - gx * canvasZoom, y: gh / 2 - gy * canvasZoom });
+                    }
+                  },
+                    nodes.map(n => e('div', {
+                      key: `mm-${n.id}`,
+                      className: 'ps-dag-minimap-node',
+                      style: {
+                        left: `${Math.round(6 + (n.x - minX) * scale)}px`,
+                        top: `${Math.round(6 + (n.y - minY) * scale)}px`,
+                        width: `${Math.max(8, Math.round(NODE_WIDTH * scale))}px`,
+                        height: `${Math.max(5, Math.round(90 * scale))}px`
+                      }
+                    })),
+                    e('div', {
+                      className: 'ps-dag-minimap-viewport',
+                      style: {
+                        left: `${Math.round(6 + (vpX - minX) * scale)}px`,
+                        top: `${Math.round(6 + (vpY - minY) * scale)}px`,
+                        width: `${Math.max(12, Math.round(vpW * scale))}px`,
+                        height: `${Math.max(10, Math.round(vpH * scale))}px`
+                      }
+                    })
+                  );
+                })(),
                 // Blender / Unreal Engine Navigation Overlay (Zoom In, Zoom Out, 100%, Fit View, Duplicate, Delete)
                 e('div', { className: 'canvas-nav-overlay' },
                   e('div', { className: 'canvas-nav-controls' },
@@ -12377,7 +15335,7 @@
                     e('div', { className: 'inspector-section' },
                       e('span', { className: 'inspector-section-label' }, 'Description'),
                       e('div', { className: 'inspector-desc' },
-                        (catItem && catItem.description) || `Custom ${selNode.type} component in Triune execution graph.`
+                        (catItem && catItem.description) || `Custom ${selNode.type} component in Polysom execution graph.`
                       )
                     ),
                     // I/O Ports
@@ -12387,13 +15345,13 @@
                         e('div', null,
                           e('span', { style: { fontSize: '11px', color: 'var(--text-muted)', marginRight: '6px' } }, 'Inputs:'),
                           inputs.length > 0
-                            ? inputs.map((pin, idx) => e('span', { key: idx, className: 'pin-pill in' }, `→ ${pin.name} (${pin.type})`))
+                            ? inputs.map((pin, idx) => e('span', { key: idx, className: 'pin-pill in' }, `-> ${pin.name} (${pin.type})`))
                             : e('span', { style: { fontSize: '11px', color: 'var(--text-dim)' } }, 'None (Source Node)')
                         ),
                         e('div', null,
                           e('span', { style: { fontSize: '11px', color: 'var(--text-muted)', marginRight: '6px' } }, 'Outputs:'),
                           outputs.length > 0
-                            ? outputs.map((pin, idx) => e('span', { key: idx, className: 'pin-pill out' }, `${pin.name} (${pin.type}) →`))
+                            ? outputs.map((pin, idx) => e('span', { key: idx, className: 'pin-pill out' }, `${pin.name} (${pin.type}) ->`))
                             : e('span', { style: { fontSize: '11px', color: 'var(--text-dim)' } }, 'None (Terminal Node)')
                         )
                       )
@@ -12484,7 +15442,113 @@
                     )
                   )
                 );
-              })()
+              })(),
+                e('aside', { className: 'ps-dag-trace-panel' },
+                  e('div', { style: { display: 'flex', gap: '6px', borderBottom: '1px solid var(--border-color)', paddingBottom: '8px', flexWrap: 'wrap' } },
+                    [
+                      { id: 'traces', label: `DAG Traces (${dagHistory.length})` },
+                      { id: 'agents', label: `Agent Studio (${agentHistory.length})` },
+                      { id: 'inspector', label: 'Graph Summary' }
+                    ].map(tabObj => e('button', {
+                      key: tabObj.id,
+                      type: 'button',
+                      className: `btn-clear-chat ${dagSideTab === tabObj.id ? 'active' : ''}`,
+                      style: { fontSize: '11px', padding: '4px 8px', fontWeight: dagSideTab === tabObj.id ? 700 : 500 },
+                      onClick: () => {
+                        setDagSideTab(tabObj.id);
+                        fetchDagAndAgentHistory();
+                      }
+                    }, tabObj.label))
+                  ),
+                  dagSideTab === 'traces' && e('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
+                    dagHistory.length === 0 ? e('div', { className: 'ps-empty-state', style: { padding: '16px' } },
+                      e('span', { style: { fontSize: '12px' } }, 'No DAG runs recorded yet. Click "Run One Pass" to capture step-by-step execution traces.')
+                    ) : dagHistory.map(run => e('div', { key: run.run_id, className: `ps-dag-trace-step ${run.status === 'success' || run.status === 'completed' ? 'completed' : (run.status === 'error' || run.status === 'failed' ? 'failed' : '')}` },
+                      e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px' } },
+                        e('strong', { style: { fontFamily: 'var(--font-mono)', fontSize: '11px' } }, run.run_id),
+                        e('div', { style: { display: 'flex', gap: '6px', alignItems: 'center' } },
+                          e('span', { className: 'pill', style: { fontSize: '10px' } }, run.status),
+                          e('button', {
+                            type: 'button',
+                            className: 'btn-sec',
+                            disabled: isReplayingDag,
+                            style: { fontSize: '10.5px', padding: '2px 7px' },
+                            onClick: () => handleReplayDagRun(run.run_id)
+                          }, isReplayingDag ? 'Replaying...' : 'Replay')
+                        )
+                      ),
+                      e('div', { style: { fontSize: '11px', color: 'var(--text-muted)' } },
+                        `${run.node_count || 0} nodes · ${run.edge_count || 0} edges · queue ${run.queue_wait_ms ?? 0} ms`
+                      ),
+                      Array.isArray(run.traces) && run.traces.length > 0 && e('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '4px' } },
+                        run.traces.map((tr, ti) => e('div', {
+                          key: ti,
+                          style: { display: 'flex', justifyContent: 'space-between', fontSize: '10.5px', fontFamily: 'var(--font-mono)', padding: '3px 6px', borderRadius: '4px', background: 'var(--bg-surface)' }
+                        },
+                          e('span', null, `${tr.title} [${tr.status}]`),
+                          e('span', { style: { color: 'var(--text-dim)' } }, `${tr.elapsed_ms} ms`)
+                        ))
+                      )
+                    ))
+                  ),
+                  dagSideTab === 'agents' && e('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
+                    e('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
+                      e('textarea', {
+                        rows: 2,
+                        value: agentGoalInput,
+                        onChange: ev => setAgentGoalInput(ev.target.value),
+                        placeholder: 'Enter autonomous research or code inspection goal...',
+                        style: { width: '100%', padding: '7px', borderRadius: '6px', background: 'var(--bg-input)', border: '1px solid var(--border-color)', color: 'var(--text-main)', fontSize: '12px' }
+                      }),
+                      e('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap' } },
+                        e('select', {
+                          value: agentMode,
+                          onChange: ev => setAgentMode(ev.target.value),
+                          style: { flex: 1, padding: '4px 6px', borderRadius: '5px', background: 'var(--bg-input)', border: '1px solid var(--border-color)', color: 'var(--text-main)', fontSize: '11px' }
+                        },
+                          e('option', { value: 'single' }, 'Single AgentHarness'),
+                          e('option', { value: 'orchestrate' }, 'Multi-Agent Team')
+                        ),
+                        e('select', {
+                          value: agentPersona,
+                          onChange: ev => setAgentPersona(ev.target.value),
+                          style: { flex: 1, padding: '4px 6px', borderRadius: '5px', background: 'var(--bg-input)', border: '1px solid var(--border-color)', color: 'var(--text-main)', fontSize: '11px' }
+                        },
+                          e('option', { value: 'auto' }, 'Auto Persona'),
+                          agentState && agentState.personas && Object.keys(agentState.personas).map(pk =>
+                            e('option', { key: pk, value: pk }, pk)
+                          )
+                        ),
+                        e('button', {
+                          type: 'button',
+                          className: 'btn-action start',
+                          disabled: isRunningAgent || !agentGoalInput.trim(),
+                          style: { padding: '4px 10px', fontSize: '11px' },
+                          onClick: handleRunAgentGoal
+                        }, isRunningAgent ? 'Running...' : 'Run Agent')
+                      )
+                    ),
+                    agentHistory.length === 0 ? e('div', { className: 'ps-empty-state', style: { padding: '14px' } },
+                      e('span', { style: { fontSize: '11.5px' } }, 'No agent tool-call runs recorded yet.')
+                    ) : agentHistory.map(ar => e('div', { key: ar.run_id, className: `ps-dag-trace-step ${ar.status === 'success' ? 'completed' : 'failed'}` },
+                      e('div', { style: { display: 'flex', justifyContent: 'space-between', fontSize: '11px', fontWeight: 700 } },
+                        e('span', null, `${ar.kind === 'orchestrate' ? 'Team' : ar.persona} · ${ar.elapsed_ms ?? 0} ms`),
+                        e('span', { className: 'pill', style: { fontSize: '10px' } }, ar.status)
+                      ),
+                      e('div', { style: { fontSize: '11.5px', color: 'var(--text-main)' } }, ar.goal),
+                      ar.final_answer && e('div', { style: { fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'pre-wrap' } }, String(ar.final_answer).slice(0, 280))
+                    ))
+                  ),
+                  dagSideTab === 'inspector' && e('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '12px' } },
+                    e('div', { className: 'ps-dag-trace-step' },
+                      e('strong', null, `Canvas: ${nodes.length} nodes · ${edges.length} edges`),
+                      e('span', { style: { color: 'var(--text-muted)', fontSize: '11.5px' } },
+                        selectedNodeId ? `Selected Node: ${selectedNodeId}` : 'Click any node on the canvas to edit hyperparameters, or switch to DAG Traces / Agent Studio above.'
+                      )
+                    )
+                  )
+                )
+              )
             )
           ),
 
@@ -12706,12 +15770,12 @@
                               e('td', { style: { fontWeight: isActive ? 700 : 500, fontFamily: 'var(--font-mono)' } },
                                 [renderIcon('modules', 12, { marginRight: '6px', color: 'var(--accent-sage, #2b4c3f)' }), ad.name]
                               ),
-                              e('td', null, `r=${ad.rank}, α=${ad.alpha}`),
+                              e('td', null, `r=${ad.rank}, a=${ad.alpha}`),
                               e('td', null, e('span', { className: 'badge-folder' }, ad.quantization || '4-bit NF4')),
                               e('td', null, `${ad.size_mb || 0} MB`),
                               e('td', null,
                                 isActive
-                                  ? e('span', { className: 'badge-ckpt-active' }, '● Attached')
+                                  ? e('span', { className: 'badge-ckpt-active' }, 'Attached')
                                   : e('span', { className: 'badge-ckpt-idle' }, 'On Disk')
                               ),
                               e('td', { style: { textAlign: 'right' } },
@@ -12762,7 +15826,7 @@
               e('div', { className: 'ckpt-card-header' },
                 e('div', null,
                   e('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' } },
-                    renderTriuneLogo(24),
+                    renderPolysomLogo(24),
                     e('h3', { style: { fontFamily: 'var(--font-heading)', fontSize: '20px', margin: 0 } }, 'Checkpoint Browser & Model Weights Manager')
                   ),
                   e('div', { className: 'ckpt-run-status' },
@@ -12782,7 +15846,7 @@
                 e('div', { className: 'ckpt-save-bar', style: { flexWrap: 'wrap' } },
                   e('input', {
                     className: 'ckpt-input',
-                    placeholder: `triune_studio_step_${metrics.step || 0}.pt (or custom name)`,
+                    placeholder: `lucid_machines_studio_step_${metrics.step || 0}.pt (or custom name)`,
                     value: saveCkptName,
                     onChange: ev => setSaveCkptName(ev.target.value)
                   }),
@@ -12938,7 +16002,7 @@
                                     e('td', { style: { color: 'var(--text-muted)', fontSize: '12px' } }, c.mtime || '—'),
                                     e('td', null,
                                       isActive
-                                        ? e('span', { className: 'badge-ckpt-active' }, '● Loaded & Active')
+                                        ? e('span', { className: 'badge-ckpt-active' }, 'Loaded & Active')
                                         : e('span', { className: 'badge-ckpt-idle' }, 'On Disk')
                                     ),
                                     e('td', { style: { textAlign: 'right' } },
@@ -13302,7 +16366,7 @@
                   e('div', { className: 'transmutation-layer-inspector-row' },
                     e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
                       e('span', { style: { fontWeight: 700, fontSize: '13px', color: 'var(--text-main)' } },
-                        `Layer ${selectedInspectorLayer.layer_index}: ${selectedInspectorLayer.original_name} → ${selectedInspectorLayer.upgraded_label}`
+                        `Layer ${selectedInspectorLayer.layer_index}: ${selectedInspectorLayer.original_name} -> ${selectedInspectorLayer.upgraded_label}`
                       ),
                       e('span', {
                         className: `inspector-tag ${selectedInspectorLayer.upgraded_tier === 'reflex' ? 'online' : (selectedInspectorLayer.upgraded_tier === 'limbic' ? 'warning' : 'active')}`
@@ -13338,7 +16402,7 @@
                       e('div', null,
                         e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
                           e('h3', { className: 'model-title', style: { margin: 0, fontSize: '16px' } }, m.name),
-                          isCurrent && e('span', { className: 'badge-ckpt-active', style: { fontSize: '10.5px', padding: '1px 6px' } }, '● Active')
+                          isCurrent && e('span', { className: 'badge-ckpt-active', style: { fontSize: '10.5px', padding: '1px 6px' } }, 'Active')
                         ),
                         e('span', { style: { fontSize: '11px', color: 'var(--accent-terracotta, #9a3412)', fontWeight: 600, fontFamily: 'var(--font-mono)' } }, m.tier)
                       ),
@@ -13537,11 +16601,11 @@
                 e('div', { className: 'token-chip-container' },
                   tokens.map(t => {
                     const raw = t.text || '';
-                    const isPrefixed = raw.startsWith('Ġ') || raw.startsWith(' ');
-                    const clean = raw.replace(/^[Ġ ]/, '');
+                    const isPrefixed = raw.startsWith('G') || raw.startsWith(' ');
+                    const clean = raw.replace(/^[G ]/, '');
                     return e('span', { key: t.id, className: 'token-chip' },
-                      isPrefixed && e('span', { style: { opacity: 0.5, marginRight: '3px', fontWeight: 700 } }, '␣'),
-                      `${clean || '␣'} [ID:${t.id}]`
+                      isPrefixed && e('span', { style: { opacity: 0.5, marginRight: '3px', fontWeight: 700 } }, '_'),
+                      `${clean || ' '} [ID:${t.id}]`
                     );
                   })
                 )
@@ -13604,6 +16668,13 @@
                                     handleConnectHfStream(ds.path || ds.name, '', 'train', 'text');
                                   }
                                 }, [renderIcon('play', 11, { marginRight: '4px' }), 'Stream in Engine']),
+                            ds.type === 'local' && ds.path && e('button', {
+                              className: 'btn-sec',
+                              style: { padding: '4px 10px', fontSize: '11px' },
+                              title: 'Preview local dataset records via /v1/datasets/preview',
+                              disabled: isLoadingDatasetPreview,
+                              onClick: () => handlePreviewDataset(ds.path)
+                            }, 'Preview'),
                             e('button', {
                               className: 'btn-sec',
                               style: { padding: '4px 10px', fontSize: '11px' },
@@ -13614,6 +16685,18 @@
                         )
                       );
                     })
+                  )
+                ),
+                isLoadingDatasetPreview && e('div', { className: 'ps-montage-card', style: { marginTop: '14px' } },
+                  e('div', { className: 'ps-loading-skeleton', style: { height: '72px', borderRadius: '6px' } })
+                ),
+                datasetPreview && e('div', { className: 'ps-montage-card', style: { marginTop: '14px' } },
+                  e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
+                    e('strong', { style: { fontSize: '13px' } }, `Dataset Preview: ${datasetPreview.filename} (${datasetPreview.record_count} rows shown)`),
+                    e('button', { type: 'button', className: 'btn-clear-chat', onClick: () => setDatasetPreview(null) }, 'Close Preview')
+                  ),
+                  e('pre', { className: 'inspector-output-json', style: { maxHeight: '220px', overflowY: 'auto' } },
+                    JSON.stringify(datasetPreview.records, null, 2)
                   )
                 )
               )
@@ -13707,7 +16790,7 @@
                     rel: 'noreferrer',
                     className: 'btn-sec',
                     style: { height: '40px', padding: '0 12px', display: 'flex', alignItems: 'center', textDecoration: 'none', fontSize: '12px' }
-                  }, 'Get HF Token ↗')
+                  }, 'Get HF Token ?')
                 )
               ),
 
@@ -13749,14 +16832,14 @@
                     rel: 'noreferrer',
                     className: 'btn-sec',
                     style: { height: '40px', padding: '0 12px', display: 'flex', alignItems: 'center', textDecoration: 'none', fontSize: '12px' }
-                  }, 'Get W&B Key ↗'),
+                  }, 'Get W&B Key ?'),
                   wandbUrl && e('a', {
                     href: wandbUrl,
                     target: '_blank',
                     rel: 'noreferrer',
                     className: 'btn-sec',
                     style: { height: '40px', padding: '0 12px', display: 'flex', alignItems: 'center', textDecoration: 'none', fontSize: '12px', borderColor: '#d97706', color: '#d97706' }
-                  }, 'Open W&B Run ↗')
+                  }, 'Open W&B Run ?')
                 )
               ),
 
@@ -13779,23 +16862,23 @@
                 e('span', null, 'CURRENT THEME'),
                 e('strong', null, previewThemeDraft ? `${themeDraft.name} · preview` : activeAppearanceTheme.name),
                 e('small', null, `${previewThemeDraft ? 'Unsaved preview' : activeAppearanceTheme.edition} · ${rootTheme.mode} mode`),
-                (studioTheme !== 'obsidian-glass' || previewThemeDraft || customAccent) && e('button', {
+                (studioTheme !== 'hypnagogic' || previewThemeDraft || customAccent) && e('button', {
                   className: 'btn-clear-chat',
                   style: { marginTop: '8px', padding: '3px 8px', fontSize: '10.5px' },
                   onClick: () => {
-                    setStudioTheme('obsidian-glass');
+                    setStudioTheme('hypnagogic');
                     setCustomAccent('');
                     setPreviewThemeDraft(false);
-                    try { window.localStorage.setItem('triune.studio.theme', 'obsidian-glass'); } catch (_) {}
-                    showToast('Restored Studio Carbon (Default) theme.');
+                    try { window.localStorage.setItem('lucid_machines.studio.theme', 'hypnagogic'); } catch (_) {}
+                    showToast('Restored Hypnagogic (Default) theme.');
                   }
-                }, 'Use Carbon')
+                }, 'Use Hypnagogic')
               )
             ),
             e('div', { className: 'appearance-section-heading' },
               e('div', null,
                 e('h3', null, 'Theme library'),
-                e('p', null, 'Four curated starting points, plus themes you create or import. Theme files contain colors only—no scripts or CSS.')
+                e('p', null, 'Six curated starting points, plus themes you create or import. Theme files contain colors only—no scripts or CSS.')
               ),
               e('div', { className: 'appearance-mode-switch', role: 'group', 'aria-label': 'Filter themes by appearance' },
                 ['All', 'Light', 'Dark', 'Custom'].map(mode => e('button', {
@@ -13810,7 +16893,7 @@
               !allAppearanceThemes.some(theme => appearanceFilter === 'All' || (appearanceFilter === 'Custom' ? theme.edition === 'Custom' : theme.mode === appearanceFilter)) &&
                 e('div', { className: 'appearance-empty-state' },
                   e('strong', null, 'No custom themes yet'),
-                  e('span', null, 'Start with a curated palette below, or import a .triunetheme file from someone else.')
+                  e('span', null, 'Start with a curated palette below, or import a .lucid_machinestheme file from someone else.')
                 ),
               allAppearanceThemes.filter(theme => appearanceFilter === 'All' || (appearanceFilter === 'Custom' ? theme.edition === 'Custom' : theme.mode === appearanceFilter)).map(theme =>
                 e('article', { key: theme.id, className: `appearance-theme-card ${studioTheme === theme.id ? 'selected' : ''}` },
@@ -13873,7 +16956,7 @@
                           setStudioTheme(theme.id);
                           setPreviewThemeDraft(false);
                           setCustomAccent('');
-                          try { window.localStorage.setItem('triune.studio.theme', theme.id); } catch (_) {}
+                          try { window.localStorage.setItem('lucid_machines.studio.theme', theme.id); } catch (_) {}
                           showToast(`${theme.name} applied.`);
                         }
                       }, studioTheme === theme.id ? 'Applied' : 'Apply'),
@@ -13898,13 +16981,13 @@
                 e('div', null,
                   e('span', { className: 'appearance-eyebrow' }, 'THEME EDITOR'),
                   e('h3', null, editingThemeId ? 'Edit your theme' : 'Build a theme'),
-                  e('p', null, 'Tune the whole workspace palette. Preview it live, save it locally, or share it as a .triunetheme file.')
+                  e('p', null, 'Tune the whole workspace palette. Preview it live, save it locally, or share it as a .lucid_machinestheme file.')
                 ),
                 e('div', { className: 'theme-builder-heading-actions' },
                   editingThemeId && e('button', { className: 'appearance-secondary-action', type: 'button', onClick: startNewThemeDraft }, 'New theme'),
                   e('label', { className: 'theme-import-control' }, [
                     'Import theme',
-                    e('input', { key: 'import', type: 'file', accept: '.triunetheme,application/json', onChange: importTheme })
+                    e('input', { key: 'import', type: 'file', accept: '.lucid_machinestheme,.triunetheme,application/json', onChange: importTheme })
                   ])
                 )
               ),
@@ -13972,7 +17055,7 @@
             e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '10px' } },
               e('div', null,
                 e('h2', { style: { fontFamily: 'var(--font-heading)', fontSize: '24px', margin: 0 } }, 'Extensions & Integrations'),
-                e('p', { style: { color: 'var(--text-muted)', fontSize: '13px', margin: '4px 0 0 0' } }, 'Browse curated Triune modules, community repositories, and the extensions installed in this workspace.')
+                e('p', { style: { color: 'var(--text-muted)', fontSize: '13px', margin: '4px 0 0 0' } }, 'Browse curated Lucid Machines modules, community repositories, and the extensions installed in this workspace.')
               ),
               e('div', { style: { display: 'flex', gap: '8px' } },
                 e('button', { className: 'btn-sec', onClick: () => { fetchInstalledModules(); searchMarketplace(moduleSearchQuery, moduleFilter, 'all'); checkModuleUpdates(); } }, [renderIcon('refresh', 13, { marginRight: '6px' }), 'Refresh All']),
@@ -13996,7 +17079,7 @@
                     e('span', { className: 'badge-update', style: { background: '#e3ebd8', color: '#2b4c3f', borderColor: '#c5d6b4', fontSize: '11px' } }, 'AUTO-LOAD')
                   ),
                   e('p', { style: { color: 'var(--text-muted)', fontSize: '12.5px', margin: '4px 0 0 0' } },
-                    'Instantly scan your local Triune project repository (triune/plugins/, scripts/, root) for custom @register_node plugins and custom models.'
+                    'Instantly scan your local Lucid Machines project repository (lucid_machines/plugins/, scripts/, root) for custom @register_node plugins and custom models.'
                   )
                 ),
                 e('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } },
@@ -14140,7 +17223,7 @@
                     className: 'btn-sec',
                     style: { fontSize: '12px', background: '#f5e3c3', color: '#78350f', borderColor: '#edd5a6' },
                     onClick: () => installModule(up)
-                  }, `Update ${up.name} (${up.current_version} → ${up.latest_version})`)
+                  }, `Update ${up.name} (${up.current_version} -> ${up.latest_version})`)
                 )
               )
             ),
@@ -14342,7 +17425,7 @@
                           )
                         ),
                         e('div', { className: 'modrinth-actions-footer' },
-                          e('a', { href: hf.repo_url, target: '_blank', rel: 'noreferrer', style: { fontSize: '11.5px', color: 'var(--primary)', textDecoration: 'none', fontWeight: 600 } }, 'Hub Page ↗'),
+                          e('a', { href: hf.repo_url, target: '_blank', rel: 'noreferrer', style: { fontSize: '11.5px', color: 'var(--primary)', textDecoration: 'none', fontWeight: 600 } }, 'Hub Page ?'),
                           e('div', { className: 'modrinth-actions-group' },
                             hf.type === 'dataset' ?
                               e('div', { style: { display: 'flex', gap: '6px' } },
@@ -14432,7 +17515,7 @@
                           )
                         ),
                         e('div', { className: 'modrinth-actions-footer' },
-                          e('a', { href: gh.repo_url, target: '_blank', rel: 'noreferrer', style: { fontSize: '11.5px', color: 'var(--primary)', textDecoration: 'none', fontWeight: 600 } }, 'GitHub ↗'),
+                          e('a', { href: gh.repo_url, target: '_blank', rel: 'noreferrer', style: { fontSize: '11.5px', color: 'var(--primary)', textDecoration: 'none', fontWeight: 600 } }, 'GitHub ?'),
                           e('div', { className: 'modrinth-actions-group' },
                             e('button', {
                               className: 'btn-sec',
@@ -14536,28 +17619,28 @@
                 e('div', { className: 'field-group' },
                   e('label', null, 'Installation Base Path:'),
                   e('input', {
-                    value: systemConfig.installation_path || 'C:\\TriuneStudio',
+                    value: systemConfig.installation_path || 'C:\\PolysomStudio',
                     onChange: ev => setSystemConfig({ ...systemConfig, installation_path: ev.target.value })
                   })
                 ),
                 e('div', { className: 'field-group' },
                   e('label', null, 'Models Directory:'),
                   e('input', {
-                    value: systemConfig.models_path || 'C:\\TriuneStudio\\models',
+                    value: systemConfig.models_path || 'C:\\PolysomStudio\\models',
                     onChange: ev => setSystemConfig({ ...systemConfig, models_path: ev.target.value })
                   })
                 ),
                 e('div', { className: 'field-group' },
                   e('label', null, 'Datasets Directory:'),
                   e('input', {
-                    value: systemConfig.datasets_path || 'C:\\TriuneStudio\\datasets',
+                    value: systemConfig.datasets_path || 'C:\\PolysomStudio\\datasets',
                     onChange: ev => setSystemConfig({ ...systemConfig, datasets_path: ev.target.value })
                   })
                 ),
                 e('div', { className: 'field-group' },
                   e('label', null, 'Checkpoints Directory:'),
                   e('input', {
-                    value: systemConfig.checkpoints_path || 'C:\\TriuneStudio\\checkpoints',
+                    value: systemConfig.checkpoints_path || 'C:\\PolysomStudio\\checkpoints',
                     onChange: ev => setSystemConfig({ ...systemConfig, checkpoints_path: ev.target.value })
                   })
                 ),
@@ -14837,11 +17920,11 @@
 
   function initApp() {
     const container = document.getElementById('root');
-    if (container && !container._triune_mounted) {
-      container._triune_mounted = true;
+    if (container && !container._lucid_machines_mounted) {
+      container._lucid_machines_mounted = true;
       if (typeof ReactDOM !== 'undefined' && ReactDOM.createRoot) {
         const root = ReactDOM.createRoot(container);
-        root.render(e(TriuneStudio));
+        root.render(e(PolysomStudio));
       }
     }
   }

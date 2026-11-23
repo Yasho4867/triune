@@ -13,19 +13,19 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from triune.modules.manager import ModuleManager, _verified_plugin_entrypoints
+from lucid_machines.modules.manager import ModuleManager, _verified_plugin_entrypoints
 
 
 class TestModuleManagerFailures(unittest.TestCase):
     def setUp(self) -> None:
-        self.temp_dir = tempfile.TemporaryDirectory(prefix="triune_module_test_")
+        self.temp_dir = tempfile.TemporaryDirectory(prefix="lucid_machines_module_test_")
         self.manager = ModuleManager(config_dir=Path(self.temp_dir.name) / "config")
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
 
     def test_failed_package_install_is_not_recorded_as_installed(self) -> None:
-        with patch("triune.modules.manager.subprocess.check_call", side_effect=RuntimeError("offline")):
+        with patch("lucid_machines.modules.manager.subprocess.check_call", side_effect=RuntimeError("offline")):
             result = self.manager.install_module({"id": "test-broken-package", "package_name": "test-package"})
 
         self.assertFalse(result["success"])
@@ -33,7 +33,7 @@ class TestModuleManagerFailures(unittest.TestCase):
         self.assertFalse((self.manager.modules_dir / "test-broken-package").exists())
 
     def test_failed_checkpoint_download_does_not_create_fake_artifact(self) -> None:
-        with patch("triune.modules.manager.urllib.request.urlretrieve", side_effect=OSError("offline")):
+        with patch("lucid_machines.modules.manager.urllib.request.urlretrieve", side_effect=OSError("offline")):
             result = self.manager.install_module(
                 {
                     "id": "test-missing-weights",
@@ -60,14 +60,14 @@ class TestModuleManagerFailures(unittest.TestCase):
             ]
         )
 
-        with patch("triune.modules.manager.shutil.rmtree", side_effect=PermissionError("locked")):
+        with patch("lucid_machines.modules.manager.shutil.rmtree", side_effect=PermissionError("locked")):
             result = self.manager.uninstall_module("test-protected-module")
 
         self.assertFalse(result["success"])
         self.assertIn("test-protected-module", {m["id"] for m in self.manager.get_installed_modules()})
 
     def test_config_write_failure_is_reported_to_the_api(self) -> None:
-        with patch("triune.modules.manager.os.replace", side_effect=OSError("read-only")):
+        with patch("lucid_machines.modules.manager.os.replace", side_effect=OSError("read-only")):
             with self.assertRaisesRegex(RuntimeError, "Could not persist Studio configuration"):
                 self.manager.save_config({"example": True})
 
@@ -109,7 +109,7 @@ class TestModuleManagerFailures(unittest.TestCase):
         }
         with (
             patch(
-                "triune.modules.manager.subprocess.run",
+                "lucid_machines.modules.manager.subprocess.run",
                 return_value=SimpleNamespace(returncode=0, stdout="cloned", stderr=""),
             ),
             patch.object(self.manager, "inspect_directory", return_value=inspection),
@@ -229,31 +229,31 @@ class TestModuleManagerFailures(unittest.TestCase):
         fake_windows_python.write_bytes(b"test placeholder")
         result = SimpleNamespace(returncode=0, stdout='{"value":"stored-secret"}', stderr="")
         with (
-            patch.dict(os.environ, {"TRIUNE_WINDOWS_PYTHON": str(fake_windows_python)}),
-            patch("triune.modules.manager.subprocess.run", return_value=result) as run,
+            patch.dict(os.environ, {"LUCID_MACHINES_WINDOWS_PYTHON": str(fake_windows_python)}),
+            patch("lucid_machines.modules.manager.subprocess.run", return_value=result) as run,
         ):
             bridge = ModuleManager._get_secure_keyring()
-            bridge.set_password("Triune Studio", "byok:openai", "new-secret")
-            self.assertEqual(bridge.get_password("Triune Studio", "byok:openai"), "stored-secret")
-            bridge.delete_password("Triune Studio", "byok:openai")
+            bridge.set_password("Polysom Studio", "byok:openai", "new-secret")
+            self.assertEqual(bridge.get_password("Polysom Studio", "byok:openai"), "stored-secret")
+            bridge.delete_password("Polysom Studio", "byok:openai")
 
         self.assertEqual(run.call_count, 3)
         self.assertEqual(run.call_args_list[0].args[0][0], str(fake_windows_python))
         set_payload = json.loads(run.call_args_list[0].kwargs["input"])
         self.assertEqual(set_payload["password"], "new-secret")
         self.assertNotIn("new-secret", " ".join(run.call_args_list[0].args[0]))
-        from triune.modules.manager import _WindowsCredentialStoreBridge
+        from lucid_machines.modules.manager import _WindowsCredentialStoreBridge
 
         self.assertIn("CredWriteW", _WindowsCredentialStoreBridge._HELPER)
         self.assertIn("CredReadW", _WindowsCredentialStoreBridge._HELPER)
         self.assertNotIn("import keyring", _WindowsCredentialStoreBridge._HELPER)
 
     def test_native_windows_credential_store_does_not_require_keyring_package(self) -> None:
-        from triune.modules.manager import _WindowsCredentialStoreBridge
+        from lucid_machines.modules.manager import _WindowsCredentialStoreBridge
 
         with (
-            patch("triune.modules.manager.sys.platform", "win32"),
-            patch.dict(os.environ, {"TRIUNE_WINDOWS_PYTHON": ""}),
+            patch("lucid_machines.modules.manager.sys.platform", "win32"),
+            patch.dict(os.environ, {"LUCID_MACHINES_WINDOWS_PYTHON": "", "TRIUNE_WINDOWS_PYTHON": ""}),
         ):
             bridge = ModuleManager._get_secure_keyring()
 
@@ -269,7 +269,7 @@ class TestModuleManagerFailures(unittest.TestCase):
         plugin_dir.mkdir()
         entrypoint = plugin_dir / "plugin.py"
         entrypoint.write_text(
-            "from triune.plugins.registry import register_node\n@register_node('SignedDemo')\ndef run(x): return x\n",
+            "from lucid_machines.plugins.registry import register_node\n@register_node('SignedDemo')\ndef run(x): return x\n",
             encoding="utf-8",
         )
         private_key = Ed25519PrivateKey.generate()
@@ -291,10 +291,14 @@ class TestModuleManagerFailures(unittest.TestCase):
             "key_id": "test-key",
             "value": base64.b64encode(private_key.sign(canonical)).decode("ascii"),
         }
-        (plugin_dir / "triune_plugin.json").write_text(json.dumps(manifest), encoding="utf-8")
+        (plugin_dir / "lucid_machines_plugin.json").write_text(json.dumps(manifest), encoding="utf-8")
         with patch.dict(
             os.environ,
-            {"TRIUNE_PLUGIN_TRUSTED_KEYS": json.dumps({"test-key": base64.b64encode(public_bytes).decode("ascii")})},
+            {
+                "LUCID_MACHINES_PLUGIN_TRUSTED_KEYS": json.dumps(
+                    {"test-key": base64.b64encode(public_bytes).decode("ascii")}
+                )
+            },
         ):
             paths, error = _verified_plugin_entrypoints(plugin_dir)
             self.assertIsNone(error)

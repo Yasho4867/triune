@@ -2,8 +2,8 @@ import unittest
 
 import torch
 
-from triune.model.transformer import TriuneTransformer
-from triune.runtime.streaming import LayerStreamingEngine, StreamingConfig
+from lucid_machines.model.transformer import TriuneTransformer
+from lucid_machines.runtime.streaming import LayerStreamingEngine, StreamingConfig
 
 
 class TestStreamingDynamicDepth(unittest.TestCase):

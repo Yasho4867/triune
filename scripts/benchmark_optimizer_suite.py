@@ -24,9 +24,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from triune.model.transformer import TriuneTransformer
-from triune.optim.centroid import CentroidSteerOptimizer
-from triune.optim.muon import Muon
+from lucid_machines.model.transformer import TriuneTransformer
+from lucid_machines.optim.centroid import CentroidSteerOptimizer
+from lucid_machines.optim.muon import Muon
 
 
 def get_hardware_info() -> Dict[str, Any]:
@@ -88,8 +88,8 @@ def experiment_a_state_memory(device: torch.device) -> List[Dict[str, Any]]:
     optimizers_to_test = [
         ("PyTorch Standard AdamW", lambda m: torch.optim.AdamW(m.parameters(), lr=1e-3)),
         ("Native BitsAndBytes 8-bit AdamW", lambda m: BnbAdamW8bit(m.parameters(), lr=1e-3) if BnbAdamW8bit else None),
-        ("Triune CentroidSteer (SVD basis + low-rank)", lambda m: CentroidSteerOptimizer(m, lr=1e-3, rank=16)),
-        ("Triune Muon (Orthogonal matrix momentum)", lambda m: Muon(_get_muon_2d_params(m), lr=0.02)),
+        ("Lucid Machines CentroidSteer (SVD basis + low-rank)", lambda m: CentroidSteerOptimizer(m, lr=1e-3, rank=16)),
+        ("Lucid Machines Muon (Orthogonal matrix momentum)", lambda m: Muon(_get_muon_2d_params(m), lr=0.02)),
     ]
 
     for name, opt_factory in optimizers_to_test:
@@ -151,8 +151,8 @@ def experiment_b_step_throughput(device: torch.device) -> List[Dict[str, Any]]:
     optimizers_to_test = [
         ("PyTorch Standard AdamW", lambda m: torch.optim.AdamW(m.parameters(), lr=1e-3)),
         ("Native BitsAndBytes 8-bit AdamW", lambda m: BnbAdamW8bit(m.parameters(), lr=1e-3) if BnbAdamW8bit else None),
-        ("Triune CentroidSteer (SVD basis + low-rank)", lambda m: CentroidSteerOptimizer(m, lr=1e-3, rank=16)),
-        ("Triune Muon (Orthogonal matrix momentum)", lambda m: Muon(_get_muon_2d_params(m), lr=0.02)),
+        ("Lucid Machines CentroidSteer (SVD basis + low-rank)", lambda m: CentroidSteerOptimizer(m, lr=1e-3, rank=16)),
+        ("Lucid Machines Muon (Orthogonal matrix momentum)", lambda m: Muon(_get_muon_2d_params(m), lr=0.02)),
     ]
 
     for name, opt_factory in optimizers_to_test:
@@ -222,8 +222,8 @@ def experiment_c_50_step_convergence(device: torch.device) -> List[Dict[str, Any
     optimizers_to_test = [
         ("PyTorch Standard AdamW", lambda m: torch.optim.AdamW(m.parameters(), lr=1e-3)),
         ("Native BitsAndBytes 8-bit AdamW", lambda m: BnbAdamW8bit(m.parameters(), lr=1e-3) if BnbAdamW8bit else None),
-        ("Triune CentroidSteer (SVD basis + low-rank)", lambda m: CentroidSteerOptimizer(m, lr=1e-3, rank=16)),
-        ("Triune Muon (Orthogonal matrix momentum)", lambda m: Muon(_get_muon_2d_params(m), lr=0.005)),
+        ("Lucid Machines CentroidSteer (SVD basis + low-rank)", lambda m: CentroidSteerOptimizer(m, lr=1e-3, rank=16)),
+        ("Lucid Machines Muon (Orthogonal matrix momentum)", lambda m: Muon(_get_muon_2d_params(m), lr=0.005)),
     ]
 
     # Shared cyclic micro-dataset of 4 batches for fair 50-step convergence trajectory comparison
@@ -305,7 +305,7 @@ def experiment_c_50_step_convergence(device: torch.device) -> List[Dict[str, Any
 
 def run_optimizer_benchmark_suite() -> Dict[str, Any]:
     print("=" * 70)
-    print("TRIUNE BENCHMARK CATEGORY B: TRAINING-STEP & OPTIMIZER MICROBENCHMARKS")
+    print("LUCID MACHINES BENCHMARK CATEGORY B: TRAINING-STEP & OPTIMIZER MICROBENCHMARKS")
     print("=" * 70)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -336,7 +336,7 @@ def run_optimizer_benchmark_suite() -> Dict[str, Any]:
 def generate_markdown_report(results: Dict[str, Any], output_path: str) -> None:
     hw = results["hardware"]
     lines = [
-        "# Triune Category B: Optimizer Microbenchmark Report",
+        "# Lucid Machines Category B: Optimizer Microbenchmark Report",
         "",
         f"**Date**: {time.strftime('%B %d, %Y')}",
         f"**Hardware**: {hw['device_name']} ({hw['total_vram_gb']} GB VRAM)",

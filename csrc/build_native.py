@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Cross-Platform Native C ABI Shared Library Builder for Triune AI.
+"""Cross-Platform Native C ABI Shared Library Builder for LucidMachines.
 
 Discovers host C/C++ toolchains (MSVC, GCC, Clang, Apple Clang), builds
-`triune_core.dll` (Windows), `libtriune_core.so` (Linux), or `libtriune_core.dylib` (macOS),
-and places artifacts in `triune/ops/` and `studio/windows/TriuneStudio.Windows/`.
+`lucid_machines_core.dll` (Windows), `liblucid_machines_core.so` (Linux), or
+`liblucid_machines_core.dylib` (macOS), and places artifacts in
+`lucid_machines/ops/` and `studio/windows/LucidMachinesStudio.Windows/`.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from pathlib import Path
 
 CSRC_DIR = Path(__file__).resolve().parent
 REPO_ROOT = CSRC_DIR.parent
-OPS_DIR = REPO_ROOT / "triune" / "ops"
+OPS_DIR = REPO_ROOT / "lucid_machines" / "ops"
 STUDIO_WINDOWS_DIR = REPO_ROOT / "studio" / "windows" / "TriuneStudio.Windows"
 
 
@@ -73,11 +74,11 @@ def find_vcvars64() -> Path | None:
 
 
 def build_windows_msvc(vcvars64: Path | None = None) -> bool:
-    """Build triune_core.dll using MSVC cl.exe."""
+    """Build lucid_machines_core.dll using MSVC cl.exe."""
     engine_cpp = CSRC_DIR / "engine" / "engine.cpp"
     def_file = CSRC_DIR / "engine" / "kernel32.def"
     lib_file = CSRC_DIR / "engine" / "kernel32.lib"
-    dll_out = OPS_DIR / "triune_core.dll"
+    dll_out = OPS_DIR / "lucid_machines_core.dll"
     obj_out = CSRC_DIR / "engine" / "engine.obj"
 
     OPS_DIR.mkdir(parents=True, exist_ok=True)
@@ -118,8 +119,8 @@ def build_windows_msvc(vcvars64: Path | None = None) -> bool:
             lib_file,
             obj_out,
             CSRC_DIR / "engine" / "kernel32.exp",
-            OPS_DIR / "triune_core.exp",
-            OPS_DIR / "triune_core.lib",
+            OPS_DIR / "lucid_machines_core.exp",
+            OPS_DIR / "lucid_machines_core.lib",
         ]:
             if junk.is_file():
                 junk.unlink(missing_ok=True)
@@ -127,7 +128,7 @@ def build_windows_msvc(vcvars64: Path | None = None) -> bool:
     # Copy to studio windows directory if present
     if STUDIO_WINDOWS_DIR.is_dir() and dll_out.is_file():
         try:
-            shutil.copy2(dll_out, STUDIO_WINDOWS_DIR / "triune_core.dll")
+            shutil.copy2(dll_out, STUDIO_WINDOWS_DIR / "lucid_machines_core.dll")
         except OSError:
             pass
 
@@ -136,7 +137,7 @@ def build_windows_msvc(vcvars64: Path | None = None) -> bool:
 
 
 def build_posix(compiler: str, target_so: Path) -> bool:
-    """Build libtriune_core.so / libtriune_core.dylib with GCC or Clang."""
+    """Build liblucid_machines_core.so / liblucid_machines_core.dylib with GCC or Clang."""
     engine_cpp = CSRC_DIR / "engine" / "engine.cpp"
     include_dir = CSRC_DIR / "engine"
 
@@ -181,25 +182,25 @@ def build() -> bool:
         return build_windows_msvc()
     elif sys_name == "Darwin":
         compiler = shutil.which("clang++") or shutil.which("clang") or shutil.which("g++") or "g++"
-        target = OPS_DIR / "libtriune_core.dylib"
+        target = OPS_DIR / "liblucid_machines_core.dylib"
         return build_posix(compiler, target)
     else:  # Linux / POSIX
         compiler = shutil.which("g++") or shutil.which("clang++") or shutil.which("gcc") or "g++"
-        target = OPS_DIR / "libtriune_core.so"
+        target = OPS_DIR / "liblucid_machines_core.so"
         return build_posix(compiler, target)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Triune AI Cross-Platform Native Shared Library Builder")
+    parser = argparse.ArgumentParser(description="LucidMachines Cross-Platform Native Shared Library Builder")
     parser.add_argument("--clean", action="store_true", help="Clean previously compiled shared libraries")
     args = parser.parse_args()
 
     if args.clean:
         for f in [
-            OPS_DIR / "triune_core.dll",
-            OPS_DIR / "libtriune_core.so",
-            OPS_DIR / "libtriune_core.dylib",
-            STUDIO_WINDOWS_DIR / "triune_core.dll",
+            OPS_DIR / "lucid_machines_core.dll",
+            OPS_DIR / "liblucid_machines_core.so",
+            OPS_DIR / "liblucid_machines_core.dylib",
+            STUDIO_WINDOWS_DIR / "lucid_machines_core.dll",
         ]:
             if f.is_file():
                 f.unlink()

@@ -1,10 +1,10 @@
 import torch
 import torch.nn as nn
 
-from triune.model.moe import MoE_FFN
-from triune.model.transformer import TriuneTransformer
-from triune.optim.centroid import CentroidSteerOptimizer
-from triune.optim.muon import Muon, zeropower_via_newtonschulz5
+from lucid_machines.model.moe import MoE_FFN
+from lucid_machines.model.transformer import TriuneTransformer
+from lucid_machines.optim.centroid import CentroidSteerOptimizer
+from lucid_machines.optim.muon import Muon, zeropower_via_newtonschulz5
 
 
 def test_newtonschulz5_orthogonality():
@@ -42,7 +42,10 @@ def test_newtonschulz5_orthogonality():
 
 def test_newtonschulz5_batched_parity():
     print("=== Testing Batched Newton-Schulz Parity ===")
-    from triune.kernels.fast_muon import fast_zeropower_via_newtonschulz5, fast_zeropower_via_newtonschulz5_batched
+    from lucid_machines.kernels.fast_muon import (
+        fast_zeropower_via_newtonschulz5,
+        fast_zeropower_via_newtonschulz5_batched,
+    )
 
     torch.manual_seed(42)
 
@@ -92,7 +95,10 @@ def test_newtonschulz5_batched_parity():
 
 def test_newtonschulz_input_immutability():
     """Verify that Newton-Schulz kernels never mutate caller input tensors in-place."""
-    from triune.kernels.fast_muon import fast_zeropower_via_newtonschulz5, fast_zeropower_via_newtonschulz5_batched
+    from lucid_machines.kernels.fast_muon import (
+        fast_zeropower_via_newtonschulz5,
+        fast_zeropower_via_newtonschulz5_batched,
+    )
 
     torch.manual_seed(42)
 
@@ -406,7 +412,7 @@ def test_centroid_steer_mathematical_invariants():
 def test_adaptive_subspace_refresh_and_rank_profiler():
     """Verify adaptive subspace refresh tracking and offline rank sensitivity profiler."""
     print("=== Testing Adaptive Subspace Refresh & Rank Sensitivity Profiler ===")
-    from triune.optim.centroid import profile_rank_sensitivity
+    from lucid_machines.optim.centroid import profile_rank_sensitivity
 
     torch.manual_seed(42)
 

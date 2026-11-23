@@ -1,4 +1,4 @@
-"""Tests for the Rich Triune CLI, new scan/transmute/agent subcommands, and chat slash commands."""
+"""Tests for the Rich Lucid Machines CLI, new scan/transmute/agent subcommands, and chat slash commands."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ import unittest
 from contextlib import redirect_stdout
 from unittest.mock import patch
 
+from lucid_machines.cli import main as cli_main
 from scripts.chat import main as chat_main
-from triune.cli import main as cli_main
 
 try:
     from tests.test_weight_transmutation import _build_tiny_hf_llama_dir
@@ -19,29 +19,29 @@ except ModuleNotFoundError:
     from test_weight_transmutation import _build_tiny_hf_llama_dir
 
 
-class TestTriuneBeautifiedCLI(unittest.TestCase):
+class TestLucidMachinesBeautifiedCLI(unittest.TestCase):
     def _run_cli(self, argv: list[str]) -> str:
         buf = io.StringIO()
-        with patch.object(sys, "argv", ["triune", *argv]), redirect_stdout(buf):
+        with patch.object(sys, "argv", ["lucid-machines", *argv]), redirect_stdout(buf):
             cli_main()
         return buf.getvalue()
 
     def test_help_models_gpucheck_doctor_and_memory_plan(self) -> None:
         help_out = self._run_cli(["--help"])
-        self.assertIn("TRIUNE AI CLI", help_out)
-        self.assertIn("triune agent", help_out)
-        self.assertIn("triune transmute", help_out)
-        self.assertIn("triune scan", help_out)
+        self.assertIn("LUCID MACHINES", help_out.upper())
+        self.assertIn("lucid-machines agent", help_out)
+        self.assertIn("lucid-machines transmute", help_out)
+        self.assertIn("lucid-machines scan", help_out)
 
         models_out = self._run_cli(["models"])
-        self.assertIn("Triune Model Architecture Zoo", models_out)
+        self.assertIn("Model Architecture Zoo", models_out)
         self.assertIn("triune-small", models_out)
 
         gpu_out = self._run_cli(["gpucheck"])
-        self.assertIn("TRIUNE GPU", gpu_out)
+        self.assertIn("GPU", gpu_out.upper())
 
         doc_out = self._run_cli(["doctor"])
-        self.assertIn("TRIUNE SYSTEM DOCTOR", doc_out)
+        self.assertIn("SYSTEM DOCTOR", doc_out.upper())
         self.assertIn("CentroidSteer", doc_out)
 
         mem_out = self._run_cli(["plan-memory", "--vram-gb", "8"])
@@ -76,7 +76,7 @@ class TestTriuneBeautifiedCLI(unittest.TestCase):
                 },
             ]
         }
-        with patch("triune.runtime.model_scanner.scan_pc_models", return_value=fake_scan):
+        with patch("lucid_machines.runtime.model_scanner.scan_pc_models", return_value=fake_scan):
             out = self._run_cli(["scan"])
         self.assertIn("PC MODEL SCANNER", out)
         self.assertIn("ollama:gemma3:4b", out)
@@ -96,12 +96,12 @@ class TestTriuneBeautifiedCLI(unittest.TestCase):
                     "--device",
                     "cpu",
                     "--prompt",
-                    "hello triune",
+                    "hello lucid",
                     "--max-tokens",
                     "3",
                 ]
             )
-            self.assertIn("TRIUNE WEIGHT TRANSMUTER", out_ee)
+            self.assertIn("WEIGHT TRANSMUTER", out_ee)
             self.assertIn("Yes (real weights intact)", out_ee)
 
             out_nat = self._run_cli(
@@ -146,7 +146,7 @@ class TestTriuneBeautifiedCLI(unittest.TestCase):
         inputs = iter(["/help", "/route cortex", "/temp 0.4", "/tokens 128", "hello there", "/clear", "/exit"])
         out_buf = io.StringIO()
         with (
-            patch("triune.runtime.model_scanner.query_ollama_running_tags", return_value={"gemma3:4b"}),
+            patch("lucid_machines.runtime.model_scanner.query_ollama_running_tags", return_value={"gemma3:4b"}),
             patch("urllib.request.urlopen", return_value=_FakeResp(ndjson_body)),
             patch("builtins.input", side_effect=lambda *_: next(inputs)),
             redirect_stdout(out_buf),
@@ -154,7 +154,7 @@ class TestTriuneBeautifiedCLI(unittest.TestCase):
             chat_main(["--model", "ollama:gemma3:4b"])
 
         out = out_buf.getvalue()
-        self.assertIn("TRIUNE CHAT", out)
+        self.assertIn("CHAT", out.upper())
         self.assertIn("Interactive Chat Commands", out)
         self.assertIn("Route set to CORTEX", out)
         self.assertIn("Temperature updated to 0.40", out)

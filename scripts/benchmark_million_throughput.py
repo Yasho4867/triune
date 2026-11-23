@@ -28,8 +28,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from triune.data.dynamic_tokenizer import DynamicTokenizer
-from triune.runtime.parallel_engine import ParallelEngine
+from lucid_machines.data.dynamic_tokenizer import DynamicTokenizer
+from lucid_machines.runtime.parallel_engine import ParallelEngine
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("million_throughput_benchmark")
@@ -303,7 +303,7 @@ class TriuneContinuousLayer(nn.Module):
 """
 
     text_corpus = """
-Triune AI Frontier Architecture 2024-2026.
+Lucid Machines Frontier Architecture 2024-2026.
 Non-generative Joint-Embedding Predictive Architecture (JEV) replaces vocabulary projections.
 Non-generative Joint-Embedding Predictive Architecture (JEV) replaces vocabulary projections.
 Semantic Tube Prediction bounds prediction variance on Stiefel geodesic manifolds.
@@ -346,7 +346,7 @@ DeepSeek-V3 load-balanced MoE routing executes with zero auxiliary loss gradient
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Triune Multi-Million Tok/s Benchmark Suite")
+    parser = argparse.ArgumentParser(description="Lucid Machines Multi-Million Tok/s Benchmark Suite")
     parser.add_argument("--batch-sizes", type=str, default="1,4,16,32,64", help="Comma-separated batch sizes")
     parser.add_argument(
         "--seq-lengths", type=str, default="512,1024,2048,4096,8192", help="Comma-separated sequence lengths"
@@ -370,7 +370,7 @@ def main():
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     print("\n" + "=" * 90)
-    print("TRIUNE MULTI-MILLION TOKENS/SECOND THROUGHPUT & JEV EMPIRICAL BENCHMARK")
+    print("LUCID MACHINES MULTI-MILLION TOKENS/SECOND THROUGHPUT & JEV EMPIRICAL BENCHMARK")
     print(f"Host: {platform.node()} ({platform.system()} {platform.release()})")
     print(f"Device: {gpu_info.get('device_name', 'CPU')} | PyTorch: {torch.__version__}")
     if gpu_info.get("available"):

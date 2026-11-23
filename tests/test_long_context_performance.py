@@ -2,11 +2,11 @@
 
 import torch
 
-from triune.configs.config import build_config
-from triune.inference import generate_response
-from triune.model.attention import HybridAttention
-from triune.model.factory import build_model
-from triune.model.rotary import RotaryEmbedding
+from lucid_machines.configs.config import build_config
+from lucid_machines.inference import generate_response
+from lucid_machines.model.attention import HybridAttention
+from lucid_machines.model.factory import build_model
+from lucid_machines.model.rotary import RotaryEmbedding
 
 
 class DummyTokenizer:
@@ -52,7 +52,7 @@ def test_rope_precomputation_8192_tokens():
 
 def test_factored_gla_numerical_parity_and_scaling():
     """Verify factored intra-chunk GLA GEMM produces exact mathematical parity with un-factored recurrence."""
-    from triune.kernels.fast_gla import fast_chunk_gla
+    from lucid_machines.kernels.fast_gla import fast_chunk_gla
 
     B, T, H, HD = 1, 1024, 4, 64
     torch.manual_seed(42)

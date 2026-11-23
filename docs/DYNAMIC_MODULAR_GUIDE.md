@@ -1,13 +1,13 @@
-# Triune AI — Architecture Configuration Guide
+﻿# Lucid Machines — Triune Architecture Configuration Guide
 
-**Triune AI** models (`TriuneTransformer` and `UniversalTransformer`) are configured via parameter dictionaries, `UniversalConfig`, or JSON files. This guide details architectural parameters, structural invariants, and hardware sizing.
+**Triune** models by **Lucid Machines** (`TriuneTransformer` / `TriuneModel` / `TriuneConfig`, plus `UniversalTransformer`) are configured via parameter dictionaries, `TriuneConfig` / `UniversalConfig`, or JSON files in `models/configs/triune-*.json` (plus `models/configs/junkie.json` for our first flagship model to be trained **Junkie**). This guide details architectural parameters, structural invariants, and hardware sizing.
 
 ---
 
 ## 1. Model Instantiation
 
 ```python
-from triune.model import TriuneTransformer
+from lucid_machines.model import TriuneTransformer
 
 model = TriuneTransformer(
     vocab_size=32000,
@@ -42,13 +42,13 @@ model = TriuneTransformer(
 
 ## 2. Hardware Planning and Execution Modes
 
-| Available VRAM | Preset | Parameters | Recommended Execution Flags |
-| :--- | :--- | :---: | :--- |
-| **8 GB** | `triune-2.5b` | 2.45B | `--streaming --streaming_fp8_weights --use_fp8 --batch_size 2 --grad_accum 8` |
-| **12 GB** | `triune-small` | 750M | `--use_fp8 --batch_size 4 --grad_accum_steps 4` |
-| **16–24 GB** | `triune-2.5b` | 2.45B | `--use_fp8 --batch_size 4 --grad_accum_steps 4` |
-| **80 GB** | `triune-7b` | 7.2B | `--use_fp8 --batch_size 8 --grad_accum_steps 4 --seq_len 1024` |
-| **Multi-GPU (8x)** | `triune-7b` | 7.2B | `torchrun --nproc_per_node=8 scripts/train.py --model_name triune-7b` |
+| Available VRAM | Architecture Template | Legacy Alias | Recommended Execution Flags |
+| :--- | :--- | :--- | :--- |
+| **8 GB** | `triune-2.5b` | — | `--streaming --streaming_fp8_weights --use_fp8 --batch_size 2 --grad_accum 8` |
+| **12 GB** | `triune-small` | — | `--use_fp8 --batch_size 4 --grad_accum_steps 4` |
+| **16–24 GB** | `triune-2.5b` | — | `--use_fp8 --batch_size 4 --grad_accum_steps 4` |
+| **80 GB** | `triune-7b` | — | `--use_fp8 --batch_size 8 --grad_accum_steps 4 --seq_len 1024` |
+| **Multi-GPU (8x)** | `triune-7b` | — | `torchrun --nproc_per_node=8 scripts/train.py --model_name triune-7b` |
 
 ---
 
@@ -57,7 +57,7 @@ model = TriuneTransformer(
 The model uses a Straight-Through (ST) Gumbel-Softmax router for discrete pathway execution during forward passes and continuous gradient propagation during backward passes.
 
 ```python
-from triune.model.router import GumbelSoftmaxRouter
+from lucid_machines.model.router import GumbelSoftmaxRouter
 
 router = GumbelSoftmaxRouter(
     hidden_dim=1280,
@@ -97,7 +97,7 @@ python scripts/train.py \
 
 ### Parameter Reference
 
-- `--model_name`: Architecture preset (`triune-nano`, `triune-small`, `triune-2.5b`, `triune-7b`).
+- `--model_name`: Triune architecture template (`triune-tiny`, `triune-edge`, `triune-nano`, `triune-base`, `triune-small`, `triune-pro`, `triune-1b`, `triune-2.5b`, `triune-large`, `triune-moe`, `triune-7b`, `triune-frontier`, first flagship target `junkie`, or legacy aliases).
 - `--num_layers`: Total layer count (must exceed `--limbic_exit_layer`).
 - `--num_experts`: Number of MoE experts per routed block.
 - `--dataset_name`: Hugging Face dataset ID or local path (`.jsonl`, `.txt`, `.parquet`).

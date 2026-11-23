@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Industry Standard Multi-Seed 100-Step Mixture-of-Experts (MoE) Convergence & Loss Trajectory Benchmark.
 
-Trains identical Triune Universal Mixture-of-Experts Transformers (90.79M parameters,
+Trains identical Lucid Universal Mixture-of-Experts Transformers (90.79M parameters,
 8 layers, 4 routed experts per layer, shared expert, top-1 routing) on real FineWeb-Edu
 educational text across multiple independent random seeds for 100 continuous steps under
 core optimizer regimes, published memory-efficient baselines (GaLore, BAdam), and
@@ -46,9 +46,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from triune.model.moe import MoE_FFN
-from triune.optim.centroid import CentroidSteerOptimizer
-from triune.universal import UniversalMoETransformer
+from lucid_machines.model.moe import MoE_FFN
+from lucid_machines.optim.centroid import CentroidSteerOptimizer
+from lucid_machines.universal import UniversalMoETransformer
 
 try:
     import bitsandbytes as bnb
@@ -67,15 +67,15 @@ def compute_sha256(path: Path) -> str:
 def compute_source_hashes() -> Dict[str, str]:
     files = [
         "scripts/benchmark_moe_convergence_100_steps.py",
-        "triune/kernels/fast_gla.py",
-        "triune/kernels/fast_muon.py",
-        "triune/kernels/fast_triangular.py",
-        "triune/model/moe.py",
-        "triune/model/transformer.py",
-        "triune/optim/centroid.py",
-        "triune/optim/muon.py",
-        "triune/universal.py",
-        "triune/model/config.py",
+        "lucid_machines/kernels/fast_gla.py",
+        "lucid_machines/kernels/fast_muon.py",
+        "lucid_machines/kernels/fast_triangular.py",
+        "lucid_machines/model/moe.py",
+        "lucid_machines/model/transformer.py",
+        "lucid_machines/optim/centroid.py",
+        "lucid_machines/optim/muon.py",
+        "lucid_machines/universal.py",
+        "lucid_machines/model/config.py",
         "triune_tokenizer.json",
         "data/fineweb_edu_real.jsonl",
     ]
@@ -1049,11 +1049,11 @@ def generate_moe_convergence_report(
 
     best_regime = min(regimes_order, key=lambda r: summary[r]["final_val_loss"]["mean"]) if regimes_order else None
 
-    md = f"""# Triune Multi-Seed {provenance.get("total_steps", 100)}-Step Mixture-of-Experts (MoE) Convergence Report
+    md = f"""# Lucid Machines Multi-Seed {provenance.get("total_steps", 100)}-Step Mixture-of-Experts (MoE) Convergence Report
 **Empirical Multi-Seed Optimizer Evaluation & 3-Tier Dynamic Steering Synergy on Real FineWeb-Edu**
 
 - **Date / Timestamp**: `{time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())}`
-- **Git Commit**: [`{git_c[:10]}`](https://github.com/Yasho4867/triune/commit/{git_c}){git_dirty_str}
+- **Git Commit**: [`{git_c[:10]}`](https://github.com/Yasho4867/lucid_machines/commit/{git_c}){git_dirty_str}
 - **Hardware**: `{hw.get("device_name", "GPU")}` ({hw.get("total_vram_gb", 0)} GB VRAM, CC {hw.get("compute_capability", "N/A")})
 - **Software**: PyTorch `{sw.get("torch", "N/A")}` | CUDA `{sw.get("cuda", "N/A")}` | Python `{sw.get("python", "N/A")}`
 - **Dataset**: Real FineWeb-Edu educational text (`{ds.get("dataset_path", "data/fineweb_edu_real.jsonl")}`, SHA-256 `{ds.get("dataset_sha256", "N/A")[:12]}...`)
@@ -1257,7 +1257,7 @@ To reproduce these exact MoE results from a clean repository checkout:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Triune Multi-Seed 100-Step MoE Convergence Benchmark")
+    parser = argparse.ArgumentParser(description="Lucid Machines Multi-Seed 100-Step MoE Convergence Benchmark")
     parser.add_argument("--steps", type=int, default=100, help="Total training steps")
     parser.add_argument("--batch-size", type=int, default=2, help="Batch size")
     parser.add_argument("--seq-len", type=int, default=256, help="Sequence length")
@@ -1310,7 +1310,7 @@ def main():
     tokenizer_path = REPO_ROOT / "triune_tokenizer.json"
 
     print("================================================================================")
-    print(" TRIUNE MULTI-SEED 100-STEP MIXTURE-OF-EXPERTS (MoE) CONVERGENCE BENCHMARK")
+    print(" LUCID MACHINES MULTI-SEED 100-STEP MIXTURE-OF-EXPERTS (MoE) CONVERGENCE BENCHMARK")
     print(f" Hardware: {device} | Precision: {dtype}")
     print(f" Steps: {args.steps} | Batch Size: {args.batch_size} | Seq Len: {args.seq_len}")
     print(

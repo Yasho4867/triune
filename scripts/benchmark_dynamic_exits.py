@@ -26,7 +26,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from triune.model.transformer import TriuneTransformer
+from lucid_machines.model.transformer import TriuneTransformer
 
 
 def get_hardware_info() -> Dict[str, Any]:
@@ -172,7 +172,7 @@ def evaluate_quality_on_heldout_tokens(
 
 def run_dynamic_exits_suite() -> Dict[str, Any]:
     print("=" * 70)
-    print("TRIUNE BENCHMARK CATEGORY E: HIERARCHICAL DYNAMIC EXITS & PARETO FRONTIER")
+    print("LUCID MACHINES BENCHMARK CATEGORY E: HIERARCHICAL DYNAMIC EXITS & PARETO FRONTIER")
     print("=" * 70)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -256,7 +256,7 @@ def generate_markdown_report(results: Dict[str, Any], output_path: str) -> None:
     hw = results["hardware"]
     cfg = results["config"]
     lines = [
-        "# Triune Category E: Hierarchical Dynamic Exits & Quality vs. Compute Report",
+        "# Lucid Machines Category E: Hierarchical Dynamic Exits & Quality vs. Compute Report",
         "",
         f"**Date**: {time.strftime('%B %d, %Y')}",
         f"**Hardware**: {hw['device_name']} ({hw['total_vram_gb']} GB VRAM)",
@@ -265,7 +265,7 @@ def generate_markdown_report(results: Dict[str, Any], output_path: str) -> None:
         "",
         "## 1. Executive Summary",
         "",
-        "Triune's hierarchical dynamic exit architecture allows tokens to exit computation as soon as sufficient confidence",
+        "Lucid Machines' hierarchical dynamic exit architecture allows tokens to exit computation as soon as sufficient confidence",
         "is attained. Three discrete execution tiers are provided:",
         "1. **Reflex Exit (Layer 2)**: Ultra-fast shallow inference for common phrases, boilerplate, and low-entropy tokens.",
         "2. **Limbic Exit (Layer 5)**: Intermediate semantic processing for standard syntax and grammatical transitions.",

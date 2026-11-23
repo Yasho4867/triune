@@ -1,4 +1,4 @@
-"""Profile Triune training steps from the command line."""
+"""Profile Lucid Machines training steps from the command line."""
 
 from __future__ import annotations
 
@@ -9,11 +9,11 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from triune.profiling import profile_model
+from lucid_machines.profiling import profile_model
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(description="Profile Triune training steps")
+    parser = argparse.ArgumentParser(description="Profile Lucid Machines training steps")
     parser.add_argument("--checkpoint", default="checkpoints_full/latest.pt")
     parser.add_argument("--tokenizer_path", default="triune_tokenizer.json")
     parser.add_argument("--output", default="profiler_output.txt")

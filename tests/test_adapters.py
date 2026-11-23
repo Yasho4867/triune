@@ -5,8 +5,8 @@ import unittest
 import torch
 import torch.nn as nn
 
-from triune.configs import build_config
-from triune.model import (
+from lucid_machines.configs import build_config
+from lucid_machines.model import (
     TriuneTransformer,
     WeightTiedExitProjection,
     attach_early_exits,

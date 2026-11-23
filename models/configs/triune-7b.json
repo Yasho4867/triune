@@ -1,5 +1,9 @@
 {
   "model_name": "triune-7b",
+  "name": "triune-7b",
+  "model_id": "triune-7b",
+  "architecture": "TriuneTransformer",
+  "model_type": "triune",
   "vocab_size": 32000,
   "hidden_dim": 2048,
   "num_layers": 32,

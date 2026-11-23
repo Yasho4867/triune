@@ -17,10 +17,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from triune.model import MoE_FFN, build_model_from_spec, get_model_spec
-from triune.optim.centroid import CentroidSteerOptimizer, fast_subspace_projection
-from triune.trainer.engine import TrainingEngine
-from triune.trainer.scheduler import set_optimizer_lr
+from lucid_machines.model import MoE_FFN, build_model_from_spec, get_model_spec
+from lucid_machines.optim.centroid import CentroidSteerOptimizer, fast_subspace_projection
+from lucid_machines.trainer.engine import TrainingEngine
+from lucid_machines.trainer.scheduler import set_optimizer_lr
 
 # 1. MoE Architecture & Positional Constructor Compatibility
 
@@ -145,7 +145,7 @@ def test_checkpointing_gradient_and_state_parity():
     moe_cp = MoE_FFN(dim=dim, num_experts=num_experts, top_k=top_k, shared_expert=True)
     moe_cp.train()
 
-    from triune.model.config import checkpoint_bwd_ctx, checkpoint_fwd_ctx
+    from lucid_machines.model.config import checkpoint_bwd_ctx, checkpoint_fwd_ctx
 
     x = torch.randn(B, T, dim)
 
@@ -258,7 +258,7 @@ def test_expert_lr_schedule_decay():
 
 def test_telemetry_semantics_distinguishes_usage_from_target():
     """Verify that unmeasured models report exit_usage=None and expose target separately."""
-    from triune.api.routes import RealPyTorchEngineState
+    from lucid_machines.api.routes import RealPyTorchEngineState
 
     state = RealPyTorchEngineState()
     # Before training has produced actual measurements

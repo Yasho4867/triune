@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; base-uri 'self'; form-action 'self';">
+  <title>Lucid Machines v3.0.0 — CentroidSteer R2 Validation</title>
+  <link rel="icon" type="image/svg+xml" href="../assets/lucid-machines-logo.svg">
+  <link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="container nav-bar">
+      <a href="../index.html" class="brand-link">
+        <img src="../assets/lucid-machines-logo.svg" alt="Lucid Machines Logo" class="brand-logo" width="36" height="36">
+        <span>Lucid Machines</span>
+        <span class="version-pill">v3.0.0</span>
+      </a>
+      <nav aria-label="Document Navigation">
+        <ul class="nav-links">
+          <li><a href="../index.html">Back to Overview</a></li>
+          <li><a href="release-name-report.html">R1 Name Report</a></li>
+          <li><a href="centroidsteer-validation.html">R2 Validation</a></li>
+          <li><a href="release-notes.html">Release Notes</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+  <main class="doc-body">
+    <div class="container">
+      <article class="doc-card">
+        <h1>Lucid Machines v3.0.0 — CentroidSteer R2 Validation</h1>
+        <div class="code-block"><pre># CentroidSteer Upgrade Validation Report (R2)
+
+- **Timestamp (UTC)**: `2026-11-19T16:48:24Z`
+- **Git Commit**: `57a14767647edc465bf7f221bdd260021cc561c7` (dirty: `True`)
+- **Hardware**: `NVIDIA GeForce RTX 5070 Laptop GPU` (7.93 GB VRAM, CC `12.0`)
+- **Software**: Python `3.14.7` | PyTorch `2.14.1+cu132` | CUDA `13.2`
+- **Seeds**: `[42, 1337, 2026, 777, 1024]`
+
+## Exact Reproduction Command
+
+```powershell
+studio\studio_env\Scripts\python.exe benchmarks/validate_centroid_steer_upgrade.py --seeds 42 1337 2026 777 1024 --md-steps 120 --fw-steps 100
+```
+
+---
+
+## 1. Root-Cause Diagnosis: Why Legacy CentroidSteer Had Near-Zero Effect
+
+Empirical and algebraic inspection of `triune/optim/centroid.py`, `triune/model/moe.py`, and `triune/kernels/fast_triangular.py` isolated **five compounding defects** in legacy CentroidSteer:
+
+1. **Un-Deflated Krylov Subspace Absorption**: Legacy CentroidSteer ran randomized subspace iteration directly on the raw expert gradient $G$. Because $G = \sum_{x \in \mathcal{B}_e} g_y x^T$ already concentrates energy along the routed activation centroid $\mu_e$, the top-$r$ singular basis $Q_r$ absorbed the centroid direction. Orthogonalizing $c_e$ against $Q_r$ via $c_\perp = (I - Q_r Q_r^T) c_e$ left only low-energy orthogonal tail noise on the $(r+1)$-th steering border.
+   - *Measured*: Residual centroid survival $\|c_\perp\|_2$ dropped to **0.1248** (legacy) vs. **1.0000** (upgraded), with border gradient energy fraction jumping **22.12x** (0.0139 -&gt; 0.3082).
+2. **Synthetic Hidden Centroid Mismatch ($w_2$ Experts)**: For `steer_role=&quot;hidden&quot;`, legacy CentroidSteer approximated hidden activations by pushing the raw input centroid through the first layer (`FastGELU(W1 @ c_e)`), ignoring Jensen&#x27;s inequality and non-linear variance.
+   - *Measured*: Cosine similarity between synthetic `FastGELU(W1 @ c_e)` and true post-activation $\mathbb{E}[\text{FastGELU}(W_1 x)]$ was **0.9897** (relative L2 error **0.1437**).
+3. **Non-Contrastive Raw Centroids Under Shared Residual Offset**: Legacy raw EMAs $\mu_e$ captured shared Transformer residual-stream DC offsets rather than expert-specific specialization.
+   - *Measured*: Off-diagonal inter-expert centroid cosine similarity collapsed from **0.5763** (raw) to **-0.3329** (contrastive $\Delta \mu_e = \mu_e - \bar{\mu}$).
+4. **Stale `subspace_step` Bias-Correction Damping**: Whenever the steering border rotated every `steer_update_gap` steps and zeroed border moments $(m, v)$, legacy CentroidSteer continued dividing by $1 - \beta_1^{\text{subspace\_step}}$ instead of resetting a dedicated `steer_step` counter, damping border updates immediately after refresh.
+   - *Measured*: At `subspace_step=10, steer_step=1`, legacy border update was damped to **0.4844** vs. **1.0000** with independent `steer_step` (**2.06x** recovery).
+5. **Rank-1 Bottleneck**: Legacy steering injected only a single 1D direction per expert without multi-directional subspace coverage or out-of-core activation drift correction between `update_gap` refreshes.
+
+---
+
+## 2. Upgraded CentroidSteer Architecture (R2)
+
+- **True Post-Activation Hidden &amp; Multi-Directional Subspaces (`triune/model/moe.py`)**: `MoE_FFN` captures true `last_hidden_centroids`, computes `last_contrastive_centroids` and `last_hidden_contrastive_centroids`, and maintains $k_c=4$ orthonormal activation subspace directions (`last_input_subspace`, `last_hidden_subspace`) via two-pass modified Gram-Schmidt (`_orthonormalize_subspace_batch`) in both batched BMM and fallback paths.
+- **Centroid-Deflated Krylov + Seeded Probes (`triune/optim/centroid.py`)**: Subspace refresh deflates $G$ along $\hat{c}_e$ before Krylov iteration (`G_defl`) and seeds probe columns with secondary activation directions, preserving 100% of $\hat{c}_e$ for column $r+1$ while capturing non-centroid curvature in $Q_r$.
+- **Independent `steer_step` &amp; Border RMS Regularization (`triune/kernels/fast_triangular.py`)**: Triton kernel &amp; PyTorch fallback apply independent `steer_step_vals` bias correction on row/column $r+1$ and border RMS variance regularization (`rms_reg=0.35`), paired with sign-continuity alignment (`last_c_orth`).
+- **Fisher-Alignment-Weighted Multi-Directional &amp; Live Out-of-Core Steering (`triune/optim/centroid.py`)**: Combines utilization-weighted border scaling, in-core $k_c$-directional subspace boost, and scale-preserving live orthogonal drift correction (`live_ortho_updates`) between `update_gap` refreshes.
+
+---
+
+## 3. Suite 2: Controlled Multi-Seed Multi-Domain MoE Specialization Results
+
+Configuration: `num_layers=2`, `dim=128`, `num_experts=4`, `rank=8`, `update_gap=10`, `steer_update_gap=2`, `steer_scale=0.35`, `steps=120`, `N=5` seeds.
+
+| Regime | Val Loss (Mean ± Std) | Val PPL | Val Accuracy | Domain Purity | Centroid Sep. | Alignment Energy | Expert State (B/p) |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| `nosteer` | 1.2311 ± 0.0486 | 3.43 ± 0.17 | 0.5668 ± 0.0231 | 0.7931 ± 0.1298 | 1.3407 ± 0.0329 | 0.0000 ± 0.0000 | 0.334 |
+| `legacy` | 1.2190 ± 0.0508 | 3.39 ± 0.17 | 0.5685 ± 0.0257 | 0.7952 ± 0.1043 | 1.3367 ± 0.0205 | 0.0404 ± 0.0023 | 0.334 |
+| `random` | 1.2196 ± 0.0520 | 3.39 ± 0.18 | 0.5675 ± 0.0282 | 0.7961 ± 0.1053 | 1.3374 ± 0.0232 | 0.0155 ± 0.0026 | 0.352 |
+| `adamw` | 0.8307 ± 0.0365 | 2.30 ± 0.08 | 0.7007 ± 0.0108 | 0.5821 ± 0.0924 | 1.4215 ± 0.1142 | 0.0000 ± 0.0000 | 8.000 |
+| `upgraded` | 1.1998 ± 0.0574 | 3.32 ± 0.19 | 0.5724 ± 0.0314 | 0.8309 ± 0.0552 | 1.3327 ± 0.0141 | 0.1769 ± 0.0203 | 0.352 |
+
+### Paired Statistical Comparisons (Upgraded vs. Baselines — Multi-Domain MoE)
+
+| Comparison | Metric | Mean Delta (Upgraded - Base) | 95% CI (Paired) | Cohen&#x27;s d | Paired t-test p | Welch p |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: |
+| `upgraded` vs `nosteer` | Val Loss | -0.0313 | [-0.0613, -0.0012] | -1.292 | 0.0446 | 0.3806 |
+| `upgraded` vs `nosteer` | Domain Purity | +0.0378 | [-0.0863, +0.1619] | +0.378 | 0.4456 | 0.5734 |
+| `upgraded` vs `nosteer` | Alignment Energy | +0.1769 | [+0.1517, +0.2021] | +8.702 | 4.113e-05 | 4.113e-05 |
+| `upgraded` vs `legacy` | Val Loss | -0.0192 | [-0.0436, +0.0052] | -0.976 | 0.0944 | 0.5907 |
+| `upgraded` vs `legacy` | Domain Purity | +0.0357 | [-0.0597, +0.1311] | +0.465 | 0.3573 | 0.5233 |
+| `upgraded` vs `legacy` | Alignment Energy | +0.1365 | [+0.1122, +0.1608] | +6.973 | 9.882e-05 | 9.964e-05 |
+| `upgraded` vs `random` | Val Loss | -0.0198 | [-0.0362, -0.0035] | -1.508 | 0.0280 | 0.5827 |
+| `upgraded` vs `random` | Domain Purity | +0.0348 | [-0.0576, +0.1272] | +0.468 | 0.3543 | 0.5363 |
+| `upgraded` vs `random` | Alignment Energy | +0.1614 | [+0.1348, +0.1881] | +7.522 | 7.322e-05 | 4.826e-05 |
+| `upgraded` vs `adamw` | Val Loss | +0.3691 | [+0.2781, +0.4601] | +5.037 | 0.0004 | 7.617e-06 |
+| `upgraded` vs `adamw` | Domain Purity | +0.2488 | [+0.1606, +0.3371] | +3.500 | 0.0014 | 0.0016 |
+| `upgraded` vs `adamw` | Alignment Energy | +0.1769 | [+0.1517, +0.2021] | +8.702 | 4.113e-05 | 4.113e-05 |
+
+---
+
+## 4. Suite 3: Real FineWeb-Edu Language Modeling Results (75.8M Triune-Base Continuation (checkpoints/triune_studio_step_36500.pt))
+
+Dataset: `data\fineweb_edu_real.jsonl` (SHA-256 `aed10d4c98afb6da...`), `dim=384`, `layers=8`, `experts=4`, `rank=16`, `update_gap=20`, `steer_update_gap=2`, `steer_scale=0.35`, `steps=100`, `N=5` seeds.
+
+| Regime | Val Loss (Mean ± Std) | Val PPL | Val Loss Drop | Centroid Sep. | Within/Global Var | Alignment Energy | Expert State (B/p) |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| `nosteer` | 4.5186 ± 0.0044 | 91.71 ± 0.41 | -0.0825 ± 0.0044 | 1.3629 ± 0.0193 | 0.9094 ± 0.0112 | 0.0000 ± 0.0000 | 0.106 |
+| `legacy` | 4.5186 ± 0.0046 | 91.71 ± 0.42 | -0.0825 ± 0.0046 | 1.3629 ± 0.0188 | 0.9084 ± 0.0112 | 0.0108 ± 0.0027 | 0.106 |
+| `random` | 4.5186 ± 0.0045 | 91.71 ± 0.42 | -0.0825 ± 0.0045 | 1.3594 ± 0.0182 | 0.9084 ± 0.0121 | 0.0069 ± 0.0019 | 0.109 |
+| `adamw` | 4.5250 ± 0.0061 | 92.30 ± 0.56 | -0.0889 ± 0.0061 | 1.4117 ± 0.0559 | 0.8886 ± 0.0105 | 0.0000 ± 0.0000 | 4.000 |
+| `upgraded` | 4.5185 ± 0.0043 | 91.70 ± 0.39 | -0.0824 ± 0.0043 | 1.3625 ± 0.0207 | 0.9074 ± 0.0096 | 0.0506 ± 0.0058 | 0.109 |
+
+### Paired Statistical Comparisons (Upgraded vs. Baselines — Real FineWeb-Edu MoE)
+
+| Comparison | Metric | Mean Delta (Upgraded - Base) | 95% CI (Paired) | Cohen&#x27;s d | Paired t-test p | Welch p |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: |
+| `upgraded` vs `nosteer` | Val Loss | -0.0001 | [-0.0003, +0.0002] | -0.394 | 0.4285 | 0.9792 |
+| `upgraded` vs `nosteer` | Val PPL | -0.0069 | [-0.0284, +0.0147] | -0.395 | 0.4274 | 0.9790 |
+| `upgraded` vs `nosteer` | Alignment Energy | +0.0506 | [+0.0434, +0.0579] | +8.661 | 4.191e-05 | 4.191e-05 |
+| `upgraded` vs `legacy` | Val Loss | -0.0001 | [-0.0005, +0.0003] | -0.346 | 0.4823 | 0.9721 |
+| `upgraded` vs `legacy` | Val PPL | -0.0094 | [-0.0426, +0.0239] | -0.349 | 0.4783 | 0.9718 |
+| `upgraded` vs `legacy` | Alignment Energy | +0.0398 | [+0.0343, +0.0454] | +8.902 | 3.758e-05 | 1.543e-05 |
+| `upgraded` vs `random` | Val Loss | -0.0001 | [-0.0005, +0.0004] | -0.178 | 0.7111 | 0.9835 |
+| `upgraded` vs `random` | Val PPL | -0.0056 | [-0.0439, +0.0328] | -0.180 | 0.7078 | 0.9832 |
+| `upgraded` vs `random` | Alignment Energy | +0.0437 | [+0.0379, +0.0496] | +9.296 | 3.165e-05 | 2.312e-05 |
+| `upgraded` vs `adamw` | Val Loss | -0.0065 | [-0.0100, -0.0030] | -2.303 | 0.0068 | 0.0894 |
+| `upgraded` vs `adamw` | Val PPL | -0.6000 | [-0.9254, -0.2745] | -2.289 | 0.0069 | 0.0892 |
+| `upgraded` vs `adamw` | Alignment Energy | +0.0506 | [+0.0434, +0.0579] | +8.661 | 4.191e-05 | 4.191e-05 |
+
+---
+
+*Generated automatically by `benchmarks/validate_centroid_steer_upgrade.py`.*
+</pre></div>
+      </article>
+    </div>
+  </main>
+</body>
+</html>

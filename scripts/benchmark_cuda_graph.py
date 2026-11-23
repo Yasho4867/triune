@@ -34,8 +34,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from triune.runtime.cuda_graph import CUDAGraphEngine
-from triune.universal import UniversalDenseTransformer
+from lucid_machines.runtime.cuda_graph import CUDAGraphEngine
+from lucid_machines.universal import UniversalDenseTransformer
 
 
 def compute_sha256(file_path: Path) -> str:
@@ -498,7 +498,7 @@ def generate_cuda_graph_report(results: Dict[str, Any], output_path: Path):
     speedup_step = round((eager_step - async_step) / eager_step * 100.0, 1) if eager_step > 0 else 0.0
     host_reduction = round((eager_host - async_host) / eager_host * 100.0, 1) if eager_host > 0 else 0.0
 
-    md = f"""# Triune AI — CUDA Graph vs Eager Execution & Optimizer Parity Report
+    md = f"""# Lucid Machines — CUDA Graph vs Eager Execution & Optimizer Parity Report
 
 **Benchmarked Hardware**: `{prov["hardware"]["device_name"]}` ({prov["hardware"]["total_memory_mb"]:,.1f} MB VRAM)  
 **Timestamp**: {results["timestamp_utc"]}  
@@ -522,7 +522,7 @@ CUDA Graph execution eliminates the Python interpreter overhead and kernel launc
 
 > [!IMPORTANT]
 > **Host Synchronization Elimination**:
-> When `sync=False` (default in Triune's `CUDAGraphEngine`), `step()` executes a single non-blocking hardware pulse `graph.replay()` and returns the GPU-resident scalar loss tensor. The host CPU returns in **{async_host:.1f} $\\mu$s** without waiting for GPU execution, completely decoupling host dispatch from device completion.
+> When `sync=False` (default in Lucid Machines' `CUDAGraphEngine`), `step()` executes a single non-blocking hardware pulse `graph.replay()` and returns the GPU-resident scalar loss tensor. The host CPU returns in **{async_host:.1f} $\\mu$s** without waiting for GPU execution, completely decoupling host dispatch from device completion.
 
 ---
 
@@ -559,7 +559,7 @@ def main():
     args = parser.parse_args()
 
     print("=" * 80)
-    print(" TRIUNE AI — CUDA GRAPH VS EAGER BENCHMARK & MATHEMATICAL PARITY")
+    print(" LUCID MACHINES — CUDA GRAPH VS EAGER BENCHMARK & MATHEMATICAL PARITY")
     print(f" Device: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'}")
     print(f" Config: B={args.batch_size}, T={args.seq_len}, Steps={args.steps}, Warmup={args.warmup}")
     print("=" * 80)

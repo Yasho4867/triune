@@ -4,9 +4,9 @@ import threading
 import unittest
 from types import SimpleNamespace
 
-from triune.execution.dag import DAGParser, ExecutionEngine, NodeExecutionError
-from triune.plugins.node_schema import NodeExecutionType
-from triune.plugins.registry import global_registry
+from lucid_machines.execution.dag import DAGParser, ExecutionEngine, NodeExecutionError
+from lucid_machines.plugins.node_schema import NodeExecutionType
+from lucid_machines.plugins.registry import global_registry
 
 
 class TestDAGExecutionContracts(unittest.TestCase):
@@ -139,7 +139,7 @@ class TestDAGExecutionContracts(unittest.TestCase):
         self.assertEqual(result["status"], "success")
 
     def test_registered_plugin_consumes_wired_ports_and_emits_declared_ports(self):
-        from triune.plugins.registry import global_registry
+        from lucid_machines.plugins.registry import global_registry
 
         name = "DAGContractMultiplyPlugin"
         previous = global_registry._nodes.get(name)

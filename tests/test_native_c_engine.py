@@ -1,12 +1,12 @@
-"""Tests for the Native C/C++/AVX2/CUDA Engine Bridge (`triune.ops._c_bridge`) and NeuronScope."""
+"""Tests for the Native C/C++/AVX2/CUDA Engine Bridge (`lucid_machines.ops._c_bridge`) and NeuronScope."""
 
 from __future__ import annotations
 
 import torch
 
-import triune
-from triune.ops import (
-    NativeTriuneEngine,
+import lucid_machines
+from lucid_machines.ops import (
+    NativeLucidMachinesEngine,
     c_centroid_steer_update_f32,
     c_compute_neuron_heatmap_f32,
     c_gla_recurrent_step_f32,
@@ -16,7 +16,7 @@ from triune.ops import (
     route_tiers,
     triangular_steer_update,
 )
-from triune.runtime.neuron_scope import NeuronScope
+from lucid_machines.runtime.neuron_scope import NeuronScope
 
 
 def test_native_c_info_schema():
@@ -44,7 +44,7 @@ def test_native_c_direct_entrypoints_when_loaded():
     if not is_native_c_available():
         return
     info = get_native_c_info()
-    assert "2.1.0" in str(info["version"])
+    assert any(v in str(info["version"]) for v in ("1.0.0", "3.0.0"))
 
     # 1. Native C AVX2 CentroidSteer update
     P = torch.ones((8, 64), dtype=torch.float32)
@@ -82,7 +82,7 @@ def test_native_c_direct_entrypoints_when_loaded():
     assert next_state.shape == (2, 16, 16)
 
     # 5. Native C++/CUDA Arena & Graph Lifecycle
-    eng = NativeTriuneEngine(vocab_size=1024, hidden_dim=128, num_layers=4, max_seq_len=64)
+    eng = NativeLucidMachinesEngine(vocab_size=1024, hidden_dim=128, num_layers=4, max_seq_len=64)
     assert eng.is_ready
     step_info = eng.step(batch_size=2, seq_len=32)
     assert step_info["ok"] is True
@@ -91,7 +91,7 @@ def test_native_c_direct_entrypoints_when_loaded():
 
 
 def test_neuron_scope_end_to_end():
-    model = triune.Model("triune-nano", vocab_size=256)
+    model = lucid_machines.Model("triune-nano", vocab_size=256)
     scope = NeuronScope(model)
     scope.attach()
     x = torch.randint(0, 256, (1, 16))

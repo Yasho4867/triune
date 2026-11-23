@@ -1,4 +1,4 @@
-"""Rigorously verifies Triune Proprietary Non-Generative Joint-Embedding Predictive Architecture (JEV).
+"""Rigorously verifies Lucid Machines Proprietary Non-Generative Joint-Embedding Predictive Architecture (JEV).
 
 Empirical Test Suite for:
 1. JEVLatentPredictor:
@@ -28,7 +28,7 @@ import unittest
 import torch
 import torch.nn as nn
 
-from triune.model.jev import (
+from lucid_machines.model.jev import (
     JEVExitRouter,
     JEVLatentPredictor,
     JEVObjective,
@@ -379,7 +379,7 @@ class TestJEVExitRouter(unittest.TestCase):
         self.assertEqual(res.should_exit.dtype, torch.bool)
 
     def test_proprietary_triune_aliases(self):
-        """Verifies seamless aliasing for Triune proprietary branding."""
+        """Verifies seamless aliasing for Triune architecture branding."""
         self.assertIs(TriuneLatentPredictor, JEVLatentPredictor)
         self.assertIs(TriuneLatentObjective, JEVObjective)
         self.assertIs(TriuneContinuousExitRouter, JEVExitRouter)

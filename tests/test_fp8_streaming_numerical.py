@@ -3,9 +3,9 @@ import unittest
 import torch
 import torch.nn as nn
 
-from triune.model.fp8 import FP8Linear
-from triune.runtime.capabilities import PrecisionCapabilities
-from triune.runtime.staging import FP8StagingBuffer, ParameterStager, StagingBuffer
+from lucid_machines.model.fp8 import FP8Linear
+from lucid_machines.runtime.capabilities import PrecisionCapabilities
+from lucid_machines.runtime.staging import FP8StagingBuffer, ParameterStager, StagingBuffer
 
 
 class TestFP8StreamingNumerical(unittest.TestCase):

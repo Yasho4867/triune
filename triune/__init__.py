@@ -1,190 +1,89 @@
-"""Triune Core Package with PEP 562 Lazy Loading."""
+"""Backward-compatibility shim delegating ``triune`` imports to ``lucid_machines``.
+
+The canonical Python package is ``lucid_machines`` (distribution ``lucid-machines``).
+This lightweight shim preserves ``import triune``, ``from triune import ...``, and
+``from triune.<submodule> import ...`` without duplicating the codebase.
+"""
 
 from __future__ import annotations
 
 import importlib
-import os
+import importlib.abc
+import importlib.machinery
+import importlib.util
 import sys
-from typing import Any
+import warnings
+from types import ModuleType
+from typing import Any, Sequence
 
-# Ensure UTF-8 standard streams on Windows pipes/consoles so Unicode log symbols never raise UnicodeEncodeError
-os.environ.setdefault("PYTHONUTF8", "1")
-os.environ.setdefault("PYTHONIOENCODING", "utf-8")
-if sys.platform == "win32":
-    for _stream in (sys.stdout, sys.stderr):
-        try:
-            if hasattr(_stream, "reconfigure"):
-                _stream.reconfigure(encoding="utf-8", errors="replace")
-        except Exception:
-            pass
+import lucid_machines as _lucid_machines
 
-# Pure PEP 562 Lazy Loading: Zero-overhead startup for CLI, tooling, and desktop launchers.
-# PyTorch, Triton, and native CUDA extensions are loaded strictly on first access.
-_CORE_IMPORTS = {
-    # Core public API
-    "Model": ".model",
-    "Config": ".configs.config",
-    "CentroidSteer": ".optim",
-    "Muon": ".optim",
-    "ops": ".ops",
-    # Configs
-    "build_config": ".configs.config",
-    "default_config": ".configs.config",
-    "validate_config": ".configs.config",
-    # Kernels
-    "FastGELU": ".kernels",
-    "FastSwiGLU": ".kernels",
-    "fast_chunk_gla": ".kernels",
-    "fast_cross_entropy": ".kernels",
-    "fast_gelu": ".kernels",
-    "fast_lora_forward": ".kernels",
-    "fast_rmsnorm": ".kernels",
-    "fast_rope": ".kernels",
-    "fast_swiglu": ".kernels",
-    "fast_zeropower_via_newtonschulz5": ".kernels",
-    "get_kernel_telemetry": ".kernels",
-    "is_turbo_mode_enabled": ".kernels",
-    "set_turbo_mode": ".kernels",
-    # Model
-    "TriuneModel": ".model",
-    "TriuneTransformer": ".model",
-    "attach_early_exits": ".model",
-    "build_model": ".model",
-    "load_model": ".model",
-    "register_model": ".model",
-    "JEVLatentPredictor": ".model",
-    "JEVObjective": ".model",
-    "JEVExitRouter": ".model",
-    "JEVRoutingResult": ".model",
-    "TriuneLatentPredictor": ".model",
-    "TriuneLatentObjective": ".model",
-    "TriuneContinuousExitRouter": ".model",
-    # Optim
-    "CentroidSteerOptimizer": ".optim",
-    "build_optimizer": ".optim",
-}
-
-# Mapping of heavy/secondary components to their host submodule
-_LAZY_IMPORTS = {
-    # Agents
-    "Agent": ".agents",
-    "MultiAgentOrchestrator": ".agents",
-    "ProviderConfig": ".agents",
-    "ProviderManager": ".agents",
-    # API / Web Server
-    "create_app": ".api",
-    "run_server": ".api",
-    # Callbacks
-    "Callback": ".callbacks",
-    "CallbackList": ".callbacks",
-    "EventEmitter": ".callbacks",
-    "TelemetryCallback": ".callbacks",
-    "global_emitter": ".callbacks",
-    # Execution
-    "DAGParser": ".execution",
-    "ExecutionEngine": ".execution",
-    "NodeExecutionError": ".execution",
-    # Export
-    "export_gguf": ".export",
-    "export_model": ".export",
-    "export_onnx": ".export",
-    "export_safetensors": ".export",
-    # Data
-    "DynamicTokenizer": ".data",
-    # Plugins
-    "NodeRegistry": ".plugins",
-    "register_node": ".plugins",
-    # Runtime
-    "AutoOffloader": ".runtime",
-    "DynamicResourceManager": ".runtime",
-    "LayerStreamingEngine": ".runtime",
-    "LiveVRAMMonitor": ".runtime",
-    "MemoryPlan": ".runtime",
-    "MemoryPlanner": ".runtime",
-    "ParallelEngine": ".runtime",
-    "PythonSandbox": ".runtime",
-    "VRAMProfiler": ".runtime",
-    "enable_layer_streaming": ".runtime",
-    # Trainer
-    "Engine": ".trainer",
-    "Trainer": ".trainer",
-    "LoRAConfig": ".trainer",
-    "LoRALayer": ".trainer",
-    "TriuneFineTuner": ".trainer",
-    # Universal Framework
-    "UniversalDenseTransformer": ".universal",
-    "UniversalMoETransformer": ".universal",
-    "TriuneUniversalEngine": ".universal",
-    "upgrade_model": ".universal",
-    "upgrade": ".universal",
-}
-
-__all__ = [
-    # Minimalist Public API
-    "Model",
-    "Config",
-    "CentroidSteer",
-    "Muon",
-    "ops",
-    # Core (eager)
-    "build_config",
-    "default_config",
-    "validate_config",
-    "fast_cross_entropy",
-    "fast_rmsnorm",
-    "fast_rope",
-    "fast_swiglu",
-    "fast_gelu",
-    "FastSwiGLU",
-    "FastGELU",
-    "fast_chunk_gla",
-    "fast_zeropower_via_newtonschulz5",
-    "fast_lora_forward",
-    "get_kernel_telemetry",
-    "is_turbo_mode_enabled",
-    "set_turbo_mode",
-    "TriuneModel",
-    "TriuneTransformer",
-    "attach_early_exits",
-    "build_model",
-    "load_model",
-    "register_model",
-    "JEVLatentPredictor",
-    "JEVObjective",
-    "JEVExitRouter",
-    "JEVRoutingResult",
-    "TriuneLatentPredictor",
-    "TriuneLatentObjective",
-    "TriuneContinuousExitRouter",
-    "CentroidSteerOptimizer",
-    "Muon",
-    "build_optimizer",
-    # Lazy
-    *_LAZY_IMPORTS.keys(),
-]
+warnings.warn(
+    "The 'triune' import namespace is deprecated; use 'lucid_machines' instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 
-_ALL_LAZY = {**_CORE_IMPORTS, **_LAZY_IMPORTS}
+class _TriuneSubmoduleAliasLoader(importlib.abc.Loader):
+    """Loader that aliases ``triune.<submod>`` to ``lucid_machines.<submod>``."""
+
+    def __init__(self, target_name: str) -> None:
+        self._target_name = target_name
+
+    def create_module(self, spec: importlib.machinery.ModuleSpec) -> ModuleType:
+        target = importlib.import_module(self._target_name)
+        sys.modules[spec.name] = target
+        return target
+
+    def exec_module(self, module: ModuleType) -> None:
+        return None
+
+
+class _TriuneSubmoduleAliasFinder(importlib.abc.MetaPathFinder):
+    """Meta-path hook forwarding ``triune.<submod>`` imports to ``lucid_machines.<submod>``."""
+
+    def find_spec(
+        self,
+        fullname: str,
+        path: Sequence[str] | None = None,
+        target: ModuleType | None = None,
+    ) -> importlib.machinery.ModuleSpec | None:
+        if not fullname.startswith("triune."):
+            return None
+        target_name = "lucid_machines." + fullname[len("triune.") :]
+        target_spec = importlib.util.find_spec(target_name)
+        if target_spec is None:
+            return None
+        is_pkg = target_spec.submodule_search_locations is not None
+        spec = importlib.machinery.ModuleSpec(
+            fullname,
+            _TriuneSubmoduleAliasLoader(target_name),
+            is_package=is_pkg,
+        )
+        if is_pkg and target_spec.submodule_search_locations is not None:
+            spec.submodule_search_locations = list(target_spec.submodule_search_locations)
+        return spec
+
+
+if not any(isinstance(f, _TriuneSubmoduleAliasFinder) for f in sys.meta_path):
+    sys.meta_path.insert(0, _TriuneSubmoduleAliasFinder())
+
+__all__ = list(getattr(_lucid_machines, "__all__", []))
+__path__: list[str] = []
 
 
 def __getattr__(name: str) -> Any:
-    if name in _ALL_LAZY:
-        module_path = _ALL_LAZY[name]
-        module = importlib.import_module(module_path, __package__)
-        if name == "Model":
-            val = getattr(module, "build_model")
-        elif name == "Config":
-            val = getattr(module, "build_config")
-        elif name == "CentroidSteer":
-            val = getattr(module, "CentroidSteerOptimizer")
-        elif name == "ops":
-            val = module
-        else:
-            val = getattr(module, name)
-        globals()[name] = val
-        return val
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    if hasattr(_lucid_machines, name):
+        return getattr(_lucid_machines, name)
+    # Support submodule attribute access after ``import triune.<submod>`` or direct access
+    try:
+        submod = importlib.import_module(f"lucid_machines.{name}")
+        globals()[name] = submod
+        return submod
+    except ImportError as exc:
+        raise AttributeError(f"module 'triune' has no attribute {name!r}") from exc
 
 
 def __dir__() -> list[str]:
-    return sorted(list(globals().keys()) + list(_ALL_LAZY.keys()))
+    return sorted(set(list(globals().keys()) + list(dir(_lucid_machines))))
