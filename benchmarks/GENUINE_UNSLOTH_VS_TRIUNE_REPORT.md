@@ -1,4 +1,4 @@
-# Triune AI vs Genuine Full-Stack Unsloth vs Standard PyTorch — Comprehensive Head-to-Head Benchmark
+# Lucid Machines (Triune) vs Genuine Full-Stack Unsloth vs Standard PyTorch — Comprehensive Head-to-Head Benchmark
 
 **Benchmarked Hardware**: `NVIDIA GeForce RTX 5070 Laptop GPU`  
 **Precision**: `torch.bfloat16` with native CUDA Tensor Cores  

@@ -16,11 +16,11 @@
 
 ## Phase 2: Pretraining and Distributed Scaling (Active)
 
-- [x] **Track 0**: Multi-seed FineWeb-Edu pre-training & checkpoint-continuation verification on `90.79M` / `75.8M` checkpoints (`N=12`, `df=11` Latin-square TOST equivalence within `±0.01` nats, `p_TOST = 1.52e-7`; M1 `N=5` CentroidSteer validation `p = 0.0068` vs. AdamW).
+- [x] **Track 0**: Multi-seed FineWeb-Edu pre-training & checkpoint-continuation verification on `90.79M` / `75.8M` checkpoints (`N=12`, `df=11` Latin-square TOST equivalence within `±0.01` nats, `p_TOST = 1.52e-7`; 5-seed CentroidSteer Suite 3 cold-start LM `p = 0.0112` vs. `No-Steer Low-Rank` and `p = 0.0006` vs. `Memory-Matched Random Subspace`; Suite 4 continuation `p = 0.0004` vs. `No-Steer`, `p = 0.0005` vs. `Random`, and `p = 0.0038` vs. `AdamW`).
 - [ ] **Track 1**: Pretraining **Junkie** (`models/configs/junkie.json`, first flagship model to train on the Triune architecture) and `triune-2.5b` (~2.45B params, ~780M active) on `FineWeb-Edu` using layer streaming and Muon on single-GPU hardware.
 - [ ] **Track 2**: Multi-GPU distributed training setup for `triune-7b` (~7.2B params, ~2.2B active) via PyTorch FSDP2 / torchrun.
 - [x] Calibrated joint multi-exit KL self-distillation (`checkpoints/triune_studio_step_36500_rescued.pt`, `step_40555`: monotonic `111.80 -> 111.18 -> 110.92` PPL and `95.73%` conformal CALM Reflex agreement at $\tau=0.20$).
-- [ ] SafeTensors checkpoint export and Hugging Face Hub integration.
+- [x] SafeTensors checkpoint export and Hugging Face Hub integration (`lucid_machines.export.hf_compat`).
 
 ## Phase 3: Polysom Studio and Deployment (Delivered & Extending)
 

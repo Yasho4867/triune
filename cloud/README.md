@@ -1,6 +1,6 @@
 # Lucid Machines `v1.0.0` — Cloud GPU Runner Guide (`Junkie-3B` Colab L4 Sweet Spot, `Junkie-1B`, `Junkie-Mini` & Flagship `Junkie-7B`)
 
-This directory provides turnkey cloud-GPU training, curriculum orchestration, and **Polysom Studio v1.0.0** remote inspection workflows for **Lucid Machines** (`TriuneTransformer` architecture, `CentroidSteer` optimizer, and inaugural `Junkie` models).
+This directory provides turnkey cloud-GPU training, curriculum orchestration, and **Polysom Studio v1.0.0** remote inspection workflows for **Lucid Machines** (`TriuneTransformer` architecture, `CentroidSteer` optimizer, and inaugural `Junkie` models; [https://lucidmachines.co](https://lucidmachines.co) · [https://github.com/lucid-machines/triune](https://github.com/lucid-machines/triune)).
 
 ---
 
@@ -38,7 +38,7 @@ To maximize reasoning, coding, and mathematical density per compute unit without
 | :--- | :---: | :--- | :--- |
 | **Stage 1: Foundation Pretraining** | **80%** (`~17B–18.5B` tokens on L4) | **`50%` FineWeb-Edu** (`HuggingFaceFW/fineweb-edu`) + **`30%` Permissive Code** (The Stack v2 / StarCoderData decontaminated) + **`20%` FineMath** (`HuggingFaceTB/finemath`). Warmup + stable peak LR (`3e-4` base / `0.02` Muon) with `CentroidSteer` (`--rank 64 --steer_dirs 4`). | `--model_config models/configs/junkie-3b.json --use_fp8 --depth_mode dynamic --target_depth_dist 0.50,0.30,0.20` |
 | **Stage 2: High-Density WSD Annealing** | **15%** (`~3B–3.5B` tokens on L4) | **Warmup-Stable-Decay (WSD) Cooldown** on high-density synthetic textbooks (` Cosmopedia-v2` / `FineWeb-Edu` score $\ge 4$), verified algorithmic code, and formal math proofs, paired with joint multi-exit KL self-distillation (`depth_mode="joint"`) to calibrate Reflex (`L2`) and Limbic (`L5`) exits toward Cortex (`L16`). | `--model_config models/configs/junkie-3b.json --use_fp8 --depth_mode joint --auto_resume` |
-| **Stage 3: Clean SFT + Verifiable GRPO RL** | **5%** (`~1B` tokens + RL rollouts) | **1.** Decontaminated multi-turn instruction SFT (n-gram filtered against GSM8K, MATH, HumanEval, MBPP, MMLU).<br>**2.** Verifiable **Group Relative Policy Optimization (GRPO)** RL using deterministic Python/unit-test execution and symbolic math verifiers inside `PythonSandbox`. | `lucid-machines finetune` + `PythonSandbox` verifiable reward loop |
+| **Stage 3: Clean SFT + Verifiable GRPO RL** | **5%** (`~1B` tokens + RL rollouts) | **1.** Decontaminated multi-turn instruction SFT (n-gram filtered against GSM8K, MATH, HumanEval, MBPP, MMLU).<br>**2.** Verifiable **Group Relative Policy Optimization (GRPO)** RL using deterministic Python/unit-test execution and symbolic math verifiers inside `PythonSandbox`. | `kcx finetune` + `PythonSandbox` verifiable reward loop |
 
 ---
 
@@ -53,7 +53,7 @@ Open **`cloud/lucid_machines_colab_runner.ipynb`** in Google Colab Pro (`L4 24GB
 5. **Cell 5 — Train `Junkie-Mini` (`535.10M` Total / `230.81M` Expected Active):** Fast single-GPU training on L4 / T4 / A100 (`3.12 GiB` BF16 static).
 6. **Cell 6 — Train Flagship `Junkie-7B` (`7.40B` Total / `1.95B` Expected Active):** Runs `models/configs/junkie-7b.json` on A100-80GB (`34.49 GiB` BF16 static; automatically enables `--streaming` on `< 45 GiB` GPUs).
 7. **Cell 7 — CentroidSteer 5-Seed Scaling Validation:** Runs `benchmarks/validate_centroid_steer_upgrade.py` across 5 seeds (`42 1337 2026 777 1024`) against `No-Steer Low-Rank`, `Memory-Matched Random Subspace`, and `Full-Rank AdamW`.
-8. **Cell 8 — Live Polysom Studio v1.0.0 Inside Colab:** Starts `lucid-machines serve --host 127.0.0.1 --port 8000` and exposes Polysom Studio via `google.colab.output.serve_kernel_port_as_window(8000)`, `serve_kernel_port_as_iframe(8000)`, and `google.colab.kernel.proxyPort(8000)`.
+8. **Cell 8 — Live Polysom Studio v1.0.0 Inside Colab:** Starts `kcx serve --host 127.0.0.1 --port 8000` (or `lucid-machines serve`) and exposes Polysom Studio via `google.colab.output.serve_kernel_port_as_window(8000)`, `serve_kernel_port_as_iframe(8000)`, and `google.colab.kernel.proxyPort(8000)`.
 
 ---
 

@@ -109,6 +109,9 @@ class TestUnifiedEngineParity(unittest.TestCase):
         studio_state.batch_size = 2
         studio_state.seq_len = 16
         studio_state.grad_accum_steps = 1
+        studio_state.precision = "bf16"
+        studio_state.architecture_spec["use_fp8"] = False
+        studio_state.architecture_spec["use_fp4"] = False
         studio_state.depth_mode = "dynamic"
         studio_state.balance_loss_weight = 0.3
         studio_state.exploration_mode = "none"

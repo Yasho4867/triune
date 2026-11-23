@@ -302,10 +302,23 @@ def status_spinner(message: str):
         yield
 
 
-def render_help_overview() -> None:
-    """Render the grouped flagship `lucid-machines --help` command dashboard."""
+def resolve_cli_prog() -> str:
+    """Resolve the active CLI executable name dynamically (e.g. kcx, polysom, lucid-machines)."""
+    raw = os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] else ""
+    stem = raw
+    for suffix in (".exe", "-script.py", ".py"):
+        if stem.lower().endswith(suffix):
+            stem = stem[: -len(suffix)]
+    if stem.lower() in ("", "__main__", "cli", "python", "python3", "pytest"):
+        return "kcx"
+    return stem
+
+
+def render_help_overview(prog: str | None = None) -> None:
+    """Render the grouped flagship CLI command dashboard."""
+    cmd_prog = prog or resolve_cli_prog()
     render_banner(
-        "LUCID MACHINES CLI",
+        "POLYSOM KCX · LUCID MACHINES CLI",
         subtitle="Triune 3-Tier Adaptive MoE + Weight Transmutation & Local Runtime Engine",
         badge="v1.0.0",
     )
@@ -316,7 +329,7 @@ def render_help_overview() -> None:
             [
                 (
                     "agent",
-                    "Self-learning cognitive agent harness (adaptive personas, skills, memory, integrated tools)",
+                    "Self-learning cognitive agent harness (adaptive personas, skills, memory, --workspace, --mode)",
                 ),
                 ("chat", "Interactive terminal chat (supports checkpoints, HF, NVFP4, --transmute, or ollama:tag)"),
                 ("infer", "Single-turn streaming generation with Reflex / Limbic / Cortex telemetry"),
@@ -325,30 +338,33 @@ def render_help_overview() -> None:
             ],
         ),
         (
-            "Polysom Studio & API Server",
+            "Polysom Studio, API & Workspace",
             [
                 ("studio", "Launch Polysom Studio native desktop / browser workspace"),
                 ("serve", "Start the embedded FastAPI + OpenAI-compatible server"),
+                ("workspace", "Inspect status, file tree, read files, or initialize project workspace"),
             ],
         ),
         (
-            "Training & Weights",
+            "Training, Evaluation & Weights",
             [
                 ("finetune", "LoRA / 4-bit NVFP4 QLoRA & layer-streamed fine-tuning"),
                 ("train", "Run full pre-training or distributed training scripts"),
+                ("eval", "Evaluate a checkpoint on a validation dataset and optional sample prompt"),
                 ("adapter", "List, merge, or export LoRA/QLoRA adapters"),
                 ("checkpoint", "Inspect and export local .pt training checkpoints"),
-                ("export", "Export checkpoints directly to SafeTensors, GGUF, ONNX, or HF"),
+                ("export", "Export checkpoints directly to SafeTensors, ONNX, or HF"),
                 ("tokenizer", "Build or train a domain BPE tokenizer"),
             ],
         ),
         (
-            "Zoo & Diagnostics",
+            "Zoo, Configs & Diagnostics",
             [
-                ("models", "List canonical Triune Model Zoo architecture presets"),
+                ("models", "List canonical Triune & Junkie Model Zoo presets with active params"),
+                ("config", "List, inspect, and validate model configs and session state"),
                 ("doctor", "Full diagnostic dashboard (CUDA, C/AVX2 engine, Ollama, session state)"),
                 ("gpucheck", "CUDA device, compute capability, VRAM, and PyTorch check"),
-                ("plan-memory", "Estimate VRAM/RAM & NVFP4 disk-stream budget for Triune or HF models"),
+                ("plan-memory", "Estimate VRAM/RAM & NVFP4 disk-stream budget for Triune/Junkie or HF models"),
                 ("cache-nvfp4", "Pack HF SafeTensors shards into an NVMe NVFP4 stream cache (~0.625 B/param)"),
                 ("benchmark", "Benchmark kernel, optimizer, streaming, context, or inference latency"),
                 ("profile", "Profile step compute & memory breakdowns"),
@@ -364,10 +380,10 @@ def render_help_overview() -> None:
             for cmd, desc in cmds:
                 print(f"  {cmd:<14} {desc}")
         print("\nExamples:")
-        print("  lucid-machines scan")
-        print("  lucid-machines chat --model ollama:gemma3:4b")
-        print('  lucid-machines transmute --model Qwen/Qwen2.5-1.5B-Instruct --prompt "Hello!"')
-        print("  lucid-machines studio\n")
+        print(f"  {cmd_prog} scan")
+        print(f"  {cmd_prog} chat --model ollama:gemma3:4b")
+        print(f'  {cmd_prog} transmute --model Qwen/Qwen2.5-1.5B-Instruct --prompt "Hello!"')
+        print(f"  {cmd_prog} studio\n")
         return
 
     for grp_title, cmds in groups:
@@ -377,20 +393,20 @@ def render_help_overview() -> None:
                 ("Command", "left", "bold cyan"),
                 ("Description", "left", "white"),
             ],
-            rows=[[f"lucid-machines {cmd}", desc] for cmd, desc in cmds],
+            rows=[[f"{cmd_prog} {cmd}", desc] for cmd, desc in cmds],
             border_style="bright_black",
         )
 
     examples = [
-        ("Scan local runtimes", "lucid-machines scan"),
-        ("Chat with live Ollama", "lucid-machines chat --model ollama:gemma3:4b"),
-        ("Zero-loss 3-tier transmute", "lucid-machines transmute --model <hf_dir_or_repo> --mode early-exit"),
-        ("Run diagnostics", "lucid-machines doctor"),
-        ("Launch desktop IDE", "lucid-machines studio"),
+        ("Scan local runtimes", f"{cmd_prog} scan"),
+        ("Chat with live Ollama", f"{cmd_prog} chat --model ollama:gemma3:4b"),
+        ("Zero-loss 3-tier transmute", f"{cmd_prog} transmute --model <hf_dir_or_repo> --mode early-exit"),
+        ("Run diagnostics", f"{cmd_prog} doctor"),
+        ("Launch desktop IDE", f"{cmd_prog} studio"),
     ]
     render_kv_panel(
         "Quickstart Examples",
         examples,
         border_style="cyan",
-        footer="Run `lucid-machines <command> --help` for detailed flags on any subcommand.",
+        footer=f"Run `{cmd_prog} <command> --help` for detailed flags on any subcommand.",
     )

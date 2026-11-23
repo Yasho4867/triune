@@ -43,12 +43,12 @@ Training on a 200-compute-unit Colab Pro budget?
 - Also ships `Junkie-Mini` (`535.10M`), `Junkie-1B` (`1.16B`), and flagship `Junkie-7B` (`7.40B`, `34.49 GiB` static on single A100-80GB).
 
 **Post 7/8 (Polysom Studio v1.0.0 Desktop Workbench & 6 Themes)**
-**Polysom Studio v1.0.0** (`polysom` / `PolysomStudio.exe`) is a self-contained native Windows workbench (`.NET 10` + `WebView2` + `lucid_machines_core.dll`) with 6 zero-gradient themes (`Hypnagogic`, `Phosphene`, `Pareidolia`, `Afterimage`, `Mirage`, `Euphoria`), Project Workspace IDE, SSE Agent Loops (`ReAct`, `PEV`, `Multi-Agent`, `Training Supervisor`), Obsidian 3D brain inspector, 40-node DAG canvas, and R4 security (`weights_only=True`, path confinement, `shell=False`, proxy bearer auth, Ed25519 plugins).
+**Polysom Studio v1.0.0** (`kcx studio` / `PolysomStudio.exe`) is a self-contained native Windows workbench (`.NET 10` + `WebView2` + `lucid_machines_core.dll`) with 6 zero-gradient themes (`Hypnagogic`, `Phosphene`, `Pareidolia`, `Afterimage`, `Mirage`, `Euphoria`), Project Workspace IDE, SSE Agent Loops (`ReAct`, `PEV`, `Multi-Agent`, `Training Supervisor`), Obsidian 3D brain inspector, 40-node DAG canvas, and R4 security (`weights_only=True`, path confinement, `shell=False`, proxy bearer auth, Ed25519 plugins).
 
 **Post 8/8 (Quickstart & Links)**
 Upgrade any PyTorch or Hugging Face model in 1 line:
 `engine = lucid_machines.upgrade(model, lora_rank=16)`
-Full code (`import triune` compat shim included), Colab Pro notebook (`cloud/`), 2 companion LaTeX/PDF papers, benchmark scripts, and Windows Studio installer instructions are available in the repo.
+Full code (`import triune` compat shim included), Colab Pro notebook (`cloud/`), 2 companion LaTeX/PDF papers, benchmark scripts, and Windows Studio installer instructions are available at `https://lucidmachines.co` and `https://github.com/lucid-machines/triune`.
 
 ---
 

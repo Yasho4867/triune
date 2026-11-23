@@ -5,6 +5,7 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
+using System.Text.Json;
 using System.Threading;
 using System.Windows;
 
@@ -26,20 +27,37 @@ public partial class MainWindow : Window
     [DllImport("dwmapi.dll")]
     private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
 
+    private void ApplyTitleBarTheme(bool isLight, int? captionColorRef = null)
+    {
+        try
+        {
+            var helper = new System.Windows.Interop.WindowInteropHelper(this);
+            if (helper.Handle == IntPtr.Zero) return;
+            int darkMode = isLight ? 0 : 1;
+            DwmSetWindowAttribute(helper.Handle, 20, ref darkMode, sizeof(int));
+            int captionColor = captionColorRef ?? (isLight ? 0xECF3F6 : 0x0E0B0A);
+            DwmSetWindowAttribute(helper.Handle, 35, ref captionColor, sizeof(int));
+        }
+        catch { }
+    }
+
+    private static int? ParseHexColorRef(string? hex)
+    {
+        if (string.IsNullOrWhiteSpace(hex)) return null;
+        var clean = hex.Trim().TrimStart('#');
+        if (clean.Length != 6) return null;
+        if (!int.TryParse(clean[0..2], System.Globalization.NumberStyles.HexNumber, null, out var r)) return null;
+        if (!int.TryParse(clean[2..4], System.Globalization.NumberStyles.HexNumber, null, out var g)) return null;
+        if (!int.TryParse(clean[4..6], System.Globalization.NumberStyles.HexNumber, null, out var b)) return null;
+        return (b << 16) | (g << 8) | r;
+    }
+
     public MainWindow()
     {
         InitializeComponent();
         Loaded += async (_, _) =>
         {
-            try
-            {
-                var helper = new System.Windows.Interop.WindowInteropHelper(this);
-                int darkMode = 1;
-                DwmSetWindowAttribute(helper.Handle, 20, ref darkMode, sizeof(int));
-                int captionColor = 0x0E0B0A;
-                DwmSetWindowAttribute(helper.Handle, 35, ref captionColor, sizeof(int));
-            }
-            catch { }
+            ApplyTitleBarTheme(false);
             await StartStudioAsync();
         };
     }
@@ -216,6 +234,29 @@ public partial class MainWindow : Window
             args.Handled = true;
             OpenExternal(args.Uri);
         };
+
+        try
+        {
+            StudioView.CoreWebView2.WebMessageReceived += (_, args) =>
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(args.WebMessageAsJson);
+                    var root = doc.RootElement;
+                    if (root.ValueKind == JsonValueKind.Object &&
+                        root.TryGetProperty("type", out var typeProp) &&
+                        string.Equals(typeProp.GetString(), "theme_changed", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var isLight = root.TryGetProperty("isLight", out var lightProp) && lightProp.ValueKind == JsonValueKind.True;
+                        var bgHex = root.TryGetProperty("bgHex", out var bgProp) ? bgProp.GetString() : null;
+                        var colorRef = ParseHexColorRef(bgHex);
+                        Dispatcher.InvokeAsync(() => ApplyTitleBarTheme(isLight, colorRef));
+                    }
+                }
+                catch { }
+            };
+        }
+        catch { }
 
         try
         {

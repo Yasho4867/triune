@@ -810,14 +810,131 @@ def generate_calm_quant_figure():
     print("Generated calm_quant_tradeoff.[pdf|png]")
 
 
+def generate_centroidsteer_5seed_figure():
+    """Generates Paper 1 Figure: 5-seed Direct-Sum + Block-Oja CentroidSteer validation (Suites 1-4)."""
+    json_path = BENCHMARK_DIR / "centroidsteer_upgrade_results.json"
+    if not json_path.exists():
+        raise FileNotFoundError(f"Missing required benchmark artifact: {json_path}")
+
+    with open(json_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    s1 = data["suite1_mechanistic_diagnostics"]["block_oja_energy_capture"]
+    s2 = data["suite2_multidomain_moe"]["summary"]
+    s3 = data["suite3_fineweb_cold_start"]["summary"]
+    s4 = data["suite4_fineweb_continuation"]["summary"]
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(7.6, 3.0), constrained_layout=True)
+
+    # Panel (a): Suite 3 FineWeb-Edu Cold-Start LM (5 seeds, 0.264 B/p vs baselines)
+    regimes = [
+        ("nosteer", "No-Steer\nLow-Rank\n(0.046 B/p)", COLORS["triune_moe_nosteer"]),
+        ("random_same_mem", "Random\nSubspace\n(0.264 B/p)", COLORS["triune_moe_random"]),
+        ("upgraded", "CentroidSteer\nDirect-Sum\n(0.264 B/p)", COLORS["triune"]),
+        ("adamw", "Full-Rank\nAdamW\n(4.000 B/p)", COLORS["adamw"]),
+    ]
+    labels = [r[1] for r in regimes]
+    means = [s3[r[0]]["final_val_loss"]["mean"] for r in regimes]
+    stds = [s3[r[0]]["final_val_loss"]["std"] for r in regimes]
+    colors = [r[2] for r in regimes]
+    x = np.arange(len(regimes))
+
+    bars = ax1.bar(x, means, yerr=stds, capsize=3, width=0.55, color=colors, edgecolor="black", linewidth=0.6)
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(labels, fontsize=7.2)
+    ax1.set_ylabel("Validation Loss (Lower is Better)", fontsize=9.5)
+    ax1.set_title("(a) Suite 3 FineWeb-Edu LM (N=5 Seeds)", fontsize=10.2)
+    ax1.set_ylim(2.05, 2.34)
+    ax1.grid(axis="y", linestyle=":")
+    for bar, m in zip(bars, means):
+        ax1.text(
+            bar.get_x() + bar.get_width() / 2.0,
+            m + 0.022,
+            f"{m:.4f}",
+            ha="center",
+            va="bottom",
+            fontsize=7.0,
+            fontweight="bold",
+        )
+    ax1.text(
+        1.5,
+        2.305,
+        "p=0.0112 vs No-Steer | p=0.0006 vs Random (5/5 seeds)",
+        ha="center",
+        fontsize=6.8,
+        bbox=dict(boxstyle="round,pad=0.22", fc="#e7f0fa", ec=COLORS["triune"]),
+    )
+
+    # Panel (b): Block-Oja Subspace Energy Capture across Suites 1-4
+    suites_lbl = ["Suite 1\nGrad.", "Suite 2\nMulti-Dom.", "Suite 3\nFineWeb LM", "Suite 4\n75.8M Cont."]
+    cs_energy = [
+        s1["v3_block_oja_grad_capture_frac"] * 100.0,
+        s2["upgraded"]["mean_border_energy_frac"]["mean"] * 100.0,
+        s3["upgraded"]["mean_border_energy_frac"]["mean"] * 100.0,
+        s4["upgraded"]["mean_border_energy_frac"]["mean"] * 100.0,
+    ]
+    rnd_energy = [
+        s1["random_same_mem_grad_capture_frac"] * 100.0,
+        s2["random_same_mem"]["mean_border_energy_frac"]["mean"] * 100.0,
+        s3["random_same_mem"]["mean_border_energy_frac"]["mean"] * 100.0,
+        s4["random_same_mem"]["mean_border_energy_frac"]["mean"] * 100.0,
+    ]
+    x2 = np.arange(len(suites_lbl))
+    w = 0.36
+    b_rnd = ax2.bar(
+        x2 - w / 2,
+        rnd_energy,
+        w,
+        label="Memory-Matched Random",
+        color=COLORS["triune_moe_random"],
+        edgecolor="black",
+        linewidth=0.6,
+    )
+    b_cs = ax2.bar(
+        x2 + w / 2,
+        cs_energy,
+        w,
+        label="CentroidSteer Block-Oja",
+        color=COLORS["triune"],
+        edgecolor="black",
+        linewidth=0.6,
+    )
+    ax2.set_xticks(x2)
+    ax2.set_xticklabels(suites_lbl, fontsize=7.5)
+    ax2.set_ylabel("Subspace Energy Capture (%)", fontsize=9.5)
+    ax2.set_title("(b) Block-Oja Gradient Energy Capture", fontsize=10.2)
+    ax2.set_ylim(0, 108)
+    ax2.grid(axis="y", linestyle=":")
+    ax2.legend(loc="upper right", fontsize=7.0, framealpha=0.92)
+    for bar, v in zip(b_rnd, rnd_energy):
+        ax2.text(bar.get_x() + bar.get_width() / 2.0, v + 1.5, f"{v:.1f}%", ha="center", va="bottom", fontsize=6.6)
+    for bar, v in zip(b_cs, cs_energy):
+        ax2.text(
+            bar.get_x() + bar.get_width() / 2.0,
+            v + 1.5,
+            f"{v:.1f}%",
+            ha="center",
+            va="bottom",
+            fontsize=6.8,
+            fontweight="bold",
+            color=COLORS["triune"],
+        )
+
+    fig.savefig(P1_FIGS / "centroidsteer_5seed_validation.pdf")
+    fig.savefig(P1_FIGS / "centroidsteer_5seed_validation.png")
+    plt.close(fig)
+    print("Generated centroidsteer_5seed_validation.[pdf|png]")
+
+
 def main():
     print("=" * 70)
-    print("Generating Publication-Grade Figures for Triune Research Papers")
+    print("Generating Publication-Grade Figures for Lucid Machines Research Papers")
     print("=" * 70)
     generate_dense_convergence_figure()
     generate_moe_convergence_figure()
     generate_optimizer_memory_figure()
     generate_moe_ablation_figure()
+    generate_centroidsteer_5seed_figure()
     generate_long_context_figure()
     generate_kernel_memory_figure()
     generate_parallelism_figure()

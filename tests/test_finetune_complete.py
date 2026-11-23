@@ -104,7 +104,16 @@ class TestFineTuneCore(unittest.TestCase):
 class TestFineTuneApiEndpoints(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        from pathlib import Path
+
+        cls._session_file = Path("checkpoints/session_state.json")
+        cls._session_backup = cls._session_file.read_bytes() if cls._session_file.is_file() else None
         cls.client = TestClient(create_app(), client=("127.0.0.1", 43210))
+
+    @classmethod
+    def tearDownClass(cls):
+        if getattr(cls, "_session_backup", None) is not None:
+            cls._session_file.write_bytes(cls._session_backup)
 
     def test_finetune_status_endpoint(self):
         res = self.client.get("/v1/finetune/status")

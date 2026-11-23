@@ -24,7 +24,7 @@ from lucid_machines.inference import generate_response, load_checkpoint_model, l
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Build argument parser shared by scripts/chat.py and `lucid_machines chat`."""
+    """Build argument parser shared by scripts/chat.py and `lucid-machines chat`."""
     parser = argparse.ArgumentParser(
         description="Chat with a Lucid Machines checkpoint, HF/transmuted model, or local Ollama"
     )
@@ -102,10 +102,10 @@ def main(argv: list[str] | None = None) -> None:
         if not _is_tag_live_in_ollama(ollama_tag, query_ollama_running_tags()):
             render_notice(
                 f"'{ollama_tag}' is not currently running in local Ollama. "
-                f"Run `ollama run {ollama_tag.removeprefix('ollama:')}` or run `lucid_machines scan` to inspect live models.",
+                f"Run `ollama run {ollama_tag.removeprefix('ollama:')}` or run `lucid-machines scan` to inspect live models.",
                 level="error",
             )
-            return
+            raise SystemExit(1)
         mode_label = "Ollama Live Runtime"
     else:
         quantize = "nvfp4" if args.nvfp4 else None

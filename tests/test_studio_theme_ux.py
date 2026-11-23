@@ -46,7 +46,7 @@ def test_live_active_states_and_primary_actions_follow_selected_palette():
 
 
 def test_neural_graph_scales_to_canvas_and_avoids_overlapping_labels():
-    assert "const sceneScale = Math.min(2, Math.max(0.8, Math.min(width / 600, height / 150)))" in APP
+    assert "const sceneScale = Math.min(2, Math.max(0.75, Math.min(width / 600, height / 150)))" in APP
     assert "const labelRects = [];" in APP
     assert "labelRects.some(other =>" in APP
     assert "labelRects.length >= 12" in APP

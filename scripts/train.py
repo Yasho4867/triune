@@ -95,7 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--steer_mode",
         "--steer-mode",
         dest="steer_mode",
-        choices=("upgraded", "legacy", "nosteer"),
+        choices=("centroid", "upgraded", "legacy", "nosteer", "random_same_mem"),
         default=None,
         help="CentroidSteer mode",
     )
@@ -291,6 +291,13 @@ def _resolve_local_model_config(raw_spec: str) -> tuple[dict | None, str | None]
 
 def _count_meta_triune_params(config: dict) -> int:
     """Measure exact unique parameters on torch.device('meta') without allocating RAM/VRAM."""
+    from lucid_machines.model.config import (
+        EXPERT_HIDDEN_MULTIPLIER,
+        ROPE_MAX_SEQ_LEN,
+        SHARED_EXPERT,
+        SHARED_EXPERT_SCALE,
+        TOP_K_EXPERTS,
+    )
     from lucid_machines.model.transformer import TriuneTransformer
 
     with torch.device("meta"):
@@ -301,6 +308,11 @@ def _count_meta_triune_params(config: dict) -> int:
             num_heads=int(config.get("num_heads", 12)),
             head_dim=int(config.get("head_dim", 128)),
             num_experts=int(config.get("num_experts", 8)),
+            top_k_experts=int(config.get("top_k_experts", TOP_K_EXPERTS)),
+            shared_expert=bool(config.get("shared_expert", SHARED_EXPERT)),
+            shared_expert_scale=float(config.get("shared_expert_scale", SHARED_EXPERT_SCALE)),
+            expert_hidden_multiplier=int(config.get("expert_hidden_multiplier", EXPERT_HIDDEN_MULTIPLIER)),
+            rope_max_seq_len=int(config.get("rope_max_seq_len", ROPE_MAX_SEQ_LEN)),
             router_prefix_layers=int(config.get("router_prefix_layers", 3)),
             reflex_exit_layer=int(config.get("reflex_exit_layer", 6)),
             limbic_exit_layer=int(config.get("limbic_exit_layer", 16)),
@@ -318,6 +330,53 @@ def _count_meta_triune_params(config: dict) -> int:
             seen.add(pid)
             total += p.numel()
     return total
+
+
+def _build_triune_from_config(config: dict):
+    """Instantiate TriuneTransformer directly when extra config fields are present, else via build_model."""
+    from lucid_machines.model.config import (
+        DEPTH_BALANCE_COEF,
+        EXPERT_HIDDEN_MULTIPLIER,
+        ROPE_MAX_SEQ_LEN,
+        SHARED_EXPERT,
+        SHARED_EXPERT_SCALE,
+        TARGET_DEPTH_DIST,
+        TOP_K_EXPERTS,
+    )
+    from lucid_machines.model.transformer import TriuneTransformer
+
+    if any(
+        k in config
+        for k in (
+            "top_k_experts",
+            "shared_expert",
+            "shared_expert_scale",
+            "expert_hidden_multiplier",
+            "rope_max_seq_len",
+        )
+    ):
+        return TriuneTransformer(
+            vocab_size=int(config.get("vocab_size", 32000)),
+            hidden_dim=int(config.get("hidden_dim", 1536)),
+            num_layers=int(config.get("num_layers", 24)),
+            num_heads=int(config.get("num_heads", 12)),
+            head_dim=int(config.get("head_dim", 128)),
+            num_experts=int(config.get("num_experts", 8)),
+            top_k_experts=int(config.get("top_k_experts", TOP_K_EXPERTS)),
+            shared_expert=bool(config.get("shared_expert", SHARED_EXPERT)),
+            shared_expert_scale=float(config.get("shared_expert_scale", SHARED_EXPERT_SCALE)),
+            expert_hidden_multiplier=int(config.get("expert_hidden_multiplier", EXPERT_HIDDEN_MULTIPLIER)),
+            rope_max_seq_len=int(config.get("rope_max_seq_len", ROPE_MAX_SEQ_LEN)),
+            router_prefix_layers=int(config.get("router_prefix_layers", 3)),
+            reflex_exit_layer=int(config.get("reflex_exit_layer", 6)),
+            limbic_exit_layer=int(config.get("limbic_exit_layer", 16)),
+            target_depth_dist=tuple(config.get("target_depth_dist", TARGET_DEPTH_DIST)),
+            balance_coef=float(config.get("balance_coef", DEPTH_BALANCE_COEF)),
+            use_fp4=bool(config.get("use_fp4", False)),
+            use_fp8=bool(config.get("use_fp8", False)),
+            streaming_fp8_weights=bool(config.get("streaming_fp8_weights", False)),
+        )
+    return build_model(config)
 
 
 def main(argv: list[str] | None = None) -> dict:
@@ -362,8 +421,14 @@ def main(argv: list[str] | None = None) -> dict:
         )
         if getattr(args, key) is not None
     }
-    if args.steer_mode == "nosteer":
+    requested_steer_mode = getattr(args, "steer_mode", None)
+    if requested_steer_mode == "nosteer":
         overrides["steer_scale"] = 0.0
+        overrides["steer_mode"] = "legacy"
+    elif requested_steer_mode == "centroid":
+        overrides["steer_mode"] = "upgraded"
+    elif requested_steer_mode is not None:
+        overrides["steer_mode"] = requested_steer_mode
     if args.steer_dirs is not None:
         overrides["num_steer_dirs"] = int(args.steer_dirs)
 
@@ -383,6 +448,11 @@ def main(argv: list[str] | None = None) -> dict:
             "num_heads",
             "head_dim",
             "num_experts",
+            "top_k_experts",
+            "shared_expert",
+            "shared_expert_scale",
+            "expert_hidden_multiplier",
+            "rope_max_seq_len",
             "router_prefix_layers",
             "reflex_exit_layer",
             "limbic_exit_layer",
@@ -401,6 +471,11 @@ def main(argv: list[str] | None = None) -> dict:
             "num_heads",
             "head_dim",
             "num_experts",
+            "top_k_experts",
+            "shared_expert",
+            "shared_expert_scale",
+            "expert_hidden_multiplier",
+            "rope_max_seq_len",
             "router_prefix_layers",
             "reflex_exit_layer",
             "limbic_exit_layer",
@@ -417,6 +492,10 @@ def main(argv: list[str] | None = None) -> dict:
     overrides["streaming_prefetch"] = args.streaming_prefetch
     overrides["streaming_fp8_weights"] = getattr(args, "streaming_fp8_weights", False)
     config = build_config(overrides)
+    if requested_steer_mode == "nosteer":
+        config["steer_mode"] = "nosteer"
+    elif requested_steer_mode == "centroid":
+        config["steer_mode"] = "centroid"
     config["model_name"] = local_json_stem or requested_model
     if not args.dry_run:
         Path(config["checkpoint_dir"]).mkdir(parents=True, exist_ok=True)
@@ -575,13 +654,13 @@ def main(argv: list[str] | None = None) -> dict:
                     print(f"⚠️ Could not load via transformers ({e}); building Triune model...", flush=True)
                     torch.set_default_dtype(torch.bfloat16)
                     try:
-                        raw_model = build_model(config)
+                        raw_model = _build_triune_from_config(config)
                     finally:
                         torch.set_default_dtype(torch.float32)
             else:
                 torch.set_default_dtype(torch.bfloat16)
                 try:
-                    raw_model = build_model(config)
+                    raw_model = _build_triune_from_config(config)
                 finally:
                     torch.set_default_dtype(torch.float32)
         finally:
@@ -642,11 +721,21 @@ def main(argv: list[str] | None = None) -> dict:
                 print("✅ Selective gradient checkpointing enabled", flush=True)
 
         print(f"Params: {sum(parameter.numel() for parameter in model.parameters()):,}", flush=True)
-        optimizer = build_optimizer(model, config)
+        opt_config = dict(config)
+        if opt_config.get("steer_mode") == "nosteer":
+            opt_config["steer_mode"] = "legacy"
+            opt_config["steer_scale"] = 0.0
+        elif opt_config.get("steer_mode") == "centroid":
+            opt_config["steer_mode"] = "upgraded"
+        optimizer = build_optimizer(model, opt_config)
         if args.steer_dirs is not None and hasattr(optimizer, "num_steer_dirs"):
             optimizer.num_steer_dirs = max(1, int(args.steer_dirs))
-        if args.steer_mode in ("upgraded", "legacy") and hasattr(optimizer, "steer_mode"):
-            optimizer.steer_mode = args.steer_mode
+        if requested_steer_mode in ("upgraded", "legacy", "random_same_mem") and hasattr(optimizer, "steer_mode"):
+            optimizer.steer_mode = requested_steer_mode
+        elif requested_steer_mode == "centroid" and hasattr(optimizer, "steer_mode"):
+            optimizer.steer_mode = "upgraded"
+        elif requested_steer_mode == "nosteer" and hasattr(optimizer, "steer_scale"):
+            optimizer.steer_scale = 0.0
         print(
             f"⏳ Connecting dataset stream: '{config.get('dataset_name')}' ({config.get('dataset_config')})...",
             flush=True,

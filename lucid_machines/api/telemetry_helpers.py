@@ -360,7 +360,7 @@ def resolve_confined_config_path(
 
 
 def list_model_configs(allowed_roots: List[Path]) -> List[Dict[str, Any]]:
-    """List valid JSON architecture configs from models/configs/ (junkie.json first, then triune-*.json)."""
+    """List valid JSON architecture configs from models/configs/ (junkie*.json first, then triune-*.json)."""
     seen: set[str] = set()
     items: List[Dict[str, Any]] = []
     for root in allowed_roots:
@@ -369,7 +369,7 @@ def list_model_configs(allowed_roots: List[Path]) -> List[Dict[str, Any]]:
         for f in sorted(root.glob("*.json")):
             if f.name in seen:
                 continue
-            if f.name != "junkie.json" and not f.name.startswith("triune-"):
+            if not f.name.startswith(("junkie", "triune-")):
                 continue
             seen.add(f.name)
             try:
@@ -394,7 +394,12 @@ def list_model_configs(allowed_roots: List[Path]) -> List[Dict[str, Any]]:
                     "is_flagship_junkie": f.name == "junkie.json",
                 }
             )
-    items.sort(key=lambda x: (0 if x["is_flagship_junkie"] else 1, x["filename"]))
+    items.sort(
+        key=lambda x: (
+            0 if x["is_flagship_junkie"] else (1 if x["filename"].startswith("junkie") else 2),
+            x["filename"],
+        )
+    )
     return items
 
 

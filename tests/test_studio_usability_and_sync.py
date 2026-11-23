@@ -27,8 +27,12 @@ from lucid_machines.api.routes import RealPyTorchEngineState, pytorch_state
 def app_client():
     from fastapi.testclient import TestClient
 
+    session_file = Path("checkpoints/session_state.json")
+    session_backup = session_file.read_text(encoding="utf-8") if session_file.is_file() else None
     app = create_app()
-    return TestClient(app)
+    yield TestClient(app)
+    if session_backup is not None:
+        session_file.write_text(session_backup, encoding="utf-8")
 
 
 def test_single_canonical_engine_state_invariants():
@@ -48,7 +52,10 @@ def test_optimizer_telemetry_and_update_sync(app_client):
     res_get = app_client.get("/v1/training/optimizer")
     assert res_get.status_code == 200
     telemetry = res_get.json()
-    assert "comparison_vs_unsloth" in telemetry
+    assert "comparison_vs_unsloth" not in telemetry
+    assert "triune/kernels/fast_muon.py" not in res_get.text
+    for field in ("steer_mode", "num_steer_dirs", "steer_update_gap", "steer_scale", "use_rms_steer"):
+        assert field in telemetry
     assert "tier1_muon" in telemetry
     assert "tier2_centroid" in telemetry
     assert "tier3_adamw" in telemetry
@@ -347,7 +354,7 @@ def test_upgrade_all_seven_standard_models(app_client):
     assert "UPGRADEABLE_MODELS = [" in app_js
     for model_name, _, _ in models_to_test:
         assert f"id: '{model_name}'" in app_js
-    assert "handleUpgradeModel(upgradeModelName, true)" in app_js
+    assert "handleUpgradeModel(effectiveTarget, true)" in app_js
 
 
 def test_neuron_scope_3d_synapse_simulator_integration():
@@ -384,8 +391,8 @@ def test_neuron_scope_3d_synapse_simulator_integration():
     assert "triggerStimulate" in app_js
     assert "setFps(Math.max(0, measuredFps))" in app_js
     assert "Math.min(120, Math.max(30, measuredFps))" not in app_js
-    assert "not an inference-speed metric" in app_js
-    assert "visual nodes · ${wiresRef.current ? wiresRef.current.length : '—'} links" in app_js
+    assert "Canvas frame rate measured from animation frames" in app_js
+    assert "nodes · ${wiresRef.current ? wiresRef.current.length : '—'} links" in app_js
     assert "bodyHeight = '100%'" in app_js
     assert "Math.max(165, neuralConsoleHeight - 56)" not in app_js
 
@@ -531,7 +538,7 @@ def test_custom_theme_library_is_persistent_editable_and_palette_only():
     assert "payload.version !== 1" in app_js
     assert "file.size > 32_768" in app_js
     assert "paletteKeys.every(key => isThemeHex(value.palette[key]))" in app_js
-    assert "Theme files contain colors only—no scripts or CSS." in app_js
+    assert "palette-only files" in app_js
     assert "setThemeDraft({ ...theme, palette: { ...theme.palette } })" in app_js
     assert "Export draft" in app_js
     assert "contrastRatio(themeDraft.palette.text" in app_js

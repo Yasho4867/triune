@@ -33,6 +33,10 @@ class TestStudioApiEndpoints(unittest.TestCase):
     def tearDownClass(cls) -> None:
         if getattr(cls, "_session_backup", None) is not None:
             cls._session_file.write_text(cls._session_backup, encoding="utf-8")
+        pytorch_state.precision = "bf16"
+        if isinstance(getattr(pytorch_state, "architecture_spec", None), dict):
+            pytorch_state.architecture_spec["use_fp8"] = False
+            pytorch_state.architecture_spec["use_fp4"] = False
 
     def test_plugins_endpoint_returns_serializable_nodes(self) -> None:
         response = self.client.get("/v1/plugins")
@@ -709,8 +713,11 @@ class TestStudioApiEndpoints(unittest.TestCase):
         self.assertIn("tier1_muon", data)
         self.assertIn("tier2_centroid", data)
         self.assertIn("tier3_adamw", data)
-        self.assertIn("comparison_vs_unsloth", data)
         self.assertIn("memory", data)
+        for field in ("steer_mode", "num_steer_dirs", "steer_update_gap", "steer_scale", "use_rms_steer"):
+            self.assertIn(field, data)
+        self.assertNotIn("comparison_vs_unsloth", data)
+        self.assertNotIn("triune/kernels/fast_muon.py", response.text)
 
 
 class TestLocalChatStreaming(unittest.TestCase):

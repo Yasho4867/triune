@@ -4,7 +4,8 @@
 **Company / Package / CLI:** `Lucid Machines` (`lucid-machines` / `lucid_machines` SDK, inaugural release `v1.0.0`)  
 **Core Neural Architecture:** `Triune` (`TriuneTransformer` / `TriuneModel` / `TriuneConfig`, templates `models/configs/triune-*.json`)  
 **Inaugural Flagship Models To Train:** **Junkie** (`models/configs/junkie-mini.json`, `junkie-1b.json`, `junkie-3b.json`, `junkie-7b.json`, `junkie.json`)  
-**Desktop Workbench:** `Polysom Studio v1.0.0` (`polysom` CLI, `PolysomStudio.exe`, `PolysomStudioSetup.exe`)  
+**Desktop Workbench & CLI:** `Polysom Studio v1.0.0` (`kcx` CLI — Polysom KCX, with `polysom` / `lucid-machines` compat aliases; `PolysomStudio.exe`, `PolysomStudioSetup.exe`)  
+**Website & Repository:** `https://lucidmachines.co` · `https://github.com/lucid-machines/triune`  
 
 Today we are launching **Lucid Machines v1.0.0** (`lucid-machines`), our inaugural public release. Lucid Machines pairs an open-source C/AVX2/CUDA/Triton deep learning framework built around **the Triune architecture by Lucid Machines** (`TriuneTransformer` / `TriuneConfig`) with **Polysom Studio v1.0.0**, a native Windows desktop workbench designed to train, steer, quantize, and serve multi-exit Mixture-of-Experts models within the memory envelope of consumer and single-GPU cloud hardware—establishing the validated substrate for **Junkie**, our inaugural flagship model to be trained.
 
@@ -83,8 +84,8 @@ Lucid Machines v1.0.0 ships with comprehensive security hardening verified by `t
 
 ```bash
 pip install -e ".[all]"
-lucid-machines doctor
-polysom --port 8000
+kcx doctor
+kcx studio --port 8000
 ```
 
 Or launch the self-contained Windows desktop application and setup wizard in `studio\publish\PolysomStudioSetup.exe`.

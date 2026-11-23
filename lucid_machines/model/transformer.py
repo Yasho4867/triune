@@ -9,6 +9,7 @@ import torch.nn.functional as F
 from .block import TransformerBlock
 from .config import (
     DEPTH_BALANCE_COEF,
+    EXPERT_HIDDEN_MULTIPLIER,
     GLA_HEAD_DIM,
     HIDDEN_DIM,
     LIMBIC_EXIT_LAYER,
@@ -16,8 +17,12 @@ from .config import (
     NUM_HEADS,
     NUM_LAYERS,
     REFLEX_EXIT_LAYER,
+    ROPE_MAX_SEQ_LEN,
     ROUTER_PREFIX_LAYERS,
+    SHARED_EXPERT,
+    SHARED_EXPERT_SCALE,
     TARGET_DEPTH_DIST,
+    TOP_K_EXPERTS,
     VOCAB_SIZE,
 )
 from .norms import RMSNorm
@@ -33,6 +38,11 @@ class TriuneTransformer(nn.Module):
         num_heads: int = NUM_HEADS,
         head_dim: int = GLA_HEAD_DIM,
         num_experts: int = NUM_EXPERTS,
+        top_k_experts: int = TOP_K_EXPERTS,
+        shared_expert: bool = SHARED_EXPERT,
+        shared_expert_scale: float = SHARED_EXPERT_SCALE,
+        expert_hidden_multiplier: int = EXPERT_HIDDEN_MULTIPLIER,
+        rope_max_seq_len: int = ROPE_MAX_SEQ_LEN,
         router_prefix_layers: int = ROUTER_PREFIX_LAYERS,
         reflex_exit_layer: int = REFLEX_EXIT_LAYER,
         limbic_exit_layer: int = LIMBIC_EXIT_LAYER,
@@ -53,6 +63,12 @@ class TriuneTransformer(nn.Module):
             )
         if num_experts < 1:
             raise ValueError(f"num_experts must be >= 1; got {num_experts}")
+        if top_k_experts < 1 or top_k_experts > num_experts:
+            raise ValueError(f"top_k_experts must be in [1, num_experts={num_experts}]; got {top_k_experts}")
+        if expert_hidden_multiplier < 1:
+            raise ValueError(f"expert_hidden_multiplier must be >= 1; got {expert_hidden_multiplier}")
+        if rope_max_seq_len < 1:
+            raise ValueError(f"rope_max_seq_len must be >= 1; got {rope_max_seq_len}")
         if vocab_size < 1:
             raise ValueError(f"vocab_size must be >= 1; got {vocab_size}")
         if num_heads < 1 or head_dim < 1:
@@ -73,6 +89,11 @@ class TriuneTransformer(nn.Module):
         self.head_dim = head_dim
         self.vocab_size = vocab_size
         self.num_experts = num_experts
+        self.top_k_experts = int(top_k_experts)
+        self.shared_expert = bool(shared_expert)
+        self.shared_expert_scale = float(shared_expert_scale)
+        self.expert_hidden_multiplier = int(expert_hidden_multiplier)
+        self.rope_max_seq_len = int(rope_max_seq_len)
         self.router_prefix_layers = router_prefix_layers
         self.reflex_exit_layer = reflex_exit_layer
         self.limbic_exit_layer = limbic_exit_layer
@@ -97,6 +118,11 @@ class TriuneTransformer(nn.Module):
                     vocab_size,
                     exit_layers,
                     num_experts=num_experts,
+                    top_k_experts=self.top_k_experts,
+                    shared_expert=self.shared_expert,
+                    shared_expert_scale=self.shared_expert_scale,
+                    expert_hidden_multiplier=self.expert_hidden_multiplier,
+                    rope_max_seq_len=self.rope_max_seq_len,
                     use_moe=(i > reflex_exit_layer),
                     use_fp4=use_fp4,
                     use_fp8=use_fp8,

@@ -1,4 +1,4 @@
-# Triune AI — CUDA Graph vs Eager Execution & Optimizer Parity Report
+# Lucid Machines (Triune) — CUDA Graph vs Eager Execution & Optimizer Parity Report
 
 **Benchmarked Hardware**: `NVIDIA GeForce RTX 5070 Laptop GPU` (8,123.8 MB VRAM)  
 **Timestamp**: 2026-11-03 23:52:45 UTC  

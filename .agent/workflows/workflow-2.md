@@ -38,10 +38,10 @@ This workflow governs all agentic engineering, multi-agent swarm execution, benc
 
 ### B1. 4-Layer Naming Boundary & Inaugural `v1.0.0` Framing
 - **Strict 4-Layer Brand Split (`docs/RELEASE_NAME_REPORT.md`):**
-  1. **Company / Python Distribution / Package / CLI:** **Lucid Machines** (`lucid-machines`, `lucid_machines`, `lucid-machines` CLI, `LUCID_MACHINES_*` env prefix).
+  1. **Company / Python Distribution / Package:** **Lucid Machines** (`lucid-machines`, `lucid_machines`, `LUCID_MACHINES_*` env prefix).
   2. **Core Neural Architecture:** **Triune** (`TriuneTransformer`, `TriuneModel`, `TriuneConfig`, Hugging Face `"model_type": "triune"`, templates `models/configs/triune-*.json`).
   3. **Inaugural Flagship Models To Train:** **Junkie** (`models/configs/junkie.json`, `junkie-7b.json`, `junkie-3b.json`, `junkie-1b.json`, `junkie-mini.json`). Use hyphenated size suffixes (`Junkie-Mini`, `Junkie-1B`, `Junkie-3B`, `Junkie-7B`), and keep `TriuneTransformer` / `TriuneModel` / `TriuneConfig` as the sole neural architecture classes.
-  4. **Desktop Workbench:** **Polysom Studio** (`polysom` CLI, `PolysomStudio.exe`, `PolysomStudioSetup.exe`, 6 themes: `Hypnagogic`, `Phosphene`, `Pareidolia`, `Afterimage`, `Mirage`, `Euphoria`).
+  4. **Primary CLI (`Polysom KCX`) & Desktop Workbench:** **`kcx` CLI** (`kcx studio`, `kcx train`, `kcx chat`, `kcx doctor`, `kcx eval`, `kcx config`, `kcx workspace`; `polysom` & `lucid-machines` compat aliases) and **Polysom Studio** (`PolysomStudio.exe`, `PolysomStudioSetup.exe`, 6 themes: `Hypnagogic`, `Phosphene`, `Pareidolia`, `Afterimage`, `Mirage`, `Euphoria`).
 - **Inaugural `v1.0.0` Release Framing:**
   - Branch: `release/lucid-machines-v1.0.0` | Package & Studio Version: `1.0.0`.
   - Frame **Lucid Machines `v1.0.0`** as the **first public release** of Lucid Machines. Do not use internal "upgraded from legacy v2 to v3" or "migration from previous public releases" framing in public documentation.
@@ -73,8 +73,8 @@ Never conflate isolated microkernel speedups with end-to-end model throughput. A
   - `checkpoints/session_state.json` (must remain at `"step": 40555`; always restore if any test mutates it)
   - `data/*.jsonl` (`fineweb_edu_real.jsonl`, `fineweb_edu_large.jsonl`, `finetune.jsonl`)
   - `exports/*`
-  - `papers/paper1_centroidsteer/*` and `papers/paper2_triune_systems/*` (0 git modifications permitted in `papers/paper1_centroidsteer/`)
   - `triune_tokenizer.json`
+  - Original Nov 15 research snapshots in git history (`57a1476`) remain preserved while `papers/` carries the synchronized `v1.0.0` suite & 5-seed CentroidSteer manuscripts.
 - **Untracked Private Rules File:** `WORKSPACE_RULES.md` is strictly read-only and must never be staged or tracked in git (`git ls-files WORKSPACE_RULES.md` must always return empty output).
 
 ---

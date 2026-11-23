@@ -2,10 +2,10 @@
 
 ## Locked 4-Layer Naming Boundary
 
-**Company / Lab / Package / CLI / Repository Brand:** **Lucid Machines** (`lucid-machines`, `lucid_machines`, `lucid-machines` CLI).  
+**Company / Lab / Python Package / Repository Brand:** **Lucid Machines** (`lucid-machines`, `lucid_machines`).  
 **Core Neural Architecture:** **Triune** (`TriuneTransformer`, `TriuneModel`, `TriuneConfig`, Hugging Face `model_type: "triune"`).  
 **First Flagship Model:** **Junkie** (`models/configs/junkie.json`). Junkie is a model name, not a package namespace.  
-**Desktop Workbench:** **Polysom Studio** (`polysom` CLI, `PolysomStudio.exe`, `PolysomStudioSetup.exe`).
+**Primary CLI (`Polysom KCX`) & Desktop Workbench:** **`kcx` CLI** (`polysom` & `lucid-machines` compatibility aliases) and **Polysom Studio** (`PolysomStudio.exe`, `PolysomStudioSetup.exe`).
 
 The inaugural release version is **1.0.0** and the release branch is `release/lucid-machines-v1.0.0`. Legacy `triune` Python imports and `TRIUNE_*` environment variables remain compatibility shims only; they do not replace the Lucid Machines release identity.
 
@@ -21,10 +21,9 @@ Automated public checks were performed for **PyPI**, **npm**, **GitHub**, DNS, a
 | --- | --- |
 | Python distribution | `lucid-machines` |
 | Python import | `lucid_machines` |
-| Package CLI | `lucid-machines` |
-| Studio CLI | `polysom` |
-| Environment prefix | `LUCID_MACHINES_*` |
-| Native library | `lucid_machines_core.dll` / `.so` / `.dylib` |
+| Primary CLI (`Polysom KCX`) | `kcx` (`polysom` / `lucid-machines` compat aliases) |
+| Live Website | `https://lucidmachines.co` |
+| Canonical GitHub Repository | `https://github.com/lucid-machines/triune` (`https://github.com/lucid-machines`) |
 | Desktop binary | `PolysomStudio.exe` |
 | Desktop installer | `PolysomStudioSetup.exe` |
 | Architecture | `TriuneTransformer`, `TriuneModel`, `TriuneConfig` |
