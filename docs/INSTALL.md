@@ -1,12 +1,12 @@
 ﻿# Lucid Machines v1.0.0 — Installation & Setup Guide
 
-**Lucid Machines** (`lucid-machines` / `lucid_machines`) supports Windows, Linux, WSL2, and macOS. It includes both a Python SDK / unified CLI (`lucid-machines` & `polysom`) and a self-contained native Windows desktop workbench (**Polysom Studio v1.0.0**).
+**Lucid Machines** (`lucid-machines` / `lucid_machines`) supports Windows, Linux, WSL2, and macOS. It includes both a Python SDK, unified **`kcx`** (**Polysom KCX**) CLI (with `polysom` / `lucid-machines` compatibility aliases), and a self-contained native Windows desktop workbench (**Polysom Studio v1.0.0**).
 
 ---
 
 ## 1. Native Windows Desktop App & Installer (`studio/publish/`)
 
-On Windows 10/11 (x64), the native WPF setup wizard (`PolysomStudioSetup.exe`) and automated installer (`studio\installer\install_studio.bat`) probe your NVIDIA CUDA driver, provision the isolated Python virtual environment (`studio/studio_env`), install hardware-matched PyTorch wheels, register the `lucid_machines` and `lucid_machines` CLIs on your User `PATH`, register the `HKCU` Windows `Uninstall` entry, and create Desktop and Start Menu shortcuts.
+On Windows 10/11 (x64), the native WPF setup wizard (`PolysomStudioSetup.exe`) and automated installer (`studio\installer\install_studio.bat`) probe your NVIDIA CUDA driver, provision the isolated Python virtual environment (`studio/studio_env`), install hardware-matched PyTorch wheels, register the `kcx` (plus `polysom` / `lucid-machines`) CLIs on your User `PATH`, register the `HKCU` Windows `Uninstall` entry, and create Desktop and Start Menu shortcuts.
 
 ### Interactive GUI Setup
 ```powershell
@@ -71,8 +71,8 @@ pip install -e ".[all]"
 
 Run the built-in hardware and subsystem diagnostic suite:
 ```bash
-lucid_machines doctor
+kcx doctor
 # Launch Polysom Studio:
-lucid_machines --port 8000
-# (legacy `triune doctor` CLI alias remains supported via compatibility shim)
+kcx studio --port 8000
+# (compatibility aliases `polysom`, `lucid-machines`, and `triune` remain supported)
 ```

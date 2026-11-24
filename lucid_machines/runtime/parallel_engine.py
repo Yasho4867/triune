@@ -11,6 +11,7 @@ on modern NVIDIA GPUs via:
 
 from __future__ import annotations
 
+import gc
 import logging
 import time
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -651,11 +652,16 @@ class ParallelEngine:
         bs_list = batch_sizes or [1, 4, 16, 32, 64]
         seq_list = seq_lengths or [512, 1024, 2048]
 
+        if self.device.type == "cuda" and torch.cuda.is_available():
+            gc.collect()
+            torch.cuda.empty_cache()
+
         results = []
         max_throughput = 0.0
 
         for B in bs_list:
             for T in seq_list:
+                x = out = state = None
                 try:
                     x = torch.randn(B, T, self.dim, device=self.device, dtype=self.dtype)
 
@@ -696,6 +702,8 @@ class ParallelEngine:
                     )
                 except Exception as exc:
                     logger.debug("Benchmark configuration B=%d, T=%d skipped: %s", B, T, exc)
+                finally:
+                    del x, out, state
 
         self.telemetry["peak_throughput_tok_s"] = max_throughput
         return {

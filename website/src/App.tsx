@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { SystemDrawing } from "./components/SystemDrawing";
 import { SurrealStudy } from "./components/SurrealStudy";
 
-const repository = "https://github.com/Yasho4867/triune";
+const repository = "https://github.com/lucid-machines/triune";
 
 const systems = [
   {
@@ -11,7 +11,7 @@ const systems = [
     description:
       "From an architecture on a canvas to a model running on your machine. A native environment for training, fine-tuning, inspecting, and serving language models.",
     features: ["Visual model builder", "Live activation inspection", "Local-first workflows"],
-    command: "polysom studio",
+    command: "kcx studio",
     link: `${repository}#launching-polysom-studio`,
     action: "Explore the studio",
   },

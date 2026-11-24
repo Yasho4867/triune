@@ -6,10 +6,8 @@ The following versions of **Lucid Machines** (`lucid-machines` / the **Triune** 
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 3.0.x   | :white_check_mark: |
-| 2.1.x   | :white_check_mark: |
-| 2.0.x   | :white_check_mark: |
-| < 2.0   | :x:                |
+| 1.0.x   | :white_check_mark: |
+| < 1.0   | :x:                |
 
 ---
 
@@ -18,7 +16,8 @@ The following versions of **Lucid Machines** (`lucid-machines` / the **Triune** 
 We take the security of Lucid Machines, its model architecture, and Polysom Studio very seriously. If you discover a security vulnerability, please do **NOT** open a public issue.
 
 Instead, please send a private report to the maintainers:
-- **Email**: `security@lucid-machines.org` (legacy alias: `security@triune-ai.org`, or directly contact the repository owner via GitHub Security Advisories)
+- **GitHub Security Advisories**: [`https://github.com/lucid-machines/triune/security/advisories`](https://github.com/lucid-machines/triune/security/advisories) (or `security@lucid-machines.org`)
+- **Project Website**: `https://lucidmachines.co`
 - **Response Time**: We acknowledge receipt of vulnerability reports within 48 hours and strive to issue security advisories and patches within 7 business days.
 
 Please include:

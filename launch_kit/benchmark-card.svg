@@ -5,7 +5,7 @@
   <rect x="40" y="36" width="1120" height="86" rx="12" fill="#111827" stroke="#1E293B" stroke-width="2"/>
   <text x="68" y="76" fill="#38BDF8" font-family="Outfit, Segoe UI, sans-serif" font-size="28" font-weight="800">LUCID MACHINES v1.0.0</text>
   <text x="424" y="76" fill="#F8FAFC" font-family="Inter, Segoe UI, sans-serif" font-size="21" font-weight="600">Triune Architecture, CentroidSteer &amp; Polysom Studio</text>
-  <text x="68" y="104" fill="#94A3B8" font-family="Fira Code, Consolas, monospace" font-size="14">pip install lucid-machines  |  polysom  |  PolysomStudioSetup.exe  |  Flagship Target: Junkie</text>
+  <text x="68" y="104" fill="#94A3B8" font-family="Fira Code, Consolas, monospace" font-size="14">pip install lucid-machines  |  kcx  |  PolysomStudioSetup.exe  |  Flagship Target: Junkie</text>
 
   <rect x="40" y="144" width="546" height="206" rx="12" fill="#111827" stroke="#38BDF8" stroke-width="2"/>
   <text x="64" y="178" fill="#38BDF8" font-family="Fira Code, Consolas, monospace" font-size="14" font-weight="700">TIER 1: ISOLATED KERNEL MICROBENCHMARKS</text>

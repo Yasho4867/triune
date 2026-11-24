@@ -87,7 +87,18 @@ $env:TWINE_PASSWORD = "<YOUR_PYPI_API_TOKEN>"
 
 ---
 
-## 4. Publishing a GitHub Release (`v1.0.0`)
+## 4. Publishing a GitHub Release (`v1.0.0`) & Organization Transfer
+
+The canonical repository lives under the **Lucid Machines** GitHub organization at **`https://github.com/lucid-machines/triune`** (`https://github.com/lucid-machines`).
+
+### Updating Local Clones After `Yasho4867/triune` -> `lucid-machines/triune` Transfer
+If your local clone still points to `Yasho4867/triune` (and to keep Vercel Git deployments connected to the transferred repository without disruption):
+```powershell
+# Point local origin to the canonical lucid-machines organization repository
+git remote set-url origin https://github.com/lucid-machines/triune.git
+git remote -v
+```
+*(In GitHub **Settings -> Danger Zone -> Transfer ownership**, transferring `Yasho4867/triune` to `lucid-machines` automatically preserves GitHub redirects and Vercel repository linkage; re-link the Vercel project Git connection only if Vercel prompts after org transfer.)*
 
 ### Prerequisites
 - Install GitHub CLI (`gh`) and authenticate via `gh auth login` (or set `GH_TOKEN`).
@@ -114,7 +125,7 @@ gh release create v1.0.0 `
 
 ## 5. Deploying the Project Website (`website/`)
 
-The project website in `website/` is a React/Vite application (`index.html`, `src/*`, `public/*`) built to `website/dist/`.
+The live project website is hosted at **`https://lucidmachines.co`** (deployed from `website/` via Vercel). The source is a React/Vite application (`index.html`, `src/*`, `public/*`) built to `website/dist/`.
 
 ### Local Smoke Test
 ```powershell

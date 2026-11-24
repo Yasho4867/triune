@@ -1,10 +1,11 @@
 # Release Notes — Lucid Machines `v1.0.0` (Inaugural Public Release: Triune Architecture, Junkie & Polysom Studio)
 
 **Release Version:** `1.0.0` (Inaugural Public Release)  
-**Company / Python Package:** **Lucid Machines** (`lucid-machines` distribution, `lucid_machines` Python SDK, `lucid-machines` CLI)  
+**Company / Python Package:** **Lucid Machines** (`lucid-machines` distribution, `lucid_machines` Python SDK)  
 **Core Neural Architecture:** **Triune** (`TriuneTransformer` / `TriuneModel` / `TriuneConfig`, HF `"model_type": "triune"`, size templates `models/configs/triune-*.json`)  
 **Inaugural Flagship Models To Train:** **Junkie** (`models/configs/junkie-mini.json`, `junkie-1b.json`, `junkie-3b.json`, `junkie-7b.json`, and `junkie.json` — built on the Triune architecture)  
-**Desktop Workbench:** **Polysom Studio v1.0.0** (`polysom` CLI, `PolysomStudio.exe`, `PolysomStudioSetup.exe`)  
+**Primary CLI (`Polysom KCX`) & Workbench:** **`kcx` CLI** (`kcx studio`, `kcx train`, `kcx chat`, `kcx doctor`, `kcx serve`, `kcx eval`, `kcx config`, `kcx workspace`; `polysom` & `lucid-machines` compat aliases) and **Polysom Studio v1.0.0** (`PolysomStudio.exe`, `PolysomStudioSetup.exe`)  
+**Website & Repository:** `https://lucidmachines.co` · `https://github.com/lucid-machines/triune`  
 **Branch / Baseline:** `release/lucid-machines-v1.0.0`  
 **Release Date:** November 2026  
 
@@ -28,7 +29,7 @@ This inaugural release delivers five core engineering pillars (**R1–R5**):
 - **Conflict-Screened 4-Layer Brand (`docs/RELEASE_NAME_REPORT.md`)**: Locked **Lucid Machines** (`lucid-machines` / `lucid_machines` company, package, CLI, and release brand), **Triune** (`TriuneTransformer` / `TriuneModel` / `TriuneConfig` core neural architecture), **Junkie** (inaugural flagship model to be trained), and **Polysom Studio** (`polysom` / `polysom-studio` workbench) via automated registry queries across PyPI, npm, GitHub, DNS, and web search alongside an explicit non-legal/trademark disclaimer (`docs/RELEASE_NAME_REPORT.md`).
 - **Unified Naming Surface (`v1.0.0`)**:
   - Python distribution & import package: `lucid-machines` / `lucid_machines` (`pyproject.toml` `version = "1.0.0"`).
-  - CLI entrypoints: `lucid-machines` (`studio`, `serve`, `train`, `finetune`, `chat`, `doctor`, `benchmark`, `plan-memory`) and `polysom` (Polysom Studio launcher).
+  - Primary CLI (`Polysom KCX`): `kcx` (`studio`, `serve`, `train`, `finetune`, `chat`, `eval`, `config`, `workspace`, `doctor`, `benchmark`, `plan-memory`), with `polysom`, `lucid-machines`, and `triune` compatibility aliases.
   - Model configs: 12 Triune architecture size templates in `models/configs/triune-*.json` plus 4 inaugural **Junkie** training configurations (`models/configs/junkie-mini.json`, `junkie-1b.json`, `junkie-3b.json`, `junkie-7b.json` / `junkie.json`).
   - Native C/AVX2/CUDA shared library: `lucid_machines_core.dll` / `liblucid_machines_core.so` / `liblucid_machines_core.dylib` (`1.0.0-native-avx2-cuda`, with `triune_core.*` fallback).
   - Windows Desktop App & Installer: `PolysomStudio.exe` and `PolysomStudioSetup.exe` (`dist/PolysomStudio-1.0.0-win-x64.zip`).

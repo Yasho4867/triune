@@ -797,6 +797,7 @@ if HAS_FASTAPI:
             self.steer_mode = "upgraded"
             self.num_steer_dirs = 4
             self.steer_update_gap = 2
+            self.use_rms_steer = False
             self.muon_lr = 0.02
             self.use_triangular_core = True
             self.use_8bit_base = False
@@ -1159,6 +1160,11 @@ if HAS_FASTAPI:
                     "num_heads",
                     "head_dim",
                     "num_experts",
+                    "top_k_experts",
+                    "shared_expert",
+                    "shared_expert_scale",
+                    "expert_hidden_multiplier",
+                    "rope_max_seq_len",
                     "router_prefix_layers",
                     "reflex_exit_layer",
                     "limbic_exit_layer",
@@ -1269,6 +1275,7 @@ if HAS_FASTAPI:
                         "steer_mode": getattr(self, "steer_mode", "upgraded"),
                         "num_steer_dirs": getattr(self, "num_steer_dirs", 4),
                         "steer_update_gap": getattr(self, "steer_update_gap", 2),
+                        "use_rms_steer": getattr(self, "use_rms_steer", False),
                         "galore_lr": getattr(self, "centroid_lr", self.current_lr),
                         "galore_betas": (0.9, 0.999),
                         "galore_weight_decay": 0.01,
@@ -1281,6 +1288,8 @@ if HAS_FASTAPI:
                     }
                     try:
                         self.optimizer = build_optimizer(self.model, optim_cfg)
+                        if hasattr(self.optimizer, "use_rms_steer"):
+                            self.optimizer.use_rms_steer = bool(getattr(self, "use_rms_steer", False))
                     except Exception:
                         self.optimizer = torch.optim.AdamW(
                             self.model.parameters(), lr=self.current_lr, weight_decay=0.01
@@ -3266,6 +3275,7 @@ if HAS_FASTAPI:
         top_logprobs: int = Field(default=5, ge=1, le=20)
         session_id: Optional[str] = None
         user: Optional[str] = None
+        workspace_context: Optional[Dict[str, Any]] = None
 
     class DAGExecuteRequest(BaseModel):
         nodes: List[Dict[str, Any]]
@@ -3515,10 +3525,40 @@ if HAS_FASTAPI:
             },
         }
 
+    def _format_workspace_context(ws_ctx: Optional[Dict[str, Any]]) -> str:
+        if not isinstance(ws_ctx, dict) or not ws_ctx:
+            return ""
+        parts: List[str] = []
+        ws_root = str(ws_ctx.get("workspace_root") or "").strip()
+        if ws_root:
+            parts.append(f"Workspace Root: {ws_root[:300]}")
+        attached = ws_ctx.get("attached_files")
+        if isinstance(attached, list):
+            for item in attached[:5]:
+                if not isinstance(item, dict):
+                    continue
+                fpath = str(item.get("path") or "").strip()
+                lrange = str(item.get("line_range") or "").strip()
+                excerpt = str(item.get("content_excerpt") or "").strip()
+                if not fpath and not excerpt:
+                    continue
+                header = f"File: {fpath[:260]}" + (f" (lines {lrange[:40]})" if lrange else "")
+                if excerpt:
+                    parts.append(f"{header}\n```\n{excerpt[:2000]}\n```")
+                else:
+                    parts.append(header)
+        if not parts:
+            return ""
+        return "[Workspace Context]\n" + "\n".join(parts)
+
     @router.post("/v1/chat/completions")
     async def chat_completions(req: ChatCompletionRequest) -> Dict[str, Any]:
         """Real PyTorch engine or BYOK frontier provider chat completion response."""
         user_prompt = req.messages[-1].get("content", "") if req.messages else ""
+        ws_context_text = _format_workspace_context(req.workspace_context)
+        byok_messages = list(req.messages or [])
+        if ws_context_text:
+            byok_messages = [{"role": "system", "content": ws_context_text}] + byok_messages
         model_name = req.model.lower()
 
         # Check for BYOK Provider Routing only when the request does not target
@@ -3559,7 +3599,7 @@ if HAS_FASTAPI:
                 t0 = time.perf_counter()
                 reply_text = await asyncio.to_thread(
                     _call_openai_api,
-                    req.messages,
+                    byok_messages,
                     api_key,
                     model="gpt-4o-mini",
                     temperature=req.temperature,
@@ -3582,7 +3622,7 @@ if HAS_FASTAPI:
                 anthropic_model = req.model if req.model.startswith("claude-") else "claude-3-5-sonnet-latest"
                 reply_text = await asyncio.to_thread(
                     _call_anthropic_api,
-                    req.messages,
+                    byok_messages,
                     api_key,
                     model=anthropic_model,
                     temperature=req.temperature,
@@ -3608,7 +3648,7 @@ if HAS_FASTAPI:
                 try:
                     reply_text = await asyncio.to_thread(
                         _call_gemini_api,
-                        req.messages,
+                        byok_messages,
                         api_key,
                         model=gemini_model,
                         temperature=req.temperature,
@@ -3619,7 +3659,7 @@ if HAS_FASTAPI:
                     if gemini_model != "gemini-1.5-flash" and "404" in str(g_err):
                         reply_text = await asyncio.to_thread(
                             _call_gemini_api,
-                            req.messages,
+                            byok_messages,
                             api_key,
                             model="gemini-1.5-flash",
                             temperature=req.temperature,
@@ -3710,6 +3750,10 @@ if HAS_FASTAPI:
             else:
                 effective_prompt = user_prompt
 
+        if ws_context_text:
+            effective_prompt = f"{ws_context_text}\n\n{effective_prompt}"
+            prompt_is_formatted = True
+
         if pytorch_state.is_training:
             raise HTTPException(
                 status_code=409, detail="Pause training before starting local inference to avoid competing GPU work."
@@ -3738,7 +3782,7 @@ if HAS_FASTAPI:
                         raise RuntimeError("Training started while inference was being prepared; pause it and retry.")
                     if getattr(pytorch_state, "active_runtime", "pytorch") == "ollama":
                         res = pytorch_state.generate_ollama_text(
-                            req.messages,
+                            byok_messages,
                             max_new_tokens=req.max_tokens,
                             temperature=req.temperature,
                             cancel_event=cancel_event,
@@ -5031,11 +5075,15 @@ if HAS_FASTAPI:
             currently_resident = len(old_engine.resident_layers)
 
         try:
+            if torch.cuda.is_available():
+                gc.collect()
+                torch.cuda.empty_cache()
             free_bytes, _ = torch.cuda.mem_get_info(device)
+            cached_free_bytes = max(0, torch.cuda.memory_reserved(device) - torch.cuda.memory_allocated(device))
             resident_layers = old_engine.resident_layers if old_engine is not None else all_layers[:currently_resident]
             current_bytes = sum(p.numel() * p.element_size() for layer in resident_layers for p in layer.parameters())
             reserve_bytes = 2.5 * (1024**3)
-            usable_bytes = max(0, int(free_bytes + current_bytes - reserve_bytes))
+            usable_bytes = max(0, int(free_bytes + cached_free_bytes + current_bytes - reserve_bytes))
             cumulative_bytes = 0
             max_fit = 0
             for layer in all_layers:
@@ -6072,6 +6120,10 @@ if HAS_FASTAPI:
         muon_lr: Optional[float] = None
         centroid_lr: Optional[float] = None
         steer_scale: Optional[float] = None
+        steer_mode: Optional[str] = None
+        num_steer_dirs: Optional[int] = None
+        steer_update_gap: Optional[int] = None
+        use_rms_steer: Optional[bool] = None
         momentum: Optional[float] = None
         use_triangular_core: Optional[bool] = None
         use_8bit_base: Optional[bool] = None
@@ -6093,7 +6145,11 @@ if HAS_FASTAPI:
                 "type": "StandardOptimizer",
                 "name": "Standard AdamW Baseline",
                 "step_count": pytorch_state.step,
-                "steer_scale": getattr(pytorch_state, "steer_scale", 0.2),
+                "steer_scale": getattr(pytorch_state, "steer_scale", 0.75),
+                "steer_mode": getattr(pytorch_state, "steer_mode", "upgraded"),
+                "num_steer_dirs": getattr(pytorch_state, "num_steer_dirs", 4),
+                "steer_update_gap": getattr(pytorch_state, "steer_update_gap", 2),
+                "use_rms_steer": bool(getattr(pytorch_state, "use_rms_steer", False)),
                 "rank": 64,
                 "update_gap": 100,
                 "expert_lr": getattr(pytorch_state, "centroid_lr", pytorch_state.current_lr),
@@ -6107,7 +6163,7 @@ if HAS_FASTAPI:
                     "param_pct": 0.0,
                     "target": "2D Attention Projections & Shared Weights",
                     "vram_saving": "Not active",
-                    "kernel": "triune/kernels/fast_muon.py",
+                    "kernel": "lucid_machines/kernels/fast_muon.py",
                 },
                 "tier2_centroid": {
                     "name": "Steered Triangular Subspace (sCholQR2)",
@@ -6132,24 +6188,26 @@ if HAS_FASTAPI:
                     "compression_ratio": 1.0,
                 },
             }
-        data["comparison_vs_unsloth"] = {
-            "triune": {
-                "optimizer": "3-Tier Partitioned (Muon + CentroidSteer + AdamW)",
-                "memory_compression": "Not measured for this model and runtime",
-                "moe_anti_collapse": "CentroidSteer configured; runtime state determines whether it is active",
-                "matrix_geometry": "Riemannian 5th-Order Newton-Schulz Orthogonalization",
-                "basis_change": "Subspace transport T = P_old^T @ P_new (loss impact not benchmarked)",
-                "convergence_speed": "Not benchmarked",
-            },
-            "unsloth": {
-                "optimizer": "Standard 8-bit / FP32 AdamW",
-                "memory_compression": "Baseline details depend on optimizer configuration",
-                "moe_anti_collapse": "None (Subject to expert representation collapse)",
-                "matrix_geometry": "None (Coordinate-wise element updates)",
-                "basis_change": "N/A",
-                "convergence_speed": "Not benchmarked",
-            },
-        }
+        data.setdefault(
+            "steer_mode",
+            getattr(pytorch_state.optimizer, "steer_mode", getattr(pytorch_state, "steer_mode", "upgraded")),
+        )
+        data.setdefault(
+            "num_steer_dirs",
+            int(getattr(pytorch_state.optimizer, "num_steer_dirs", getattr(pytorch_state, "num_steer_dirs", 4))),
+        )
+        data.setdefault(
+            "steer_update_gap",
+            int(getattr(pytorch_state.optimizer, "steer_update_gap", getattr(pytorch_state, "steer_update_gap", 2))),
+        )
+        data.setdefault(
+            "steer_scale",
+            float(getattr(pytorch_state.optimizer, "steer_scale", getattr(pytorch_state, "steer_scale", 0.75))),
+        )
+        data.setdefault(
+            "use_rms_steer",
+            bool(getattr(pytorch_state.optimizer, "use_rms_steer", getattr(pytorch_state, "use_rms_steer", False))),
+        )
         return data
 
     @router.post("/v1/training/optimizer")
@@ -6218,6 +6276,38 @@ if HAS_FASTAPI:
             if pytorch_state.optimizer is not None and hasattr(pytorch_state.optimizer, "rank"):
                 pytorch_state.optimizer.rank = req.rank
 
+        if req.steer_mode is not None:
+            raw_sm = str(req.steer_mode).strip().lower()
+            allowed_modes = {"centroid", "upgraded", "legacy", "nosteer", "random_same_mem"}
+            if raw_sm not in allowed_modes:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid steer_mode '{req.steer_mode}'. Expected one of: {', '.join(sorted(allowed_modes))}.",
+                )
+            pytorch_state.steer_mode = raw_sm
+            if raw_sm == "nosteer" and req.steer_scale is None:
+                pytorch_state.steer_scale = 0.0
+                if pytorch_state.optimizer is not None and hasattr(pytorch_state.optimizer, "steer_scale"):
+                    pytorch_state.optimizer.steer_scale = 0.0
+            if pytorch_state.optimizer is not None and hasattr(pytorch_state.optimizer, "steer_mode"):
+                opt_sm = "upgraded" if raw_sm in ("centroid", "nosteer") else raw_sm
+                pytorch_state.optimizer.steer_mode = opt_sm
+
+        if req.num_steer_dirs is not None and req.num_steer_dirs > 0:
+            pytorch_state.num_steer_dirs = int(req.num_steer_dirs)
+            if pytorch_state.optimizer is not None and hasattr(pytorch_state.optimizer, "num_steer_dirs"):
+                pytorch_state.optimizer.num_steer_dirs = int(req.num_steer_dirs)
+
+        if req.steer_update_gap is not None and req.steer_update_gap > 0:
+            pytorch_state.steer_update_gap = int(req.steer_update_gap)
+            if pytorch_state.optimizer is not None and hasattr(pytorch_state.optimizer, "steer_update_gap"):
+                pytorch_state.optimizer.steer_update_gap = int(req.steer_update_gap)
+
+        if req.use_rms_steer is not None:
+            pytorch_state.use_rms_steer = bool(req.use_rms_steer)
+            if pytorch_state.optimizer is not None and hasattr(pytorch_state.optimizer, "use_rms_steer"):
+                pytorch_state.optimizer.use_rms_steer = bool(req.use_rms_steer)
+
         if req.update_gap is not None and req.update_gap > 0:
             pytorch_state.centroid_update_gap = req.update_gap
             if pytorch_state.optimizer is not None and hasattr(pytorch_state.optimizer, "update_gap"):
@@ -6229,7 +6319,19 @@ if HAS_FASTAPI:
             "centroid_lr": getattr(
                 pytorch_state.optimizer, "expert_lr", getattr(pytorch_state, "centroid_lr", pytorch_state.current_lr)
             ),
-            "steer_scale": getattr(pytorch_state.optimizer, "steer_scale", getattr(pytorch_state, "steer_scale", 0.2)),
+            "steer_scale": getattr(pytorch_state.optimizer, "steer_scale", getattr(pytorch_state, "steer_scale", 0.75)),
+            "steer_mode": getattr(
+                pytorch_state, "steer_mode", getattr(pytorch_state.optimizer, "steer_mode", "upgraded")
+            ),
+            "num_steer_dirs": int(
+                getattr(pytorch_state.optimizer, "num_steer_dirs", getattr(pytorch_state, "num_steer_dirs", 4))
+            ),
+            "steer_update_gap": int(
+                getattr(pytorch_state.optimizer, "steer_update_gap", getattr(pytorch_state, "steer_update_gap", 2))
+            ),
+            "use_rms_steer": bool(
+                getattr(pytorch_state.optimizer, "use_rms_steer", getattr(pytorch_state, "use_rms_steer", False))
+            ),
             "muon_lr": getattr(
                 getattr(pytorch_state.optimizer, "muon_optimizer", None), "lr", getattr(pytorch_state, "muon_lr", 0.02)
             ),
@@ -9101,24 +9203,38 @@ SYSTEM \"\"\"You are a Triune neural language model by Lucid Machines, trained w
         return payload
 
     class LaunchJunkieRequest(BaseModel):
+        preset: str = "junkie"
         dataset_path: Optional[str] = None
         batch_size: Optional[int] = None
         seq_len: Optional[int] = None
         grad_accum_steps: Optional[int] = None
         precision: Optional[str] = None
         depth_mode: Optional[str] = None
+        steer_mode: Optional[str] = None
+        target_depth_dist: Optional[List[float]] = None
+        top_k_experts: Optional[int] = None
         start: bool = False
 
     @router.post("/v1/training/launch_junkie")
     async def launch_junkie_training_endpoint(req: Optional[LaunchJunkieRequest] = None) -> Any:
-        """Configure and optionally launch Lucid Machines' first flagship model (Junkie) from models/configs/junkie.json."""
+        """Configure and optionally launch Lucid Machines' Junkie flagship preset from models/configs/."""
         from lucid_machines.api.telemetry_helpers import resolve_confined_config_path
 
         req_obj = req or LaunchJunkieRequest()
+        allowed_presets = {"junkie", "junkie-mini", "junkie-1b", "junkie-3b", "junkie-7b"}
+        preset_id = str(req_obj.preset or "junkie").strip().lower()
+        if preset_id.endswith(".json"):
+            preset_id = preset_id[:-5]
+        if preset_id not in allowed_presets:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid Junkie preset '{req_obj.preset}'. Expected one of: {', '.join(sorted(allowed_presets))}.",
+            )
+
         roots = _get_allowed_roots(("models/configs",), "ALLOWED_CONFIG_ROOTS")
-        junkie_path = resolve_confined_config_path("junkie.json", roots, _has_traversal_syntax, _is_path_confined)
+        junkie_path = resolve_confined_config_path(f"{preset_id}.json", roots, _has_traversal_syntax, _is_path_confined)
         if junkie_path is None or not junkie_path.is_file():
-            raise HTTPException(status_code=404, detail="models/configs/junkie.json not found.")
+            raise HTTPException(status_code=404, detail=f"models/configs/{preset_id}.json not found.")
         junkie_cfg = json.loads(junkie_path.read_text(encoding="utf-8-sig"))
 
         if req_obj.dataset_path:
@@ -9133,14 +9249,34 @@ SYSTEM \"\"\"You are a Triune neural language model by Lucid Machines, trained w
                 )
             pytorch_state.load_training_data(raw_dp)
 
+        if req_obj.steer_mode is not None:
+            raw_sm = str(req_obj.steer_mode).strip().lower()
+            allowed_modes = {"centroid", "upgraded", "legacy", "nosteer", "random_same_mem"}
+            if raw_sm not in allowed_modes:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid steer_mode '{req_obj.steer_mode}'. Expected one of: {', '.join(sorted(allowed_modes))}.",
+                )
+            pytorch_state.steer_mode = "upgraded" if raw_sm == "centroid" else raw_sm
+            if raw_sm == "nosteer":
+                pytorch_state.steer_scale = 0.0
+
         arch = pytorch_state.reconfigure_architecture(
-            preset_id="junkie",
+            preset_id=preset_id,
             instantiate_model=bool(req_obj.start),
             num_layers=junkie_cfg.get("num_layers"),
             hidden_dim=junkie_cfg.get("hidden_dim"),
             num_heads=junkie_cfg.get("num_heads"),
             head_dim=junkie_cfg.get("head_dim"),
             num_experts=junkie_cfg.get("num_experts"),
+            top_k_experts=req_obj.top_k_experts
+            if req_obj.top_k_experts is not None
+            else junkie_cfg.get("top_k_experts"),
+            shared_expert=junkie_cfg.get("shared_expert"),
+            shared_expert_scale=junkie_cfg.get("shared_expert_scale"),
+            expert_hidden_multiplier=junkie_cfg.get("expert_hidden_multiplier"),
+            rope_max_seq_len=junkie_cfg.get("rope_max_seq_len"),
+            target_depth_dist=req_obj.target_depth_dist or junkie_cfg.get("target_depth_dist"),
             batch_size=req_obj.batch_size,
             seq_len=req_obj.seq_len,
             depth_mode=req_obj.depth_mode,
@@ -9149,7 +9285,7 @@ SYSTEM \"\"\"You are a Triune neural language model by Lucid Machines, trained w
         if req_obj.grad_accum_steps is not None and req_obj.grad_accum_steps > 0:
             pytorch_state.grad_accum_steps = int(req_obj.grad_accum_steps)
         pytorch_state.explicit_architecture_active = True
-        pytorch_state.active_project = "Junkie · Inaugural Triune Flagship"
+        pytorch_state.active_project = f"{junkie_cfg.get('name', preset_id)} · Triune Flagship"
 
         started = False
         if req_obj.start:
@@ -9166,15 +9302,17 @@ SYSTEM \"\"\"You are a Triune neural language model by Lucid Machines, trained w
 
         return {
             "status": "started" if started else "configured",
-            "model_id": "junkie",
+            "model_id": preset_id,
+            "preset": preset_id,
             "model_name": junkie_cfg.get("name", "Junkie"),
             "architecture": arch,
+            "steer_mode": getattr(pytorch_state, "steer_mode", "upgraded"),
             "is_training": bool(pytorch_state.is_training),
             "run_id": pytorch_state.run_id,
             "message": (
-                "Junkie flagship training started on Triune architecture."
+                f"{junkie_cfg.get('name', preset_id)} flagship training started on Triune architecture."
                 if started
-                else "Junkie flagship architecture configured from models/configs/junkie.json (ready to train)."
+                else f"{junkie_cfg.get('name', preset_id)} flagship architecture configured from models/configs/{preset_id}.json (ready to train)."
             ),
         }
 

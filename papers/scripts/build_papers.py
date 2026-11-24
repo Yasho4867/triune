@@ -58,7 +58,7 @@ def compile_paper(paper_dir: Path, src_name: str, out_name: str) -> bool:
 
 def main() -> None:
     print("=" * 70, flush=True)
-    print("TRIUNE RESEARCH PAPERS BUILD PIPELINE", flush=True)
+    print("LUCID MACHINES RESEARCH PAPERS BUILD PIPELINE", flush=True)
     print(f"Compiler: {TECTONIC_PATH}", flush=True)
     print("=" * 70, flush=True)
 

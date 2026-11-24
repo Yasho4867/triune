@@ -416,3 +416,133 @@ def test_frontend_themes_ps_classes_and_hygiene_invariants():
     assert "dangerouslySetInnerHTML" not in APP_JS
     assert "document.write(" not in APP_JS
     assert "innerHTML" not in APP_JS
+
+    # R3 & R4 invariants: cleanText Unicode markers, SplitHandle, AmbientPerceptualLayer, Mind Probe
+    assert "replace(/\\u0120/g" in APP_JS
+    assert "replace(/\\u010A/g" in APP_JS
+    assert not re.search(r"replace\(/\[?G", APP_JS)
+    assert "function SplitHandle" in APP_JS or "const SplitHandle" in APP_JS
+    assert "AmbientPerceptualLayer" in APP_JS
+    assert "Polysom Mind Probe & Lucid Steer" in APP_JS
+
+
+def test_configs_endpoint_lists_all_junkie_and_triune_variants(studio_client):
+    res = studio_client.get("/v1/configs")
+    assert res.status_code == 200
+    filenames = {item["filename"] for item in res.json().get("configs", [])}
+    for expected in ("junkie.json", "junkie-mini.json", "junkie-1b.json", "junkie-3b.json", "junkie-7b.json"):
+        assert expected in filenames, f"Missing {expected} from /v1/configs"
+    assert any(name.startswith("triune-") for name in filenames)
+
+
+def test_launch_junkie_supports_presets_and_steer_mode(studio_client):
+    snap = _snapshot_pytorch_state()
+    try:
+        res_bad_preset = studio_client.post("/v1/training/launch_junkie", json={"preset": "nonexistent-preset"})
+        assert res_bad_preset.status_code == 400
+
+        res_mini = studio_client.post(
+            "/v1/training/launch_junkie",
+            json={
+                "preset": "junkie-mini",
+                "steer_mode": "centroid",
+                "target_depth_dist": [0.4, 0.35, 0.25],
+                "top_k_experts": 2,
+                "start": False,
+            },
+        )
+        assert res_mini.status_code == 200
+        body = res_mini.json()
+        assert body["model_id"] == "junkie-mini"
+        assert body["preset"] == "junkie-mini"
+        assert body["architecture"]["num_layers"] == 12
+    finally:
+        _restore_pytorch_state(snap)
+
+
+def test_training_optimizer_api_parity_and_no_stale_comparison(studio_client):
+    snap = _snapshot_pytorch_state()
+    try:
+        get_res = studio_client.get("/v1/training/optimizer")
+        assert get_res.status_code == 200
+        get_data = get_res.json()
+        assert "comparison_vs_unsloth" not in get_data
+        assert "triune/kernels/fast_muon.py" not in json.dumps(get_data)
+        for field in ("steer_mode", "num_steer_dirs", "steer_update_gap", "steer_scale", "use_rms_steer"):
+            assert field in get_data
+
+        post_res = studio_client.post(
+            "/v1/training/optimizer",
+            json={
+                "steer_mode": "random_same_mem",
+                "num_steer_dirs": 6,
+                "steer_update_gap": 4,
+                "steer_scale": 0.42,
+                "use_rms_steer": True,
+            },
+        )
+        assert post_res.status_code == 200
+        post_data = post_res.json()
+        assert post_data["steer_mode"] == "random_same_mem"
+        assert post_data["num_steer_dirs"] == 6
+        assert post_data["steer_update_gap"] == 4
+        assert abs(post_data["steer_scale"] - 0.42) < 1e-6
+        assert post_data["use_rms_steer"] is True
+
+        bad_res = studio_client.post("/v1/training/optimizer", json={"steer_mode": "bogus_mode"})
+        assert bad_res.status_code == 400
+    finally:
+        _restore_pytorch_state(snap)
+
+
+def test_chat_completions_forwards_workspace_context_and_csp_aligned(studio_client):
+    res_health = studio_client.get("/healthz")
+    assert res_health.status_code == 200
+    csp = res_health.headers.get("Content-Security-Policy", "")
+    assert "font-src 'self' data:" in csp
+    assert "fonts.googleapis.com" not in csp
+    assert "fonts.gstatic.com" not in csp
+
+    captured = {}
+
+    def _fake_generate(prompt, **kwargs):
+        captured["prompt"] = prompt
+        captured["kwargs"] = kwargs
+        return {
+            "text": "Verified workspace answer.",
+            "route": "REFLEX",
+            "latency_ms": 12.0,
+            "tokens_per_sec": 80,
+            "tokens_count": 3,
+            "vram_gb": 0.0,
+            "weights_loaded": False,
+        }
+
+    snap = _snapshot_pytorch_state()
+    try:
+        with patch.object(pytorch_state, "generate_text", side_effect=_fake_generate):
+            res = studio_client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "triune-small",
+                    "session_id": "test_ws_ctx_session",
+                    "messages": [{"role": "user", "content": "Explain kernel.py"}],
+                    "workspace_context": {
+                        "workspace_root": "/tmp/demo_ws",
+                        "attached_files": [
+                            {
+                                "path": "src/kernel.py",
+                                "line_range": "1-10",
+                                "content_excerpt": "def fast_op(x): return x * 2",
+                            }
+                        ],
+                    },
+                    "stream": False,
+                },
+            )
+            assert res.status_code == 200
+            assert "src/kernel.py" in captured["prompt"]
+            assert "def fast_op(x): return x * 2" in captured["prompt"]
+            assert "/tmp/demo_ws" in captured["prompt"]
+    finally:
+        _restore_pytorch_state(snap)

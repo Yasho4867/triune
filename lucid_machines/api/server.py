@@ -143,8 +143,8 @@ _SECURITY_HEADERS = {
     "Content-Security-Policy": (
         "default-src 'self'; "
         "script-src 'self' 'unsafe-inline'; "
-        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-        "font-src 'self' data: https://fonts.gstatic.com; "
+        "style-src 'self' 'unsafe-inline'; "
+        "font-src 'self' data:; "
         "img-src 'self' data: blob:; "
         "connect-src 'self' ws: wss: http://127.0.0.1:* http://localhost:*; "
         "object-src 'none'; "
@@ -431,10 +431,10 @@ def run_server(host: str = "127.0.0.1", port: int = 8000) -> None:
             ssl_keyfile=tls_key or None,
         )
         server = SafeServer(config)
-        print(f"[Triune API Server] Starting uvicorn server on http://{host}:{port}...")
+        print(f"[Polysom Studio API] Starting uvicorn server on http://{host}:{port}...")
         server.run()
     except Exception as err:
-        print(f"[Triune API Server ERROR] Failed to start uvicorn server: {err}")
+        print(f"[Polysom Studio API ERROR] Failed to start uvicorn server: {err}")
         import traceback
 
         traceback.print_exc()

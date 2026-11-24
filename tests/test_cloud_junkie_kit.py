@@ -326,6 +326,8 @@ def test_cloud_artifacts_structure_and_hygiene() -> None:
     assert "junkie-7b.json" in joined_cells
     assert "--use_fp8" in joined_cells
     assert "--depth_mode dynamic" in joined_cells
+    assert "--steer_mode centroid" in joined_cells
+    assert "--steer_mode upgraded" not in joined_cells
     assert "FineWeb-Edu" in joined_cells and "FineMath" in joined_cells
     assert "WSD" in joined_cells and "GRPO" in joined_cells
     assert "--auto_resume" in joined_cells
@@ -337,6 +339,7 @@ def test_cloud_artifacts_structure_and_hygiene() -> None:
     sh_text = sh_bytes.decode("utf-8")
     for token in ("--model", "--mode", "--gpus", "--gcs-bucket", "torchrun", "gcloud storage rsync", "ablation"):
         assert token in sh_text
+    assert 'STEER_MODE="centroid"' in sh_text
     bash_bin = shutil.which("bash")
     if bash_bin:
         chk = subprocess.run([bash_bin, "-n", str(sh_path)], capture_output=True, text=True, check=False)

@@ -15,7 +15,24 @@ public partial class MainWindow : Window
     private Process? _activeProcess;
     private bool _unattended;
     private bool _noLaunch;
-    private readonly string _logPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Triune", "logs", $"studio-setup-{DateTime.Now:yyyyMMdd-HHmmss}.log");
+    private readonly string _logPath = Path.Combine(ResolveLogDirectory(), $"studio-setup-{DateTime.Now:yyyyMMdd-HHmmss}.log");
+
+    private static string ResolveLogDirectory()
+    {
+        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        var primary = Path.Combine(localAppData, "Lucid Machines", "logs");
+        try
+        {
+            Directory.CreateDirectory(primary);
+            return primary;
+        }
+        catch
+        {
+            var fallback = Path.Combine(localAppData, "Triune", "logs");
+            Directory.CreateDirectory(fallback);
+            return fallback;
+        }
+    }
 
     public MainWindow()
     {
@@ -47,7 +64,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            StatusHeadlineText.Text = "Could not locate Triune repository root.";
+            StatusHeadlineText.Text = "Could not locate Lucid Machines repository root.";
             AppendLog($"[ERROR] {ex.Message}");
             InstallButton.IsEnabled = false;
             VerifyButton.IsEnabled = false;
@@ -176,7 +193,7 @@ public partial class MainWindow : Window
         Stage1Text.Text = "○  [1/6] Hardware Stack & Driver Probing";
         Stage2Text.Text = "○  [2/6] Isolated Studio Virtual Environment";
         Stage3Text.Text = "○  [3/6] PyTorch & CUDA Tensor Core Runtime";
-        Stage4Text.Text = "○  [4/6] Studio API, WebSockets & Triune Engine";
+        Stage4Text.Text = "○  [4/6] Polysom Studio API, WebSockets & Triune Engine";
         Stage5Text.Text = "○  [5/6] Native Shortcuts & Global CLI PATH";
         Stage6Text.Text = "○  [6/6] End-to-End Subsystem Health Check";
     }
@@ -191,7 +208,7 @@ public partial class MainWindow : Window
             "[1/6] Hardware Stack & Driver Probing",
             "[2/6] Isolated Studio Virtual Environment",
             "[3/6] PyTorch & CUDA Tensor Core Runtime",
-            "[4/6] Studio API, WebSockets & Triune Engine",
+            "[4/6] Polysom Studio API, WebSockets & Triune Engine",
             "[5/6] Native Shortcuts & Global CLI PATH",
             "[6/6] End-to-End Subsystem Health Check"
         };
@@ -225,7 +242,7 @@ public partial class MainWindow : Window
             "[1/6] Hardware Stack & Driver Probing",
             "[2/6] Isolated Studio Virtual Environment",
             "[3/6] PyTorch & CUDA Tensor Core Runtime",
-            "[4/6] Studio API, WebSockets & Triune Engine",
+            "[4/6] Polysom Studio API, WebSockets & Triune Engine",
             "[5/6] Native Shortcuts & Global CLI PATH",
             "[6/6] End-to-End Subsystem Health Check"
         };

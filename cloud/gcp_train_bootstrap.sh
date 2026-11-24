@@ -12,12 +12,12 @@ BATCH_SIZE=""
 SEQ_LEN=1024
 RANK=""
 STEER_DIRS=4
-STEER_MODE="upgraded"
+STEER_MODE="centroid"
 CHECKPOINT_DIR="${HOME}/lucid_checkpoints"
 GCS_BUCKET=""
 PORT=8000
 REPO_DIR="${HOME}/TriuneTransformer"
-REPO_URL="${LUCID_MACHINES_REPO_URL:-https://github.com/lucidmachines/TriuneTransformer.git}"
+REPO_URL="${LUCID_MACHINES_REPO_URL:-https://github.com/lucid-machines/triune.git}"
 BRANCH="release/lucid-machines-v1.0.0"
 
 usage() {
@@ -155,7 +155,7 @@ case "${MODE}" in
     ;;
   studio)
     echo "[Polysom Studio] Serving on 127.0.0.1:${PORT} (tunnel via: gcloud compute ssh <VM> -- -L ${PORT}:127.0.0.1:${PORT})"
-    lucid-machines serve --host 127.0.0.1 --port "${PORT}"
+    kcx serve --host 127.0.0.1 --port "${PORT}"
     ;;
   *)
     echo "Unsupported --mode '${MODE}'. Expected ablation, train, or studio." >&2

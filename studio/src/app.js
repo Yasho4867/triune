@@ -997,6 +997,11 @@
         e('rect', { key: '1', x: '3', y: '3', width: '18', height: '18', rx: '2' }),
         e('line', { key: '2', x1: '3', y1: '9', x2: '21', y2: '9' }),
         e('line', { key: '3', x1: '9', y1: '21', x2: '9', y2: '9' })
+      ],
+      externalLink: [
+        e('path', { key: '1', d: 'M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6' }),
+        e('polyline', { key: '2', points: '15 3 21 3 21 9' }),
+        e('line', { key: '3', x1: '10', y1: '14', x2: '21', y2: '3' })
       ]
     };
     return e('svg', {
@@ -1138,6 +1143,48 @@
       exits: 'Prefix L0-L1 -> Reflex L6 -> Limbic L9 -> Cortex L12',
       params: '535.10M params (230.8M expected active)',
       desc: 'Junkie-Mini is the fast single-GPU inaugural training configuration for Junkie on the 12-layer TriuneTransformer Sparse MoE architecture (1024D, 4 routed + 1 shared expert, VectorisedGLA, RoPE 4096, and CentroidSteer).'
+    },
+    {
+      id: 'junkie-1b',
+      name: 'Junkie-1B (1.16B · 22L / 1024D / 4E)',
+      tier: '1B Single-GPU Target · Junkie-1B Config',
+      layers: 22,
+      hidden_dim: 1024,
+      heads: 8,
+      head_dim: 128,
+      experts_routed: 4,
+      experts_shared: 1,
+      exits: 'Prefix L0-L2 -> Reflex L11 -> Limbic L17 -> Cortex L22',
+      params: '1.16B params (535M expected active)',
+      desc: 'Junkie-1B scales Triune depth to 22 layers with 4 routed + 1 shared expert for single-GPU pretraining and NVFP4 layer streaming.'
+    },
+    {
+      id: 'junkie-3b',
+      name: 'Junkie-3B (2.99B · 16L / 1024D / 16E)',
+      tier: 'Colab L4 Sweet Spot · 16-Expert Sparse Junkie-3B',
+      layers: 16,
+      hidden_dim: 1024,
+      heads: 8,
+      head_dim: 128,
+      experts_routed: 16,
+      experts_shared: 1,
+      exits: 'Prefix L0-L1 -> Reflex L8 -> Limbic L12 -> Cortex L16',
+      params: '2.99B params (460M expected active)',
+      desc: 'Junkie-3B pairs 16 routed MoE experts with Top-2 sparse activation and CentroidSteer orthogonal subspace transport.'
+    },
+    {
+      id: 'junkie-7b',
+      name: 'Junkie-7B (7.40B · 32L / 2048D / 8E)',
+      tier: 'Flagship Scale · Junkie-7B Config',
+      layers: 32,
+      hidden_dim: 2048,
+      heads: 16,
+      head_dim: 128,
+      experts_routed: 8,
+      experts_shared: 1,
+      exits: 'Prefix L0-L3 -> Reflex L18 -> Limbic L25 -> Cortex L32',
+      params: '7.40B params (~1.95B expected active)',
+      desc: 'Junkie-7B flagship 32-layer TriuneTransformer Sparse MoE architecture with CentroidSteer and NVFP4 streaming support.'
     },
     {
       id: 'triune-3b',
@@ -1347,14 +1394,14 @@
     junkie_3b: {
       id: 'junkie_3b',
       name: 'Junkie-3B (16E Dynamic-Exit Blueprint)',
-      preset_id: 'triune-3b',
-      spec: { num_layers: 30, hidden_dim: 1280, num_heads: 20, head_dim: 64, num_experts: 16, top_k_experts: 2, reflex_exit_layer: 7, limbic_exit_layer: 19, precision: 'bf16' },
+      preset_id: 'junkie-3b',
+      spec: { num_layers: 16, hidden_dim: 1024, num_heads: 8, head_dim: 128, num_experts: 16, top_k_experts: 2, reflex_exit_layer: 8, limbic_exit_layer: 12, precision: 'bf16' },
       nodes: [
         { id: 'arch_tok', title: 'BPE Tokenizer', type: 'Data', x: 40, y: 180, details: 'vocab_size=32000\nseq_len=2048' },
-        { id: 'arch_prefix', title: 'Hybrid GLA + RoPE Attention', type: 'Model', x: 340, y: 80, details: 'hidden_dim=1280\nnum_heads=20\nprefix_layers=4' },
-        { id: 'arch_router', title: 'Hierarchical Depth Router', type: 'Model', x: 340, y: 310, details: 'reflex_exit_layer=7\nlimbic_exit_layer=19\ntarget_depth_dist=[0.34, 0.33, 0.33]' },
+        { id: 'arch_prefix', title: 'Hybrid GLA + RoPE Attention', type: 'Model', x: 340, y: 80, details: 'hidden_dim=1024\nnum_heads=8\nprefix_layers=2' },
+        { id: 'arch_router', title: 'Hierarchical Depth Router', type: 'Model', x: 340, y: 310, details: 'reflex_exit_layer=8\nlimbic_exit_layer=12\ntarget_depth_dist=[0.34, 0.33, 0.33]' },
         { id: 'arch_moe', title: 'Sparse MoE FFN Layer', type: 'Model', x: 660, y: 180, details: 'num_experts=16\ntop_k=2\nshared_expert=True' },
-        { id: 'arch_triune', title: 'Triune MoE Transformer', type: 'Model', x: 980, y: 180, details: 'preset_id=triune-3b\nnum_layers=30\nhidden_dim=1280\nheads=20\nhead_dim=64\nexperts_routed=16\ndepth_mode=dynamic\nprecision=bf16' },
+        { id: 'arch_triune', title: 'Triune MoE Transformer', type: 'Model', x: 980, y: 180, details: 'preset_id=junkie-3b\nnum_layers=16\nhidden_dim=1024\nheads=8\nhead_dim=128\nexperts_routed=16\ndepth_mode=dynamic\nprecision=bf16' },
         { id: 'arch_opt', title: 'CentroidSteer Optimizer', type: 'Optimizer', x: 1300, y: 180, details: 'lr=0.0004\nsteer_scale=0.20\ngalore_rank=64' }
       ],
       edges: [
@@ -1977,23 +2024,31 @@
   }
 
   function NeuronSynapseCanvas3D(props) {
-    const { neuronScopeData, activeTierIdx, route, streamVelocity, isGenerating, upgradeResult, activeModel, height: customHeight } = props;
+    const { neuronScopeData, mindTelemetry, activeTierIdx, route, streamVelocity, isGenerating, upgradeResult, activeModel, studioTheme, effectsLevel = 'full', height: customHeight } = props;
     const canvasRef = useRef(null);
     const wrapRef = useRef(null);
     const [isExpanded, setIsExpanded] = useState(false);
     const [fps, setFps] = useState(0);
     const [layoutMode, setLayoutMode] = useState(() => {
-      try { return localStorage.getItem('lucid_machines_canvas_layout') || localStorage.getItem('triune_canvas_layout') || 'obsidian'; } catch (_) { return 'obsidian'; }
+      try {
+        const stored = localStorage.getItem('lucid_machines_canvas_layout') || localStorage.getItem('triune_canvas_layout');
+        if (stored === 'atlas2d' || stored === 'obsidian' || stored === 'pipeline') return stored;
+      } catch (_) {}
+      return 'atlas2d';
     });
+    const [tierFilter, setTierFilter] = useState('all'); // 'all' | 'reflex' | 'limbic' | 'cortex' | 'centroid'
+    const [graphSearch, setGraphSearch] = useState('');
+    const [selectedAtlasNode, setSelectedAtlasNode] = useState(null);
+    const [hoveredAtlasNodeId, setHoveredAtlasNodeId] = useState(null);
     const [customCanvasHeight, setCustomCanvasHeight] = useState(() => {
       try {
         const saved = localStorage.getItem('lucid_machines_canvas_height') || localStorage.getItem('triune_canvas_height');
-        return saved ? Math.max(160, Math.min(560, parseInt(saved, 10))) : 240;
-      } catch (_) { return 240; }
+        return saved ? Math.max(180, Math.min(600, parseInt(saved, 10))) : 280;
+      } catch (_) { return 280; }
     });
     const [isResizing, setIsResizing] = useState(false);
     const resizeStartYRef = useRef(0);
-    const resizeStartHRef = useRef(240);
+    const resizeStartHRef = useRef(280);
 
     const rotXRef = useRef(0.24);
     const rotYRef = useRef(-0.35);
@@ -2001,10 +2056,15 @@
     const velYRef = useRef(0);
     const camDistRef = useRef(370);
     const targetCamDistRef = useRef(370);
+    const pan2dRef = useRef({ x: 0, y: 0, zoom: 1.0, targetX: 0, targetY: 0, targetZoom: 1.0 });
+    const dragNodeIdRef = useRef(null);
+    const pointerDownPosRef = useRef({ x: 0, y: 0 });
+    const isPanning2dRef = useRef(false);
     const isResettingRef = useRef(false);
     const isDraggingRef = useRef(false);
     const lastMouseRef = useRef({ x: 0, y: 0 });
     const autoRotatePausedUntilRef = useRef(0);
+    const screenPosRef = useRef([]);
 
     const pulsesRef = useRef([]);
     const ripplesRef = useRef([]);
@@ -2016,9 +2076,9 @@
     const lastFpsCalcRef = useRef(performance.now());
     const modelSigRef = useRef('');
     const lastPulseEmitTimeRef = useRef(0);
-    const livePropsRef = useRef({ activeTierIdx, route, streamVelocity, isGenerating, neuronScopeData });
-    livePropsRef.current = { activeTierIdx, route, streamVelocity, isGenerating, neuronScopeData };
-    const sizeRef = useRef({ width: 600, height: isExpanded ? 380 : 205, dpr: 1 });
+    const livePropsRef = useRef({ activeTierIdx, route, streamVelocity, isGenerating, neuronScopeData, mindTelemetry, tierFilter, graphSearch, hoveredAtlasNodeId, selectedAtlasNode, studioTheme, effectsLevel });
+    livePropsRef.current = { activeTierIdx, route, streamVelocity, isGenerating, neuronScopeData, mindTelemetry, tierFilter, graphSearch, hoveredAtlasNodeId, selectedAtlasNode, studioTheme, effectsLevel };
+    const sizeRef = useRef({ width: 520, height: isExpanded ? 420 : 260, dpr: 1 });
     const bgCacheRef = useRef({ width: 0, height: 0, grad: null });
     const labelWidthCacheRef = useRef(new Map());
     const lastReportedFpsRef = useRef(-1);
@@ -2080,7 +2140,7 @@
       const particles = [];
       const wires = [];
 
-      if (layoutMode === 'obsidian') {
+      if (layoutMode === 'obsidian' || layoutMode === 'atlas2d') {
         // =========================================================================
         // Obsidian 3D Biological Brain Topology (Dual Hemispheres & Fissure)
         // =========================================================================
@@ -2627,6 +2687,49 @@
         });
       }
 
+      // Augment graph with CentroidSteer C_e Subspace Satellites around MoE experts & initialize 2D Obsidian coordinates
+      const expertNodesForSat = particles.filter(p => p.isExpert);
+      expertNodesForSat.forEach((expNode, eIdx) => {
+        const satId = particles.length;
+        const satAng = (eIdx / Math.max(1, expertNodesForSat.length)) * Math.PI * 2;
+        particles.push({
+          id: satId,
+          tier: 1,
+          tierName: 'CentroidSteer',
+          expertIdx: expNode.expertIdx !== undefined ? expNode.expertIdx : eIdx,
+          x: expNode.x + Math.cos(satAng) * 26,
+          y: expNode.y + Math.sin(satAng) * 24,
+          z: expNode.z + Math.sin(satAng * 2) * 18,
+          phaseX: eIdx * 0.7,
+          phaseY: eIdx * 1.1,
+          phaseZ: eIdx * 0.5,
+          baseR: 3.1,
+          charge: 0,
+          color: '#06b6d4',
+          glowColor: '#22d3ee',
+          auraColor: 'rgba(6, 182, 212, 0.75)',
+          isCentroidSatellite: true,
+          parentExpertId: expNode.id,
+          label: `C_e${expNode.expertIdx !== undefined ? expNode.expertIdx : eIdx}`
+        });
+        wires.push({ from: expNode.id, to: satId, tierFrom: 1, tierTo: 1, isSkip: false, isCentroidLink: true });
+      });
+
+      particles.forEach((p, idx) => {
+        const tierBandX = p.isInput ? -210 : (p.isOutput ? 215 : (p.tier === 0 ? -115 : (p.tier === 1 ? 5 : 130)));
+        const jitterAngle = (idx * 2.39996);
+        const spreadR = p.isCentroidSatellite ? 26 : (p.isExpert ? 88 : 54);
+        p.x2d = p.isCentroidSatellite && particles[p.parentExpertId]
+          ? particles[p.parentExpertId].x2d + Math.cos(jitterAngle) * 30
+          : tierBandX + Math.cos(jitterAngle) * spreadR * 0.45;
+        p.y2d = p.isCentroidSatellite && particles[p.parentExpertId]
+          ? particles[p.parentExpertId].y2d + Math.sin(jitterAngle) * 30
+          : Math.sin(jitterAngle) * spreadR + (p.z || 0) * 0.45;
+        p.vx2d = 0;
+        p.vy2d = 0;
+        p.anchorX2d = tierBandX;
+      });
+
       // Background ambient quanta
       const quanta = [];
       for (let q = 0; q < 34; q++) {
@@ -2665,7 +2768,16 @@
       }
       lastPulseEmitTimeRef.current = now;
 
-      const tier = typeof telemetry.tier === 'number' ? telemetry.tier : (route === 'reflex' ? 0 : (route === 'limbic' ? 1 : 2));
+      const mtLive = livePropsRef.current.mindTelemetry || {};
+      const exitUsageLive = (mtLive.triune_tiers && mtLive.triune_tiers.exit_usage) || {};
+      const rPct = Number(exitUsageLive.reflex || 0);
+      const lPct = Number(exitUsageLive.limbic || 0);
+      const cPct = Number(exitUsageLive.cortex || 0);
+      let tier = typeof telemetry.tier === 'number' ? telemetry.tier : (route === 'reflex' ? 0 : (route === 'limbic' ? 1 : (route === 'cortex' ? 2 : 1)));
+      if (typeof telemetry.tier !== 'number' && route === 'auto' && (rPct + lPct + cPct) > 0) {
+        const roll = Math.random() * (rPct + lPct + cPct);
+        tier = roll < rPct ? 0 : (roll < rPct + lPct ? 1 : 2);
+      }
       const inputNode = particles.find(p => p.isInput) || particles[0];
       const outputNode = particles.find(p => p.isOutput) || particles[particles.length - 1];
       const reflexExitNode = particles.find(p => p.isExit && p.tier === 0);
@@ -2688,11 +2800,30 @@
         pulseColor = '#fbbf24';
         pulseAura = 'rgba(245, 158, 11, 0.92)';
         const experts = particles.filter(p => p.tier === 1 && p.isExpert);
-        const activeExp = experts.length > 0 ? experts[Math.floor(Math.random() * experts.length)] : null;
+        const utilPct = (mtLive.moe_routing && Array.isArray(mtLive.moe_routing.utilization_pct)) ? mtLive.moe_routing.utilization_pct : [];
+        let activeExp = null;
+        if (experts.length > 0) {
+          if (utilPct.length > 0) {
+            const weights = experts.map(ex => Math.max(1, Number(utilPct[ex.expertIdx || 0] || 1)));
+            const sumW = weights.reduce((a, b) => a + b, 0);
+            let rW = Math.random() * sumW;
+            activeExp = experts[0];
+            for (let ei = 0; ei < experts.length; ei++) {
+              rW -= weights[ei];
+              if (rW <= 0) { activeExp = experts[ei]; break; }
+            }
+          } else {
+            activeExp = experts[Math.floor(Math.random() * experts.length)];
+          }
+        }
         chain = [inputNode.id];
         if (reflexExitNode) chain.push(reflexExitNode.id);
         chain.push(routerNode.id);
-        if (activeExp) chain.push(activeExp.id);
+        if (activeExp) {
+          chain.push(activeExp.id);
+          const sat = particles.find(p => p.isCentroidSatellite && p.parentExpertId === activeExp.id);
+          if (sat) chain.push(sat.id);
+        }
         chain.push(limbicExitNode.id, outputNode.id);
       } else {
         pulseColor = '#8b5cf6';
@@ -2742,6 +2873,19 @@
       velXRef.current = 0;
       velYRef.current = 0;
       targetCamDistRef.current = 380;
+      pan2dRef.current = { x: 0, y: 0, zoom: 1.0, targetX: 0, targetY: 0, targetZoom: 1.0 };
+    };
+
+    const focusAtlasNode = (node) => {
+      if (!node) return;
+      if (layoutMode === 'atlas2d') {
+        pan2dRef.current.targetX = -(node.x2d || 0);
+        pan2dRef.current.targetY = -(node.y2d || 0);
+        pan2dRef.current.targetZoom = 1.65;
+      } else {
+        targetCamDistRef.current = 260;
+      }
+      setSelectedAtlasNode(node);
     };
 
     const prevUpgradeSigRef = useRef('');
@@ -2787,10 +2931,10 @@
       if (!ctx) return;
 
       const updateCanvasSize = () => {
-        const rect = canvas.getBoundingClientRect();
-        const width = Math.max(300, Math.floor(rect.width || 600));
-        const height = Math.max(160, Math.floor(rect.height || (isExpanded ? 380 : 205)));
-        const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+        const rect = (wrapRef.current || canvas).getBoundingClientRect();
+        const width = Math.max(180, Math.floor(rect.width || 460));
+        const height = Math.max(160, Math.floor(rect.height || (isExpanded ? 420 : 260)));
+        const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
         sizeRef.current = { width, height, dpr };
         const targetW = Math.floor(width * dpr);
         const targetH = Math.floor(height * dpr);
@@ -2805,7 +2949,7 @@
       let resizeObserver = null;
       if (typeof ResizeObserver !== 'undefined') {
         resizeObserver = new ResizeObserver(updateCanvasSize);
-        resizeObserver.observe(canvas);
+        resizeObserver.observe(wrapRef.current || canvas);
       }
 
       let ioObserver = null;
@@ -2834,17 +2978,38 @@
           activeTierIdx: liveTierIdx,
           streamVelocity: liveStreamVelocity,
           isGenerating: liveIsGenerating,
-          neuronScopeData: liveNeuronScopeData
+          neuronScopeData: liveNeuronScopeData,
+          mindTelemetry: liveMindTelemetry,
+          tierFilter: liveFilter,
+          graphSearch: liveSearch,
+          hoveredAtlasNodeId: liveHoverId,
+          selectedAtlasNode: liveSelectedNode,
+          effectsLevel: liveEffects
         } = livePropsRef.current;
-        const hasActiveMotion = isDraggingRef.current || isResettingRef.current || liveIsGenerating
-          || pulsesRef.current.length > 0 || ripplesRef.current.length > 0;
-        if (!hasActiveMotion && now - lastDrawAt < 33) {
+        const motionPaused = liveEffects === 'off';
+        const hasActiveMotion = !motionPaused && (isDraggingRef.current || isPanning2dRef.current || dragNodeIdRef.current !== null || isResettingRef.current || liveIsGenerating
+          || pulsesRef.current.length > 0 || ripplesRef.current.length > 0 || layoutMode === 'atlas2d');
+        if (!hasActiveMotion && now - lastDrawAt < 66) {
           animIdRef.current = requestAnimationFrame(render);
           return;
         }
         lastDrawAt = now;
 
         const { width, height, dpr } = sizeRef.current;
+        const cs = window.getComputedStyle(canvas);
+        const cssVar = (name, fb) => cs.getPropertyValue(name).trim() || fb;
+        const tColors = {
+          bg: cssVar('--bg-dark', '#0b0a14'),
+          card: cssVar('--bg-card', '#141322'),
+          text: cssVar('--text-main', '#e2e8f0'),
+          muted: cssVar('--text-muted', '#94a3b8'),
+          border: cssVar('--border-color', '#2d294a'),
+          primary: cssVar('--primary', '#8b7cff'),
+          emerald: cssVar('--accent-emerald', '#10b981'),
+          amber: cssVar('--accent-amber', '#f59e0b'),
+          cyan: cssVar('--chart-4', '#06b6d4')
+        };
+
         ctx.save();
         ctx.scale(dpr, dpr);
 
@@ -2857,6 +3022,228 @@
           }
           frameCountRef.current = 0;
           lastFpsCalcRef.current = now;
+        }
+
+        const cx = width / 2;
+        const cy = height / 2;
+        ctx.fillStyle = tColors.bg;
+        ctx.fillRect(0, 0, width, height);
+
+        const particles = particlesRef.current || [];
+        const wires = wiresRef.current || [];
+        const pulses = pulsesRef.current || [];
+        const ripples = ripplesRef.current || [];
+        const moeUtil = (liveMindTelemetry && liveMindTelemetry.moe_routing && Array.isArray(liveMindTelemetry.moe_routing.utilization_pct))
+          ? liveMindTelemetry.moe_routing.utilization_pct : [];
+        const csEnergy = Number(liveMindTelemetry && liveMindTelemetry.centroid_steer ? (liveMindTelemetry.centroid_steer.alignment_energy || 0) : 0);
+
+        const searchQ = String(liveSearch || '').trim().toLowerCase();
+        const matchesNodeFilter = (p) => {
+          const fOk = liveFilter === 'all'
+            || (liveFilter === 'reflex' && p.tier === 0)
+            || (liveFilter === 'limbic' && p.tier === 1 && !p.isCentroidSatellite)
+            || (liveFilter === 'cortex' && p.tier === 2)
+            || (liveFilter === 'centroid' && (p.isCentroidSatellite || p.isExpert));
+          const qOk = !searchQ || String(p.label || '').toLowerCase().includes(searchQ) || String(p.tierName || '').toLowerCase().includes(searchQ);
+          return fOk && qOk;
+        };
+
+        const focusNodeId = liveHoverId !== null ? liveHoverId : (liveSelectedNode ? liveSelectedNode.id : null);
+        const adjacentSet = new Set();
+        if (focusNodeId !== null) {
+          adjacentSet.add(focusNodeId);
+          wires.forEach(w => {
+            if (w.from === focusNodeId) adjacentSet.add(w.to);
+            if (w.to === focusNodeId) adjacentSet.add(w.from);
+          });
+        }
+
+        if (layoutMode === 'atlas2d') {
+          const pan = pan2dRef.current;
+          pan.x += (pan.targetX - pan.x) * 0.2;
+          pan.y += (pan.targetY - pan.y) * 0.2;
+          pan.zoom += (pan.targetZoom - pan.zoom) * 0.2;
+
+          // Subtle tier column guide bands (Obsidian semantic clusters)
+          const tierBands = [
+            { x: -115, label: 'TIER 0 · REFLEX', color: tColors.emerald },
+            { x: 5, label: 'TIER 1 · LIMBIC MoE + C_e', color: tColors.amber },
+            { x: 130, label: 'TIER 2 · CORTEX GLA', color: tColors.primary }
+          ];
+          ctx.save();
+          ctx.font = '600 9px "Fira Code", Consolas, monospace';
+          ctx.textAlign = 'center';
+          tierBands.forEach(tb => {
+            const sx = cx + (tb.x + pan.x) * pan.zoom;
+            if (sx < -60 || sx > width + 60) return;
+            ctx.strokeStyle = tColors.border;
+            ctx.globalAlpha = 0.45;
+            ctx.setLineDash([3, 5]);
+            ctx.beginPath();
+            ctx.moveTo(sx, 36);
+            ctx.lineTo(sx, height - 34);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.fillStyle = tb.color;
+            ctx.globalAlpha = 0.78;
+            ctx.fillText(tb.label, sx, height - 38);
+          });
+          ctx.restore();
+
+          // Gentle Obsidian force-directed relaxation when motion enabled
+          if (!motionPaused) {
+            const nLen = particles.length;
+            for (let i = 0; i < nLen; i++) {
+              const a = particles[i];
+              if (dragNodeIdRef.current === a.id) continue;
+              a.vx2d += ((a.anchorX2d - a.x2d) * 0.012) + ((0 - a.y2d) * 0.0025);
+              for (let j = i + 1; j < nLen; j++) {
+                const b = particles[j];
+                const dx = a.x2d - b.x2d;
+                const dy = a.y2d - b.y2d;
+                const d2 = dx * dx + dy * dy + 16;
+                if (d2 < 3200) {
+                  const rep = 38 / d2;
+                  if (dragNodeIdRef.current !== a.id) { a.vx2d += dx * rep; a.vy2d += dy * rep; }
+                  if (dragNodeIdRef.current !== b.id) { b.vx2d -= dx * rep; b.vy2d -= dy * rep; }
+                }
+              }
+            }
+            wires.forEach(w => {
+              const a = particles[w.from];
+              const b = particles[w.to];
+              if (!a || !b) return;
+              const idealLen = w.isCentroidLink ? 32 : (w.isSkip ? 170 : 72);
+              const dx = b.x2d - a.x2d;
+              const dy = b.y2d - a.y2d;
+              const dist = Math.hypot(dx, dy) || 1;
+              const pull = (dist - idealLen) * (w.isCentroidLink ? 0.045 : 0.008);
+              const fx = (dx / dist) * pull;
+              const fy = (dy / dist) * pull;
+              if (dragNodeIdRef.current !== a.id) { a.vx2d += fx; a.vy2d += fy; }
+              if (dragNodeIdRef.current !== b.id) { b.vx2d -= fx; b.vy2d -= fy; }
+            });
+            particles.forEach(p => {
+              if (dragNodeIdRef.current === p.id) return;
+              p.vx2d *= 0.78;
+              p.vy2d *= 0.78;
+              p.x2d += p.vx2d;
+              p.y2d += p.vy2d;
+            });
+          }
+
+          if (!motionPaused && !liveIsGenerating && (now - lastSpawn > 950)) {
+            lastSpawn = now;
+            emitRealtimePulse({});
+          }
+
+          const fitScale = Math.min(width / 540, height / 280);
+          const worldScale = Math.max(0.6, fitScale) * pan.zoom;
+          const toScreen2d = (p) => ({
+            sx: cx + (p.x2d + pan.x) * worldScale,
+            sy: cy + (p.y2d + pan.y) * worldScale,
+            scale: worldScale
+          });
+
+          const pos2d = particles.map(p => ({ p, proj: toScreen2d(p) }));
+          screenPosRef.current = pos2d;
+
+          // Draw links with hover spotlight dimming
+          wires.forEach(w => {
+            const a = pos2d[w.from];
+            const b = pos2d[w.to];
+            if (!a || !b) return;
+            const visible = matchesNodeFilter(a.p) && matchesNodeFilter(b.p);
+            const isSpotlight = focusNodeId === null || (adjacentSet.has(a.p.id) && adjacentSet.has(b.p.id));
+            const expertWeight = (b.p.isExpert && moeUtil[b.p.expertIdx || 0]) ? (0.8 + Number(moeUtil[b.p.expertIdx || 0]) * 0.04) : 1.0;
+
+            ctx.beginPath();
+            ctx.moveTo(a.proj.sx, a.proj.sy);
+            ctx.lineTo(b.proj.sx, b.proj.sy);
+            if (w.isSkip) {
+              ctx.setLineDash([4, 4]);
+              ctx.strokeStyle = tColors.cyan;
+            } else if (w.isCentroidLink) {
+              ctx.setLineDash([2, 2]);
+              ctx.strokeStyle = tColors.cyan;
+            } else {
+              ctx.setLineDash([]);
+              ctx.strokeStyle = a.p.tier === 0 ? tColors.emerald : (a.p.tier === 1 ? tColors.amber : tColors.primary);
+            }
+            ctx.globalAlpha = !visible ? 0.04 : (isSpotlight ? (focusNodeId !== null ? 0.85 : 0.34) : 0.12);
+            ctx.lineWidth = (w.isSkip ? 1.3 : 1.05 * expertWeight) * (focusNodeId !== null && isSpotlight ? 1.5 : 1.0);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.globalAlpha = 1.0;
+          });
+
+          // Animate telemetry pulses along 2D paths
+          for (let i = pulses.length - 1; i >= 0; i--) {
+            const pulse = pulses[i];
+            pulse.progress += motionPaused ? 0.08 : pulse.speed;
+            const fromIdx = pulse.chain ? pulse.chain[pulse.legIndex || 0] : pulse.fromNode;
+            const toIdx = pulse.chain ? pulse.chain[(pulse.legIndex || 0) + 1] : pulse.toNode;
+            const a = pos2d[fromIdx];
+            const b = pos2d[toIdx];
+            if (!a || !b || pulse.progress >= 1.0) {
+              if (b && b.p) b.p.charge = 1.0;
+              if (pulse.chain && (pulse.legIndex || 0) + 2 < pulse.chain.length) {
+                pulse.legIndex = (pulse.legIndex || 0) + 1;
+                pulse.progress = 0;
+                continue;
+              }
+              pulses.splice(i, 1);
+              continue;
+            }
+            const t = pulse.progress;
+            const px = a.proj.sx + (b.proj.sx - a.proj.sx) * t;
+            const py = a.proj.sy + (b.proj.sy - a.proj.sy) * t;
+            ctx.beginPath();
+            ctx.arc(px, py, 3.2 * Math.min(1.4, worldScale), 0, Math.PI * 2);
+            ctx.fillStyle = pulse.color;
+            ctx.fill();
+          }
+
+          // Draw nodes + CentroidSteer C_e energy rings + theme-token labels
+          pos2d.forEach(({ p, proj }) => {
+            p.charge *= 0.92;
+            const visible = matchesNodeFilter(p);
+            const inSpot = focusNodeId === null || adjacentSet.has(p.id);
+            const nodeCol = p.isCentroidSatellite ? tColors.cyan : (p.tier === 0 ? tColors.emerald : (p.tier === 1 ? tColors.amber : tColors.primary));
+            const utilBoost = (p.isExpert && moeUtil[p.expertIdx || 0]) ? Math.min(4, Number(moeUtil[p.expertIdx || 0]) * 0.08) : 0;
+            const r = Math.max(3.0, (p.baseR + utilBoost + p.charge * 2.2) * Math.min(1.4, worldScale));
+
+            ctx.save();
+            ctx.globalAlpha = !visible ? 0.08 : (inSpot ? 1.0 : 0.14);
+            if (p.isCentroidSatellite && csEnergy > 0) {
+              ctx.beginPath();
+              ctx.arc(proj.sx, proj.sy, r + 4, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * Math.min(1, csEnergy));
+              ctx.strokeStyle = tColors.cyan;
+              ctx.lineWidth = 1.6;
+              ctx.stroke();
+            }
+            ctx.beginPath();
+            ctx.arc(proj.sx, proj.sy, r, 0, Math.PI * 2);
+            ctx.fillStyle = (liveSelectedNode && liveSelectedNode.id === p.id) || (liveHoverId === p.id) ? nodeCol : tColors.card;
+            ctx.fill();
+            ctx.strokeStyle = nodeCol;
+            ctx.lineWidth = (liveTierIdx === p.tier || liveSelectedNode?.id === p.id) ? 2.2 : 1.5;
+            ctx.stroke();
+
+            if (visible && (inSpot || p.isInput || p.isOutput || p.isRouterHub || p.isExit || (p.isExpert && pan.zoom >= 0.85))) {
+              ctx.fillStyle = tColors.text;
+              ctx.font = '600 9.5px "Fira Code", Consolas, monospace';
+              ctx.textAlign = 'left';
+              const lx = Math.min(width - 70, Math.max(6, proj.sx + r + 5));
+              const ly = Math.min(height - 36, Math.max(40, proj.sy + 3));
+              ctx.fillText(p.label, lx, ly);
+            }
+            ctx.restore();
+          });
+
+          ctx.restore();
+          animIdRef.current = requestAnimationFrame(render);
+          return;
         }
 
         if (isResettingRef.current) {
@@ -2884,21 +3271,9 @@
           camDistRef.current += (targetCamDistRef.current - camDistRef.current) * 0.15;
         }
 
-        const cx = width / 2;
-        const cy = height / 2;
-        const sceneScale = Math.min(2, Math.max(0.8, Math.min(width / 600, height / 150)));
+        const sceneScale = Math.min(2, Math.max(0.75, Math.min(width / 600, height / 150)));
 
-        ctx.fillStyle = '#06080d';
-        ctx.fillRect(0, 0, width, height);
-
-        if (bgCacheRef.current.width !== width || bgCacheRef.current.height !== height || !bgCacheRef.current.grad) {
-          const bgGrad = ctx.createRadialGradient(cx, cy, 20, cx, cy, Math.max(width, height) * 0.7);
-          bgGrad.addColorStop(0, 'rgba(16, 22, 38, 0.55)');
-          bgGrad.addColorStop(0.5, 'rgba(10, 14, 24, 0.75)');
-          bgGrad.addColorStop(1, 'rgba(6, 8, 13, 0.98)');
-          bgCacheRef.current = { width, height, grad: bgGrad };
-        }
-        ctx.fillStyle = bgCacheRef.current.grad;
+        ctx.fillStyle = tColors.bg;
         ctx.fillRect(0, 0, width, height);
 
         const ringY = 72;
@@ -2943,11 +3318,6 @@
             }
           });
         }
-
-        const particles = particlesRef.current;
-        const wires = wiresRef.current;
-        const pulses = pulsesRef.current;
-        const ripples = ripplesRef.current;
 
         const tokSpeed = (liveStreamVelocity && typeof liveStreamVelocity.current === 'number')
           ? liveStreamVelocity.current
@@ -3206,7 +3576,7 @@
           const fontSize = Math.max(9, Math.min(12, Math.round(10 * scale)));
           const radius = Math.max(2, p.baseR * scale);
           const fontKey = `${fontSize}|${p.label}`;
-          ctx.font = `600 ${fontSize}px JetBrains Mono, Fira Code, monospace`;
+          ctx.font = `600 ${fontSize}px "Fira Code", Consolas, monospace`;
           let textWidth = labelCache.get(fontKey);
           if (textWidth === undefined) {
             textWidth = ctx.measureText(p.label).width;
@@ -3219,7 +3589,7 @@
           if (rect.left < 3 || rect.right > width - 3 || rect.top < 3 || rect.bottom > height - 3) continue;
           if (labelRects.some(other => rect.left < other.right + 3 && rect.right + 3 > other.left && rect.top < other.bottom + 2 && rect.bottom + 2 > other.top)) continue;
           labelRects.push(rect);
-          ctx.fillStyle = '#f8fafc';
+          ctx.fillStyle = tColors.text;
           ctx.fillText(p.label, textX, sy + 3);
           if (labelRects.length >= 12) break;
         }
@@ -3235,9 +3605,30 @@
         if (ioObserver) ioObserver.disconnect();
         document.removeEventListener('visibilitychange', onVisibilityChange);
       };
-    }, [isExpanded, layoutMode]);
+    }, [isExpanded, layoutMode, studioTheme, effectsLevel]);
 
-    const targetCanvasHeight = isExpanded ? '440px' : (customHeight || `${customCanvasHeight}px`);
+    const findHitNode = (clientX, clientY) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return null;
+      const rect = canvas.getBoundingClientRect();
+      const mx = clientX - rect.left;
+      const my = clientY - rect.top;
+      const list = screenPosRef.current || [];
+      let best = null;
+      let bestDist = 18;
+      for (let i = 0; i < list.length; i++) {
+        const { p, proj } = list[i];
+        if (!proj) continue;
+        const d = Math.hypot(proj.sx - mx, proj.sy - my);
+        if (d < bestDist) {
+          bestDist = d;
+          best = p;
+        }
+      }
+      return best;
+    };
+
+    const targetCanvasHeight = isExpanded ? '460px' : (customHeight || `${customCanvasHeight}px`);
     return e('div', {
       ref: wrapRef,
       className: `neuron-theater-canvas-wrap ${isExpanded ? 'expanded' : ''}`,
@@ -3246,89 +3637,209 @@
       e('canvas', {
         ref: canvasRef,
         className: 'neuron-theater-canvas',
-        onPointerDown: e => {
-          isDraggingRef.current = true;
+        onPointerDown: ev => {
+          pointerDownPosRef.current = { x: ev.clientX, y: ev.clientY };
+          lastMouseRef.current = { x: ev.clientX, y: ev.clientY };
           isResettingRef.current = false;
-          velXRef.current = 0;
-          velYRef.current = 0;
-          lastMouseRef.current = { x: e.clientX, y: e.clientY };
-          try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {}
+          if (layoutMode === 'atlas2d') {
+            const hit = findHitNode(ev.clientX, ev.clientY);
+            if (hit && !ev.shiftKey) {
+              dragNodeIdRef.current = hit.id;
+            } else {
+              isPanning2dRef.current = true;
+            }
+          } else {
+            isDraggingRef.current = true;
+            velXRef.current = 0;
+            velYRef.current = 0;
+          }
+          try { ev.currentTarget.setPointerCapture(ev.pointerId); } catch (_) {}
         },
-        onPointerMove: e => {
+        onPointerMove: ev => {
+          if (layoutMode === 'atlas2d') {
+            const dx = ev.clientX - lastMouseRef.current.x;
+            const dy = ev.clientY - lastMouseRef.current.y;
+            lastMouseRef.current = { x: ev.clientX, y: ev.clientY };
+            if (dragNodeIdRef.current !== null && particlesRef.current) {
+              const node = particlesRef.current[dragNodeIdRef.current];
+              if (node) {
+                const { width, height } = sizeRef.current;
+                const worldScale = Math.max(0.6, Math.min(width / 540, height / 280)) * pan2dRef.current.zoom;
+                node.x2d += dx / worldScale;
+                node.y2d += dy / worldScale;
+              }
+              return;
+            }
+            if (isPanning2dRef.current) {
+              const { width, height } = sizeRef.current;
+              const worldScale = Math.max(0.6, Math.min(width / 540, height / 280)) * pan2dRef.current.zoom;
+              pan2dRef.current.targetX += dx / worldScale;
+              pan2dRef.current.targetY += dy / worldScale;
+              pan2dRef.current.x = pan2dRef.current.targetX;
+              pan2dRef.current.y = pan2dRef.current.targetY;
+              return;
+            }
+            const hit = findHitNode(ev.clientX, ev.clientY);
+            setHoveredAtlasNodeId(hit ? hit.id : null);
+            return;
+          }
           if (!isDraggingRef.current) return;
-          const dx = e.clientX - lastMouseRef.current.x;
-          const dy = e.clientY - lastMouseRef.current.y;
-          lastMouseRef.current = { x: e.clientX, y: e.clientY };
+          const dx = ev.clientX - lastMouseRef.current.x;
+          const dy = ev.clientY - lastMouseRef.current.y;
+          lastMouseRef.current = { x: ev.clientX, y: ev.clientY };
           rotYRef.current += dx * 0.007;
           rotXRef.current = Math.max(-1.15, Math.min(1.15, rotXRef.current + dy * 0.007));
           velYRef.current = dx * 0.005;
           velXRef.current = dy * 0.005;
           autoRotatePausedUntilRef.current = performance.now() + 3500;
         },
-        onPointerUp: e => {
+        onPointerUp: ev => {
+          const moved = Math.hypot(ev.clientX - pointerDownPosRef.current.x, ev.clientY - pointerDownPosRef.current.y);
+          if (layoutMode === 'atlas2d' && moved < 5) {
+            const hit = findHitNode(ev.clientX, ev.clientY);
+            setSelectedAtlasNode(hit || null);
+          }
+          dragNodeIdRef.current = null;
+          isPanning2dRef.current = false;
           isDraggingRef.current = false;
-          try { e.currentTarget.releasePointerCapture(e.pointerId); } catch (_) {}
+          try { ev.currentTarget.releasePointerCapture(ev.pointerId); } catch (_) {}
         },
-        onPointerCancel: () => { isDraggingRef.current = false; },
-        onWheel: e => {
-          e.preventDefault();
-          const delta = e.deltaY;
+        onPointerLeave: () => {
+          setHoveredAtlasNodeId(null);
+        },
+        onDoubleClick: ev => {
+          if (layoutMode !== 'atlas2d') return;
+          const hit = findHitNode(ev.clientX, ev.clientY);
+          if (hit) focusAtlasNode(hit);
+          else resetCamera();
+        },
+        onPointerCancel: () => {
+          dragNodeIdRef.current = null;
+          isPanning2dRef.current = false;
+          isDraggingRef.current = false;
+        },
+        onWheel: ev => {
+          ev.preventDefault();
+          const delta = ev.deltaY;
+          if (layoutMode === 'atlas2d') {
+            const nextZ = Math.max(0.45, Math.min(3.2, pan2dRef.current.targetZoom * (delta < 0 ? 1.12 : 0.89)));
+            pan2dRef.current.targetZoom = nextZ;
+            return;
+          }
           targetCamDistRef.current = Math.max(160, Math.min(650, targetCamDistRef.current + delta * 0.38));
           autoRotatePausedUntilRef.current = performance.now() + 2500;
         }
       }),
-      e('div', { className: 'neuron-theater-hud-left' },
-        e('span', { className: `neuron-tier-pill reflex ${activeTierIdx === 0 ? 'active' : ''}` }, 'Tier 0 · Reflex'),
-        e('span', { className: `neuron-tier-pill limbic ${activeTierIdx === 1 ? 'active' : ''}` }, 'Tier 1 · Limbic MoE'),
-        e('span', { className: `neuron-tier-pill cortex ${activeTierIdx === 2 ? 'active' : ''}` }, 'Tier 2 · Cortex')
+      e('div', { className: 'ps-atlas-toolbar' },
+        e('div', { className: 'ps-atlas-filter-group' },
+          [
+            { id: 'all', label: 'All' },
+            { id: 'reflex', label: 'Reflex' },
+            { id: 'limbic', label: 'Limbic MoE' },
+            { id: 'cortex', label: 'Cortex' },
+            { id: 'centroid', label: 'CentroidSteer' }
+          ].map(f => e('button', {
+            key: f.id,
+            type: 'button',
+            className: `ps-atlas-chip ${tierFilter === f.id ? 'active' : ''}`,
+            onClick: () => setTierFilter(f.id)
+          }, f.label)),
+          e('input', {
+            type: 'text',
+            value: graphSearch,
+            onChange: ev => setGraphSearch(ev.target.value),
+            placeholder: 'Filter nodes...',
+            'aria-label': 'Filter Neural Atlas nodes',
+            style: { width: '94px', padding: '2px 6px', borderRadius: '5px', border: '1px solid var(--border-color)', background: 'var(--bg-input)', color: 'var(--text-main)', fontSize: '10px', fontFamily: 'var(--font-mono)' }
+          })
+        ),
+        e('div', { className: 'ps-atlas-filter-group' },
+          e('span', { className: `neuron-tier-pill reflex ${activeTierIdx === 0 ? 'active' : ''}` }, 'Tier 0 · Reflex'),
+          e('span', { className: `neuron-tier-pill limbic ${activeTierIdx === 1 ? 'active' : ''}` }, 'Tier 1 · Limbic'),
+          e('span', { className: `neuron-tier-pill cortex ${activeTierIdx === 2 ? 'active' : ''}` }, 'Tier 2 · Cortex')
+        )
       ),
+      selectedAtlasNode && (() => {
+        const moeLayers = (mindTelemetry && mindTelemetry.moe_routing && Array.isArray(mindTelemetry.moe_routing.layers)) ? mindTelemetry.moe_routing.layers : [];
+        const cs = (mindTelemetry && mindTelemetry.centroid_steer) || {};
+        const expIdx = selectedAtlasNode.expertIdx;
+        const expUtil = (expIdx !== undefined && mindTelemetry?.moe_routing?.utilization_pct) ? mindTelemetry.moe_routing.utilization_pct[expIdx] : null;
+        const firstLayer = moeLayers[selectedAtlasNode.layerIdx || 0] || moeLayers[0] || {};
+        const acc = expIdx !== undefined && Array.isArray(firstLayer.accepted_counts) ? firstLayer.accepted_counts[expIdx] : null;
+        const req = expIdx !== undefined && Array.isArray(firstLayer.requested_counts) ? firstLayer.requested_counts[expIdx] : null;
+        const drop = expIdx !== undefined && Array.isArray(firstLayer.dropped_counts) ? firstLayer.dropped_counts[expIdx] : null;
+        return e('div', { className: 'ps-atlas-inspector' },
+          e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' } },
+            e('strong', { style: { fontFamily: 'var(--font-mono)', fontSize: '11.5px' } }, selectedAtlasNode.label),
+            e('button', {
+              type: 'button',
+              onClick: () => setSelectedAtlasNode(null),
+              style: { background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '0 2px' },
+              title: 'Close node inspector'
+            }, renderIcon('close', 11))
+          ),
+          e('div', { style: { display: 'flex', flexDirection: 'column', gap: '3px', fontFamily: 'var(--font-mono)', fontSize: '10px', color: 'var(--text-muted)' } },
+            e('div', null, `Tier: ${selectedAtlasNode.tierName || 'Triune'} (T${selectedAtlasNode.tier})`),
+            selectedAtlasNode.layerIdx !== undefined && e('div', null, `Layer Index: L${selectedAtlasNode.layerIdx}`),
+            expUtil !== null && expUtil !== undefined && e('div', null, `MoE Utilization: ${expUtil}%`),
+            acc !== null && e('div', null, `Tokens Acc/Req/Drop: ${acc} / ${req ?? 0} / ${drop ?? 0}`),
+            (selectedAtlasNode.isCentroidSatellite || selectedAtlasNode.isExpert) && e('div', null,
+              `CentroidSteer Energy: ${cs.alignment_energy ?? '--'} | Drift: ${cs.centroid_drift ?? '--'}`
+            ),
+            (selectedAtlasNode.isCentroidSatellite || selectedAtlasNode.isExpert) && e('div', null,
+              `Subspace Rank k_c: ${cs.subspace_rank ?? 64} | Scale: ${cs.steer_scale ?? 0.75}`
+            )
+          )
+        );
+      })(),
       e('div', { className: 'neuron-theater-hud' },
         upgradeResult && e('div', {
           className: 'neuron-hud-item',
-          style: { color: '#10b981', borderColor: 'rgba(16, 185, 129, 0.4)', fontWeight: 600 }
+          style: { color: 'var(--accent-emerald)', borderColor: 'var(--border-color)', fontWeight: 600 }
         }, [
-          renderIcon('branch', 10, { marginRight: '4px', color: '#10b981' }),
-          `${(upgradeResult.model_name || 'TriuneTransformer').toUpperCase()}: architecture estimate · not benchmarked`
+          renderIcon('branch', 10, { marginRight: '4px' }),
+          `${(upgradeResult.model_name || 'TriuneTransformer').toUpperCase()}: architecture estimate`
         ]),
         e('div', {
           className: 'neuron-hud-item',
-          style: { color: layoutMode === 'obsidian' ? '#c084fc' : '#38bdf8', fontWeight: 600 }
-        }, layoutMode === 'obsidian' ? 'Obsidian Brain' : 'Linear Pipeline'),
+          style: { color: 'var(--primary)', fontWeight: 600 }
+        }, layoutMode === 'atlas2d' ? 'Obsidian 2D Atlas' : (layoutMode === 'obsidian' ? '3D Manifold' : '3D Pipeline')),
         e('div', { className: `neuron-hud-item ${(streamVelocity && streamVelocity.current > 0) || isGenerating ? 'accent' : ''}` },
           renderIcon('bolt', 11, { marginRight: '2px' }),
           (streamVelocity && streamVelocity.current > 0) ? `${streamVelocity.current} tok/s` : (isGenerating ? 'Active Flow' : '0 tok/s')
         ),
-        e('div', { className: 'neuron-hud-item', title: 'Canvas frame rate measured from animation frames; not an inference-speed metric.' }, `Canvas ${fps} FPS`),
-        e('div', { className: 'neuron-hud-item', title: 'Counts of rendered graph primitives, not model neurons or individual neural connections.' },
-          `${particlesRef.current ? particlesRef.current.length : '—'} visual nodes · ${wiresRef.current ? wiresRef.current.length : '—'} links`
+        e('div', { className: 'neuron-hud-item', title: 'Canvas frame rate measured from animation frames' }, `Canvas ${fps} FPS`),
+        e('div', { className: 'neuron-hud-item' },
+          `${particlesRef.current ? particlesRef.current.length : '—'} nodes · ${wiresRef.current ? wiresRef.current.length : '—'} links`
         )
       ),
       e('div', { className: 'neuron-theater-controls' },
         e('button', {
           className: 'btn-stimulate-synapse',
-          title: 'Trigger high-energy photon cascade across all layers',
+          title: 'Trigger telemetry-weighted photon cascade across active Triune tiers',
           onClick: triggerStimulate
-        }, [renderIcon('bolt', 11, { marginRight: '3px' }), 'Stimulate Synapses']),
+        }, [renderIcon('bolt', 11, { marginRight: '3px' }), 'Stimulate']),
         e('button', {
-          className: `neuron-ctrl-btn ${layoutMode === 'obsidian' ? 'active' : ''}`,
-          title: 'Toggle between 3D Obsidian Brain graph and Linear Pipeline view',
+          className: `neuron-ctrl-btn ${layoutMode === 'atlas2d' ? 'active' : ''}`,
+          title: 'Cycle between 2D Obsidian Atlas, 3D Manifold, and 3D Pipeline views',
           onClick: () => {
-            const next = layoutMode === 'obsidian' ? 'pipeline' : 'obsidian';
+            const order = ['atlas2d', 'obsidian', 'pipeline'];
+            const next = order[(order.indexOf(layoutMode) + 1) % order.length];
             setLayoutMode(next);
             try { localStorage.setItem('lucid_machines_canvas_layout', next); } catch (_) {}
           }
-        }, [renderIcon('hub', 11, { marginRight: '3px' }), layoutMode === 'obsidian' ? 'Obsidian Brain' : 'Pipeline']),
+        }, [renderIcon('hub', 11, { marginRight: '3px' }), layoutMode === 'atlas2d' ? '2D Obsidian Atlas' : (layoutMode === 'obsidian' ? '3D Manifold' : '3D Pipeline')]),
         e('button', {
           className: 'neuron-ctrl-btn',
-          title: 'Reset camera orbit & zoom',
+          title: 'Reset camera pan, orbit & zoom',
           onClick: resetCamera
         }, [renderIcon('refresh', 11, { marginRight: '3px' }), 'Reset View']),
         !customHeight && e('button', {
           className: `neuron-ctrl-btn ${isExpanded ? 'active' : ''}`,
-          title: isExpanded ? 'Collapse 3D visualizer to compact view' : 'Expand 3D visualizer to large theater mode',
+          title: isExpanded ? 'Collapse visualizer to compact view' : 'Expand visualizer to theater mode',
           onClick: () => setIsExpanded(!isExpanded)
         }, [renderIcon('frame', 11, { marginRight: '4px' }), isExpanded ? 'Compact' : 'Expand']),
-        e('span', { className: 'neuron-mouse-hint' }, 'Drag: Orbit · Scroll: Zoom · Bottom: Resize')
+        e('span', { className: 'neuron-mouse-hint' }, layoutMode === 'atlas2d' ? 'Drag node/bg · Double-click: Focus · Scroll: Zoom' : 'Drag: Orbit · Scroll: Zoom · Bottom: Resize')
       ),
       !isExpanded && !customHeight && e('div', {
         className: `canvas-resize-handle ${isResizing ? 'active' : ''}`,
@@ -3676,14 +4187,15 @@
       return () => ro.disconnect();
     }, []);
 
-    // Draw Layer x Expert Routing Heatmap
+    // Draw Layer x Expert Routing Heatmap (Dynamic height for 30-32L models)
+    const heatHeightPx = Math.max(220, layers.length * 18 + 44);
     useEffect(() => {
       const canvas = heatRef.current;
       if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
-      const w = Math.max(240, Math.floor(rect.width || 360));
-      const h = Math.max(180, Math.floor(rect.height || 220));
-      const dpr = window.devicePixelRatio || 1;
+      const w = Math.max(220, Math.floor(rect.width || 360));
+      const h = heatHeightPx;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
       canvas.width = w * dpr;
       canvas.height = h * dpr;
       const ctx = canvas.getContext('2d');
@@ -3811,13 +4323,25 @@
       const avgEnergy = Number(mindTelemetry?.centroid_steer?.alignment_energy || 0);
       const pts = [];
       for (let i = 0; i < nExp; i++) {
-        const angle = (i / nExp) * Math.PI * 2 - Math.PI / 2;
         const load = Number(util[i] || (100 / nExp));
-        const layerEnergy = layers.reduce((acc, l) => acc + Number(l.alignment_energy || 0), 0) / Math.max(1, layers.length);
-        const radius = maxR * Math.min(0.95, Math.max(0.28, 0.35 + (load / 100) * 0.55 + Math.min(0.25, (layerEnergy || avgEnergy) * 0.5)));
+        let expEnergySum = 0;
+        let expAccSum = 0;
+        let expReqSum = 0;
+        layers.forEach(l => {
+          const acc = Number((l.accepted_counts || [])[i] || 0);
+          const req = Number((l.requested_counts || [])[i] || 0);
+          expAccSum += acc;
+          expReqSum += req;
+          expEnergySum += Number(l.alignment_energy || avgEnergy || 0) * (acc > 0 ? 1 : 0.4);
+        });
+        const expEnergy = layers.length > 0 ? expEnergySum / layers.length : avgEnergy;
+        const acceptRatio = expReqSum > 0 ? expAccSum / expReqSum : 1.0;
+        const phaseShift = (acceptRatio - 0.5) * 0.35 + (expEnergy - avgEnergy) * 0.6;
+        const angle = (i / nExp) * Math.PI * 2 - Math.PI / 2 + phaseShift;
+        const radius = maxR * Math.min(0.95, Math.max(0.28, 0.32 + (load / 100) * 0.52 + Math.min(0.25, expEnergy * 0.5)));
         const px = cx + Math.cos(angle) * radius;
         const py = cy + Math.sin(angle) * radius;
-        pts.push({ i, px, py, load, energy: layerEnergy || avgEnergy, cosSep: Math.cos(angle).toFixed(2) });
+        pts.push({ i, px, py, load, energy: expEnergy, cosSep: Math.cos(phaseShift).toFixed(3) });
       }
 
       // Connect centroid spokes
@@ -3855,37 +4379,40 @@
             e('strong', null, 'Layer x Expert Routing Matrix'),
             e('span', { style: { fontFamily: 'var(--font-mono)' } }, `${layers.length} MoE layers`)
           ),
-          e('canvas', {
-            ref: heatRef,
-            className: 'ps-moe-canvas',
-            onMouseMove: (ev) => {
-              if (!layers.length || !heatRef.current) return;
-              const rect = heatRef.current.getBoundingClientRect();
-              const padL = 56, padT = 22, padR = 10, padB = 12;
-              const maxE = Math.max(1, ...layers.map(l => l.num_experts || 4));
-              const cellW = (rect.width - padL - padR) / maxE;
-              const cellH = (rect.height - padT - padB) / layers.length;
-              const ei = Math.floor((ev.clientX - rect.left - padL) / cellW);
-              const li = Math.floor((ev.clientY - rect.top - padT) / cellH);
-              if (li >= 0 && li < layers.length && ei >= 0 && ei < (layers[li].num_experts || maxE)) {
-                const layer = layers[li];
-                const acc = Number((layer.accepted_counts || [])[ei] || 0);
-                const req = Number((layer.requested_counts || [])[ei] || 0);
-                const tot = (layer.accepted_counts || []).reduce((a, b) => a + Number(b || 0), 0);
-                setHoverCell({
-                  li, ei,
-                  layerName: layer.layer_name || `Layer ${li}`,
-                  loadRatio: tot > 0 ? ((acc / tot) * 100).toFixed(1) + '%' : '0.0%',
-                  accepted: acc,
-                  requested: req,
-                  energy: layer.alignment_energy
-                });
-              } else {
-                setHoverCell(null);
-              }
-            },
-            onMouseLeave: () => setHoverCell(null)
-          })
+          e('div', { className: 'ps-moe-heat-scroll' },
+            e('canvas', {
+              ref: heatRef,
+              className: 'ps-moe-canvas',
+              style: { height: `${heatHeightPx}px`, minHeight: `${heatHeightPx}px` },
+              onMouseMove: (ev) => {
+                if (!layers.length || !heatRef.current) return;
+                const rect = heatRef.current.getBoundingClientRect();
+                const padL = 56, padT = 22, padR = 10, padB = 12;
+                const maxE = Math.max(1, ...layers.map(l => l.num_experts || 4));
+                const cellW = (rect.width - padL - padR) / maxE;
+                const cellH = (rect.height - padT - padB) / layers.length;
+                const ei = Math.floor((ev.clientX - rect.left - padL) / cellW);
+                const li = Math.floor((ev.clientY - rect.top - padT) / cellH);
+                if (li >= 0 && li < layers.length && ei >= 0 && ei < (layers[li].num_experts || maxE)) {
+                  const layer = layers[li];
+                  const acc = Number((layer.accepted_counts || [])[ei] || 0);
+                  const req = Number((layer.requested_counts || [])[ei] || 0);
+                  const tot = (layer.accepted_counts || []).reduce((a, b) => a + Number(b || 0), 0);
+                  setHoverCell({
+                    li, ei,
+                    layerName: layer.layer_name || `Layer ${li}`,
+                    loadRatio: tot > 0 ? ((acc / tot) * 100).toFixed(1) + '%' : '0.0%',
+                    accepted: acc,
+                    requested: req,
+                    energy: layer.alignment_energy
+                  });
+                } else {
+                  setHoverCell(null);
+                }
+              },
+              onMouseLeave: () => setHoverCell(null)
+            })
+          )
         ),
         e('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
           e('div', { style: { display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-muted)' } },
@@ -3926,6 +4453,135 @@
       )
     );
   }
+
+  // ============================================================================
+  // A3. R4 Perceptual Themes Ambient SVG/Geometry Layer (0 Gradients, 0 Emojis)
+  // ============================================================================
+  function renderPerceptualThemeMotif(themeId, size = 36) {
+    const id = String(themeId || 'hypnagogic').toLowerCase();
+    if (id === 'phosphene') {
+      return e('svg', { width: size, height: size, viewBox: '0 0 64 64', fill: 'none', stroke: 'currentColor', strokeWidth: '1.4' },
+        e('circle', { cx: 32, cy: 32, r: 22, strokeDasharray: '4 3' }),
+        e('circle', { cx: 32, cy: 32, r: 12 }),
+        e('path', { d: 'M32 4v10M32 50v10M4 32h10M50 32h10M12 12l7 7M45 45l7 7M52 12l-7 7M19 45l-7 7' })
+      );
+    }
+    if (id === 'pareidolia') {
+      return e('svg', { width: size, height: size, viewBox: '0 0 64 64', fill: 'none', stroke: 'currentColor', strokeWidth: '1.3' },
+        e('polygon', { points: '32,6 56,22 48,54 16,54 8,22' }),
+        e('path', { d: 'M8 22l24 14 24-14M32 6v30M16 54l16-18 16 18' }),
+        e('ellipse', { cx: 32, cy: 32, rx: 10, ry: 5 }),
+        e('circle', { cx: 32, cy: 32, r: 2.2, fill: 'currentColor' })
+      );
+    }
+    if (id === 'afterimage') {
+      return e('svg', { width: size, height: size, viewBox: '0 0 64 64', fill: 'none', stroke: 'currentColor', strokeWidth: '1.4' },
+        e('circle', { cx: 28, cy: 32, r: 16 }),
+        e('circle', { cx: 36, cy: 32, r: 16, strokeDasharray: '5 4' }),
+        e('path', { d: 'M10 14h12M10 50h12M42 14h12M42 50h12M32 10v8M32 46v8' })
+      );
+    }
+    if (id === 'mirage') {
+      return e('svg', { width: size, height: size, viewBox: '0 0 64 64', fill: 'none', stroke: 'currentColor', strokeWidth: '1.3' },
+        e('path', { d: 'M6 26h52M10 34q11-6 22 0t22 0M10 42q11-5 22 0t22 0M14 50h36' }),
+        e('circle', { cx: 32, cy: 16, r: 7 })
+      );
+    }
+    if (id === 'euphoria') {
+      return e('svg', { width: size, height: size, viewBox: '0 0 64 64', fill: 'none', stroke: 'currentColor', strokeWidth: '1.3' },
+        e('circle', { cx: 32, cy: 32, r: 20 }),
+        e('circle', { cx: 32, cy: 32, r: 7 }),
+        e('path', { d: 'M32 6v10M32 48v10M6 32h10M48 32h10M14 14l7 7M43 43l7 7M50 14l-7 7M21 43l-7 7' })
+      );
+    }
+    // hypnagogic default: phase-interference arcs + REM spindle wave
+    return e('svg', { width: size, height: size, viewBox: '0 0 64 64', fill: 'none', stroke: 'currentColor', strokeWidth: '1.3' },
+      e('circle', { cx: 32, cy: 32, r: 22, strokeDasharray: '6 4' }),
+      e('circle', { cx: 32, cy: 32, r: 14 }),
+      e('path', { d: 'M8 32q8-12 16 0t16 0 16 0' })
+    );
+  }
+
+  const AmbientPerceptualLayer = React.memo(function AmbientPerceptualLayer({ studioTheme, effectsLevel }) {
+    const [mouseOffset, setMouseOffset] = useState({ x: 0, y: 0 });
+    const themeId = String(studioTheme || 'hypnagogic').toLowerCase();
+
+    useEffect(() => {
+      if (effectsLevel !== 'full' || themeId !== 'pareidolia') return undefined;
+      let raf = null;
+      const onMove = (ev) => {
+        if (raf) return;
+        raf = requestAnimationFrame(() => {
+          raf = null;
+          const nx = ((ev.clientX / Math.max(1, window.innerWidth)) - 0.5) * 18;
+          const ny = ((ev.clientY / Math.max(1, window.innerHeight)) - 0.5) * 18;
+          setMouseOffset({ x: nx, y: ny });
+        });
+      };
+      window.addEventListener('mousemove', onMove, { passive: true });
+      return () => {
+        window.removeEventListener('mousemove', onMove);
+        if (raf) cancelAnimationFrame(raf);
+      };
+    }, [effectsLevel, themeId]);
+
+    if (effectsLevel === 'off') return null;
+
+    const svgStyle = {
+      width: '100%',
+      height: '100%',
+      color: 'var(--primary)',
+      transform: themeId === 'pareidolia' ? `translate(${mouseOffset.x.toFixed(1)}px, ${mouseOffset.y.toFixed(1)}px)` : undefined
+    };
+
+    return e('div', {
+      className: `ps-ambient-perceptual ${effectsLevel}`,
+      'aria-hidden': 'true'
+    },
+      themeId === 'hypnagogic' && e('svg', { viewBox: '0 0 1200 800', preserveAspectRatio: 'xMidYMid slice', style: svgStyle, fill: 'none', stroke: 'currentColor' },
+        e('g', { className: 'ps-perceptual-spin' },
+          e('circle', { cx: 980, cy: 170, r: 210, strokeWidth: 1, strokeDasharray: '8 10' }),
+          e('circle', { cx: 980, cy: 170, r: 150, strokeWidth: 1 }),
+          e('circle', { cx: 980, cy: 170, r: 92, strokeWidth: 1, strokeDasharray: '4 6' })
+        ),
+        e('path', { className: 'ps-perceptual-pulse', d: 'M0 640 Q150 580 300 640 T600 640 T900 640 T1200 640', strokeWidth: 1.4 }),
+        e('path', { d: 'M0 670 Q150 620 300 670 T600 670 T900 670 T1200 670', strokeWidth: 1, strokeDasharray: '5 5' })
+      ),
+      themeId === 'phosphene' && e('svg', { viewBox: '0 0 1200 800', preserveAspectRatio: 'xMidYMid slice', style: svgStyle, fill: 'none', stroke: 'currentColor' },
+        e('g', { className: 'ps-perceptual-pulse' },
+          e('circle', { cx: 1020, cy: 160, r: 140, strokeWidth: 1.2, strokeDasharray: '3 7' }),
+          e('circle', { cx: 1020, cy: 160, r: 85, strokeWidth: 1 }),
+          e('path', { d: 'M850 160 H1190 M1020 10 V320', strokeWidth: 0.9, strokeDasharray: '4 8' })
+        ),
+        e('path', { d: 'M120 700 C240 580 360 760 480 640 C600 520 720 740 840 620', strokeWidth: 1.2 })
+      ),
+      themeId === 'pareidolia' && e('svg', { viewBox: '0 0 1200 800', preserveAspectRatio: 'xMidYMid slice', style: svgStyle, fill: 'none', stroke: 'currentColor' },
+        e('polygon', { points: '960,80 1120,210 1040,360 880,320 840,160', strokeWidth: 1 }),
+        e('path', { d: 'M840 160 L1120 210 M960 80 L1040 360 M880 320 L1120 210', strokeWidth: 0.9 }),
+        e('ellipse', { cx: 980, cy: 220, rx: 46, ry: 22, strokeWidth: 1.2 }),
+        e('circle', { cx: 980, cy: 220, r: 9, strokeWidth: 1.2 }),
+        e('path', { d: 'M80 720 L220 580 L380 680 L540 540 L700 660', strokeWidth: 1, strokeDasharray: '4 6' })
+      ),
+      themeId === 'afterimage' && e('svg', { viewBox: '0 0 1200 800', preserveAspectRatio: 'xMidYMid slice', style: svgStyle, fill: 'none', stroke: 'currentColor' },
+        e('g', { className: 'ps-perceptual-pulse' },
+          e('circle', { cx: 960, cy: 210, r: 135, strokeWidth: 1.3 }),
+          e('circle', { cx: 1005, cy: 210, r: 135, strokeWidth: 1.1, strokeDasharray: '7 5' })
+        ),
+        e('path', { d: 'M60 80 H110 M60 80 V130 M1140 720 H1090 M1140 720 V670', strokeWidth: 1.5 })
+      ),
+      themeId === 'mirage' && e('svg', { viewBox: '0 0 1200 800', preserveAspectRatio: 'xMidYMid slice', style: svgStyle, fill: 'none', stroke: 'currentColor' },
+        e('path', { d: 'M0 540 H1200 M0 570 Q300 548 600 570 T1200 570 M0 605 Q300 586 600 605 T1200 605 M0 645 H1200', strokeWidth: 1.1 }),
+        e('circle', { cx: 980, cy: 190, r: 78, strokeWidth: 1.1, strokeDasharray: '4 4' })
+      ),
+      themeId === 'euphoria' && e('svg', { viewBox: '0 0 1200 800', preserveAspectRatio: 'xMidYMid slice', style: svgStyle, fill: 'none', stroke: 'currentColor' },
+        e('g', { className: 'ps-perceptual-spin' },
+          e('circle', { cx: 990, cy: 190, r: 170, strokeWidth: 1.1 }),
+          e('circle', { cx: 990, cy: 190, r: 112, strokeWidth: 1, strokeDasharray: '5 5' }),
+          e('path', { d: 'M990 10 V370 M810 190 H1170 M862 62 L1118 318 M1118 62 L862 318', strokeWidth: 0.9 })
+        )
+      )
+    );
+  });
 
   // ============================================================================
   // High-Performance Syntax Highlighting, Incremental Markdown & DOM Virtualization
@@ -4467,6 +5123,77 @@
     );
   });
 
+  function usePersistentSplit(storageKey, defaultSize, minSize, maxSize) {
+    const [size, setSize] = useState(() => {
+      try {
+        const raw = parseInt(window.localStorage.getItem(storageKey), 10);
+        if (!isNaN(raw)) return Math.max(minSize, Math.min(maxSize, raw));
+      } catch (_) {}
+      return defaultSize;
+    });
+    const setClamped = React.useCallback((nextVal) => {
+      setSize(prev => {
+        const val = typeof nextVal === 'function' ? nextVal(prev) : nextVal;
+        const clamped = Math.max(minSize, Math.min(maxSize, Math.round(val)));
+        try { window.localStorage.setItem(storageKey, String(clamped)); } catch (_) {}
+        return clamped;
+      });
+    }, [storageKey, minSize, maxSize]);
+    return [size, setClamped];
+  }
+
+  const SplitHandle = React.memo(function SplitHandle({ orientation = 'vertical', value, onChange, min = 180, max = 640, reverse = false, label = 'Resize pane' }) {
+    const [dragging, setDragging] = useState(false);
+    const startRef = useRef({ pos: 0, val: value });
+    const onPointerDown = (ev) => {
+      if (ev.button !== 0) return;
+      ev.preventDefault();
+      const pos = orientation === 'vertical' ? ev.clientX : ev.clientY;
+      startRef.current = { pos, val: value };
+      setDragging(true);
+      try { ev.currentTarget.setPointerCapture(ev.pointerId); } catch (_) {}
+    };
+    const onPointerMove = (ev) => {
+      if (!dragging) return;
+      const cur = orientation === 'vertical' ? ev.clientX : ev.clientY;
+      const delta = (cur - startRef.current.pos) * (reverse ? -1 : 1);
+      onChange(Math.max(min, Math.min(max, startRef.current.val + delta)));
+    };
+    const onPointerUp = (ev) => {
+      if (!dragging) return;
+      setDragging(false);
+      try { ev.currentTarget.releasePointerCapture(ev.pointerId); } catch (_) {}
+    };
+    const onKeyDown = (ev) => {
+      const step = ev.shiftKey ? 32 : 12;
+      if (orientation === 'vertical' && (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight')) {
+        ev.preventDefault();
+        const dir = ev.key === 'ArrowRight' ? 1 : -1;
+        onChange(Math.max(min, Math.min(max, value + dir * (reverse ? -step : step))));
+      } else if (orientation === 'horizontal' && (ev.key === 'ArrowUp' || ev.key === 'ArrowDown')) {
+        ev.preventDefault();
+        const dir = ev.key === 'ArrowDown' ? 1 : -1;
+        onChange(Math.max(min, Math.min(max, value + dir * (reverse ? -step : step))));
+      }
+    };
+    return e('div', {
+      role: 'separator',
+      tabIndex: 0,
+      'aria-orientation': orientation,
+      'aria-label': label,
+      'aria-valuenow': value,
+      'aria-valuemin': min,
+      'aria-valuemax': max,
+      className: `ps-split-handle ${orientation === 'horizontal' ? 'horizontal' : ''} ${dragging ? 'dragging' : ''}`,
+      title: `${label} (drag or use arrow keys)`,
+      onPointerDown,
+      onPointerMove,
+      onPointerUp,
+      onPointerCancel: onPointerUp,
+      onKeyDown
+    });
+  });
+
   const ChatComposer = React.memo(function ChatComposer(props) {
     const {
       chatInputRef,
@@ -4496,7 +5223,8 @@
       setMaxTokens,
       hasRetryableMessage,
       onRegenerateLast,
-      onStopGeneration
+      onStopGeneration,
+      contextBridge
     } = props;
     const [chatInput, setChatInput] = useState(() => (chatInputRef && chatInputRef.current) || '');
     const [showSystemDrawer, setShowSystemDrawer] = useState(false);
@@ -4509,6 +5237,50 @@
     };
     const isTriuneEngine = /^(triune|junkie|lucid_machines|lucid)/i.test(String(activeModel || ''));
     return e('div', { className: 'chat-input-container' },
+      contextBridge && e('div', { className: 'ps-context-bridge' },
+        e('span', { style: { fontWeight: 700, color: 'var(--text-main)', fontSize: '10.5px', textTransform: 'uppercase', letterSpacing: '0.04em' } }, 'Project Context:'),
+        contextBridge.wsRoot && e('button', {
+          type: 'button',
+          className: 'ps-context-chip',
+          title: `Workspace root: ${contextBridge.wsRoot} (click to open IDE)`,
+          onClick: () => contextBridge.onJumpTab && contextBridge.onJumpTab('workspace')
+        }, [renderIcon('folder', 11), contextBridge.wsRoot.split(/[\\/]/).filter(Boolean).pop() || contextBridge.wsRoot]),
+        contextBridge.activeFilePath && e('button', {
+          type: 'button',
+          className: `ps-context-chip ${contextBridge.attachWorkspace ? 'attached' : ''}`,
+          title: contextBridge.attachWorkspace
+            ? `Attached ${contextBridge.activeFilePath} to prompt context (click to detach)`
+            : `Attach active Workspace file ${contextBridge.activeFilePath} to prompt context`,
+          onClick: contextBridge.onToggleAttachWorkspace
+        }, [
+          renderIcon('file', 11),
+          contextBridge.activeFilePath.split('/').pop(),
+          contextBridge.attachWorkspace ? ' (Attached)' : ' (Attach)'
+        ]),
+        contextBridge.activeConfigName && e('button', {
+          type: 'button',
+          className: 'ps-context-chip',
+          title: 'Active model config (click to view in Training)',
+          onClick: () => contextBridge.onJumpTab && contextBridge.onJumpTab('training')
+        }, [renderIcon('models', 11), contextBridge.activeConfigName]),
+        contextBridge.activeDataset && e('button', {
+          type: 'button',
+          className: 'ps-context-chip',
+          title: 'Active dataset (click to open Datasets)',
+          onClick: () => contextBridge.onJumpTab && contextBridge.onJumpTab('datasets')
+        }, [renderIcon('datasets', 11), String(contextBridge.activeDataset).split('/').pop()]),
+        contextBridge.isTraining && e('button', {
+          type: 'button',
+          className: 'ps-context-chip attached',
+          onClick: () => contextBridge.onJumpTab && contextBridge.onJumpTab('training')
+        }, [renderIcon('activity', 11), `Training Step ${contextBridge.step || 0}`]),
+        e('button', {
+          type: 'button',
+          className: 'ps-context-chip',
+          title: 'Open Visual DAG / Architecture Composer',
+          onClick: () => contextBridge.onJumpTab && contextBridge.onJumpTab('nodegraph')
+        }, [renderIcon('nodes', 11), 'DAG'])
+      ),
       showSystemDrawer && e('div', {
         style: {
           padding: '10px 12px',
@@ -4722,8 +5494,8 @@
         .replace(/â€”/g, '--')
         .replace(/â€¦/g, '...')
         .replace(/[\ufffd\uFFFD]/g, '')
-        .replace(/G/g, ' ')
-        .replace(/C/g, '\n')
+        .replace(/\u0120/g, ' ')
+        .replace(/\u010A/g, '\n')
         .replace(/\r\n?/g, '\n')
         .replace(/[ \t]+/g, ' ')
         .replace(/ *\n */g, '\n')
@@ -4820,6 +5592,12 @@
         window.localStorage.setItem('lucid_machines.studio.theme', studioTheme);
         if (customAccent) window.localStorage.setItem('lucid_machines.studio.customAccent', customAccent);
         else window.localStorage.removeItem('lucid_machines.studio.customAccent');
+        if (typeof window !== 'undefined' && window.chrome && window.chrome.webview && typeof window.chrome.webview.postMessage === 'function') {
+          const themeObj = (typeof APPEARANCE_THEMES !== 'undefined' ? APPEARANCE_THEMES : []).find(t => t.id === studioTheme);
+          const isLight = Boolean(themeObj && themeObj.mode === 'Light');
+          const bgHex = themeObj && themeObj.palette ? themeObj.palette.bg : (isLight ? '#f6f3ec' : '#0a0b0e');
+          window.chrome.webview.postMessage({ type: 'theme_changed', theme: studioTheme, isLight, bgHex });
+        }
       } catch (e) {}
     }, [studioTheme, customAccent]);
     useEffect(() => {
@@ -4930,6 +5708,50 @@
     const [isResizingConsole, setIsResizingConsole] = useState(false);
     const consoleDragOffsetRef = useRef({ x: 0, y: 0 });
 
+    // Resizable SplitPane sizes (persisted) & R4 Perceptual Effects Mode
+    const [chatSidebarWidth, setChatSidebarWidth] = usePersistentSplit('lucid_machines.split.chatSidebar', 260, 180, 440);
+    const [wsSidebarWidth, setWsSidebarWidth] = usePersistentSplit('lucid_machines.split.wsSidebar', 260, 170, 440);
+    const [wsCockpitWidth, setWsCockpitWidth] = usePersistentSplit('lucid_machines.split.wsCockpit', 370, 260, 560);
+    const [dagRightWidth, setDagRightWidth] = usePersistentSplit('lucid_machines.split.dagRight', 380, 260, 640);
+    const [notebookCodeHeight, setNotebookCodeHeight] = usePersistentSplit('lucid_machines.split.notebookCode', 240, 120, 520);
+    const [attachWorkspaceToChat, setAttachWorkspaceToChat] = useState(true);
+    const [effectsLevel, setEffectsLevel] = useState(() => {
+      try {
+        const stored = window.localStorage.getItem('lucid_machines.studio.effectsLevel');
+        if (stored === 'full' || stored === 'subtle' || stored === 'off') return stored;
+      } catch (_) {}
+      return 'full';
+    });
+    const [prefersReducedMotion, setPrefersReducedMotion] = useState(() => {
+      try {
+        return typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      } catch (_) { return false; }
+    });
+    useEffect(() => {
+      try { window.localStorage.setItem('lucid_machines.studio.effectsLevel', effectsLevel); } catch (_) {}
+    }, [effectsLevel]);
+    useEffect(() => {
+      if (typeof window === 'undefined' || !window.matchMedia) return undefined;
+      const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+      const onChange = (ev) => setPrefersReducedMotion(Boolean(ev.matches));
+      if (mq.addEventListener) mq.addEventListener('change', onChange);
+      return () => { if (mq.removeEventListener) mq.removeEventListener('change', onChange); };
+    }, []);
+    const effectiveEffectsLevel = prefersReducedMotion ? 'off' : effectsLevel;
+    useEffect(() => {
+      const clampConsole = () => {
+        setNeuralConsolePos(prev => {
+          const maxX = Math.max(12, window.innerWidth - Math.min(neuralConsoleWidth, 340) - 16);
+          const maxY = Math.max(12, window.innerHeight - 240);
+          const nx = Math.max(12, Math.min(maxX, prev.x));
+          const ny = Math.max(12, Math.min(maxY, prev.y));
+          return (nx === prev.x && ny === prev.y) ? prev : { x: nx, y: ny };
+        });
+      };
+      window.addEventListener('resize', clampConsole);
+      return () => window.removeEventListener('resize', clampConsole);
+    }, [neuralConsoleWidth]);
+
     const [playgroundMode, setPlaygroundMode] = useState(() => {
       try { return window.localStorage.getItem('lucid_machines.playground.mode') || window.localStorage.getItem('triune.playground.mode') || 'chat'; } catch (_) { return 'chat'; }
     });
@@ -4958,6 +5780,15 @@
     const [tokenLabStatusMsg, setTokenLabStatusMsg] = useState('Click "Inspect Token Entropy" to query real model logprobs or BPE tokenization.');
     const [isInspectingTokens, setIsInspectingTokens] = useState(false);
     const [selectedTokenIdx, setSelectedTokenIdx] = useState(null);
+
+    // R4 Signature Hook: Polysom Mind Probe & Lucid Steer State
+    const [probePrompt, setProbePrompt] = useState('Trace why CentroidSteer preserves MoE expert subspaces while Reflex handles confident tokens.');
+    const [probeRouterTemp, setProbeRouterTemp] = useState(1.0);
+    const [probeSteerScale, setProbeSteerScale] = useState(0.75);
+    const [probeSteerMode, setProbeSteerMode] = useState('upgraded');
+    const [isProbingMind, setIsProbingMind] = useState(false);
+    const [probeEpochA, setProbeEpochA] = useState(null);
+    const [probeEpochB, setProbeEpochB] = useState(null);
 
     // Agentic Workflow Studio & DAG Trace History State
     const [dagSideTab, setDagSideTab] = useState('inspector'); // 'inspector' | 'traces' | 'agents'
@@ -5085,6 +5916,40 @@
         }
       } catch (_) {}
       setIsLoadingMind(false);
+    };
+
+    const syncEngineSnapshot = async ({ refreshCheckpoints = false } = {}) => {
+      try {
+        await Promise.all([
+          refreshMindTelemetry(),
+          refreshNeuronScope(),
+          typeof fetchHardwareProfile === 'function' ? fetchHardwareProfile() : Promise.resolve(),
+          refreshCheckpoints && typeof fetchCheckpoints === 'function' ? fetchCheckpoints() : Promise.resolve()
+        ]);
+      } catch (_) {}
+    };
+
+    const buildWorkspaceContextPayload = () => {
+      if (!attachWorkspaceToChat) return undefined;
+      const activeTabObj = wsOpenTabs.find(t => t.relPath === wsActiveTabPath) || null;
+      if (!wsRoot && !activeTabObj) return undefined;
+      const attachedFiles = [];
+      if (activeTabObj) {
+        const lines = String(activeTabObj.content || '').split('\n');
+        const center = Math.max(1, wsCursorPos.line || 1);
+        const startLine = Math.max(1, center - 35);
+        const endLine = Math.min(lines.length, startLine + 79);
+        const excerpt = lines.slice(startLine - 1, endLine).join('\n').slice(0, 2000);
+        attachedFiles.push({
+          path: activeTabObj.relPath,
+          line_range: `${startLine}-${endLine}`,
+          content_excerpt: excerpt
+        });
+      }
+      return {
+        workspace_root: wsRoot || '',
+        attached_files: attachedFiles
+      };
     };
 
     const handleInspectTokens = async (textOverride = null) => {
@@ -5218,6 +6083,9 @@
         showToast('Enter a workspace folder path to open.');
         return;
       }
+      if (wsOpenTabs.some(t => t.dirty) && !window.confirm('You have unsaved file changes in open tabs. Switch workspace anyway?')) {
+        return;
+      }
       try {
         const res = await apiFetch('/v1/workspace/open', {
           method: 'POST',
@@ -5294,6 +6162,11 @@
         setWsShowGitDiff(false);
         if (targetLine && wsEditorRef.current) {
           setWsCursorPos({ line: targetLine, col: 1 });
+          requestAnimationFrame(() => {
+            if (!wsEditorRef.current) return;
+            const lineH = parseFloat(window.getComputedStyle(wsEditorRef.current).lineHeight) || 18.6;
+            wsEditorRef.current.scrollTop = Math.max(0, (targetLine - 4) * lineH);
+          });
         }
         return;
       }
@@ -5316,7 +6189,15 @@
         setWsOpenTabs(prev => [...prev.filter(t => t.relPath !== rel), tabObj]);
         setWsActiveTabPath(rel);
         setWsShowGitDiff(false);
-        setWsCursorPos({ line: targetLine || 1, col: 1 });
+        const lineNum = targetLine || 1;
+        setWsCursorPos({ line: lineNum, col: 1 });
+        if (targetLine) {
+          requestAnimationFrame(() => {
+            if (!wsEditorRef.current) return;
+            const lineH = parseFloat(window.getComputedStyle(wsEditorRef.current).lineHeight) || 18.6;
+            wsEditorRef.current.scrollTop = Math.max(0, (targetLine - 4) * lineH);
+          });
+        }
       } catch (err) {
         showToast(`Could not open file: ${err.message}`);
       }
@@ -5372,6 +6253,7 @@
 
     const handleWorkspaceDeleteFile = async (relPath) => {
       if (!relPath) return;
+      if (!window.confirm(`Delete "${relPath}" from the workspace? This cannot be undone.`)) return;
       try {
         const res = await apiFetch(`/v1/workspace/file?path=${encodeURIComponent(relPath)}`, {
           method: 'DELETE'
@@ -5930,6 +6812,15 @@
     const [activeCheckpointName, setActiveCheckpointName] = useState(null);
     const [saveCkptName, setSaveCkptName] = useState('');
     const [isLoadingCkpt, setIsLoadingCkpt] = useState(false);
+    const [isLoadingCheckpoints, setIsLoadingCheckpoints] = useState(false);
+    const [lossHoverInfo, setLossHoverInfo] = useState(null);
+    const fineTunePollerRef = useRef(null);
+    useEffect(() => () => {
+      if (fineTunePollerRef.current) {
+        clearInterval(fineTunePollerRef.current);
+        fineTunePollerRef.current = null;
+      }
+    }, []);
     const [datasetInfo, setDatasetInfo] = useState({
       name: 'HuggingFaceFW/fineweb-edu',
       type: 'streaming',
@@ -5978,8 +6869,23 @@
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || data.message || `Save failed (${res.status})`);
         if (applyToEngine) {
-          setActiveModel(selectedConfigName.replace(/\.json$/i, ''));
-          refreshMindTelemetry();
+          const appliedModelId = selectedConfigName.replace(/\.json$/i, '');
+          setActiveModel(appliedModelId);
+          setDatasetInfo(prev => ({
+            ...prev,
+            num_layers: parsed.num_layers ?? prev.num_layers,
+            hidden_dim: parsed.hidden_dim ?? prev.hidden_dim,
+            num_heads: parsed.num_heads ?? prev.num_heads,
+            num_experts: parsed.num_experts ?? prev.num_experts
+          }));
+          syncStateToDAGNodes({
+            model_id: appliedModelId,
+            num_layers: parsed.num_layers,
+            hidden_dim: parsed.hidden_dim,
+            num_heads: parsed.num_heads,
+            num_experts: parsed.num_experts
+          });
+          syncEngineSnapshot();
         }
         fetchModelConfigs(selectedConfigName);
         showToast(applyToEngine ? `Saved & activated ${selectedConfigName}` : `Saved ${selectedConfigName}`);
@@ -5990,13 +6896,15 @@
       }
     };
 
-    const handleLaunchJunkie = async (startTrainingNow = false) => {
+    const handleLaunchJunkie = async (startTrainingNow = false, presetOverride = 'junkie') => {
       setIsLaunchingJunkie(true);
       try {
         const res = await apiFetch('/v1/training/launch_junkie', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            preset: presetOverride || 'junkie',
+            dataset_path: activeDataset || undefined,
             batch_size: trainBatchSize || 1,
             seq_len: trainSeqLen || 128,
             grad_accum_steps: trainGradAccum || 4,
@@ -6007,10 +6915,21 @@
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || data.message || `Launch failed (${res.status})`);
-        setActiveModel('junkie');
-        setActiveProjectName('Junkie · Inaugural Triune Flagship');
+        const launchedId = data.model_id || presetOverride || 'junkie';
+        setActiveModel(launchedId);
+        setActiveProjectName(`${data.model_name || 'Junkie'} · Triune Flagship`);
         setIsTraining(Boolean(data.is_training));
-        refreshMindTelemetry();
+        if (data.architecture) {
+          setDatasetInfo(prev => ({
+            ...prev,
+            num_layers: data.architecture.num_layers ?? prev.num_layers,
+            hidden_dim: data.architecture.hidden_dim ?? prev.hidden_dim,
+            num_heads: data.architecture.num_heads ?? prev.num_heads,
+            num_experts: data.architecture.num_experts ?? prev.num_experts
+          }));
+          syncStateToDAGNodes({ model_id: launchedId, ...data.architecture });
+        }
+        syncEngineSnapshot({ refreshCheckpoints: true });
         showToast(data.message || 'Junkie architecture configured.');
       } catch (err) {
         showToast(`Junkie launch failed: ${err.message}`);
@@ -6626,10 +7545,20 @@
       let ws = null;
       let wsReconnectTimer = null;
       let wsReconnectDelay = 1000;
-      const connectWs = () => {
+      const connectWs = async () => {
         try {
-          const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-          const wsUrl = `${protocol}//${window.location.host}/ws/telemetry`;
+          const isRemote = (window.location.protocol === 'http:' || window.location.protocol === 'https:') && !isLocalStudioHost(window.location.hostname);
+          const resolvedBase = isRemote ? '' : (activeApiBase || await discoverApiBase());
+          let wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+          let wsHost = window.location.host;
+          if (resolvedBase) {
+            try {
+              const parsed = new URL(resolvedBase);
+              wsProtocol = parsed.protocol === 'https:' ? 'wss:' : 'ws:';
+              wsHost = parsed.host;
+            } catch (_) {}
+          }
+          const wsUrl = `${wsProtocol}//${wsHost}/ws/telemetry`;
           ws = new WebSocket(wsUrl);
           ws.onopen = () => {
             wsReconnectDelay = 1000;
@@ -7800,6 +8729,7 @@
 
     // Checkpoint Management Handlers (Project-Clubbed)
     const fetchCheckpoints = async () => {
+      setIsLoadingCheckpoints(true);
       try {
         const res = await apiFetch('/v1/checkpoints');
         const data = await res.json();
@@ -7822,7 +8752,10 @@
         if (data.active_checkpoint) {
           setActiveCheckpointName(data.active_checkpoint);
         }
-      } catch (err) {}
+      } catch (err) {
+      } finally {
+        setIsLoadingCheckpoints(false);
+      }
     };
 
     const handleSetActiveProject = async (projectName) => {
@@ -7926,7 +8859,11 @@
             setMetrics(prev => ({ ...prev, step: data.step, tokens_trained: restoredTok }));
             setDatasetInfo(prev => ({ ...prev, total_tokens: restoredTok }));
           }
-          fetchCheckpoints();
+          if (data.architecture) {
+            setDatasetInfo(prev => ({ ...prev, ...data.architecture }));
+            syncStateToDAGNodes({ model_id: data.active_model || activeModel, ...data.architecture });
+          }
+          syncEngineSnapshot({ refreshCheckpoints: true });
         } else {
           showToast(data.message);
         }
@@ -8072,10 +9009,14 @@
           if (sig === lastTrainSig) return;
           lastTrainSig = sig;
           if (data.active_model) {
-            setActiveModel(prev => (prev === data.active_model ? prev : data.active_model));
+            setActiveModel(prev => {
+              const isByok = CLOUD_BYOK_MODEL_IDS.has(prev) || isCloudByokModel(prev, Boolean(data.weights_loaded));
+              if (isByok) return prev;
+              return prev === data.active_model ? prev : data.active_model;
+            });
           }
           if (data.dataset) {
-            setDatasetInfo(data.dataset);
+            setDatasetInfo(prev => ({ ...prev, ...data.dataset }));
             if (Date.now() - lastManualConfigEditRef.current > 4000) {
               if (data.dataset.batch_size) setTrainBatchSize(data.dataset.batch_size);
               if (data.dataset.seq_len) setTrainSeqLen(data.dataset.seq_len);
@@ -8112,7 +9053,7 @@
             if (data.exit_usage) setExitUsage(data.exit_usage);
           }
           if (data.logs && data.logs.length > 0) setTelemetryLogs(data.logs);
-          if (data.last_sample) setLastSample(data.last_sample.replace(/G/g, ' ').replace(/\s+/g, ' ').trim());
+          if (data.last_sample) setLastSample(data.last_sample.replace(/\u0120/g, ' ').replace(/\u010A/g, '\n').replace(/\s+/g, ' ').trim());
         } catch (err) {
         } finally {
           trainPollInFlight = false;
@@ -8154,14 +9095,23 @@
       return () => { cancelled = true; clearTimeout(tid); };
     }, [sampleText]);
 
-    // WandB-Style Multi-Metric Loss & Telemetry Canvas Chart Renderer
+    // WandB-Style Multi-Metric Loss & Telemetry Canvas Chart Renderer (ResizeObserver + Hover Crosshair)
+    const [lossChartWidthTick, setLossChartWidthTick] = useState(0);
+    useEffect(() => {
+      if (activeTab !== 'training' || !canvasRef.current || typeof ResizeObserver === 'undefined') return undefined;
+      const el = canvasRef.current;
+      const ro = new ResizeObserver(() => setLossChartWidthTick(t => t + 1));
+      ro.observe(el.parentElement || el);
+      return () => ro.disconnect();
+    }, [activeTab]);
+
     useEffect(() => {
       if (activeTab === 'training' && canvasRef.current) {
         const canvas = canvasRef.current;
         const rect = canvas.getBoundingClientRect();
-        const displayWidth = Math.max(300, Math.floor(rect.width || 850));
+        const displayWidth = Math.max(240, Math.floor(rect.width || 850));
         const displayHeight = Math.max(180, Math.floor(rect.height || 260));
-        const dpr = window.devicePixelRatio || 1;
+        const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
         canvas.width = displayWidth * dpr;
         canvas.height = displayHeight * dpr;
         const ctx = canvas.getContext('2d');
@@ -8175,7 +9125,9 @@
           lmLoss: chartColor('--chart-lm-loss', '#2b4c3f'),
           routerLoss: chartColor('--chart-router-loss', '#d97706'),
           throughput: chartColor('--chart-throughput', '#0d9488'),
-          ppl: chartColor('--chart-ppl', '#6366f1')
+          ppl: chartColor('--chart-ppl', '#6366f1'),
+          card: chartColor('--bg-card', '#141422'),
+          text: chartColor('--text-main', '#e2e8f0')
         };
         const width = displayWidth;
         const height = displayHeight;
@@ -8336,6 +9288,42 @@
             });
             ctx.stroke();
           });
+
+          // Interactive Hover Crosshair & Tooltip
+          if (lossHoverInfo && n >= 1) {
+            const hxIdx = Math.max(0, Math.min(n - 1, lossHoverInfo.idx));
+            const hx = n === 1 ? startX + plotWidth / 2 : startX + (hxIdx / (n - 1)) * plotWidth;
+            const hm = metricsHistory[hxIdx];
+            ctx.save();
+            ctx.strokeStyle = chartColors.axis;
+            ctx.setLineDash([4, 3]);
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(hx, 15);
+            ctx.lineTo(hx, startY);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            const tipLines = [
+              `Step ${hm.step ?? hxIdx}`,
+              typeof hm.loss === 'number' ? `Loss: ${hm.loss.toFixed(4)}` : null,
+              typeof hm.lm_loss === 'number' ? `LM: ${hm.lm_loss.toFixed(4)}` : null,
+              typeof hm.throughput === 'number' ? `${hm.throughput} tok/s` : null
+            ].filter(Boolean);
+            const tipW = 138;
+            const tipH = 14 + tipLines.length * 14;
+            const tipX = hx + tipW + 14 > width ? Math.max(66, hx - tipW - 10) : hx + 10;
+            const tipY = 20;
+            ctx.fillStyle = chartColors.card;
+            ctx.strokeStyle = chartColors.axis;
+            ctx.lineWidth = 1;
+            ctx.fillRect(tipX, tipY, tipW, tipH);
+            ctx.strokeRect(tipX, tipY, tipW, tipH);
+            ctx.fillStyle = chartColors.text;
+            ctx.font = '10.5px monospace';
+            ctx.textAlign = 'left';
+            tipLines.forEach((ln, li) => ctx.fillText(ln, tipX + 8, tipY + 16 + li * 14));
+            ctx.restore();
+          }
         } else {
           ctx.fillStyle = chartColors.axis;
           ctx.font = 'italic 13px Outfit, sans-serif';
@@ -8344,7 +9332,7 @@
           ctx.textAlign = 'start';
         }
       }
-    }, [activeTab, metricsHistory, chartMetrics, chartSmoothing, chartScale, chartXAxis, windowWidth]);
+    }, [activeTab, metricsHistory, chartMetrics, chartSmoothing, chartScale, chartXAxis, windowWidth, studioTheme, lossChartWidthTick, lossHoverInfo]);
 
     // WandB Experiment Research Export Handlers
     const handleExportRunCSV = () => {
@@ -8801,8 +9789,9 @@
               renderIcon('hardware', 16, { marginRight: '6px' }),
               'Hardware Acceleration & GPU Offload (Ollama / LM Studio Tuner)'
             ),
-            e('span', { className: 'hw-device-badge' },
-              `? ${deviceTitle} (${totalVram > 0 ? `${totalVram} GB VRAM` : 'VRAM capacity unavailable'})`
+            e('span', { className: 'hw-device-badge', style: { display: 'inline-flex', alignItems: 'center', gap: '5px' } },
+              renderIcon('hardware', 12),
+              `${deviceTitle} (${totalVram > 0 ? `${totalVram} GB VRAM` : 'VRAM capacity unavailable'})`
             )
           ),
           e('button', {
@@ -9467,11 +10456,14 @@
               setPrecision(ac.precision);
             }
             if (ac.lr) setTrainLR(String(ac.lr));
-            if (ac.dataset) setActiveDataset(ac.dataset);
+            const resolvedDatasetName = (ac.dataset && typeof ac.dataset === 'object')
+              ? (ac.dataset.name || ac.dataset.path || '')
+              : ac.dataset;
+            if (resolvedDatasetName) setActiveDataset(resolvedDatasetName);
             if (ac.active_adapter !== undefined) setActiveAdapter(ac.active_adapter);
             setDatasetInfo(prev => ({
               ...prev,
-              name: ac.dataset || prev.name,
+              name: resolvedDatasetName || prev.name,
               batch_size: ac.batch_size || prev.batch_size,
               seq_len: ac.seq_len || prev.seq_len,
               grad_accum_steps: ac.grad_accum_steps || prev.grad_accum_steps,
@@ -10502,6 +11494,10 @@
           throw new Error(data.message || data.detail || `Compile failed (${res.status})`);
         }
         if (data.active_model) setActiveModel(data.active_model);
+        if (dagArchSpec.precision) {
+          setTrainPrecision(dagArchSpec.precision);
+          setPrecision(dagArchSpec.precision);
+        }
         setDatasetInfo(prev => ({
           ...prev,
           num_layers: dagArchSpec.num_layers,
@@ -10509,7 +11505,7 @@
           num_heads: dagArchSpec.num_heads,
           num_experts: dagArchSpec.num_experts
         }));
-        refreshMindTelemetry();
+        syncEngineSnapshot();
         showToast(data.message || 'Compiled Triune architecture blueprint to live engine.');
       } catch (err) {
         showToast(`Blueprint compile failed: ${err.message}`);
@@ -10989,6 +11985,8 @@
             top_logprobs: 5,
             max_tokens: maxTokens,
             route: route,
+            session_id: activeSessionId,
+            workspace_context: buildWorkspaceContextPayload(),
             stream: true
           })
         });
@@ -11433,12 +12431,14 @@
           }
           syncStateToDAGNodes({ adapter: { rank: loraConfig.rank, alpha: loraConfig.alpha } });
           showToast('LoRA fine-tuning started on PyTorch engine!');
+          if (fineTunePollerRef.current) clearInterval(fineTunePollerRef.current);
           const poller = setInterval(async () => {
             try {
               const sRes = await apiFetch('/v1/finetune/status');
               const sData = await sRes.json();
               if (sData.status === 'completed') {
                 clearInterval(poller);
+                fineTunePollerRef.current = null;
                 setIsFineTuningRunning(false);
                 setFineTuningProgress(prev => ({ ...prev, step: sData.step, total_steps: sData.step, loss: sData.final_loss }));
                 setFineTuningStatus(`Fine-tuning completed! Final Loss: ${sData.final_loss}. Saved to: ${sData.output_dir}`);
@@ -11449,11 +12449,13 @@
                 showToast('LoRA Fine-Tuning Completed & Attached to Engine!');
               } else if (sData.status === 'failed') {
                 clearInterval(poller);
+                fineTunePollerRef.current = null;
                 setIsFineTuningRunning(false);
                 setFineTuningStatus(`Fine-tuning failed: ${sData.error}`);
                 showToast(`Fine-Tuning Failed: ${sData.error || 'unknown error'}`);
               } else if (sData.status === 'cancelled') {
                 clearInterval(poller);
+                fineTunePollerRef.current = null;
                 setIsFineTuningRunning(false);
                 setFineTuningStatus('Fine-tuning was cancelled by user.');
                 showToast('Fine-Tuning Cancelled');
@@ -11471,9 +12473,11 @@
               }
             } catch (err) {
               clearInterval(poller);
+              fineTunePollerRef.current = null;
               setIsFineTuningRunning(false);
             }
           }, 800);
+          fineTunePollerRef.current = poller;
         } else {
           setIsFineTuningRunning(false);
           setFineTuningStatus(data.message || 'Could not start fine-tuning');
@@ -11685,6 +12689,7 @@
       onMouseMove: handleMouseMove,
       onMouseUp: handleMouseUp
     },
+      e(AmbientPerceptualLayer, { studioTheme, effectsLevel: effectiveEffectsLevel }),
       // Non-Intrusive Toast Stack (.ps-toast-stack)
       toastStack.length > 0 && e('div', { className: 'ps-toast-stack', role: 'status', 'aria-live': 'polite' },
         toastStack.map(t => e('div', {
@@ -11788,6 +12793,25 @@
             label: 'Auto-Layout Node Canvas (L)',
             hint: 'DAG',
             action: () => { setActiveTab('nodegraph'); handleAutoLayoutDAG(); }
+          },
+          {
+            id: 'act:mind-probe',
+            group: 'Action',
+            label: 'Open Polysom Mind Probe & Lucid Steer',
+            hint: 'Probe',
+            action: () => { setActiveTab('chat'); setPlaygroundMode('probe'); refreshMindTelemetry(); }
+          },
+          {
+            id: 'act:effects-toggle',
+            group: 'Appearance',
+            label: `Cycle Visual Effects (${effectsLevel})`,
+            hint: 'A11y',
+            action: () => {
+              const order = ['full', 'subtle', 'off'];
+              const next = order[(order.indexOf(effectsLevel) + 1) % order.length];
+              setEffectsLevel(next);
+              showToast(`Visual Effects: ${next.toUpperCase()}`);
+            }
           },
           {
             id: 'act:purge-vram',
@@ -11924,8 +12948,8 @@
                       e('div', { style: { fontWeight: 700, fontSize: '14px', color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '6px' } },
                         item.title,
                         (item.execution_type === 'execution' || item.real_computation)
-                          ? e('span', { style: { fontSize: '9px', background: '#e3ebd8', color: '#2b4c3f', padding: '1px 5px', borderRadius: '4px', fontWeight: 600 } }, 'EXECUTION')
-                          : e('span', { style: { fontSize: '9px', background: '#faeed7', color: '#78350f', padding: '1px 5px', borderRadius: '4px', fontWeight: 600 } }, 'SPEC')
+                          ? e('span', { style: { fontSize: '9px', background: 'var(--bg-surface)', color: 'var(--accent-emerald)', border: '1px solid var(--border-color)', padding: '1px 5px', borderRadius: '4px', fontWeight: 600 } }, 'EXECUTION')
+                          : e('span', { style: { fontSize: '9px', background: 'var(--bg-surface)', color: 'var(--accent-amber)', border: '1px solid var(--border-color)', padding: '1px 5px', borderRadius: '4px', fontWeight: 600 } }, 'SPEC')
                       ),
                       e('span', { className: 'node-type-tag', style: { fontSize: '10px' } }, item.category)
                     ),
@@ -12292,27 +13316,8 @@
               title: 'Open Command Palette (Ctrl+K)',
               style: { cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '5px', fontFamily: 'var(--font-mono)', fontSize: '11px' }
             }, [renderIcon('search', 11), 'Ctrl+K']),
-            e('div', { className: 'ps-theme-switcher', role: 'group', 'aria-label': 'Studio Theme Quick Switcher' },
-              APPEARANCE_THEMES.map(t => e('button', {
-                key: t.id,
-                type: 'button',
-                className: `ps-theme-pill ${studioTheme === t.id ? 'active' : ''}`,
-                'aria-pressed': studioTheme === t.id ? 'true' : 'false',
-                title: `${t.name} (${t.mode})`,
-                onClick: () => {
-                  setStudioTheme(t.id);
-                  setPreviewThemeDraft(false);
-                  setEditingThemeId('');
-                  setCustomAccent('');
-                  try { window.localStorage.setItem('lucid_machines.studio.theme', t.id); } catch (_) {}
-                  showToast(`Theme: ${t.name}`);
-                }
-              },
-                e('span', { className: 'ps-theme-dot', style: { background: t.palette.accent } }),
-                e('span', null, t.name)
-              ))
-            ),
-            e('div', { className: 'pill', style: { display: 'inline-flex', alignItems: 'center', gap: '5px', padding: '2px 8px' }, title: 'Switch Studio Theme' },
+            e('div', { className: 'pill ps-theme-switcher ps-theme-pill', style: { display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '2px 8px' }, title: 'Switch Studio Theme' },
+              e('span', { className: 'ps-theme-dot', style: { background: activeAppearanceTheme.palette ? activeAppearanceTheme.palette.accent : 'var(--primary)' } }),
               renderIcon('themes', 12, { color: 'var(--text-muted)' }),
               e('select', {
                 value: studioTheme,
@@ -12331,7 +13336,7 @@
                 },
                 style: { background: 'transparent', border: 'none', color: 'var(--text-main)', fontSize: '11px', outline: 'none', cursor: 'pointer', fontFamily: 'var(--font-mono)' }
               },
-                allAppearanceThemes.map(t => e('option', { key: t.id, value: t.id, style: { background: 'var(--bg-card)', color: 'var(--text-main)' } }, t.name))
+                allAppearanceThemes.map(t => e('option', { key: t.id, value: t.id, style: { background: 'var(--bg-card)', color: 'var(--text-main)' } }, `${t.name} (${t.mode})`))
               )
             ),
             e('span', {
@@ -12368,7 +13373,7 @@
                 style: {
                   width: '42px',
                   height: '6px',
-                  background: 'rgba(255, 255, 255, 0.1)',
+                  background: 'var(--border-color)',
                   borderRadius: '3px',
                   overflow: 'hidden'
                 }
@@ -12539,7 +13544,7 @@
                 (s.messages && s.messages.some(m => m.text && m.text.toLowerCase().includes(q)));
             });
 
-            return e('div', { className: 'chat-workspace-layout' },
+            return e('div', { className: 'chat-workspace-layout', style: { '--chat-sidebar-width': `${chatSidebarWidth}px` } },
               // Left: Conversation History Sidebar
               e('aside', { className: `chat-history-sidebar ${chatSidebarOpen ? '' : 'collapsed'}` },
                 e('div', { className: 'chat-history-header' },
@@ -12618,6 +13623,15 @@
                 )
               ),
 
+              chatSidebarOpen && e(SplitHandle, {
+                orientation: 'vertical',
+                value: chatSidebarWidth,
+                onChange: setChatSidebarWidth,
+                min: 180,
+                max: 440,
+                label: 'Resize conversation history sidebar'
+              }),
+
               // Right: Main Chat Pane
               e('div', { className: 'chat-main-pane' },
                 // Playground Mode Switcher & Command Bar
@@ -12632,7 +13646,8 @@
                       [
                         { id: 'chat', label: 'Chat & Reason', icon: 'chat' },
                         { id: 'arena', label: 'Dual Arena', icon: 'arena' },
-                        { id: 'tokens', label: 'Token Lab', icon: 'tokens' }
+                        { id: 'tokens', label: 'Token Lab', icon: 'tokens' },
+                        { id: 'probe', label: 'Mind Probe', icon: 'brain' }
                       ].map(m => e('button', {
                         key: m.id,
                         className: `playground-mode-btn ${playgroundMode === m.id ? 'active' : ''}`,
@@ -12938,7 +13953,7 @@
                           ),
                           e('button', {
                             className: 'neural-console-close-btn',
-                            style: { padding: '2px 6px', fontSize: '11px', minWidth: 'auto', flexShrink: 0, border: '1px solid rgba(255, 255, 255, 0.08)', background: 'transparent', color: 'var(--text-muted)' },
+                            style: { padding: '2px 6px', fontSize: '11px', minWidth: 'auto', flexShrink: 0, border: '1px solid var(--border-color)', background: 'transparent', color: 'var(--text-muted)' },
                             onClick: () => {
                               setShowNeuralConsole(false);
                               try { window.localStorage.setItem('lucid_machines.playground.neuralConsoleOpen', 'false'); } catch (_) {}
@@ -13006,12 +14021,15 @@
                       },
                         neuralConsoleView === '3d' && e(NeuronSynapseCanvas3D, {
                           neuronScopeData,
+                          mindTelemetry,
                           activeTierIdx,
                           route,
                           streamVelocity,
                           isGenerating,
                           upgradeResult,
                           activeModel,
+                          studioTheme,
+                          effectsLevel: effectiveEffectsLevel,
                           height: '165px',
                           customHeight: dockMode === 'dock-top' ? '100%' : bodyHeight
                         }),
@@ -13124,12 +14142,15 @@
                           e('div', { style: { minWidth: 0, height: dockMode === 'dock-right' ? '280px' : bodyHeight, position: 'relative', flexShrink: 0 } },
                             e(NeuronSynapseCanvas3D, {
                               neuronScopeData,
+                              mindTelemetry,
                               activeTierIdx,
                               route,
                               streamVelocity,
                               isGenerating,
                               upgradeResult,
                               activeModel,
+                              studioTheme,
+                              effectsLevel: effectiveEffectsLevel,
                               height: '165px',
                               customHeight: dockMode === 'dock-right' ? '280px' : bodyHeight
                             })
@@ -13260,7 +14281,18 @@
                       setMaxTokens,
                       hasRetryableMessage: messages.some(m => !m.isAssistant && m.sender !== 'System'),
                       onRegenerateLast: handleRegenerateLast,
-                      onStopGeneration: handleStopGeneration
+                      onStopGeneration: handleStopGeneration,
+                      contextBridge: {
+                        wsRoot,
+                        activeFilePath: wsActiveTabPath,
+                        attachWorkspace: attachWorkspaceToChat,
+                        onToggleAttachWorkspace: () => setAttachWorkspaceToChat(p => !p),
+                        activeConfigName: selectedConfigName,
+                        activeDataset,
+                        isTraining,
+                        step: metrics.step || 0,
+                        onJumpTab: (tabId) => setActiveTab(tabId)
+                      }
                     })
                   );
 
@@ -13342,12 +14374,24 @@
                         onClick: () => {
                           const chosenText = arenaWinner === 'A' ? arenaResultA.text : arenaResultB.text;
                           const chosenConfig = arenaWinner === 'A' ? arenaConfigA : arenaConfigB;
-                          setMessages([
+                          const forkedId = `session_arena_${Date.now()}`;
+                          const nowIso = new Date().toISOString();
+                          const forkedMsgs = [
                             { sender: 'User', text: arenaPrompt, time: new Date().toLocaleTimeString(), isAssistant: false },
-                            { sender: `Triune (${chosenConfig.route.toUpperCase()})`, text: chosenText, time: new Date().toLocaleTimeString(), isAssistant: true }
-                          ]);
+                            { sender: `${chosenConfig.model} (${chosenConfig.route.toUpperCase()})`, text: chosenText, time: new Date().toLocaleTimeString(), isAssistant: true }
+                          ];
+                          setChatSessions(prev => [{
+                            id: forkedId,
+                            title: `Arena ${arenaWinner}: ${String(arenaPrompt || 'Battle').slice(0, 28)}`,
+                            messages: forkedMsgs,
+                            parentSessionId: activeSessionId,
+                            parentTurn: 1,
+                            created_at: nowIso,
+                            updated_at: nowIso
+                          }, ...prev]);
+                          setActiveSessionId(forkedId);
                           setPlaygroundMode('chat');
-                          showToast(`Forked Candidate ${arenaWinner} into Chat`);
+                          showToast(`Forked Candidate ${arenaWinner} into new Chat session`);
                         }
                       }, 'Fork Winner to Chat'),
                       e('button', { className: 'btn-clear-chat', style: { fontSize: '11px', padding: '2px 8px' }, onClick: () => setArenaWinner(null) }, 'Dismiss')
@@ -13368,8 +14412,14 @@
                           e('label', { style: { fontWeight: 600 } }, 'Model:'),
                           e('select', { value: arenaConfigA.model, onChange: ev => setArenaConfigA({ ...arenaConfigA, model: ev.target.value }) },
                             MODEL_PRESETS.map(p => e('option', { key: `a:${p.id}`, value: p.id }, p.id)),
+                            (savedModels || []).map(sm => {
+                              const sid = typeof sm === 'string' ? sm : (sm.id || sm.name);
+                              return sid ? e('option', { key: `a:sm:${sid}`, value: sid }, `${sid} (Saved)`) : null;
+                            }),
+                            activeCheckpointName && e('option', { value: activeCheckpointName }, `${activeCheckpointName} (Checkpoint)`),
                             e('option', { value: 'gpt-4o-mini' }, 'gpt-4o-mini (BYOK)'),
-                            e('option', { value: 'claude-3-5-sonnet-latest' }, 'claude-3.5 (BYOK)')
+                            e('option', { value: 'claude-3-5-sonnet-latest' }, 'claude-3.5 (BYOK)'),
+                            e('option', { value: 'gemini-3.8-flash' }, 'gemini-3.8-flash (BYOK)')
                           ),
                           e('label', { style: { fontWeight: 600 } }, 'Route:'),
                           e('select', { value: arenaConfigA.route, onChange: ev => setArenaConfigA({ ...arenaConfigA, route: ev.target.value }) },
@@ -13433,8 +14483,14 @@
                           e('label', { style: { fontWeight: 600 } }, 'Model:'),
                           e('select', { value: arenaConfigB.model, onChange: ev => setArenaConfigB({ ...arenaConfigB, model: ev.target.value }) },
                             MODEL_PRESETS.map(p => e('option', { key: `b:${p.id}`, value: p.id }, p.id)),
+                            (savedModels || []).map(sm => {
+                              const sid = typeof sm === 'string' ? sm : (sm.id || sm.name);
+                              return sid ? e('option', { key: `b:sm:${sid}`, value: sid }, `${sid} (Saved)`) : null;
+                            }),
+                            activeCheckpointName && e('option', { value: activeCheckpointName }, `${activeCheckpointName} (Checkpoint)`),
                             e('option', { value: 'gpt-4o-mini' }, 'gpt-4o-mini (BYOK)'),
-                            e('option', { value: 'claude-3-5-sonnet-latest' }, 'claude-3.5 (BYOK)')
+                            e('option', { value: 'claude-3-5-sonnet-latest' }, 'claude-3.5 (BYOK)'),
+                            e('option', { value: 'gemini-3.8-flash' }, 'gemini-3.8-flash (BYOK)')
                           ),
                           e('label', { style: { fontWeight: 600 } }, 'Route:'),
                           e('select', { value: arenaConfigB.route, onChange: ev => setArenaConfigB({ ...arenaConfigB, route: ev.target.value }) },
@@ -13675,7 +14731,217 @@
                       )
                     )
                   )
-                )
+                ),
+
+                // Mode 4: R4 Signature Hook — Polysom Mind Probe & Lucid Steer
+                playgroundMode === 'probe' && (() => {
+                  const runMindProbe = async (isCompareReplay = false) => {
+                    if (!probePrompt.trim() || isProbingMind) return;
+                    setIsProbingMind(true);
+                    try {
+                      await Promise.all([
+                        apiFetch('/v1/model/router/temperature', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ temperature: probeRouterTemp })
+                        }).catch(() => null),
+                        apiFetch('/v1/training/optimizer', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ steer_scale: probeSteerScale, steer_mode: probeSteerMode })
+                        }).catch(() => null)
+                      ]);
+
+                      const [chatRes, tokRes, mindRes] = await Promise.all([
+                        apiFetch('/v1/chat/completions', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            model: activeModel,
+                            messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: probePrompt }],
+                            temperature: temperature,
+                            max_tokens: Math.min(256, maxTokens || 160),
+                            route: route,
+                            logprobs: true,
+                            top_logprobs: 5,
+                            session_id: activeSessionId,
+                            workspace_context: buildWorkspaceContextPayload(),
+                            stream: false
+                          })
+                        }),
+                        apiFetch('/v1/tokenizer/inspect', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ text: probePrompt, top_k: 5, max_tokens: 96 })
+                        }).catch(() => null),
+                        apiFetch('/v1/telemetry/mind').catch(() => null)
+                      ]);
+
+                      const chatData = chatRes.ok ? await chatRes.json() : {};
+                      const tokData = tokRes && tokRes.ok ? await tokRes.json() : {};
+                      const mindData = mindRes && mindRes.ok ? await mindRes.json() : null;
+                      if (mindData) setMindTelemetry(mindData);
+                      refreshNeuronScope();
+
+                      const replyTxt = cleanText((chatData.choices && chatData.choices[0] && chatData.choices[0].message && chatData.choices[0].message.content) || '');
+                      const tele = chatData.telemetry || {};
+                      const inspectedTokens = Array.isArray(tokData.tokens) && tokData.tokens.length > 0
+                        ? tokData.tokens
+                        : tokenizeTextWithEntropy(probePrompt);
+                      const epochRecord = {
+                        prompt: probePrompt,
+                        reply: replyTxt || 'No reply text returned.',
+                        routerTemp: probeRouterTemp,
+                        steerScale: probeSteerScale,
+                        steerMode: probeSteerMode,
+                        route: tele.route || route.toUpperCase(),
+                        ttftMs: tele.ttft_ms ?? tele.latency_ms ?? '--',
+                        tokPerSec: tele.tokens_per_sec ?? '--',
+                        tokens: inspectedTokens,
+                        exitUsage: (mindData && mindData.triune_tiers && mindData.triune_tiers.exit_usage) || exitUsage || { reflex: 0, limbic: 0, cortex: 0 },
+                        alignmentEnergy: mindData && mindData.centroid_steer ? mindData.centroid_steer.alignment_energy : null,
+                        centroidDrift: mindData && mindData.centroid_steer ? mindData.centroid_steer.centroid_drift : null,
+                        moeUtil: (mindData && mindData.moe_routing && mindData.moe_routing.utilization_pct) || []
+                      };
+                      if (isCompareReplay && probeEpochA) {
+                        setProbeEpochB(epochRecord);
+                      } else {
+                        setProbeEpochA(epochRecord);
+                        setProbeEpochB(null);
+                      }
+                      if (window.__lucid_machinesCanvasEmitPulse) {
+                        window.__lucid_machinesCanvasEmitPulse({ force: true });
+                      }
+                    } catch (err) {
+                      showToast(`Mind Probe failed: ${err.message}`);
+                    } finally {
+                      setIsProbingMind(false);
+                    }
+                  };
+
+                  const activeEpoch = probeEpochB || probeEpochA;
+                  return e('div', { className: 'ps-probe-view' },
+                    e('div', { className: 'ps-probe-card' },
+                      e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' } },
+                        e('div', null,
+                          e('strong', { style: { fontFamily: 'var(--font-heading)', fontSize: '16px' } }, 'Polysom Mind Probe & Lucid Steer'),
+                          e('div', { style: { fontSize: '12px', color: 'var(--text-muted)' } }, 'Synchronized Reflex/Limbic/Cortex hypnogram, Shannon entropy trace, MoE expert chord, and live CentroidSteer subspace dialing.')
+                        ),
+                        e('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap' } },
+                          [
+                            { label: 'Code Kernel', p: 'Write a branchless CUDA kernel warp reduction and trace memory coalescing.' },
+                            { label: 'Logical Proof', p: 'Prove why orthogonal projection onto C_e complement preserves centroid direction.' },
+                            { label: 'Creative Story', p: 'Describe a lucid dream inside a sleeping neural network waking into Cortex depth.' },
+                            { label: 'Factual Recall', p: 'Summarize the 3 Triune exit tiers (Reflex, Limbic MoE, Cortex GLA) in 3 bullets.' }
+                          ].map(pr => e('button', {
+                            key: pr.label,
+                            type: 'button',
+                            className: 'preset-chip',
+                            style: { fontSize: '11px', padding: '3px 9px' },
+                            onClick: () => setProbePrompt(pr.p)
+                          }, pr.label))
+                        )
+                      ),
+                      e('div', { style: { display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' } },
+                        e('input', {
+                          type: 'text',
+                          value: probePrompt,
+                          onChange: ev => setProbePrompt(ev.target.value),
+                          placeholder: 'Enter prompt to probe Triune tier exits & CentroidSteer dynamics...',
+                          style: { flex: '1 1 320px', padding: '8px 12px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-input)', color: 'var(--text-main)', fontSize: '12.5px' }
+                        }),
+                        e('button', {
+                          type: 'button',
+                          className: 'btn-action start',
+                          disabled: isProbingMind || !probePrompt.trim(),
+                          onClick: () => runMindProbe(false)
+                        }, isProbingMind ? 'Probing Mind...' : [renderIcon('bolt', 13, { marginRight: '5px' }), 'Probe Mind']),
+                        probeEpochA && e('button', {
+                          type: 'button',
+                          className: 'btn-sec',
+                          disabled: isProbingMind,
+                          title: 'Re-run with updated Lucid Steer dials and compare Epoch A vs Epoch B',
+                          onClick: () => runMindProbe(true)
+                        }, 'Replay & Compare Epoch')
+                      ),
+                      e('div', { style: { display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'center', fontSize: '11.5px', fontFamily: 'var(--font-mono)' } },
+                        e('label', { style: { display: 'flex', alignItems: 'center', gap: '6px' } },
+                          `Router Temp (Reflex <-> Cortex): ${probeRouterTemp.toFixed(2)}`,
+                          e('input', { type: 'range', min: 0.2, max: 2.5, step: 0.05, value: probeRouterTemp, onChange: ev => setProbeRouterTemp(parseFloat(ev.target.value)) })
+                        ),
+                        e('label', { style: { display: 'flex', alignItems: 'center', gap: '6px' } },
+                          `CentroidSteer Scale: ${probeSteerScale.toFixed(2)}`,
+                          e('input', { type: 'range', min: 0.0, max: 2.0, step: 0.05, value: probeSteerScale, onChange: ev => setProbeSteerScale(parseFloat(ev.target.value)) })
+                        ),
+                        e('label', { style: { display: 'flex', alignItems: 'center', gap: '6px' } },
+                          'Steer Mode:',
+                          e('select', {
+                            value: probeSteerMode,
+                            onChange: ev => setProbeSteerMode(ev.target.value),
+                            style: { padding: '3px 7px', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-input)', color: 'var(--text-main)', fontSize: '11px' }
+                          },
+                            e('option', { value: 'upgraded' }, 'upgraded (CentroidSteer)'),
+                            e('option', { value: 'legacy' }, 'legacy'),
+                            e('option', { value: 'random_same_mem' }, 'random_same_mem'),
+                            e('option', { value: 'nosteer' }, 'nosteer')
+                          )
+                        )
+                      )
+                    ),
+                    e('div', { className: 'ps-probe-grid' },
+                      e('div', { className: 'ps-probe-card' },
+                        e('strong', { style: { fontSize: '13px', fontFamily: 'var(--font-heading)' } }, 'Interactive Triune Neural Atlas'),
+                        e(NeuronSynapseCanvas3D, {
+                          neuronScopeData,
+                          mindTelemetry,
+                          activeTierIdx: (neuronScopeData && typeof neuronScopeData.active_tier === 'number' ? neuronScopeData.active_tier : (route === 'reflex' ? 0 : (route === 'limbic' ? 1 : 2))),
+                          route,
+                          streamVelocity,
+                          isGenerating: isProbingMind,
+                          upgradeResult,
+                          activeModel,
+                          studioTheme,
+                          effectsLevel: effectiveEffectsLevel,
+                          customHeight: '300px'
+                        })
+                      ),
+                      e('div', { className: 'ps-probe-card' },
+                        e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
+                          e('strong', { style: { fontSize: '13px', fontFamily: 'var(--font-heading)' } }, 'Polysom Epoch Trace'),
+                          activeEpoch && e('span', { className: 'ps-telemetry-chip live' },
+                            `${activeEpoch.route} · ${activeEpoch.tokPerSec} tok/s · TTFT ${activeEpoch.ttftMs} ms`
+                          )
+                        ),
+                        activeEpoch ? [
+                          e('div', { key: 'hyp', className: 'ps-probe-epoch-strip', title: 'Per-token Shannon entropy & exit depth profile' },
+                            activeEpoch.tokens.slice(0, 48).map((tk, ti) => {
+                              const ent = typeof tk.entropy === 'number' ? tk.entropy : 0.4;
+                              const barH = Math.max(12, Math.min(64, Math.round(14 + ent * 18)));
+                              const barCol = ent > 2.2 ? 'var(--primary)' : (ent > 1.0 ? 'var(--accent-amber)' : 'var(--accent-emerald)');
+                              return e('div', { key: `${tk.id}-${ti}`, className: 'ps-probe-token-col', title: `"${tk.text}" | H=${ent}` },
+                                e('div', { style: { width: '10px', height: `${barH}px`, background: barCol, borderRadius: '3px' } }),
+                                e('span', { style: { maxWidth: '34px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, String(tk.text || '').replace(/\u0120/g, ' ').trim() || '_')
+                              );
+                            })
+                          ),
+                          e('div', { key: 'cs', style: { display: 'flex', gap: '8px', flexWrap: 'wrap', fontSize: '11px', fontFamily: 'var(--font-mono)' } },
+                            e('span', { className: 'pill' }, `Exit R/L/C: ${activeEpoch.exitUsage.reflex ?? 0}% / ${activeEpoch.exitUsage.limbic ?? 0}% / ${activeEpoch.exitUsage.cortex ?? 0}%`),
+                            e('span', { className: 'pill' }, `Alignment Energy: ${activeEpoch.alignmentEnergy ?? 'unmeasured'}`),
+                            e('span', { className: 'pill' }, `Centroid Drift: ${activeEpoch.centroidDrift ?? 'unmeasured'}`)
+                          ),
+                          probeEpochA && probeEpochB && e('div', { key: 'cmp', style: { padding: '8px 10px', borderRadius: '6px', background: 'var(--bg-surface)', border: '1px solid var(--border-color)', fontSize: '11px', fontFamily: 'var(--font-mono)' } },
+                            `Epoch A (T=${probeEpochA.routerTemp.toFixed(2)}, scale=${probeEpochA.steerScale.toFixed(2)}, ${probeEpochA.route}) vs Epoch B (T=${probeEpochB.routerTemp.toFixed(2)}, scale=${probeEpochB.steerScale.toFixed(2)}, ${probeEpochB.route})`
+                          ),
+                          e('div', { key: 'rep', style: { fontSize: '12.5px', lineHeight: 1.55, padding: '8px 10px', borderRadius: '6px', background: 'var(--bg-surface)', border: '1px solid var(--border-color)', maxHeight: '140px', overflowY: 'auto' } },
+                            activeEpoch.reply
+                          )
+                        ] : e('div', { className: 'ps-empty-state', style: { padding: '24px' } },
+                          'Click "Probe Mind" above to capture a live Triune exit hypnogram, Shannon entropy trace, and CentroidSteer telemetry snapshot.'
+                        )
+                      )
+                    )
+                  );
+                })()
               )
             );
           })(),
@@ -13767,7 +15033,7 @@
               // 3-Pane IDE Body: Explorer/Search | Multi-tab Editor | Live Agentic Cockpit
               e('div', { className: `ps-ide-body ${wsSidebarOpen ? '' : 'sidebar-collapsed'}` },
                 // Left Pane: File Explorer + Workspace Search
-                wsSidebarOpen && e('aside', { className: 'ps-ide-sidebar' },
+                wsSidebarOpen && e('aside', { className: 'ps-ide-sidebar', style: { width: `${wsSidebarWidth}px` } },
                   e('div', { style: { display: 'flex', gap: '4px', padding: '8px', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-card)' } },
                     e('button', {
                       type: 'button',
@@ -13834,6 +15100,15 @@
                   )
                 ),
 
+                wsSidebarOpen && e(SplitHandle, {
+                  orientation: 'vertical',
+                  value: wsSidebarWidth,
+                  onChange: setWsSidebarWidth,
+                  min: 170,
+                  max: 440,
+                  label: 'Resize workspace file explorer'
+                }),
+
                 // Center Pane: Multi-tab Editor & Diff Viewer
                 e('section', { className: 'ps-ide-editor-pane' },
                   e('div', { className: 'ps-ide-tabs' },
@@ -13852,6 +15127,7 @@
                             style: { background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer', padding: '0 2px', display: 'inline-flex', alignItems: 'center' },
                             onClick: (ev) => {
                               ev.stopPropagation();
+                              if (tab.dirty && !window.confirm(`Close "${tab.name}" without saving changes?`)) return;
                               const rem = wsOpenTabs.filter(t => t.relPath !== tab.relPath);
                               setWsOpenTabs(rem);
                               if (wsActiveTabPath === tab.relPath) setWsActiveTabPath(rem[0] ? rem[0].relPath : '');
@@ -13887,6 +15163,17 @@
                           showToast(`Attached ${activeTabObj.relPath} to Agent Cockpit`);
                         }
                       }, [renderIcon('send', 11), 'Send to Agent']),
+                      e('button', {
+                        type: 'button',
+                        className: 'btn-sec',
+                        style: { padding: '4px 9px', fontSize: '11.5px', display: 'inline-flex', alignItems: 'center', gap: '4px' },
+                        title: 'Attach this file as Workspace Context in Chat & Inference',
+                        onClick: () => {
+                          setAttachWorkspaceToChat(true);
+                          setActiveTab('chat');
+                          showToast(`Attached ${activeTabObj.relPath} to Chat Context Bridge`);
+                        }
+                      }, [renderIcon('chat', 11), 'Send to Chat']),
                       e('button', {
                         type: 'button',
                         className: 'btn-purge',
@@ -13939,8 +15226,18 @@
                   )
                 ),
 
+                e(SplitHandle, {
+                  orientation: 'vertical',
+                  value: wsCockpitWidth,
+                  onChange: setWsCockpitWidth,
+                  min: 260,
+                  max: 560,
+                  reverse: true,
+                  label: 'Resize workspace agent cockpit'
+                }),
+
                 // Right Pane: Live Agentic Loop Cockpit & Training Supervisor
-                e('aside', { className: 'ps-ide-cockpit' },
+                e('aside', { className: 'ps-ide-cockpit', style: { width: `${wsCockpitWidth}px`, flexShrink: 0 } },
                   e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' } },
                     e('strong', { style: { fontFamily: 'var(--font-heading)', fontSize: '14px' } }, 'Agentic Loop Cockpit'),
                     e('span', { className: `ps-telemetry-chip ${wsLoopRunning ? 'live' : ''}` }, wsLoopRunning ? 'STREAMING' : 'READY')
@@ -14143,7 +15440,8 @@
                       cursor: 'pointer'
                     }
                   },
-                    MODEL_PRESETS.map(p => e('option', { key: p.id, value: p.id }, p.name))
+                    MODEL_PRESETS.map(p => e('option', { key: p.id, value: p.id }, p.name)),
+                    !MODEL_PRESETS.some(p => p.id === activeModel) && activeModel && e('option', { value: activeModel }, `${activeModel} (Active)`)
                   )
                 ),
                 (() => {
@@ -14413,7 +15711,23 @@
                 studioTheme
               }),
               e('div', { style: { padding: '12px 18px' } },
-                e('canvas', { ref: canvasRef, width: 850, height: 260, className: 'loss-canvas' })
+                e('canvas', {
+                  ref: canvasRef,
+                  width: 850,
+                  height: 260,
+                  className: 'loss-canvas',
+                  onMouseMove: (ev) => {
+                    if (!metricsHistory || metricsHistory.length === 0) return;
+                    const rect = ev.currentTarget.getBoundingClientRect();
+                    const relX = ev.clientX - rect.left;
+                    const startX = 65;
+                    const plotWidth = Math.max(1, rect.width - 85);
+                    const frac = Math.max(0, Math.min(1, (relX - startX) / plotWidth));
+                    const idx = Math.round(frac * Math.max(0, metricsHistory.length - 1));
+                    setLossHoverInfo({ idx });
+                  },
+                  onMouseLeave: () => setLossHoverInfo(null)
+                })
               ),
               e('div', { className: 'ps-launchpad-grid', style: { padding: '0 18px 14px 18px' } },
                 (() => {
@@ -14422,9 +15736,11 @@
                     const w = 320;
                     const h = 88;
                     let pathD = '';
+                    let minV = 0;
+                    let maxV = 0;
                     if (pts.length >= 2) {
-                      const minV = Math.min(...pts);
-                      const maxV = Math.max(...pts);
+                      minV = Math.min(...pts);
+                      maxV = Math.max(...pts);
                       const span = Math.max(maxV - minV, 1e-6);
                       pathD = pts.map((val, idx) => {
                         const x = 6 + (idx / (pts.length - 1)) * (w - 12);
@@ -14441,6 +15757,11 @@
                         )
                       ),
                       pts.length >= 2 ? e('svg', { viewBox: `0 0 ${w} ${h}`, style: { width: '100%', height: '84px', display: 'block' } },
+                        e('line', { x1: 6, y1: 10, x2: w - 6, y2: 10, stroke: 'var(--border-color)', strokeWidth: 0.8, strokeDasharray: '3 3' }),
+                        e('line', { x1: 6, y1: h / 2, x2: w - 6, y2: h / 2, stroke: 'var(--border-color)', strokeWidth: 0.8, strokeDasharray: '3 3' }),
+                        e('line', { x1: 6, y1: h - 10, x2: w - 6, y2: h - 10, stroke: 'var(--border-color)', strokeWidth: 0.8 }),
+                        e('text', { x: 8, y: 18, fill: 'var(--text-dim)', fontSize: '8.5', fontFamily: 'monospace' }, fmtFn(maxV)),
+                        e('text', { x: 8, y: h - 14, fill: 'var(--text-dim)', fontSize: '8.5', fontFamily: 'monospace' }, fmtFn(minV)),
                         e('path', { d: pathD, fill: 'none', stroke: strokeCol, strokeWidth: 2.2, strokeLinecap: 'round', strokeLinejoin: 'round' })
                       ) : e('div', { className: 'ps-empty-state', style: { padding: '14px', minHeight: '78px' } },
                         e('span', { style: { fontSize: '11px' } }, 'Run training steps to stream live SVG telemetry.')
@@ -14469,7 +15790,7 @@
               e('div', { style: { padding: '0 18px 16px 18px' } },
                 e('div', { className: 'telemetry-box' },
                   telemetryLogs.length > 0
-                    ? telemetryLogs.map((log, idx) => e('div', { key: idx }, log.replace(/G/g, ' ')))
+                    ? telemetryLogs.map((log, idx) => e('div', { key: idx }, String(log).replace(/\u0120/g, ' ').replace(/\u010A/g, '\n')))
                     : e('div', null, '[TELEMETRY] Training events will appear here when a run starts.')
                 )
               )
@@ -15307,8 +16628,18 @@
                   )
                 )
               ),
-              // Interactive Node Inspector Drawer
-              selectedNodeId && (() => {
+              e(SplitHandle, {
+                orientation: 'vertical',
+                value: dagRightWidth,
+                onChange: setDagRightWidth,
+                min: 260,
+                max: 640,
+                reverse: true,
+                label: 'Resize DAG inspector and trace panel'
+              }),
+              e('div', { className: 'ps-dag-right-col', style: { width: `${dagRightWidth}px` } },
+                // Interactive Node Inspector Drawer (cleanly docked inside right column)
+                selectedNodeId && (() => {
                 const selNode = nodes.find(n => n.id === selectedNodeId);
                 if (!selNode) return null;
                 const cat = nodeCatalog || BUILTIN_NODE_CATALOG;
@@ -15548,6 +16879,7 @@
                     )
                   )
                 )
+              )
               )
             )
           ),
@@ -15806,8 +17138,8 @@
                         )
                       )
                     )
-                  : e('p', { style: { color: 'var(--text-muted)', fontSize: '12.5px', fontStyle: 'italic', margin: '8px 0' } },
-                      'No saved adapters found on disk. Run a fine-tuning job above or save LoRA weights to checkpoints/adapters/.'
+                  : e('div', { className: 'ps-empty-state', style: { marginTop: '8px', padding: '16px' } },
+                      e('span', { style: { fontSize: '12.5px' } }, 'No saved adapters found on disk. Run a fine-tuning job above or save LoRA weights to checkpoints/adapters/.')
                     )
               )
             )
@@ -15921,7 +17253,9 @@
 
               // Project Clubs Container
               e('div', { className: 'project-clubs-container' },
-                displayedProjects.length > 0 ? (
+                isLoadingCheckpoints && displayedProjects.length === 0 ? e('div', { className: 'ps-empty-state', style: { padding: '24px' } },
+                  e('span', { style: { fontSize: '12.5px' } }, 'Loading checkpoint projects from disk...')
+                ) : displayedProjects.length > 0 ? (
                   displayedProjects.map((project, pidx) => {
                     const isExpanded = expandedProjects[project.name] !== false;
                     const isCurrentActive = project.is_current_active_project || project.name === activeProjectName;
@@ -16297,7 +17631,7 @@
                       e('button', {
                         className: 'btn-transmute-action',
                         style: { background: 'var(--accent-olive)', color: '#fff' },
-                        onClick: () => handleUpgradeModel(upgradeModelName, true),
+                        onClick: () => handleUpgradeModel(effectiveTarget, true),
                         disabled: isUpgradingModel || !effectiveTarget,
                         title: 'Transmute layers and activate fresh Triune skeleton in engine'
                       }, [
@@ -16471,13 +17805,13 @@
                     'Stream any Hugging Face repo (e.g. roneneldan/TinyStories) or external web URL (.jsonl / .parquet / .csv / .txt) directly into the GPU autograd engine with 0 hardcoded dummy fallbacks.'
                   )
                 ),
-                byokKeys.huggingface
+                (byokConfigured.huggingface || byokKeys.huggingface)
                   ? e('div', { className: 'badge-ckpt-active', style: { display: 'flex', alignItems: 'center', gap: '6px' } },
                       e('span', null, [renderIcon('byok', 13, { marginRight: '5px' }), 'Authenticated HF Token Active'])
                     )
                   : e('button', {
                       className: 'btn-sec',
-                      style: { fontSize: '11px', padding: '4px 10px', color: '#78350f', borderColor: '#edd5a6', background: '#faeed7' },
+                      style: { fontSize: '11px', padding: '4px 10px', color: 'var(--accent-amber)', borderColor: 'var(--border-color)', background: 'var(--bg-surface)' },
                       onClick: () => setActiveTab('byok')
                     }, [renderIcon('alert', 12, { marginRight: '5px' }), 'Add HF Token (BYOK)'])
               ),
@@ -16599,11 +17933,11 @@
                 }),
                 e('div', { role: 'status', 'aria-live': 'polite', style: { margin: '7px 2px', fontSize: '11px', color: tokens.length ? 'var(--text-muted)' : 'var(--text-dim)' } }, tokenizerStatus),
                 e('div', { className: 'token-chip-container' },
-                  tokens.map(t => {
+                  tokens.map((t, tIdx) => {
                     const raw = t.text || '';
-                    const isPrefixed = raw.startsWith('G') || raw.startsWith(' ');
-                    const clean = raw.replace(/^[G ]/, '');
-                    return e('span', { key: t.id, className: 'token-chip' },
+                    const isPrefixed = raw.startsWith('\u0120') || raw.startsWith(' ');
+                    const clean = raw.replace(/^[\u0120 ]/, '').replace(/\u010A/g, '\\n');
+                    return e('span', { key: `${t.id}-${tIdx}`, className: 'token-chip' },
                       isPrefixed && e('span', { style: { opacity: 0.5, marginRight: '3px', fontWeight: 700 } }, '_'),
                       `${clean || ' '} [ID:${t.id}]`
                     );
@@ -16633,7 +17967,10 @@
                     onClick: handleRegisterLocalDataset
                   }, 'Register & Index')
                 ),
-                e('table', { className: 'table-data' },
+                datasetList.length === 0 ? e('div', { className: 'ps-empty-state', style: { padding: '20px' } },
+                  e('strong', { style: { fontSize: '13px', color: 'var(--text-main)' } }, 'No registered datasets yet'),
+                  e('span', { style: { fontSize: '12px', color: 'var(--text-muted)' } }, 'Connect a Hugging Face stream above or register a local .jsonl/.parquet file inside data/ or datasets/.')
+                ) : e('table', { className: 'table-data' },
                   e('thead', null,
                     e('tr', null,
                       e('th', null, 'ID'),
@@ -16644,11 +17981,7 @@
                     )
                   ),
                   e('tbody', null,
-                    (datasetList.length > 0 ? datasetList : [
-                      { id: '1', name: 'HuggingFaceFW/fineweb-edu', path: 'HuggingFaceFW/fineweb-edu', tokens: '10,000,000,000', status: 'Streaming Active' },
-                      { id: '2', name: 'wikitext-103-raw-v1', path: 'wikitext-103-raw-v1', tokens: '103,000,000', status: 'Cached Local' },
-                      { id: '3', name: 'roneneldan/TinyStories', path: 'roneneldan/TinyStories', tokens: '2,500,000,000', status: 'Ready to Stream' }
-                    ]).map((ds, idx) => {
+                    datasetList.map((ds, idx) => {
                       const isActive = (activeDataset === ds.name || activeDataset === ds.path || (ds.status && ds.status.includes('Active')));
                       return e('tr', { key: ds.id || idx, style: isActive ? { background: 'rgba(43, 76, 63, 0.05)' } : {} },
                         e('td', null, ds.id || (idx + 1)),
@@ -16706,19 +18039,59 @@
           // Tab 7: Python Sandbox
           activeTab === 'notebook' && e('div', { className: 'view-notebook' },
             e('div', { className: 'card-notebook' },
-              e('h3', { style: { fontFamily: 'var(--font-heading)', fontSize: '20px', marginBottom: '6px' } }, 'Sandboxed Interactive Python Environment'),
-              e('p', { style: { color: 'var(--text-muted)', fontSize: '13px' } },
-                'Run trusted local Python snippets to inspect model layers, VRAM stats, or DAG pipelines. This runner is restricted, but it is not an operating-system security boundary.'
+              e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginBottom: '6px' } },
+                e('h3', { style: { fontFamily: 'var(--font-heading)', fontSize: '20px', margin: 0 } }, 'Sandboxed Interactive Python Environment'),
+                e('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap' } },
+                  [
+                    { label: 'Inspect Engine & Torch', code: 'import torch\nprint("PyTorch:", torch.__version__, "CUDA:", torch.cuda.is_available())\nif torch.cuda.is_available():\n    print("Device:", torch.cuda.get_device_name(0))\n' },
+                    { label: 'ModelSpec Param Budget', code: 'from lucid_machines.model.base import get_model_spec\nfor name in ("junkie-mini", "junkie-3b", "junkie"):\n    spec = get_model_spec(name)\n    total, active = spec.compute_exact_params()\n    print(f"{name}: total={total/1e9:.2f}B active={active/1e9:.2f}B")\n' },
+                    { label: 'CentroidSteer Subspace', code: 'import torch\nx = torch.randn(64, 16)\nq, _ = torch.linalg.qr(x)\nprint("Orthogonal check max off-diag:", float((q.T @ q - torch.eye(16)).abs().max()))\n' }
+                  ].map(sn => e('button', {
+                    key: sn.label,
+                    type: 'button',
+                    className: 'preset-chip',
+                    style: { fontSize: '11px', padding: '3px 9px' },
+                    onClick: () => setNotebookCode(sn.code)
+                  }, sn.label))
+                )
               ),
-              e('textarea', {
-                className: 'notebook-textarea',
-                value: notebookCode,
-                onChange: ev => setNotebookCode(ev.target.value)
-              }),
-              e('button', { className: 'btn-execute', onClick: handleExecuteNotebook, disabled: isExecutingNotebook },
-                isExecutingNotebook ? 'Executing in PythonSandbox...' : 'Run Code in PythonSandbox'
+              e('p', { style: { color: 'var(--text-muted)', fontSize: '13px', marginBottom: '10px' } },
+                'Run trusted local Python snippets (Ctrl+Enter to execute). This runner is restricted, but it is not an operating-system security boundary.'
               ),
-              e('pre', { className: 'notebook-terminal' }, notebookOutput)
+              e('div', { className: 'ps-notebook-split' },
+                e('textarea', {
+                  className: 'notebook-textarea',
+                  style: { height: `${notebookCodeHeight}px`, minHeight: '120px' },
+                  value: notebookCode,
+                  onChange: ev => setNotebookCode(ev.target.value),
+                  onKeyDown: ev => {
+                    if ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter') {
+                      ev.preventDefault();
+                      if (!isExecutingNotebook) handleExecuteNotebook();
+                    }
+                  }
+                }),
+                e(SplitHandle, {
+                  orientation: 'horizontal',
+                  value: notebookCodeHeight,
+                  onChange: setNotebookCodeHeight,
+                  min: 120,
+                  max: 520,
+                  label: 'Resize Python Sandbox editor and output'
+                }),
+                e('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap' } },
+                  e('button', { className: 'btn-execute', onClick: handleExecuteNotebook, disabled: isExecutingNotebook },
+                    isExecutingNotebook ? 'Executing in PythonSandbox...' : 'Run Code (Ctrl+Enter)'
+                  ),
+                  e('button', {
+                    type: 'button',
+                    className: 'btn-sec',
+                    style: { padding: '7px 12px', fontSize: '12px' },
+                    onClick: () => setNotebookOutput('')
+                  }, 'Clear Output')
+                ),
+                e('pre', { className: 'notebook-terminal', style: { flex: 1, minHeight: '130px' } }, notebookOutput || 'Output will appear here.')
+              )
             )
           ),
 
@@ -16789,8 +18162,8 @@
                     target: '_blank',
                     rel: 'noreferrer',
                     className: 'btn-sec',
-                    style: { height: '40px', padding: '0 12px', display: 'flex', alignItems: 'center', textDecoration: 'none', fontSize: '12px' }
-                  }, 'Get HF Token ?')
+                    style: { height: '40px', padding: '0 12px', display: 'inline-flex', alignItems: 'center', gap: '5px', textDecoration: 'none', fontSize: '12px' }
+                  }, ['Get HF Token', renderIcon('externalLink', 12)])
                 )
               ),
 
@@ -16831,15 +18204,15 @@
                     target: '_blank',
                     rel: 'noreferrer',
                     className: 'btn-sec',
-                    style: { height: '40px', padding: '0 12px', display: 'flex', alignItems: 'center', textDecoration: 'none', fontSize: '12px' }
-                  }, 'Get W&B Key ?'),
+                    style: { height: '40px', padding: '0 12px', display: 'inline-flex', alignItems: 'center', gap: '5px', textDecoration: 'none', fontSize: '12px' }
+                  }, ['Get W&B Key', renderIcon('externalLink', 12)]),
                   wandbUrl && e('a', {
                     href: wandbUrl,
                     target: '_blank',
                     rel: 'noreferrer',
                     className: 'btn-sec',
-                    style: { height: '40px', padding: '0 12px', display: 'flex', alignItems: 'center', textDecoration: 'none', fontSize: '12px', borderColor: '#d97706', color: '#d97706' }
-                  }, 'Open W&B Run ?')
+                    style: { height: '40px', padding: '0 12px', display: 'inline-flex', alignItems: 'center', gap: '5px', textDecoration: 'none', fontSize: '12px', borderColor: '#d97706', color: '#d97706' }
+                  }, ['Open W&B Run', renderIcon('externalLink', 12)])
                 )
               ),
 
@@ -16878,15 +18251,33 @@
             e('div', { className: 'appearance-section-heading' },
               e('div', null,
                 e('h3', null, 'Theme library'),
-                e('p', null, 'Six curated starting points, plus themes you create or import. Theme files contain colors only—no scripts or CSS.')
+                e('p', null, 'Six curated perceptual themes with bespoke geometric art, plus themes you create or import.')
               ),
-              e('div', { className: 'appearance-mode-switch', role: 'group', 'aria-label': 'Filter themes by appearance' },
-                ['All', 'Light', 'Dark', 'Custom'].map(mode => e('button', {
-                  key: mode,
-                  type: 'button',
-                  className: `appearance-filter ${appearanceFilter === mode ? 'active' : ''}`,
-                  onClick: () => setAppearanceFilter(mode)
-                }, mode))
+              e('div', { style: { display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' } },
+                e('div', { className: 'ps-effects-toggle', role: 'group', 'aria-label': 'Visual Effects & Reduced Motion' },
+                  [
+                    { id: 'full', label: 'Effects: Full' },
+                    { id: 'subtle', label: 'Subtle' },
+                    { id: 'off', label: 'Off / Reduced' }
+                  ].map(opt => e('button', {
+                    key: opt.id,
+                    type: 'button',
+                    className: `ps-effects-btn ${effectsLevel === opt.id ? 'active' : ''}`,
+                    'aria-pressed': effectsLevel === opt.id ? 'true' : 'false',
+                    onClick: () => {
+                      setEffectsLevel(opt.id);
+                      showToast(`Visual Effects: ${opt.label}`);
+                    }
+                  }, opt.label))
+                ),
+                e('div', { className: 'appearance-mode-switch', role: 'group', 'aria-label': 'Filter themes by appearance' },
+                  ['All', 'Light', 'Dark', 'Custom'].map(mode => e('button', {
+                    key: mode,
+                    type: 'button',
+                    className: `appearance-filter ${appearanceFilter === mode ? 'active' : ''}`,
+                    onClick: () => setAppearanceFilter(mode)
+                  }, mode))
+                )
               )
             ),
             e('div', { className: 'appearance-theme-grid' },
@@ -16926,7 +18317,8 @@
                     e('div', { className: 'preview-workspace' },
                       e('div', { className: 'preview-topbar' },
                         e('span', { className: 'preview-dot' }),
-                        e('span', { className: 'preview-title' }, theme.name)
+                        e('span', { className: 'preview-title' }, theme.name),
+                        e('span', { style: { marginLeft: 'auto', color: theme.palette.accent, opacity: 0.75, display: 'inline-flex' } }, renderPerceptualThemeMotif(theme.id, 18))
                       ),
                       e('div', { className: 'preview-content' },
                         e('div', { className: 'preview-card-a' },
@@ -17214,14 +18606,14 @@
             ),
 
             // Updates Available Banner
-            availableUpdates && availableUpdates.length > 0 && e('div', { style: { background: '#faeed7', border: '1px solid #edd5a6', padding: '14px 18px', borderRadius: '8px', marginBottom: '18px' } },
-              e('h4', { style: { color: '#78350f', margin: '0 0 6px 0', fontSize: '14px' } }, [renderIcon('alert', 13, { marginRight: '6px' }), `${availableUpdates.length} Module Update(s) Available`]),
+            availableUpdates && availableUpdates.length > 0 && e('div', { style: { background: 'var(--bg-surface)', border: '1px solid var(--accent-amber)', padding: '14px 18px', borderRadius: '8px', marginBottom: '18px' } },
+              e('h4', { style: { color: 'var(--accent-amber)', margin: '0 0 6px 0', fontSize: '14px' } }, [renderIcon('alert', 13, { marginRight: '6px' }), `${availableUpdates.length} Module Update(s) Available`]),
               e('div', { style: { display: 'flex', gap: '10px', flexWrap: 'wrap' } },
                 (availableUpdates || []).map(up =>
                   e('button', {
                     key: up.id,
                     className: 'btn-sec',
-                    style: { fontSize: '12px', background: '#f5e3c3', color: '#78350f', borderColor: '#edd5a6' },
+                    style: { fontSize: '12px', background: 'var(--bg-card)', color: 'var(--accent-amber)', borderColor: 'var(--border-color)' },
                     onClick: () => installModule(up)
                   }, `Update ${up.name} (${up.current_version} -> ${up.latest_version})`)
                 )
@@ -17229,15 +18621,22 @@
             ),
 
             // Subtab 1: Installed & Cloned Repositories
-            marketplaceSubTab === 'installed' && e('div', null,
-              installedModules.length === 0 ?
+            marketplaceSubTab === 'installed' && (() => {
+              const filteredInstalled = installedModules.filter(m => {
+                const catOk = moduleFilter === 'all' || String(m.type || 'module').toLowerCase() === moduleFilter;
+                const q = moduleSearchQuery.trim().toLowerCase();
+                const qOk = !q || String(m.name || '').toLowerCase().includes(q) || String(m.description || '').toLowerCase().includes(q) || String(m.type || '').toLowerCase().includes(q);
+                return catOk && qOk;
+              });
+              return e('div', null,
+              filteredInstalled.length === 0 ?
                 e('div', { style: { textAlign: 'center', padding: '40px 20px', background: 'var(--bg-card)', border: '1px dashed var(--border-color)', borderRadius: '8px' } },
                   renderIcon('modules', 32, { marginBottom: '8px', color: 'var(--text-muted)' }),
-                  e('h4', { style: { margin: '0 0 6px 0', fontFamily: 'var(--font-heading)', fontSize: '18px' } }, 'No Repositories or Modules Installed Yet'),
-                  e('p', { style: { color: 'var(--text-muted)', fontSize: '13px', maxWidth: '520px', margin: '0 auto 16px auto' } }, 'Use the Cloner bar above to clone any Git or Hugging Face repository, or switch to Curated & Verified to install custom loss DAG plugins, base weights, and datasets.')
+                  e('h4', { style: { margin: '0 0 6px 0', fontFamily: 'var(--font-heading)', fontSize: '18px' } }, installedModules.length === 0 ? 'No Repositories or Modules Installed Yet' : 'No Installed Modules Match This Filter'),
+                  e('p', { style: { color: 'var(--text-muted)', fontSize: '13px', maxWidth: '520px', margin: '0 auto 16px auto' } }, installedModules.length === 0 ? 'Use the Cloner bar above to clone any Git or Hugging Face repository, or switch to Curated & Verified to install custom loss DAG plugins, base weights, and datasets.' : 'Try selecting "All Modules" or clearing the search filter above.')
                 ) :
                 e('div', { style: { display: 'flex', flexDirection: 'column', gap: '12px' } },
-                  installedModules.map(m =>
+                  filteredInstalled.map(m =>
                     e('div', { key: m.id, className: 'repo-card-installed' },
                       e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '8px' } },
                         e('div', null,
@@ -17302,7 +18701,8 @@
                     )
                   )
                 )
-            ),
+              );
+            })(),
 
             // Subtab 2: Curated & Verified (Modrinth / F-Droid Storefront Style)
             marketplaceSubTab === 'curated' && e('div', null,
@@ -17425,7 +18825,7 @@
                           )
                         ),
                         e('div', { className: 'modrinth-actions-footer' },
-                          e('a', { href: hf.repo_url, target: '_blank', rel: 'noreferrer', style: { fontSize: '11.5px', color: 'var(--primary)', textDecoration: 'none', fontWeight: 600 } }, 'Hub Page ?'),
+                          e('a', { href: hf.repo_url, target: '_blank', rel: 'noreferrer', style: { fontSize: '11.5px', color: 'var(--primary)', textDecoration: 'none', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' } }, ['Hub Page', renderIcon('externalLink', 11)]),
                           e('div', { className: 'modrinth-actions-group' },
                             hf.type === 'dataset' ?
                               e('div', { style: { display: 'flex', gap: '6px' } },
@@ -17515,7 +18915,7 @@
                           )
                         ),
                         e('div', { className: 'modrinth-actions-footer' },
-                          e('a', { href: gh.repo_url, target: '_blank', rel: 'noreferrer', style: { fontSize: '11.5px', color: 'var(--primary)', textDecoration: 'none', fontWeight: 600 } }, 'GitHub ?'),
+                          e('a', { href: gh.repo_url, target: '_blank', rel: 'noreferrer', style: { fontSize: '11.5px', color: 'var(--primary)', textDecoration: 'none', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' } }, ['GitHub', renderIcon('externalLink', 11)]),
                           e('div', { className: 'modrinth-actions-group' },
                             e('button', {
                               className: 'btn-sec',
@@ -17559,7 +18959,7 @@
             ),
 
             // Summary Cards Grid
-            systemScan && e('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '14px', marginBottom: '20px' } },
+            systemScan && e('div', { className: 'ps-env-summary-grid' },
               e('div', { className: 'metric-card' },
                 e('span', { className: 'metric-label' }, 'GPU Hardware Acceleration'),
                 e('span', { className: 'metric-value', style: { fontSize: '15px' } }, systemScan.gpu)
@@ -17615,7 +19015,7 @@
             // Custom Paths & Configuration Panel
             e('h3', { style: { fontFamily: 'var(--font-heading)', fontSize: '18px', marginTop: '24px', marginBottom: '8px' } }, 'Custom Paths & Workspace Directories'),
             e('div', { className: 'card-byok', style: { maxWidth: '100%', margin: '0' } },
-              e('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '14px' } },
+              e('div', { className: 'ps-env-paths-grid' },
                 e('div', { className: 'field-group' },
                   e('label', null, 'Installation Base Path:'),
                   e('input', {

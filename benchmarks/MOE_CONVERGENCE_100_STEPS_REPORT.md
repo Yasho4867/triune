@@ -2,7 +2,7 @@
 **Empirical Multi-Seed Optimizer Evaluation & 3-Tier Dynamic Steering Synergy on Real FineWeb-Edu**
 
 - **Date / Timestamp**: `2026-11-15 07:30:40 UTC`
-- **Git Commit**: [`569469e491`](https://github.com/Yasho4867/triune/commit/569469e491ea6186407ad53d10a63ffaa3582f76) (Dirty Working Tree)
+- **Git Commit**: [`569469e491`](https://github.com/lucid-machines/triune/commit/569469e491ea6186407ad53d10a63ffaa3582f76) (Dirty Working Tree)
 - **Hardware**: `NVIDIA GeForce RTX 5070 Laptop GPU` (7.93 GB VRAM, CC 12.0)
 - **Software**: PyTorch `2.14.1+cu132` | CUDA `13.2` | Python `3.14.7`
 - **Dataset**: Real FineWeb-Edu educational text (`data\fineweb_edu_real.jsonl`, SHA-256 `aed10d4c98af...`)

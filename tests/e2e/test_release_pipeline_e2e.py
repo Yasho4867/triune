@@ -517,6 +517,8 @@ class _RelativeAssetHTMLParser(HTMLParser):
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attr_map = dict(attrs)
         if tag in ("link", "script", "img", "source"):
+            if tag == "link" and (attr_map.get("rel") or "").lower() == "canonical":
+                return
             ref = attr_map.get("href") or attr_map.get("src")
             if ref:
                 self.asset_refs.append((tag, ref))

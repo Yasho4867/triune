@@ -21,6 +21,7 @@ from lucid_machines.cli_ui import (
     render_rule,
     render_table,
     render_telemetry_bar,
+    resolve_cli_prog,
     route_badge_ansi,
     status_spinner,
 )
@@ -36,12 +37,28 @@ def _format_param_count(num: int) -> str:
     return str(num)
 
 
-def build_cli_parser() -> argparse.ArgumentParser:
+def _get_subparser(parser: argparse.ArgumentParser, name: str) -> argparse.ArgumentParser:
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction) and name in action.choices:
+            return action.choices[name]
+    return parser
+
+
+def build_cli_parser(prog: str | None = None) -> argparse.ArgumentParser:
     """Build the unified Lucid Machines CLI argument parser."""
+    from lucid_machines import __version__
+
+    cli_prog = prog or resolve_cli_prog()
     parser = argparse.ArgumentParser(
-        prog="lucid-machines",
-        description="Lucid Machines Unified CLI — Triune 3-Tier Mixture-of-Experts, Weight Transmuter & Local Engine",
+        prog=cli_prog,
+        description="Polysom KCX (Lucid Machines CLI) — Triune 3-Tier Mixture-of-Experts, Weight Transmuter & Local Engine",
         formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "-V",
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
     )
     subparsers = parser.add_subparsers(dest="command", help="Available CLI Commands")
 
@@ -412,11 +429,81 @@ def build_cli_parser() -> argparse.ArgumentParser:
     agent_parser.add_argument(
         "--max-workers", type=int, default=4, help="Max concurrent workers for --parallel team orchestration"
     )
+    agent_parser.add_argument(
+        "--workspace", default=".", help="Workspace root directory for agent file and terminal tools (default: .)"
+    )
+    agent_parser.add_argument(
+        "--mode",
+        default="react",
+        choices=("react", "pev", "pipeline"),
+        help="Agent execution loop mode: react, pev (plan-execute-verify), or pipeline (multi-agent)",
+    )
 
-    parser._triune_subparsers = {  # type: ignore[attr-defined]
-        "adapter": adapter_parser,
-        "checkpoint": ckpt_parser,
-    }
+    # 21. Evaluate command
+    eval_parser = subparsers.add_parser(
+        "eval",
+        aliases=["evaluate"],
+        help="Evaluate a Triune checkpoint on a validation dataset and optional sample prompt",
+    )
+    eval_parser.add_argument("--checkpoint", default="checkpoints_full/best.pt", help="Model checkpoint path")
+    eval_parser.add_argument("--tokenizer", default="triune_tokenizer.json", help="Tokenizer JSON path")
+    eval_parser.add_argument("--dataset", default=None, help="Validation dataset name or local file path")
+    eval_parser.add_argument("--dataset-config", default=None, help="Dataset config/subset name")
+    eval_parser.add_argument("-p", "--prompt", default=None, help="Optional sample prompt to generate after eval")
+    eval_parser.add_argument(
+        "--max-steps",
+        "--eval-batches",
+        dest="max_steps",
+        type=int,
+        default=5,
+        help="Max evaluation batches (default: 5)",
+    )
+    eval_parser.add_argument("--max-tokens", type=int, default=40, help="Max tokens when --prompt is given")
+    eval_parser.add_argument(
+        "--depth",
+        default="auto",
+        choices=("auto", "reflex", "limbic", "cortex"),
+        help="Exit depth routing during evaluation (default: auto)",
+    )
+    eval_parser.add_argument("--device", default=None, help="Target device (cuda / cpu)")
+
+    # 22. Config management command
+    config_parser = subparsers.add_parser(
+        "config",
+        help="List, inspect, and validate Triune/Junkie model configs and session state",
+    )
+    config_sub = config_parser.add_subparsers(dest="config_action", help="Config action")
+    config_sub.add_parser("list", help="List available model configs in models/configs/ and canonical presets")
+    config_show = config_sub.add_parser("show", help="Inspect a model config, preset, or session_state.json")
+    config_show.add_argument("target", nargs="?", default=None, help="Preset name, 'session', or JSON path")
+    config_show.add_argument("--file", default=None, help="Explicit JSON config file path")
+    config_show.add_argument("--json", action="store_true", help="Print raw JSON output")
+    config_val = config_sub.add_parser("validate", help="Validate model config(s) against ModelSpec & build_config")
+    config_val.add_argument("target", nargs="?", default=None, help="Preset name or JSON path to validate")
+    config_val.add_argument("--all", action="store_true", help="Validate all models/configs/*.json presets")
+
+    # 23. Workspace operations command
+    ws_parser = subparsers.add_parser(
+        "workspace",
+        help="Inspect status, file tree, read files, or initialize a project workspace",
+    )
+    ws_sub = ws_parser.add_subparsers(dest="ws_action", help="Workspace action")
+    ws_status = ws_sub.add_parser("status", help="Show workspace root, git status, and checkpoint/config summary")
+    ws_status.add_argument("--path", default=".", help="Workspace root directory (default: .)")
+    ws_tree = ws_sub.add_parser("tree", help="Display workspace directory tree")
+    ws_tree.add_argument("--path", default=".", help="Workspace root directory (default: .)")
+    ws_tree.add_argument("--depth", type=int, default=2, help="Max directory depth (default: 2)")
+    ws_read = ws_sub.add_parser("read", help="Read a text file safely confined inside the workspace")
+    ws_read.add_argument("file_pos", nargs="?", default=None, help="Relative file path inside workspace")
+    ws_read.add_argument("--file", default=None, help="Relative file path inside workspace")
+    ws_read.add_argument("--path", default=".", help="Workspace root directory (default: .)")
+    ws_read.add_argument("--start", type=int, default=1, help="Start line (1-indexed)")
+    ws_read.add_argument("--end", type=int, default=200, help="End line (inclusive)")
+    ws_init = ws_sub.add_parser(
+        "init", help="Initialize standard workspace directories safely without overwriting files"
+    )
+    ws_init.add_argument("--path", default=".", help="Workspace root directory (default: .)")
+
     return parser
 
 
@@ -424,16 +511,30 @@ def main() -> None:
     """Dispatch CLI commands with Rich formatting and unified engine orchestration."""
     ensure_utf8_stdio()
     argv = sys.argv[1:]
+    prog = resolve_cli_prog()
     prog_stem = Path(sys.argv[0]).stem.lower() if sys.argv else ""
     if prog_stem in ("polysom", "polysom-script") and (
-        not argv or (argv[0].startswith("-") and argv[0] not in ("-h", "--help"))
+        not argv or (argv[0].startswith("-") and argv[0] not in ("-h", "--help", "-V", "--version"))
     ):
         argv = ["studio", *argv]
     elif not argv or argv[0] in ("-h", "--help"):
-        render_help_overview()
+        render_help_overview(prog=prog)
+        return
+    elif argv[0] in ("-V", "--version"):
+        from lucid_machines import __version__
+
+        print(f"{prog} {__version__}")
         return
 
-    parser = build_cli_parser()
+    if argv[0] == "train":
+        from scripts.train import main as train_main
+
+        train_argv = argv[1:]
+        sys.argv = [f"{prog} train", *train_argv]
+        train_main(train_argv)
+        return
+
+    parser = build_cli_parser(prog=prog)
     args = parser.parse_args(argv)
 
     if args.command == "studio":
@@ -516,7 +617,7 @@ def main() -> None:
         prompt = args.prompt or args.prompt_pos
         if not prompt:
             render_notice("Please provide a prompt via positional argument or --prompt.", level="error")
-            return
+            raise SystemExit(2)
 
         source = getattr(args, "model", None) or args.checkpoint
         is_ollama = bool(args.model and str(args.model).strip().lower().startswith("ollama:"))
@@ -543,7 +644,7 @@ def main() -> None:
                     f"'{source}' is not live in Ollama. Start it via `ollama run {str(source).removeprefix('ollama:')}`.",
                     level="error",
                 )
-                return
+                raise SystemExit(1)
 
             print(f"\n  Prompt: {prompt}")
             sys.stdout.write(f"  {route_badge_ansi('OLLAMA')} ")
@@ -719,7 +820,7 @@ def main() -> None:
                 ("Action", "left", "green"),
             ],
             rows=rows,
-            caption="Tip: run `lucid-machines chat --model ollama:<tag>` for live Ollama or `lucid-machines transmute --model <id>` for 3-tier HF transfer.",
+            caption=f"Tip: run `{prog} chat --model ollama:<tag>` for live Ollama or `{prog} transmute --model <id>` for 3-tier HF transfer.",
         )
 
     elif args.command == "transmute":
@@ -913,9 +1014,9 @@ def main() -> None:
                 model._streaming_engine.detach()
 
     elif args.command == "adapter":
-        from lucid_machines.trainer.finetune import export_adapter, list_adapters, merge_adapter_checkpoint
-
         if args.adapter_action == "list":
+            from lucid_machines.trainer.finetune import list_adapters
+
             ads = list_adapters()
             if not ads:
                 render_notice(
@@ -944,29 +1045,68 @@ def main() -> None:
                     ],
                 )
         elif args.adapter_action == "merge":
+            from lucid_machines.trainer.finetune import merge_adapter_checkpoint
+
             out = merge_adapter_checkpoint(
                 args.adapter, args.checkpoint, output_path=args.output, tokenizer_path=args.tokenizer
             )
             render_notice(f"Merged adapter '{args.adapter}' into '{args.checkpoint}' -> {out}", level="success")
         elif args.adapter_action == "export":
+            from lucid_machines.trainer.finetune import export_adapter
+
             out = export_adapter(args.adapter, output_path=args.output, fmt=args.format)
             render_notice(f"Exported adapter to: {out}", level="success")
         else:
-            parser._triune_subparsers["adapter"].print_help()  # type: ignore[attr-defined]
+            _get_subparser(parser, "adapter").print_help()
+            raise SystemExit(2)
 
     elif args.command == "checkpoint":
-        from lucid_machines.export import export_model
-        from lucid_machines.inference import load_checkpoint_model
-
         if args.ckpt_action == "list":
+            import json as _json
+
             ckpts = []
             for d in ("checkpoints", "checkpoints_full"):
                 p = Path(d)
                 if p.is_dir():
                     for f in sorted(p.glob("*.pt"), key=lambda x: x.stat().st_mtime, reverse=True):
+                        step_str = "-"
+                        model_str = "-"
+                        loss_str = "-"
+                        try:
+                            import torch
+
+                            meta = torch.load(f, map_location="cpu", weights_only=True, mmap=True)
+                            if isinstance(meta, dict):
+                                if meta.get("step") is not None:
+                                    step_str = str(meta["step"])
+                                cfg_meta = meta.get("config") or {}
+                                if isinstance(cfg_meta, dict) and cfg_meta.get("model_name"):
+                                    model_str = str(cfg_meta["model_name"])
+                                loss_val = meta.get("best_eval_loss")
+                                if loss_val is None:
+                                    loss_val = meta.get("loss")
+                                if isinstance(loss_val, (int, float)):
+                                    loss_str = f"{loss_val:.4f}"
+                        except Exception:
+                            pass
                         ckpts.append(
-                            (str(f), f"{f.stat().st_size / (1024 * 1024):.1f} MB", time.ctime(f.stat().st_mtime))
+                            (
+                                str(f),
+                                step_str,
+                                model_str,
+                                loss_str,
+                                f"{f.stat().st_size / (1024 * 1024):.1f} MB",
+                                time.ctime(f.stat().st_mtime),
+                            )
                         )
+            session_p = Path("checkpoints/session_state.json")
+            session_caption = None
+            if session_p.is_file():
+                try:
+                    st = _json.loads(session_p.read_text(encoding="utf-8"))
+                    session_caption = f"Session state: step={st.get('step')} · active={st.get('active_checkpoint') or st.get('active_model_id')}"
+                except Exception:
+                    pass
             if not ckpts:
                 render_notice("No checkpoints found in checkpoints/ or checkpoints_full/.", level="info")
             else:
@@ -974,14 +1114,62 @@ def main() -> None:
                     f"Local Training Checkpoints ({len(ckpts)})",
                     columns=[
                         ("Path", "left", "bold cyan"),
+                        ("Step", "right", "white"),
+                        ("Model", "left", "green"),
+                        ("Loss", "right", "yellow"),
                         ("Size", "right", "yellow"),
                         ("Modified", "left", "dim"),
                     ],
-                    rows=[[p, sz, mt] for p, sz, mt in ckpts],
+                    rows=[list(row) for row in ckpts],
+                    caption=session_caption,
                 )
         elif args.ckpt_action == "export":
+            if str(args.format).lower() == "gguf":
+                render_notice(
+                    "GGUF export is not yet supported for Triune's GLA, early-exit heads, and MoE architecture. "
+                    "Use `--format safetensors`, `--format hf`, or `--format onnx`.",
+                    level="error",
+                )
+                raise SystemExit(2)
+
+            from lucid_machines.export import export_model
+            from lucid_machines.inference import load_checkpoint_model
+
             with status_spinner(f"Loading checkpoint {args.checkpoint}..."):
                 model, tokenizer, _, _, _, _ = load_checkpoint_model(args.checkpoint)
+            try:
+                if args.format == "hf":
+                    from lucid_machines.export.hf_compat import export_to_huggingface
+
+                    out = args.output or f"exports/{Path(args.checkpoint).stem}_hf"
+                    out_p = export_to_huggingface(model, out, tokenizer=tokenizer)
+                    render_notice(f"Exported Hugging Face bundle to: {out_p}", level="success")
+                else:
+                    out = args.output or f"exports/{Path(args.checkpoint).stem}.{args.format}"
+                    out_p = export_model(model, out, fmt=args.format)
+                    render_notice(f"Exported checkpoint to: {out_p}", level="success")
+            except NotImplementedError as exc:
+                render_notice(str(exc), level="error")
+                raise SystemExit(2)
+        else:
+            _get_subparser(parser, "checkpoint").print_help()
+            raise SystemExit(2)
+
+    elif args.command in ("export", "convert"):
+        if str(args.format).lower() == "gguf":
+            render_notice(
+                "GGUF export is not yet supported for Triune's GLA, early-exit heads, and MoE architecture. "
+                "Use `--format safetensors`, `--format hf`, or `--format onnx`.",
+                level="error",
+            )
+            raise SystemExit(2)
+
+        from lucid_machines.export import export_model
+        from lucid_machines.inference import load_checkpoint_model
+
+        with status_spinner(f"Loading checkpoint {args.checkpoint}..."):
+            model, tokenizer, _, _, _, _ = load_checkpoint_model(args.checkpoint)
+        try:
             if args.format == "hf":
                 from lucid_machines.export.hf_compat import export_to_huggingface
 
@@ -992,48 +1180,53 @@ def main() -> None:
                 out = args.output or f"exports/{Path(args.checkpoint).stem}.{args.format}"
                 out_p = export_model(model, out, fmt=args.format)
                 render_notice(f"Exported checkpoint to: {out_p}", level="success")
-        else:
-            parser._triune_subparsers["checkpoint"].print_help()  # type: ignore[attr-defined]
-
-    elif args.command in ("export", "convert"):
-        from lucid_machines.export import export_model
-        from lucid_machines.inference import load_checkpoint_model
-
-        with status_spinner(f"Loading checkpoint {args.checkpoint}..."):
-            model, tokenizer, _, _, _, _ = load_checkpoint_model(args.checkpoint)
-        if args.format == "hf":
-            from lucid_machines.export.hf_compat import export_to_huggingface
-
-            out = args.output or f"exports/{Path(args.checkpoint).stem}_hf"
-            out_p = export_to_huggingface(model, out, tokenizer=tokenizer)
-            render_notice(f"Exported Hugging Face bundle to: {out_p}", level="success")
-        else:
-            out = args.output or f"exports/{Path(args.checkpoint).stem}.{args.format}"
-            out_p = export_model(model, out, fmt=args.format)
-            render_notice(f"Exported checkpoint to: {out_p}", level="success")
+        except NotImplementedError as exc:
+            render_notice(str(exc), level="error")
+            raise SystemExit(2)
 
     elif args.command == "models":
-        from lucid_machines.model.base import CANONICAL_MODEL_SPECS
+        import json as _json
 
-        rows = [
-            [
-                k,
-                v.name,
-                v.num_layers,
-                v.hidden_dim,
-                f"{v.num_experts}R/{v.experts_shared}S",
-                v.tier,
-            ]
-            for k, v in CANONICAL_MODEL_SPECS.items()
-        ]
+        from lucid_machines.model.base import CANONICAL_MODEL_SPECS, ModelSpec
+
+        merged_specs: dict[str, ModelSpec] = dict(CANONICAL_MODEL_SPECS)
+        cfg_dir = Path("models/configs")
+        if not cfg_dir.is_dir():
+            cfg_dir = Path(__file__).resolve().parent.parent / "models" / "configs"
+        if cfg_dir.is_dir():
+            for cfg_file in sorted(cfg_dir.glob("*.json")):
+                try:
+                    raw = _json.loads(cfg_file.read_text(encoding="utf-8-sig"))
+                    if isinstance(raw, dict) and cfg_file.stem not in merged_specs:
+                        merged_specs[cfg_file.stem] = ModelSpec.from_dict({"model_id": cfg_file.stem, **raw})
+                except Exception:
+                    pass
+
+        rows = []
+        for k, v in merged_specs.items():
+            total_p, active_p = v.compute_exact_params()
+            rows.append(
+                [
+                    k,
+                    v.name,
+                    v.num_layers,
+                    v.hidden_dim,
+                    f"{v.num_experts}R/{v.experts_shared}S (k={v.top_k_experts})",
+                    _format_param_count(total_p),
+                    _format_param_count(active_p),
+                    v.tier,
+                ]
+            )
         render_table(
-            f"Triune Model Architecture Zoo ({len(CANONICAL_MODEL_SPECS)} Presets)",
+            f"Triune & Junkie Model Architecture Zoo ({len(merged_specs)} Presets)",
             columns=[
                 ("Preset ID", "left", "bold cyan"),
                 ("Architecture", "left", "white"),
                 ("Layers", "right", "yellow"),
                 ("Hidden", "right", "white"),
                 ("Experts", "left", "green"),
+                ("Total", "right", "cyan"),
+                ("Active", "right", "green"),
                 ("Tier", "left", "dim"),
             ],
             rows=rows,
@@ -1042,8 +1235,9 @@ def main() -> None:
     elif args.command == "train":
         from scripts.train import main as train_main
 
-        sys.argv = [sys.argv[0]] + (args.train_args or [])
-        train_main()
+        train_argv = list(args.train_args or [])
+        sys.argv = [f"{prog} train", *train_argv]
+        train_main(train_argv)
 
     elif args.command in ("benchmark", "bench"):
         if getattr(args, "suite", None):
@@ -1126,21 +1320,50 @@ def main() -> None:
 
         if getattr(args, "model", None):
             hf_plan = MemoryPlanner.estimate_hf_model(args.model, available_vram_gb=args.vram_gb)
-            render_kv_panel(
-                f"Hardware Memory Plan · {hf_plan['model']}",
-                [
+            plan_rows = [
+                (
+                    "Parameters",
+                    f"{hf_plan['total_params']:,} ({hf_plan['layers']}L, hidden={hf_plan['hidden_size']}, vocab={hf_plan['vocab_size']:,})",
+                ),
+            ]
+            if hf_plan.get("active_params"):
+                plan_rows.append(
                     (
-                        "Parameters",
-                        f"{hf_plan['total_params']:,} ({hf_plan['layers']}L, hidden={hf_plan['hidden_size']}, vocab={hf_plan['vocab_size']:,})",
-                    ),
+                        "Active / Token",
+                        f"{hf_plan['active_params']:,} (top_k={hf_plan.get('top_k_experts', 1)})",
+                    )
+                )
+            plan_rows.extend(
+                [
                     ("BF16 Weights", f"{hf_plan['bf16_weights_gb']} GB"),
                     (
                         "NVFP4 Cache (SSD/VRAM)",
                         f"{hf_plan['nvfp4_disk_cache_gb']} GB (~{hf_plan['per_layer_nvfp4_mb']} MB/layer; quant lm_head={hf_plan['nvfp4_quant_lmhead_cache_gb']} GB)",
                     ),
-                    ("Hardware", f"{hf_plan['available_vram_gb']} GB VRAM  ·  {hf_plan['host_ram_gb']} GB Host RAM"),
-                    ("Recommended Mode", hf_plan["recommended_mode"]),
-                ],
+                ]
+            )
+            if hf_plan.get("centroid_steer_static_vram_gb") is not None:
+                fp8_static = hf_plan.get("centroid_steer_fp8_static_vram_gb")
+                if fp8_static is not None:
+                    train_str = f"{hf_plan['centroid_steer_static_vram_gb']} GB BF16 / {fp8_static} GB FP8 static (opt={hf_plan['centroid_steer_opt_gb']} GB)"
+                else:
+                    train_str = f"{hf_plan['centroid_steer_static_vram_gb']} GB static (opt={hf_plan['centroid_steer_opt_gb']} GB)"
+                plan_rows.append(("CentroidSteer Train", train_str))
+            plan_rows.append(
+                ("Hardware", f"{hf_plan['available_vram_gb']} GB VRAM  ·  {hf_plan['host_ram_gb']} GB Host RAM")
+            )
+            if hf_plan.get("recommended_train_mode"):
+                plan_rows.extend(
+                    [
+                        ("Inference Mode", hf_plan["recommended_mode"]),
+                        ("Training Mode", hf_plan["recommended_train_mode"]),
+                    ]
+                )
+            else:
+                plan_rows.append(("Recommended Mode", hf_plan["recommended_mode"]))
+            render_kv_panel(
+                f"Hardware Memory Plan · {hf_plan['model']}",
+                plan_rows,
                 border_style="cyan",
             )
         else:
@@ -1189,17 +1412,37 @@ def main() -> None:
     elif args.command == "install":
         import subprocess
 
-        workspace = Path(__file__).resolve().parent.parent
-        setup_exe = workspace / "PolysomStudioSetup.exe"
-        if not setup_exe.is_file():
-            setup_exe = workspace / "studio" / "publish" / "PolysomStudioSetup.exe"
-        if not setup_exe.is_file():
-            setup_exe = workspace / "studio" / "windows" / "publish" / "PolysomStudioSetup.exe"
-        if sys.platform == "win32" and setup_exe.is_file() and not args.yes and not args.verify:
+        roots = [Path.cwd(), Path(__file__).resolve().parent.parent]
+        setup_exe = next(
+            (
+                cand
+                for root in roots
+                for cand in (
+                    root / "PolysomStudioSetup.exe",
+                    root / "studio" / "windows" / "publish" / "PolysomStudioSetup.exe",
+                    root / "studio" / "publish" / "PolysomStudioSetup.exe",
+                )
+                if cand.is_file()
+            ),
+            None,
+        )
+        installer_script = next(
+            (
+                root / "studio" / "installer" / "installer.py"
+                for root in roots
+                if (root / "studio" / "installer" / "installer.py").is_file()
+            ),
+            None,
+        )
+        workspace = (
+            setup_exe.parent
+            if setup_exe is not None
+            else (installer_script.parents[2] if installer_script else Path.cwd())
+        )
+        if sys.platform == "win32" and setup_exe is not None and not args.yes and not args.verify:
             render_notice(f"Launching Native Windows Setup Wizard: {setup_exe}", level="info")
             subprocess.Popen([str(setup_exe)], cwd=str(workspace))
-        else:
-            installer_script = workspace / "studio" / "installer" / "installer.py"
+        elif installer_script is not None:
             cmd = [sys.executable, str(installer_script), "--cuda", args.cuda]
             if args.verify:
                 cmd.append("--verify")
@@ -1210,6 +1453,21 @@ def main() -> None:
             if args.yes:
                 cmd.append("--yes")
             raise SystemExit(subprocess.call(cmd, cwd=str(workspace)))
+        elif args.verify:
+            from lucid_machines.utils.device import device_diagnostic
+
+            diag = device_diagnostic()
+            render_notice(
+                f"Environment verified: Python {diag['python']} · PyTorch {diag['torch']} · CUDA={diag['cuda_available']}",
+                level="success",
+            )
+        else:
+            render_notice(
+                "Studio installer script (studio/installer/installer.py) is not bundled in this wheel install. "
+                "Install extras via `pip install lucid-machines[studio]` or run from a source checkout.",
+                level="warn",
+            )
+            raise SystemExit(1)
 
     elif args.command in ("doctor", "info"):
         import importlib.util
@@ -1319,8 +1577,13 @@ def main() -> None:
     elif args.command == "agent":
         from lucid_machines.agents import AgentHarness
 
+        ws_path = Path(args.workspace).expanduser().resolve(strict=False)
+        if not ws_path.is_dir():
+            render_notice(f"Workspace directory does not exist: {args.workspace}", level="error")
+            raise SystemExit(1)
+
         harness = AgentHarness(
-            workspace=".",
+            workspace=ws_path,
             store_dir=args.store_dir,
             model=args.model,
             allow_shell=bool(args.allow_shell),
@@ -1337,14 +1600,14 @@ def main() -> None:
                 )
             except ValueError as exc:
                 render_notice(str(exc), level="error")
-                return
+                raise SystemExit(2) from exc
         elif not auto_depth:
             harness.state_controller.shift(reasoning_depth=args.depth, reason="CLI depth override")
 
         model_badge = harness.model or "NO BACKEND (configure Ollama or BYOK)"
         render_banner(
             "TRIUNE AGENT HARNESS",
-            subtitle=f"{harness.state_controller.active_profile.title} · {harness.state_controller.state.reasoning_depth.upper()}",
+            subtitle=f"{harness.state_controller.active_profile.title} · {harness.state_controller.state.reasoning_depth.upper()} · mode={args.mode}",
             badge=model_badge,
         )
 
@@ -1378,6 +1641,8 @@ def main() -> None:
             render_kv_panel(
                 "Harness Cognitive Status",
                 [
+                    ("Workspace", str(ws_path)),
+                    ("Execution Mode", args.mode.upper()),
                     ("Backend Model", harness.model or "None configured"),
                     ("Active Persona", f"{st.persona} ({harness.state_controller.active_profile.title})"),
                     ("Reasoning Tier", st.reasoning_depth.upper()),
@@ -1390,7 +1655,7 @@ def main() -> None:
             )
 
         single_goal = args.goal or args.goal_pos
-        if single_goal and (getattr(args, "team", None) or getattr(args, "parallel", False)):
+        if single_goal and (getattr(args, "team", None) or getattr(args, "parallel", False) or args.mode == "pipeline"):
             from lucid_machines.agents import MultiAgentOrchestrator
 
             raw_team = getattr(args, "team", None) or "architect,engineer,sentinel"
@@ -1421,6 +1686,50 @@ def main() -> None:
                 )
             except Exception as exc:
                 render_notice(f"Team orchestration failed: {exc}", level="error")
+                raise SystemExit(1) from exc
+            return
+        if single_goal and args.mode == "pev":
+            from lucid_machines.agents.loops import run_agent_loop
+
+            def _emit_loop(ev: dict) -> None:
+                etype = ev.get("type")
+                if etype == "plan":
+                    for idx, step_txt in enumerate(ev.get("steps") or [], 1):
+                        print(f"  [plan #{idx}] {step_txt}")
+                elif etype == "thought":
+                    print(f"  [thought #{ev.get('step', '?')}] {str(ev.get('thought', ''))[:220]}")
+                elif etype == "tool_call":
+                    print(f"  -> {ev.get('tool')}({ev.get('arguments') or {}})")
+                elif etype == "tool_result":
+                    icon = "✓" if ev.get("ok") else "✗"
+                    detail = ev.get("result_preview") if ev.get("ok") else ev.get("error")
+                    print(f"     {icon} {str(detail)[:180]}")
+
+            try:
+                res = run_agent_loop(
+                    harness=harness,
+                    goal=single_goal,
+                    mode="pev",
+                    autonomy="autonomous_sandbox" if not args.read_only else "supervised",
+                    max_steps=args.max_steps,
+                    emit=_emit_loop,
+                )
+                if res.get("error"):
+                    render_notice(f"Agent PEV execution failed: {res['error']}", level="error")
+                    raise SystemExit(1)
+                render_kv_panel(
+                    f"PEV Result ({res.get('steps', 0)} steps)",
+                    [
+                        ("Workspace", str(ws_path)),
+                        ("Response", str(res.get("answer") or "")),
+                    ],
+                    border_style="green",
+                )
+            except SystemExit:
+                raise
+            except Exception as exc:
+                render_notice(f"Agent execution failed: {exc}", level="error")
+                raise SystemExit(1) from exc
             return
         if single_goal:
             try:
@@ -1443,6 +1752,7 @@ def main() -> None:
                 )
             except Exception as exc:
                 render_notice(f"Agent execution failed: {exc}", level="error")
+                raise SystemExit(1) from exc
             return
 
         _print_agent_status()
@@ -1619,8 +1929,438 @@ def main() -> None:
             except Exception as exc:
                 render_notice(f"Agent error: {exc}", level="error")
 
+    elif args.command in ("eval", "evaluate"):
+        import math
+
+        ckpt_path = Path(args.checkpoint)
+        tok_path = Path(args.tokenizer)
+        if not ckpt_path.is_file():
+            render_notice(f"Checkpoint not found: {args.checkpoint}", level="error")
+            raise SystemExit(1)
+        if not tok_path.is_file():
+            render_notice(f"Tokenizer not found: {args.tokenizer}", level="error")
+            raise SystemExit(1)
+
+        import torch
+
+        from lucid_machines.configs.config import build_config
+        from lucid_machines.data import build_dataloader, load_tokenizer
+        from lucid_machines.model import build_model
+        from lucid_machines.model.transformer import TriuneTransformer
+        from lucid_machines.recipes import bf16_autocast
+        from lucid_machines.trainer.evaluation import run_eval, run_sample
+
+        dev = torch.device(args.device or ("cuda" if torch.cuda.is_available() else "cpu"))
+        tokenizer = load_tokenizer(tok_path)
+        vocab_size = tokenizer.get_vocab_size()
+        pad_id = tokenizer.token_to_id("[PAD]")
+        sep_id = tokenizer.token_to_id("[SEP]")
+        if pad_id is None:
+            pad_id = getattr(tokenizer, "pad_token_id", 0) or 0
+        if sep_id is None:
+            sep_id = getattr(tokenizer, "eos_token_id", None) or pad_id
+
+        with status_spinner(f"Loading checkpoint {ckpt_path} on {dev}..."):
+            payload = torch.load(ckpt_path, map_location="cpu", weights_only=True)
+            ckpt_cfg = payload.get("config") if isinstance(payload, dict) else None
+            cfg_overrides = dict(ckpt_cfg) if isinstance(ckpt_cfg, dict) else {}
+            cfg_overrides["vocab_size"] = vocab_size
+            if args.dataset:
+                cfg_overrides["dataset_name"] = args.dataset
+            if getattr(args, "dataset_config", None):
+                cfg_overrides["dataset_config"] = args.dataset_config
+            cfg = build_config(cfg_overrides)
+
+            if any(
+                k in cfg
+                for k in (
+                    "top_k_experts",
+                    "shared_expert",
+                    "shared_expert_scale",
+                    "expert_hidden_multiplier",
+                    "rope_max_seq_len",
+                )
+            ):
+                model = TriuneTransformer(
+                    vocab_size=int(cfg.get("vocab_size", vocab_size)),
+                    hidden_dim=int(cfg.get("hidden_dim", 1536)),
+                    num_layers=int(cfg.get("num_layers", 24)),
+                    num_heads=int(cfg.get("num_heads", 12)),
+                    head_dim=int(cfg.get("head_dim", 128)),
+                    num_experts=int(cfg.get("num_experts", 8)),
+                    top_k_experts=int(cfg.get("top_k_experts", 1)),
+                    shared_expert=bool(cfg.get("shared_expert", True)),
+                    shared_expert_scale=float(cfg.get("shared_expert_scale", 0.5)),
+                    expert_hidden_multiplier=int(cfg.get("expert_hidden_multiplier", 6)),
+                    rope_max_seq_len=int(cfg.get("rope_max_seq_len", 8192)),
+                    router_prefix_layers=int(cfg.get("router_prefix_layers", 3)),
+                    reflex_exit_layer=int(cfg.get("reflex_exit_layer", 6)),
+                    limbic_exit_layer=int(cfg.get("limbic_exit_layer", 16)),
+                    target_depth_dist=tuple(cfg.get("target_depth_dist", (0.34, 0.33, 0.33))),
+                    balance_coef=float(cfg.get("balance_coef", 0.30)),
+                    use_fp4=bool(cfg.get("use_fp4", False)),
+                    use_fp8=bool(cfg.get("use_fp8", False)),
+                )
+            else:
+                model = build_model(cfg)
+
+            state_dict = (
+                payload.get("model_state") or payload.get("model_state_dict") or payload
+                if isinstance(payload, dict)
+                else payload
+            )
+            model.load_state_dict(state_dict, strict=False)
+            model = model.to(dev)
+
+            eval_loader = build_dataloader(tokenizer, cfg, sep_id, is_holdout=True)
+            max_batches = max(1, int(args.max_steps))
+            eval_batches = []
+            for idx, batch in enumerate(eval_loader):
+                eval_batches.append(batch)
+                if idx + 1 >= max_batches:
+                    break
+
+        if not eval_batches:
+            render_notice("Evaluation dataset yielded zero batches.", level="error")
+            raise SystemExit(1)
+
+        depth_map = {"auto": None, "reflex": 0, "limbic": 1, "cortex": 2}
+        force_depth = depth_map.get(args.depth)
+        eval_ctx = type(
+            "_EvalContext",
+            (),
+            {
+                "model": model,
+                "eval_batches": eval_batches,
+                "device": dev,
+                "bf16_autocast": lambda _self=None: bf16_autocast(dev.type),
+                "pad_token_id": pad_id,
+                "sep_token_id": sep_id,
+                "vocab_size": vocab_size,
+                "tokenizer": tokenizer,
+                "sample_prompt": args.prompt or "The meaning of life is",
+            },
+        )()
+
+        avg_loss = run_eval(eval_ctx, force_depth=force_depth)
+        ppl = math.exp(min(20.0, avg_loss))
+        rows: list[tuple[str, object]] = [
+            ("Checkpoint", str(ckpt_path)),
+            ("Device", str(dev)),
+            ("Depth Route", args.depth.upper()),
+            ("Batches Evaluated", len(eval_batches)),
+            ("Eval Loss", f"{avg_loss:.4f}"),
+            ("Perplexity", f"{ppl:.2f}"),
+        ]
+        if args.prompt:
+            sample_text = run_sample(eval_ctx, prompt=args.prompt, max_new_tokens=args.max_tokens)
+            rows.append(("Prompt", args.prompt))
+            rows.append(("Sample Output", sample_text))
+        render_banner("TRIUNE EVALUATION REPORT", subtitle=str(ckpt_path), badge=args.depth.upper())
+        render_kv_panel("Evaluation Metrics", rows, border_style="green")
+
+    elif args.command == "config":
+        import json as _json
+
+        from lucid_machines.configs.config import build_config, validate_config
+        from lucid_machines.model.base import _LEGACY_PRESET_ALIASES, CANONICAL_MODEL_SPECS, ModelSpec, get_model_spec
+
+        cfg_dir = Path("models/configs")
+        if not cfg_dir.is_dir():
+            cfg_dir = Path(__file__).resolve().parent.parent / "models" / "configs"
+
+        def _load_cfg_target(raw_target: str) -> tuple[str, dict]:
+            t = str(raw_target or "").strip()
+            if not t:
+                raise FileNotFoundError("No config name or file path provided.")
+            if t.lower() in ("session", "session_state", "session_state.json"):
+                sp = Path("checkpoints/session_state.json")
+                if not sp.is_file():
+                    raise FileNotFoundError("checkpoints/session_state.json not found.")
+                return "session_state", _json.loads(sp.read_text(encoding="utf-8-sig"))
+            cand = Path(t)
+            if cand.is_file():
+                return cand.stem, _json.loads(cand.read_text(encoding="utf-8-sig"))
+            for stem in (t, t.lower()):
+                f = cfg_dir / (stem if stem.endswith(".json") else f"{stem}.json")
+                if f.is_file():
+                    return f.stem, _json.loads(f.read_text(encoding="utf-8-sig"))
+            low = t.lower()
+            if low in CANONICAL_MODEL_SPECS or low in _LEGACY_PRESET_ALIASES:
+                spec = get_model_spec(low)
+                return spec.model_id, spec.to_dict()
+            raise FileNotFoundError(f"Config '{raw_target}' not found in models/configs/ or CANONICAL_MODEL_SPECS.")
+
+        if args.config_action == "list":
+            rows = []
+            if cfg_dir.is_dir():
+                for f in sorted(cfg_dir.glob("*.json")):
+                    try:
+                        d = _json.loads(f.read_text(encoding="utf-8-sig"))
+                        rows.append(
+                            [
+                                f.stem,
+                                d.get("architecture", "TriuneTransformer"),
+                                f"{d.get('num_layers', '?')}L / {d.get('hidden_dim', '?')}D",
+                                f"{d.get('num_experts', '?')}E (k={d.get('top_k_experts', 1)})",
+                                d.get("rope_max_seq_len", 8192),
+                                str(f),
+                            ]
+                        )
+                    except Exception:
+                        rows.append([f.stem, "invalid-json", "-", "-", "-", str(f)])
+            render_table(
+                f"Model Configurations ({len(rows)})",
+                columns=[
+                    ("Config ID", "left", "bold cyan"),
+                    ("Architecture", "left", "white"),
+                    ("Shape", "left", "yellow"),
+                    ("MoE", "left", "green"),
+                    ("RoPE Max", "right", "white"),
+                    ("Path", "left", "dim"),
+                ],
+                rows=rows,
+                caption="Tip: run `config validate --all` or `config show junkie-3b`.",
+            )
+        elif args.config_action == "show":
+            target = args.file or args.target
+            if not target:
+                render_notice("Provide a config preset name, 'session', or --file <path>.", level="error")
+                raise SystemExit(2)
+            try:
+                name, raw_cfg = _load_cfg_target(target)
+            except Exception as exc:
+                render_notice(str(exc), level="error")
+                raise SystemExit(1) from exc
+            if getattr(args, "json", False):
+                print(_json.dumps(raw_cfg, indent=2))
+            else:
+                render_kv_panel(
+                    f"Config · {name}",
+                    [(k, _json.dumps(v) if isinstance(v, (dict, list)) else v) for k, v in raw_cfg.items()],
+                    border_style="cyan",
+                )
+        elif args.config_action == "validate":
+            targets: list[str] = []
+            if args.target:
+                targets = [args.target]
+            elif cfg_dir.is_dir():
+                targets = [str(f) for f in sorted(cfg_dir.glob("*.json"))]
+            else:
+                targets = list(CANONICAL_MODEL_SPECS.keys())
+
+            failures = 0
+            rows = []
+            for t in targets:
+                try:
+                    name, raw_cfg = _load_cfg_target(t)
+                    merged = build_config(
+                        {
+                            k: raw_cfg[k]
+                            for k in (
+                                "vocab_size",
+                                "hidden_dim",
+                                "num_layers",
+                                "num_heads",
+                                "head_dim",
+                                "num_experts",
+                                "router_prefix_layers",
+                                "reflex_exit_layer",
+                                "limbic_exit_layer",
+                                "target_depth_dist",
+                                "balance_coef",
+                                "use_fp4",
+                                "use_fp8",
+                            )
+                            if k in raw_cfg and raw_cfg[k] is not None
+                        }
+                    )
+                    validate_config(merged)
+                    spec = ModelSpec.from_dict({"model_id": name, **raw_cfg})
+                    if not (
+                        0
+                        < spec.router_prefix_layers
+                        < spec.reflex_exit_layer
+                        < spec.limbic_exit_layer
+                        < spec.num_layers
+                    ):
+                        raise ValueError("Invalid Triune layer hierarchy")
+                    if spec.hidden_dim != spec.num_heads * spec.head_dim:
+                        raise ValueError("hidden_dim != num_heads * head_dim")
+                    tot, act = spec.compute_exact_params()
+                    rows.append(
+                        [
+                            name,
+                            "VALID",
+                            _format_param_count(tot),
+                            _format_param_count(act),
+                            f"top_k={spec.top_k_experts}",
+                        ]
+                    )
+                except Exception as exc:
+                    failures += 1
+                    rows.append([str(t), "INVALID", "-", "-", str(exc)])
+            render_table(
+                f"Config Validation ({len(rows)} checked, {failures} failed)",
+                columns=[
+                    ("Target", "left", "bold cyan"),
+                    ("Status", "left", "green" if failures == 0 else "red"),
+                    ("Total", "right", "white"),
+                    ("Active", "right", "cyan"),
+                    ("Notes", "left", "dim"),
+                ],
+                rows=rows,
+            )
+            if failures:
+                raise SystemExit(1)
+        else:
+            _get_subparser(parser, "config").print_help()
+            raise SystemExit(2)
+
+    elif args.command == "workspace":
+        import json as _json
+
+        from lucid_machines.agents.tools import _has_traversal_syntax
+
+        def _ws_root(raw_root: str) -> Path:
+            p = Path(raw_root or ".").expanduser().resolve(strict=False)
+            if not p.is_dir():
+                render_notice(f"Workspace directory not found: {raw_root}", level="error")
+                raise SystemExit(1)
+            return p
+
+        def _ws_confine(ws_root: Path, rel_path: str) -> Path:
+            clean = str(rel_path or "").strip()
+            if not clean or _has_traversal_syntax(clean):
+                render_notice(f"Rejected invalid or traversal path: {rel_path!r}", level="error")
+                raise SystemExit(2)
+            cand = (ws_root / clean).resolve(strict=False)
+            if not (cand == ws_root or cand.is_relative_to(ws_root)):
+                render_notice(f"Path escapes workspace root: {rel_path!r}", level="error")
+                raise SystemExit(2)
+            return cand
+
+        if args.ws_action == "status":
+            import subprocess
+
+            ws_root = _ws_root(args.path)
+            branch = "-"
+            dirty_cnt = 0
+            if (ws_root / ".git").exists():
+                try:
+                    br = subprocess.run(
+                        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                        cwd=str(ws_root),
+                        capture_output=True,
+                        text=True,
+                        timeout=4,
+                    )
+                    if br.returncode == 0:
+                        branch = br.stdout.strip()
+                    st = subprocess.run(
+                        ["git", "status", "--porcelain"],
+                        cwd=str(ws_root),
+                        capture_output=True,
+                        text=True,
+                        timeout=4,
+                    )
+                    if st.returncode == 0:
+                        dirty_cnt = len([ln for ln in st.stdout.splitlines() if ln.strip()])
+                except Exception:
+                    pass
+            cfg_count = (
+                len(list((ws_root / "models" / "configs").glob("*.json")))
+                if (ws_root / "models" / "configs").is_dir()
+                else 0
+            )
+            ckpt_count = len(list((ws_root / "checkpoints").glob("*.pt"))) if (ws_root / "checkpoints").is_dir() else 0
+            ws_rows: list[tuple[str, object]] = [
+                ("Root", str(ws_root)),
+                ("Git Branch", branch),
+                ("Git Dirty Entries", dirty_cnt),
+                ("Model Configs", cfg_count),
+                ("Checkpoints (.pt)", ckpt_count),
+            ]
+            sess = ws_root / "checkpoints" / "session_state.json"
+            if sess.is_file():
+                try:
+                    sd = _json.loads(sess.read_text(encoding="utf-8"))
+                    ws_rows.append(("Session Step", sd.get("step", "?")))
+                except Exception:
+                    pass
+            render_kv_panel("Workspace Status", ws_rows, border_style="cyan")
+        elif args.ws_action == "tree":
+            ws_root = _ws_root(args.path)
+            max_depth = max(1, int(args.depth))
+            skip_dirs = {
+                ".git",
+                "node_modules",
+                "__pycache__",
+                "studio_env",
+                ".venv",
+                "venv",
+                ".pytest_cache",
+                ".ruff_cache",
+            }
+            lines: list[str] = [str(ws_root)]
+
+            def _walk(cur: Path, depth: int, prefix: str) -> None:
+                if depth > max_depth:
+                    return
+                try:
+                    entries = sorted(cur.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower()))
+                except OSError:
+                    return
+                entries = [e for e in entries if e.name not in skip_dirs]
+                for idx, entry in enumerate(entries[:80]):
+                    connector = "└── " if idx == len(entries) - 1 else "├── "
+                    suffix = "/" if entry.is_dir() else ""
+                    lines.append(f"{prefix}{connector}{entry.name}{suffix}")
+                    if entry.is_dir() and depth < max_depth:
+                        ext = "    " if idx == len(entries) - 1 else "│   "
+                        _walk(entry, depth + 1, prefix + ext)
+
+            _walk(ws_root, 1, "")
+            print("\n".join(lines))
+        elif args.ws_action == "read":
+            ws_root = _ws_root(args.path)
+            rel = args.file or args.file_pos
+            if not rel:
+                render_notice("Provide a relative file path to read.", level="error")
+                raise SystemExit(2)
+            target_file = _ws_confine(ws_root, rel)
+            if not target_file.is_file():
+                render_notice(f"File not found inside workspace: {rel}", level="error")
+                raise SystemExit(1)
+            raw_bytes = target_file.read_bytes()
+            if b"\x00" in raw_bytes[:4096]:
+                render_notice(f"Refusing to display binary file: {rel}", level="error")
+                raise SystemExit(2)
+            text_lines = raw_bytes.decode("utf-8", errors="replace").splitlines()
+            start_idx = max(1, int(args.start))
+            end_idx = min(len(text_lines), max(start_idx, int(args.end)))
+            for ln_no in range(start_idx, end_idx + 1):
+                print(f"{ln_no:>5} | {text_lines[ln_no - 1]}")
+        elif args.ws_action == "init":
+            ws_root = Path(args.path or ".").expanduser().resolve(strict=False)
+            ws_root.mkdir(parents=True, exist_ok=True)
+            created: list[str] = []
+            for sub in ("models/configs", "checkpoints", "exports", "data"):
+                d = ws_root / sub
+                if not d.exists():
+                    d.mkdir(parents=True, exist_ok=True)
+                    created.append(sub)
+            render_notice(
+                f"Workspace ready at {ws_root}"
+                + (f" (created: {', '.join(created)})" if created else " (all directories present)"),
+                level="success",
+            )
+        else:
+            _get_subparser(parser, "workspace").print_help()
+            raise SystemExit(2)
+
     else:
-        render_help_overview()
+        render_help_overview(prog=prog)
 
 
 if __name__ == "__main__":

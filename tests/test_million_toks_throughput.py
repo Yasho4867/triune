@@ -257,11 +257,11 @@ class TestParallelEngine(unittest.TestCase):
             self.assertGreater(res_b16["throughput_tok_s"], res_b1["throughput_tok_s"])
             # On NVIDIA RTX 5070 GPU, confirm throughput easily exceeds 1,000,000 tok/s
             large_bench = self.engine.benchmark_throughput(
-                batch_sizes=[32],
-                seq_lengths=[512],
+                batch_sizes=[32, 64],
+                seq_lengths=[512, 1024],
                 chunk_size=64,
                 iters=10,
-                warmup=3,
+                warmup=5,
             )
             self.assertTrue(large_bench["exceeds_million_tok_s"])
             self.assertGreater(large_bench["max_throughput_tok_s"], 1_000_000.0)

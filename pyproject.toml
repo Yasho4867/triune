@@ -77,7 +77,14 @@ all = [
     "pytest>=7.0.0",
 ]
 
+[project.urls]
+Homepage = "https://lucidmachines.co"
+Documentation = "https://github.com/lucid-machines/triune#readme"
+Repository = "https://github.com/lucid-machines/triune"
+Issues = "https://github.com/lucid-machines/triune/issues"
+
 [project.scripts]
+kcx = "lucid_machines.cli:main"
 lucid-machines = "lucid_machines.cli:main"
 polysom = "lucid_machines.cli:main"
 triune = "lucid_machines.cli:main"

@@ -567,7 +567,7 @@ def generate_convergence_report(
 **Empirical Multi-Seed Optimizer Evaluation & Component Ablation on Real FineWeb-Edu**
 
 - **Date / Timestamp**: `{time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())}`
-- **Git Commit**: [`{git_c[:10]}`](https://github.com/Yasho4867/lucid_machines/commit/{git_c}){git_dirty_str}
+- **Git Commit**: [`{git_c[:10]}`](https://github.com/lucid-machines/triune/commit/{git_c}){git_dirty_str}
 - **Hardware**: `{hw.get("device_name", "GPU")}` ({hw.get("total_vram_gb", 0)} GB VRAM, CC {hw.get("compute_capability", "N/A")})
 - **Software**: PyTorch `{sw.get("torch", "N/A")}` | CUDA `{sw.get("cuda", "N/A")}` | Python `{sw.get("python", "N/A")}`
 - **Dataset**: Real FineWeb-Edu educational text (`{ds.get("dataset_path", "data/fineweb_edu_real.jsonl")}`, SHA-256 `{ds.get("dataset_sha256", "N/A")[:12]}...`)

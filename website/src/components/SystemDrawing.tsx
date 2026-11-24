@@ -27,7 +27,7 @@ export function SystemDrawing({ type }: { type: number }) {
         <circle cx="65" cy="52" r="3" stroke="currentColor" />
         <circle cx="77" cy="52" r="3" stroke="currentColor" />
         <text x="102" y="56" className="drawing-mono" fontSize="10" fill="currentColor">
-          triune / workspace
+          polysom studio / workspace
         </text>
         <text x="534" y="56" className="drawing-mono" fontSize="8" fill="currentColor">
           LOCAL FIRST

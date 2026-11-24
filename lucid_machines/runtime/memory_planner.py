@@ -6,7 +6,9 @@ and gradient accumulation buffers to fit models cleanly on consumer GPUs (e.g. R
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
 
 import torch
 
@@ -25,17 +27,56 @@ class MemoryEstimate:
     recommended_precision: str
 
 
+def _resolve_local_triune_spec(model_id_or_dir: str) -> dict | None:
+    """Resolve a Triune/Junkie preset name or local models/configs/*.json before hitting Hugging Face."""
+    raw = str(model_id_or_dir or "").strip()
+    if not raw:
+        return None
+
+    cand = Path(raw)
+    if cand.is_file() and cand.suffix.lower() == ".json":
+        try:
+            data = json.loads(cand.read_text(encoding="utf-8-sig"))
+            if isinstance(data, dict) and ("hidden_dim" in data or data.get("model_type") == "triune"):
+                return {**data, "_source_name": cand.stem}
+        except Exception:
+            pass
+
+    repo_root = Path(__file__).resolve().parents[2]
+    configs_dir = repo_root / "models" / "configs"
+    for stem in (raw, raw.lower()):
+        cfg_file = configs_dir / (stem if stem.endswith(".json") else f"{stem}.json")
+        if cfg_file.is_file():
+            try:
+                data = json.loads(cfg_file.read_text(encoding="utf-8-sig"))
+                if isinstance(data, dict):
+                    return {**data, "_source_name": cfg_file.stem}
+            except Exception:
+                pass
+
+    try:
+        from lucid_machines.model.base import _LEGACY_PRESET_ALIASES, CANONICAL_MODEL_SPECS, get_model_spec
+
+        key = raw.lower()
+        if key in CANONICAL_MODEL_SPECS or key in _LEGACY_PRESET_ALIASES:
+            spec = get_model_spec(key)
+            return {**spec.to_dict(), "_source_name": spec.model_id}
+    except Exception:
+        pass
+    return None
+
+
 class MemoryPlanner:
     """Hardware-aware VRAM Memory Planner.
 
-    Accurately models the Triune architecture:
-    - Embedding: vocab_size * hidden_dim
+    Accurately models the Triune architecture & CentroidSteer + Muon + Base 3-tier optimizer:
+    - Embedding + 2 early-exit heads: 3 * vocab_size * hidden_dim + 2 * (vocab_size + hidden_dim) + hidden_dim
     - Per-layer attention: 4 projections (Q,K,V,G) + output = 5 * hidden_dim^2
-    - Per-layer MoE FFN: num_experts * 2 * hidden_dim * (hidden_dim * expert_multiplier) + shared expert
+    - Per-layer MoE FFN: (num_experts + shared_expert) * 2 * hidden_dim * (hidden_dim * expert_multiplier)
     - Per-layer dense FFN (prefix layers): 2 * hidden_dim * (hidden_dim * 4)
-    - Exit heads at reflex/limbic layers: hidden_dim * vocab_size each
-    - Router: hidden_dim * 3
-    - GaLore optimizer: rank-64 subspace projections (~0.15 bytes/param effective)
+    - Depth router: GumbelSoftmaxRouter(hidden_dim -> 256 -> 3)
+    - Optimizer: CentroidSteer low-rank expert subspace (~0.20-0.37 B/p) + Muon (4 B/p) + Base (8 B/p),
+      with optional legacy GaLore fallback.
     """
 
     @staticmethod
@@ -49,49 +90,41 @@ class MemoryPlanner:
             available_vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
         available_vram_gb = available_vram_gb or target_vram_gb
 
-        vocab_size = config.get("vocab_size", 32000)
-        hidden_dim = config.get("hidden_dim", 1536)
-        num_layers = config.get("num_layers", 24)
-        num_experts = config.get("num_experts", 8)
-        seq_len = config.get("seq_len", 256)
-        use_fp4 = config.get("use_fp4", False)
-        use_fp8 = config.get("use_fp8", False)
-        expert_multiplier = config.get("expert_hidden_multiplier", 6)
-        reflex_exit_layer = config.get("reflex_exit_layer", 6)
-        router_prefix_layers = config.get("router_prefix_layers", 3)
-        galore_rank = config.get("galore_rank", 64)
+        vocab_size = int(config.get("vocab_size", 32000))
+        hidden_dim = int(config.get("hidden_dim", 1536))
+        num_layers = max(4, int(config.get("num_layers", 24)))
+        num_experts = max(1, int(config.get("num_experts", 8)))
+        seq_len = int(config.get("seq_len", 256))
+        use_fp4 = bool(config.get("use_fp4", False))
+        use_fp8 = bool(config.get("use_fp8", False))
+        expert_multiplier = max(1, int(config.get("expert_hidden_multiplier", 6)))
+        has_shared = bool(config.get("shared_expert", True)) and int(config.get("experts_shared", 1)) >= 1
+        shared_cnt = 1 if has_shared else 0
+        reflex_exit_layer = max(2, min(int(config.get("reflex_exit_layer", 6)), num_layers - 2))
+        galore_rank = int(config.get("galore_rank", 64))
+        num_steer_dirs = max(1, int(config.get("num_steer_dirs", 4)))
+        use_muon = bool(config.get("use_muon", True))
+        optimizer_mode = str(config.get("optimizer_mode", "centroid_steer")).lower()
 
-        # ── Accurate Parameter Count ──────────────────────────
-        # Embedding + final norm
-        embed_params = vocab_size * hidden_dim + hidden_dim  # embedding + final RMSNorm
+        # ── Exact Parameter Count (aligned with ModelSpec & TriuneTransformer) ──
+        vocab_and_exits = (3 * vocab_size * hidden_dim) + (2 * (vocab_size + hidden_dim)) + hidden_dim
+        router_params = (hidden_dim * 256) + 256 + (256 * 3) + 3
+        dense_layers = reflex_exit_layer + 1
+        moe_layers = max(0, num_layers - dense_layers)
 
-        # Per-layer params
-        total_layer_params = 0
-        for i in range(num_layers):
-            # Attention: Q, K, V, gate, out projections + 2 RMSNorms
-            attn_params = 5 * (hidden_dim**2) + 2 * hidden_dim
+        per_dense = (13 * hidden_dim * hidden_dim) + (7 * hidden_dim)
+        expert_ffn_dim = hidden_dim * expert_multiplier
+        per_moe_expert_params = (
+            moe_layers
+            * (num_experts + shared_cnt)
+            * (2 * hidden_dim * expert_ffn_dim + (expert_multiplier + 1) * hidden_dim)
+        )
+        per_moe_non_expert = (5 * hidden_dim * hidden_dim) + ((num_experts + 2) * hidden_dim) + num_experts
+        per_moe_total = per_moe_non_expert + (
+            (num_experts + shared_cnt) * (2 * hidden_dim * expert_ffn_dim + (expert_multiplier + 1) * hidden_dim)
+        )
 
-            # FFN: MoE layers (after reflex_exit_layer) vs dense prefix layers
-            if i > reflex_exit_layer:
-                # MoE: num_experts routed + 1 shared, each with 2 linear layers
-                expert_ffn_dim = hidden_dim * expert_multiplier
-                routed_params = num_experts * (2 * hidden_dim * expert_ffn_dim)
-                shared_params = 2 * hidden_dim * expert_ffn_dim  # shared expert
-                gate_params = hidden_dim * num_experts  # gating projection
-                ffn_params = routed_params + shared_params + gate_params
-            else:
-                # Dense prefix: 2 linear layers with 4x expansion
-                ffn_params = 2 * hidden_dim * (hidden_dim * 4)
-
-            total_layer_params += attn_params + ffn_params
-
-        # Exit heads (reflex + limbic + final cortex head)
-        exit_head_params = 3 * (hidden_dim * vocab_size) + 3 * vocab_size
-
-        # Depth router + RMSNorms
-        router_params = hidden_dim * 3 + (num_layers * 2 * hidden_dim) + hidden_dim
-
-        total_params = embed_params + total_layer_params + exit_head_params + router_params
+        total_params = vocab_and_exits + router_params + (dense_layers * per_dense) + (moe_layers * per_moe_total)
 
         # ── Bytes Per Parameter ──────────────────────────────
         if use_fp4:
@@ -103,25 +136,43 @@ class MemoryPlanner:
 
         param_memory_gb = (total_params * bytes_per_param) / (1024**3)
 
-        # ── Optimizer Memory (GaLore Subspace) ────────────────
-        # GaLore stores rank-r projection matrices + rank-r momentum/variance
-        # For a (m, n) weight: projection is max(m,n) x rank, momentum/variance are rank x min(m,n) each
-        # Effective: ~(rank / min(m,n)) * 8 bytes per param (FP32 momentum + variance)
-        rank_ratio = min(1.0, galore_rank / hidden_dim)
-        optimizer_2d_bytes = 8.0 * rank_ratio  # FP32 momentum + variance in low-rank subspace
-        projection_bytes = 2.0 * rank_ratio
-        optimizer_bytes_per_param = optimizer_2d_bytes + projection_bytes
+        # ── Optimizer Memory (CentroidSteer + Muon + Base vs GaLore fallback) ──
+        expert_2d_params = moe_layers * (num_experts + shared_cnt) * (2 * hidden_dim * expert_ffn_dim)
+        non_expert_2d_params = dense_layers * (
+            5 * hidden_dim * hidden_dim + 8 * hidden_dim * hidden_dim
+        ) + moe_layers * (5 * hidden_dim * hidden_dim)
+        base_1d_and_embed_params = max(0, total_params - expert_2d_params - non_expert_2d_params)
 
-        norm_params = num_layers * 2 * hidden_dim
-        optimizer_memory_gb = ((total_params - norm_params) * optimizer_bytes_per_param + norm_params * 8.0) / (1024**3)
+        if optimizer_mode == "galore" or not use_muon:
+            # Legacy GaLore low-rank projection fallback
+            rank_ratio = min(1.0, galore_rank / max(1, hidden_dim))
+            optimizer_bytes_per_param = 10.0 * rank_ratio
+            norm_params = num_layers * 2 * hidden_dim
+            optimizer_memory_gb = ((total_params - norm_params) * optimizer_bytes_per_param + norm_params * 8.0) / (
+                1024**3
+            )
+        else:
+            # CentroidSteer + Muon + Base 3-tier footprint:
+            # - Expert matrices: low-rank subspace (rank) + CentroidSteer directional buffers (~0.199-0.368 B/p)
+            # - Non-expert 2D hidden matrices: Muon BF16/FP32 single momentum buffer (~4.0 B/p)
+            # - Embeddings / exit heads / norms / routers: Base AdamW (8.0 B/p)
+            rank_ratio = min(1.0, galore_rank / max(1, hidden_dim))
+            # Empirical rank=64/d=1024 (~0.199 B/p) to rank=256/d=2048 (~0.368 B/p)
+            expert_bpp = min(2.0, max(0.18, (2.6 * rank_ratio) + (0.008 * num_steer_dirs)))
+            muon_bpp = 4.0
+            base_bpp = 8.0
+            opt_bytes = (
+                (expert_2d_params * expert_bpp)
+                + (non_expert_2d_params * muon_bpp)
+                + (base_1d_and_embed_params * base_bpp)
+            )
+            optimizer_memory_gb = opt_bytes / (1024**3)
 
         # ── Activation Memory (with Gradient Checkpointing) ───
-        # With selective gradient checkpointing, only layer boundary activations are stored
         checkpointing = True
         activation_per_sample_bytes = num_layers * seq_len * hidden_dim * 2
 
         # ── Gradient Memory ──────────────────────────────────
-        # With GaLore low-rank projection, gradients are compressed into subspace buffers
         gradient_memory_gb = (total_params * bytes_per_param * 0.5) / (1024**3)
 
         # ── Target Safety Threshold ──────────────────────────
@@ -134,18 +185,15 @@ class MemoryPlanner:
         # ── Optimal Batch Size & Grad Accumulation ───────────
         activation_per_sample_gb = activation_per_sample_bytes / (1024**3)
 
-        # Find largest batch that fits
         recommended_batch_size = 1
-        for bs in [8, 4, 2, 1]:
+        for bs in [4, 2, 1]:
             if bs * activation_per_sample_gb <= remaining_vram_gb:
                 recommended_batch_size = bs
                 break
 
-        # Target effective batch of 8-16 tokens
         effective_target = 8
         recommended_grad_accum = max(1, effective_target // recommended_batch_size)
 
-        # Precision recommendation
         if torch.cuda.is_available():
             capability = torch.cuda.get_device_capability()
             if capability[0] >= 8:
@@ -181,7 +229,114 @@ class MemoryPlanner:
         available_ram_gb: float | None = None,
         local_files_only: bool = False,
     ) -> dict:
-        """Inspect a Hugging Face AutoConfig (zero weight download) and recommend LucidMachines execution mode."""
+        """Inspect a local Triune/Junkie preset or HF AutoConfig and recommend execution mode."""
+        if available_vram_gb is None and torch.cuda.is_available():
+            available_vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+        vram_gb = float(available_vram_gb or 8.0)
+
+        if available_ram_gb is None:
+            try:
+                import psutil
+
+                available_ram_gb = psutil.virtual_memory().total / (1024**3)
+            except Exception:
+                available_ram_gb = 16.0
+        ram_gb = float(available_ram_gb)
+
+        local_spec = _resolve_local_triune_spec(model_id_or_dir)
+        if local_spec is not None:
+            from lucid_machines.model.base import get_model_spec
+
+            spec = get_model_spec(
+                local_spec.get("_source_name") or local_spec.get("model_id") or str(model_id_or_dir),
+                **{
+                    k: local_spec[k]
+                    for k in (
+                        "vocab_size",
+                        "hidden_dim",
+                        "num_layers",
+                        "num_heads",
+                        "head_dim",
+                        "num_experts",
+                        "top_k_experts",
+                        "shared_expert",
+                        "shared_expert_scale",
+                        "expert_hidden_multiplier",
+                        "rope_max_seq_len",
+                        "router_prefix_layers",
+                        "reflex_exit_layer",
+                        "limbic_exit_layer",
+                    )
+                    if k in local_spec and local_spec[k] is not None
+                },
+            )
+            total_params, active_params = spec.compute_exact_params()
+            layers = int(spec.num_layers)
+            hidden = int(spec.hidden_dim)
+            vocab = int(spec.vocab_size)
+            tied = True
+            root_p = (3 * vocab * hidden) + (2 * (vocab + hidden)) + hidden
+            layer_p = max(0, total_params - root_p)
+            per_layer_p = layer_p / max(1, layers)
+
+            bf16_gb = (total_params * 2.0) / (1024**3)
+            nvfp4_gb = (root_p * 2.0 + layer_p * 0.625) / (1024**3)
+            nvfp4_quant_head_gb = (vocab * hidden * 2.0 + layer_p * 0.625) / (1024**3)
+            per_layer_nvfp4_mb = (per_layer_p * 0.625) / (1024**2)
+
+            if bf16_gb + 1.5 <= vram_gb:
+                mode = "resident_bf16"
+            elif nvfp4_gb + 1.2 <= vram_gb:
+                mode = "resident_nvfp4"
+            elif bf16_gb <= ram_gb * 0.65:
+                mode = "ram_layer_streaming"
+            else:
+                mode = "disk_nvfp4_streaming"
+
+            train_est = MemoryPlanner.estimate_vram(
+                {**spec.to_dict(), "galore_rank": 256 if hidden >= 2048 else 64},
+                target_vram_gb=vram_gb,
+                available_vram_gb=vram_gb,
+            )
+            train_est_fp8 = MemoryPlanner.estimate_vram(
+                {**spec.to_dict(), "galore_rank": 256 if hidden >= 2048 else 64, "use_fp8": True},
+                target_vram_gb=vram_gb,
+                available_vram_gb=vram_gb,
+            )
+            fp8_train_static_gb = round(train_est_fp8.total_vram_gb + (total_params * 0.5) / (1024**3), 3)
+            safe_train_vram_gb = vram_gb * 0.85
+            if train_est.total_vram_gb <= safe_train_vram_gb:
+                train_mode = "resident_bf16_train"
+            elif fp8_train_static_gb <= safe_train_vram_gb:
+                train_mode = "resident_fp8_train (--use_fp8)"
+            elif bf16_gb <= ram_gb * 0.65:
+                train_mode = "layer_streaming_train (--streaming --use_fp8)"
+            else:
+                train_mode = "disk_nvfp4_streaming_train (--streaming --use_fp8)"
+            return {
+                "model": str(model_id_or_dir),
+                "preset_id": spec.model_id,
+                "is_triune": True,
+                "total_params": total_params,
+                "active_params": active_params,
+                "top_k_experts": spec.top_k_experts,
+                "layers": layers,
+                "hidden_size": hidden,
+                "vocab_size": vocab,
+                "tied_embeddings": tied,
+                "bf16_weights_gb": round(bf16_gb, 2),
+                "nvfp4_disk_cache_gb": round(nvfp4_gb, 2),
+                "nvfp4_quant_lmhead_cache_gb": round(nvfp4_quant_head_gb, 2),
+                "per_layer_nvfp4_mb": round(per_layer_nvfp4_mb, 1),
+                "centroid_steer_opt_gb": train_est.optimizer_memory_gb,
+                "centroid_steer_static_vram_gb": train_est.total_vram_gb,
+                "centroid_steer_fp8_static_vram_gb": fp8_train_static_gb,
+                "available_vram_gb": round(vram_gb, 2),
+                "host_ram_gb": round(ram_gb, 2),
+                "recommended_mode": mode,
+                "recommended_train_mode": train_mode,
+            }
+
         from transformers import AutoConfig
 
         if local_files_only:
@@ -215,19 +370,6 @@ class MemoryPlanner:
         ) / (1024**3)
         per_layer_nvfp4_mb = (per_layer_p * 0.625) / (1024**2)
 
-        if available_vram_gb is None and torch.cuda.is_available():
-            available_vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-        vram_gb = float(available_vram_gb or 8.0)
-
-        if available_ram_gb is None:
-            try:
-                import psutil
-
-                available_ram_gb = psutil.virtual_memory().total / (1024**3)
-            except Exception:
-                available_ram_gb = 16.0
-        ram_gb = float(available_ram_gb)
-
         if bf16_gb + 1.5 <= vram_gb:
             mode = "resident_bf16"
         elif nvfp4_gb + 1.2 <= vram_gb:
@@ -239,6 +381,7 @@ class MemoryPlanner:
 
         return {
             "model": str(model_id_or_dir),
+            "is_triune": False,
             "total_params": total_params,
             "layers": layers,
             "hidden_size": hidden,

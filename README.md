@@ -1,5 +1,7 @@
 # Lucid Machines (`v1.0.0`) — Triune Architecture, Junkie & Polysom Studio
 
+**Website:** [https://lucidmachines.co](https://lucidmachines.co) · **GitHub:** [https://github.com/lucid-machines/triune](https://github.com/lucid-machines/triune)
+
 **Lucid Machines** (`lucid-machines` / `lucid_machines`) is a modular, hardware-aware deep learning ecosystem built around **the Triune architecture by Lucid Machines** (`TriuneTransformer` / `TriuneModel` / `TriuneConfig` 3-tier multi-exit Mixture-of-Experts architecture, plus `UniversalTransformer`), **Polysom Studio v1.0.0** (a self-contained native desktop workbench), and **Junkie** (`models/configs/junkie.json`, `junkie-7b.json`, `junkie-3b.json`, `junkie-1b.json`, `junkie-mini.json`) — Lucid Machines' inaugural flagship model configurations to be trained on the Triune architecture.
 
 > **Seamless Backward Compatibility (`R1`):** Every `triune-*` architecture size template (`models/configs/triune-*.json`), `LUCID_MACHINES_*` environment variable, `"Polysom Studio"` OS keyring service, `import lucid_machines` module, and `lucid_machines_core` native library preserves automatic fallback to its legacy `import triune` shim, legacy preset aliases, `TRIUNE_*` env vars, `"Triune Studio"` keyring service, `triune_core.*` library, and `triune_tokenizer.json`, ensuring 100% compatibility with existing checkpoints (`checkpoints/*.pt`), datasets (`data/*.jsonl`), exports (`exports/*`), and papers (`papers/*`). See [`docs/RELEASE_NAME_REPORT.md`](docs/RELEASE_NAME_REPORT.md).
@@ -48,7 +50,7 @@ LucidMachines/
 │   ├── trainer/                # Trainer, TrainingEngine, LoRA/QLoRA, Checkpointing
 │   ├── execution/ & plugins/   # 40-Node Typed DAG Engine & Ed25519 Cryptographic Plugin Registry
 │   ├── api/                    # Hardened FastAPI server, OpenAI-compatible REST API, WebSocket telemetry
-│   └── cli.py                  # Unified CLI (lucid-machines & polysom)
+│   └── cli.py                  # Unified CLI (`kcx` primary; `polysom` / `lucid-machines` compat aliases)
 ├── triune/                     # Backward-compatibility Python shim delegating to lucid_machines
 ├── csrc/                       # Native C/AVX2/OpenMP & CUDA Engine (lucid_machines_core.dll / liblucid_machines_core.so)
 ├── studio/                     # Polysom Studio Frontend (studio/src/), .NET 10 WPF Host (studio/windows/) & Installers
@@ -104,20 +106,19 @@ input_ids = torch.randint(0, 32000, (1, 128))
 reflex_logits, limbic_logits, cortex_logits, route_logits = model.forward_all_exits(input_ids)
 ```
 
-### CLI
+### CLI (`kcx` — Polysom KCX)
 ```bash
-# Launch Polysom Studio Desktop App
-polysom --port 8000
-# or: lucid-machines studio --port 8000
+# Launch Polysom Studio Desktop App (`polysom` / `lucid-machines studio` aliases also supported)
+kcx studio --port 8000
 
 # Start embedded OpenAI-compatible API & UI server
-lucid-machines serve --port 8000
+kcx serve --port 8000
 
 # Run hardware & CUDA diagnostics
-lucid-machines doctor
+kcx doctor
 
 # Plan memory requirements for target GPU VRAM
-lucid-machines plan-memory --vram-gb 8.0
+kcx plan-memory --vram-gb 8.0
 ```
 
 ---

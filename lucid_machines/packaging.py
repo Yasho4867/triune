@@ -17,12 +17,13 @@ from typing import Any, Dict
 
 WORKSPACE_ROOT = Path(__file__).resolve().parent.parent
 
-POLYSOM_SVG_ICON = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
-  <rect width="256" height="256" rx="48" fill="#0E0D17" stroke="#2D294E" stroke-width="6" />
-  <path d="M 60 178 L 128 54 L 196 178" fill="none" stroke="#8B7CFF" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" />
-  <path d="M 82 141 L 174 141" fill="none" stroke="#38BDF8" stroke-width="7" stroke-linecap="round" />
-  <path d="M 48 128 L 84 128 L 98 102 L 114 156 L 128 88 L 143 156 L 159 110 L 173 128 L 208 128" fill="none" stroke="#10B981" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" />
-  <circle cx="128" cy="54" r="10" fill="#0E0D17" stroke="#8B7CFF" stroke-width="4" />
+POLYSOM_SVG_ICON = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="256" height="256">
+  <rect width="48" height="48" rx="8" fill="#f4ecda"/>
+  <path d="M3 25C13 10 35 10 45 25 35 40 13 40 3 25Z" fill="none" stroke="#7b3f3c" stroke-width="1.5"/>
+  <path d="m8 17-3-4m11-1-2-5m10 3V4m8 8 2-5m6 10 3-4M14 37l-2 4m12-3v6m10-7 2 4" stroke="#7b3f3c" stroke-width="1.2"/>
+  <ellipse cx="24" cy="25" rx="8.5" ry="10.5" fill="#7b3f3c"/>
+  <ellipse cx="24" cy="25" rx="3" ry="5.5" fill="#f4ecda"/>
+  <circle cx="27" cy="21" r="1.8" fill="#f4ecda"/>
 </svg>
 """
 
@@ -39,7 +40,7 @@ def build_windows_native(workspace: Path = WORKSPACE_ROOT) -> Dict[str, Any]:
     """Compile and publish PolysomStudio.exe and PolysomStudioSetup.exe on Windows."""
     app_proj = workspace / "studio" / "windows" / "TriuneStudio.Windows" / "TriuneStudio.Windows.csproj"
     setup_proj = workspace / "studio" / "windows" / "TriuneStudio.Installer" / "TriuneStudio.Installer.csproj"
-    publish_dir = workspace / "studio" / "publish"
+    publish_dir = workspace / "studio" / "windows" / "publish"
     publish_dir.mkdir(parents=True, exist_ok=True)
 
     if not shutil.which("dotnet"):
@@ -213,7 +214,7 @@ def build_macos_native(workspace: Path = WORKSPACE_ROOT) -> Dict[str, Any]:
     <key>CFBundleExecutable</key>
     <string>PolysomStudio</string>
     <key>CFBundleIdentifier</key>
-    <string>ai.lucidmachines.polysom</string>
+    <string>dev.lucidmachines.polysom</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>

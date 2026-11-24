@@ -10,11 +10,21 @@ import torch.nn as nn
 from lucid_machines.kernels.fast_swiglu import FastGELU
 
 from .attention import HybridAttention
-from .config import NUM_EXPERTS, checkpoint_bwd_ctx, checkpoint_fwd_ctx
+from .config import (
+    EXPERT_HIDDEN_MULTIPLIER,
+    NUM_EXPERTS,
+    ROPE_MAX_SEQ_LEN,
+    SHARED_EXPERT,
+    SHARED_EXPERT_SCALE,
+    TOP_K_EXPERTS,
+    checkpoint_bwd_ctx,
+    checkpoint_fwd_ctx,
+)
 from .fp4 import FP4Linear
 from .fp8 import FP8Linear
 from .moe import MoE_FFN
 from .norms import RMSNorm
+from .rotary import RotaryEmbedding
 
 
 class TransformerBlock(nn.Module):
@@ -26,12 +36,22 @@ class TransformerBlock(nn.Module):
         vocab_size: int,
         exit_layers: tuple[int, ...] | list[int],
         num_experts: int = NUM_EXPERTS,
+        top_k_experts: int = TOP_K_EXPERTS,
+        shared_expert: bool = SHARED_EXPERT,
+        shared_expert_scale: float = SHARED_EXPERT_SCALE,
+        expert_hidden_multiplier: int = EXPERT_HIDDEN_MULTIPLIER,
+        rope_max_seq_len: int = ROPE_MAX_SEQ_LEN,
         use_moe: bool = True,
         use_fp4: bool = False,
         use_fp8: bool = False,
         use_sdpa: bool = False,
     ):
         super().__init__()
+        self.top_k_experts = max(1, int(top_k_experts))
+        self.shared_expert = bool(shared_expert)
+        self.shared_expert_scale = float(shared_expert_scale)
+        self.expert_hidden_multiplier = max(1, int(expert_hidden_multiplier))
+        self.rope_max_seq_len = max(1, int(rope_max_seq_len))
         self.attn = HybridAttention(
             dim,
             heads,
@@ -41,8 +61,39 @@ class TransformerBlock(nn.Module):
             layer_idx=layer_idx,
             reflex_exit_layer=min(exit_layers) if exit_layers else None,
         )
+        if getattr(self.attn.gla, "use_rope", False) and self.rope_max_seq_len != ROPE_MAX_SEQ_LEN:
+            self.attn.gla.rope = RotaryEmbedding(self.attn.head_dim, max_seq_len=self.rope_max_seq_len)
         if use_moe:
-            self.ffn = MoE_FFN(dim, num_experts=num_experts, use_fp4=use_fp4, use_fp8=use_fp8)
+            self.ffn = MoE_FFN(
+                dim,
+                num_experts=num_experts,
+                top_k=self.top_k_experts,
+                use_fp4=use_fp4,
+                use_fp8=use_fp8,
+                shared_expert=self.shared_expert,
+                shared_scale=self.shared_expert_scale,
+            )
+            custom_hidden = dim * self.expert_hidden_multiplier
+            if custom_hidden != self.ffn.hidden_dim:
+                Linear = FP8Linear if use_fp8 else (FP4Linear if use_fp4 else nn.Linear)
+                self.ffn.hidden_dim = custom_hidden
+                self.ffn.experts = nn.ModuleList(
+                    [
+                        nn.Sequential(Linear(dim, custom_hidden), FastGELU(), Linear(custom_hidden, dim))
+                        for _ in range(num_experts)
+                    ]
+                )
+                if self.shared_expert:
+                    self.ffn.shared = nn.Sequential(
+                        Linear(dim, custom_hidden),
+                        FastGELU(),
+                        Linear(custom_hidden, dim),
+                    )
+                self.ffn.register_buffer("last_hidden_centroids", torch.zeros(num_experts, custom_hidden))
+                self.ffn.register_buffer("last_hidden_contrastive_centroids", torch.zeros(num_experts, custom_hidden))
+                self.ffn.register_buffer(
+                    "last_hidden_subspace", torch.zeros(num_experts, custom_hidden, self.ffn.subspace_dirs)
+                )
         else:
             DenseLinear = FP8Linear if use_fp8 else (FP4Linear if use_fp4 else nn.Linear)
             self.ffn = nn.Sequential(DenseLinear(dim, dim * 4), FastGELU(), DenseLinear(dim * 4, dim))

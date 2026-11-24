@@ -146,11 +146,11 @@ class TestParallelEngine(unittest.TestCase):
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA device required for million throughput test")
     def test_million_throughput_benchmark(self):
         bench = self.engine.benchmark_throughput(
-            batch_sizes=[16, 32],
+            batch_sizes=[16, 32, 64],
             seq_lengths=[512, 1024],
             chunk_size=64,
             iters=10,
-            warmup=3,
+            warmup=5,
         )
         self.assertTrue(bench["exceeds_million_tok_s"])
         self.assertGreaterEqual(bench["max_throughput_tok_s"], 1_000_000.0)

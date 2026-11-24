@@ -2,10 +2,10 @@
 
 ## 1. Brand Identity & Taglines
 
-- **Company / Lab & Package**: **Lucid Machines** (`lucid-machines` distribution / `lucid_machines` Python SDK & CLI, inaugural release `v1.0.0`)
+- **Company / Lab & Package**: **Lucid Machines** (`lucid-machines` distribution / `lucid_machines` Python SDK & CLI, inaugural release `v1.0.0`, `https://lucidmachines.co`, `https://github.com/lucid-machines/triune`)
 - **Core Neural Architecture**: **Triune** (`TriuneTransformer` / `TriuneModel` / `TriuneConfig` — *the Triune architecture by Lucid Machines*, templates `models/configs/triune-*.json`)
 - **Inaugural Flagship Models To Train**: **Junkie** (`models/configs/junkie-mini.json` `535.10M`, `junkie-1b.json` `1.16B`, `junkie-3b.json` `2.99B` 16-expert Colab L4 sweet spot, and `junkie-7b.json` / `junkie.json` `7.40B` flagship)
-- **Desktop Workbench**: **Polysom Studio v1.0.0** (by Lucid Machines — `polysom` CLI, `PolysomStudio.exe`, `PolysomStudioSetup.exe`, with 6 themes: `Hypnagogic`, `Phosphene`, `Pareidolia`, `Afterimage`, `Mirage`, `Euphoria`)
+- **Desktop Workbench & CLI**: **Polysom Studio v1.0.0** & **`kcx` CLI** (**Polysom KCX**, with `polysom` / `lucid-machines` compat aliases; `PolysomStudio.exe`, `PolysomStudioSetup.exe`, with 6 themes: `Hypnagogic`, `Phosphene`, `Pareidolia`, `Afterimage`, `Mirage`, `Euphoria`)
 - **Primary Tagline**: *3-Tier Multi-Exit MoE Language Models & Riemannian Centroid Steering on Consumer & Cloud GPUs.*
 - **Developer Tagline**: *Train 1.52B models in 3.13 GB VRAM or 2.99B 16-expert Junkie-3B in 10.10 GiB FP8 on Colab L4. Compress MoE optimizer state by 98.4%. Serve O(1)-memory GLA & Conformal CALM models natively.*
 - **Studio Tagline**: *Polysom Studio v1.0.0: The self-contained native Windows workbench, Project Workspace IDE, multi-mode Agent Loop harness, and 40-node visual DAG IDE for local model surgery and live Neuron Scope telemetry.*
@@ -35,5 +35,5 @@
 | :--- | :--- | :--- |
 | **Optimizer & VRAM** | 3-Tier `CentroidSteerOptimizer` (`Muon` 2.0 B/p + `CentroidSteer` `0.1118–0.3678 B/p` + `8-bit AdamW`), `LayerStreamingEngine` (`1.52B` in `3.13 GB` VRAM). | Live `sCholQR2` orthogonality monitor ($\|Q^T Q - I\|_F$), interactive VRAM planner, and real-time expert utilization heatmaps. |
 | **Architecture & Kernels** | `TriuneTransformer`, `VectorisedGLA` ($O(1)$ `48.0 KiB` isolated kernel), `Gated DeltaNet` (100% MQAR recall), `MoE_FFN` (`7.518x` sparse eval), NVFP4 (`3.20x`), plus `junkie-*.json` configurations. | Obsidian 3D brain stratum visualizer (Reflex L2 / Limbic L5 / Cortex L8), 6 themes (`Hypnagogic`, `Phosphene`, `Pareidolia`, `Afterimage`, `Mirage`, `Euphoria`), and interactive CALM threshold ($\tau$) slider. |
-| **Workflows & Tooling** | Unified `lucid-machines` & `polysom` CLIs (`train`, `finetune`, `serve`, `chat`, `doctor`, `benchmark`) + Colab Pro runner (`cloud/`) + `import triune` shim. | Project Workspace IDE, SSE Agent Loops with HITL diff approval, 40-node Visual DAG IDE, PC model scanner, and 1-click `PolysomStudioSetup.exe` wizard. |
+| **Workflows & Tooling** | Unified `kcx` CLI (`studio`, `train`, `finetune`, `serve`, `chat`, `eval`, `config`, `workspace`, `doctor`, `benchmark`; `polysom` & `lucid-machines` aliases) + Colab Pro runner (`cloud/`) + `import triune` shim. | Project Workspace IDE, SSE Agent Loops with HITL diff approval, 40-node Visual DAG IDE, PC model scanner, and 1-click `PolysomStudioSetup.exe` wizard. |
 | **Security & Governance** | `weights_only=True` checkpoint hydration, symlink-resolved path confinement, `shell=False`, SSRF validation, `PythonSandbox` resource caps. | Windows Credential Manager BYOK vault (`Polysom Studio`), Ed25519 plugin signature verification (`trusted=False` default), proxy-aware bearer auth. |

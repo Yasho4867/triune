@@ -7,7 +7,7 @@
 ```text
 Lucid Machines/
 ├── studio/publish/PolysomStudio.exe  # Self-contained native Windows desktop binary (.NET 10 + WebView2 + lucid_machines_core.dll)
-├── pyproject.toml              # Package configuration (lucid-machines distribution, lucid_machines SDK, lucid-machines & polysom CLIs)
+├── pyproject.toml              # Package configuration (lucid-machines distribution, lucid_machines SDK, kcx primary CLI + polysom / lucid-machines / triune aliases)
 ├── csrc/                       # Tier 1: Native C/AVX2/OpenMP & CUDA Engine (lucid_machines_core)
 │   ├── engine/                 # C ABI header & engine implementation for native kernels and telemetry
 │   ├── kernels/                # Native CUDA kernels
@@ -145,18 +145,17 @@ For the native Windows setup and portable package workflow, see [`WINDOWS_INSTAL
 Direct non-loopback binds require all three of `LUCID_MACHINES_API_TOKEN` (at least 32 characters; legacy `TRIUNE_API_TOKEN` fallback), `LUCID_MACHINES_TLS_CERTFILE`, and `LUCID_MACHINES_TLS_KEYFILE`; the server refuses to start if any is missing. For Cloudflare, use a Cloudflare Tunnel with a Cloudflare Access policy and route it to the loopback-only Studio server (`http://127.0.0.1:8000`) so the public host and port stay closed. Direct remote access to the Python runner additionally requires `LUCID_MACHINES_ALLOW_REMOTE_SANDBOX=1`; keep that disabled unless authenticated operators need it.
 
 ```bash
-# Launch Polysom Studio desktop window
-polysom --port 8000
-# or: lucid-machines studio --port 8000
+# Launch Polysom Studio desktop window (`polysom` / `lucid-machines studio` compat aliases)
+kcx studio --port 8000
 
 # Run headless FastAPI server
-lucid-machines serve --port 8000
+kcx serve --port 8000
 
 # Interactive chat session
-lucid-machines chat --model triune-2.5b
+kcx chat --model triune-2.5b
 
 # Calculate memory plan for target hardware
-lucid-machines plan-memory --vram-gb 8.0
+kcx plan-memory --vram-gb 8.0
 ```
 
 ---

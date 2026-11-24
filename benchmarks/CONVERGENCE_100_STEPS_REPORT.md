@@ -2,7 +2,7 @@
 **Empirical Multi-Seed Optimizer Evaluation & Component Ablation on Real FineWeb-Edu**
 
 - **Date / Timestamp**: `2026-11-04 10:21:52 UTC`
-- **Git Commit**: [`e0effdc53e`](https://github.com/Yasho4867/triune/commit/e0effdc53e908a3ea01446818009778dd1730e53) (Clean Tree)
+- **Git Commit**: [`e0effdc53e`](https://github.com/lucid-machines/triune/commit/e0effdc53e908a3ea01446818009778dd1730e53) (Clean Tree)
 - **Hardware**: `NVIDIA GeForce RTX 5070 Laptop GPU` (7.93 GB VRAM, CC 12.0)
 - **Software**: PyTorch `2.14.1+cu132` | CUDA `13.2` | Python `3.14.7`
 - **Dataset**: Real FineWeb-Edu educational text (`data\fineweb_edu_real.jsonl`, SHA-256 `aed10d4c98af...`)

@@ -7,7 +7,7 @@
 
 This repository contains publication-grade, hardware-verified benchmarks evaluating **Lucid Machines**' (`lucid_machines`) **Triune** architecture and runtime components (powering the flagship **Junkie** model) against PyTorch standard baselines and genuine native competitor implementations (`unsloth 2026.10.10` / `bitsandbytes 0.50.2` / PyTorch SDPA; `liger_kernel` is unavailable on Windows in our environment and is explicitly omitted rather than approximated). We explicitly distinguish **isolated kernel microbenchmarks** from **end-to-end 90.79M full-model evaluations** and **legacy block diagnostics** so single-layer kernel speedups are never conflated with full-stack latency.
 
-> **CLI Quickstart (`lucid_machines`)**: Install with `pip install -e .` and run `lucid_machines train --model_name junkie`, `lucid_machines chat`, `lucid_machines studio`, or execute the benchmark suite via `python scripts/run_all_benchmarks.py --all`.
+> **CLI Quickstart (`kcx` — Polysom KCX):** Install with `pip install -e .` and run `kcx train --model_name junkie`, `kcx chat`, `kcx studio` (compatibility aliases `polysom` / `lucid-machines` also supported), or execute the benchmark suite via `python scripts/run_all_benchmarks.py --all`.
 
 ### Benchmark Suite Matrix
 
