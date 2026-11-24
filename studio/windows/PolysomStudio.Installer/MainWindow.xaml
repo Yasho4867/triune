@@ -1,4 +1,4 @@
-<Window x:Class="TriuneStudio.Installer.MainWindow"
+<Window x:Class="PolysomStudio.Installer.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Polysom Studio Setup — Lucid Machines AI Engine &amp; Research IDE"

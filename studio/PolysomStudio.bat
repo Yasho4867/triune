@@ -26,14 +26,9 @@ if "%~1"=="" (
         start "" "studio\windows\publish\PolysomStudio.exe"
         exit /b 0
     )
-    if exist "studio\windows\TriuneStudio.Windows\bin\Release\net10.0-windows\PolysomStudio.exe" (
+    if exist "studio\windows\PolysomStudio.Windows\bin\Release\net10.0-windows\PolysomStudio.exe" (
         echo [Studio] Launching Native Windows Application ^(bin\Release\PolysomStudio.exe^)...
-        start "" "studio\windows\TriuneStudio.Windows\bin\Release\net10.0-windows\PolysomStudio.exe"
-        exit /b 0
-    )
-    if exist "TriuneStudio.exe" (
-        echo [Studio] Launching Legacy Native Windows Application ^(TriuneStudio.exe^)...
-        start "" "TriuneStudio.exe"
+        start "" "studio\windows\PolysomStudio.Windows\bin\Release\net10.0-windows\PolysomStudio.exe"
         exit /b 0
     )
 )

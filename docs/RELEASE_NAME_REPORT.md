@@ -21,7 +21,7 @@ Automated public checks were performed for **PyPI**, **npm**, **GitHub**, DNS, a
 | --- | --- |
 | Python distribution | `lucid-machines` |
 | Python import | `lucid_machines` |
-| Primary CLI (`Polysom KCX`) | `kcx` (`polysom` / `lucid-machines` compat aliases) |
+| Primary CLI (`Polysom KCX`) | `kcx` (`polysom` / `lucid-machines` aliases) |
 | Live Website | `https://lucidmachines.co` |
 | Canonical GitHub Repository | `https://github.com/lucid-machines/triune` (`https://github.com/lucid-machines`) |
 | Desktop binary | `PolysomStudio.exe` |
@@ -29,16 +29,15 @@ Automated public checks were performed for **PyPI**, **npm**, **GitHub**, DNS, a
 | Architecture | `TriuneTransformer`, `TriuneModel`, `TriuneConfig` |
 | Model | `Junkie` |
 
-## Backward Compatibility
+## Compatibility & Asset Preservation
 
-The compatibility boundary preserves existing users without restoring the rejected draft identity:
+The naming boundary preserves architecture assets and user data without restoring legacy package layouts:
 
-- `import triune` delegates to `lucid_machines`.
-- Existing Triune classes, architecture presets, tokenizer discovery, and `model_type: "triune"` exports remain valid.
+- `lucid_machines` directly exports all Triune architecture classes, architecture presets, tokenizer discovery, and `model_type: "triune"` Hugging Face exports.
 - `LUCID_MACHINES_*` configuration takes precedence over legacy `TRIUNE_*` fallback variables.
-- Native loader lookup prefers `lucid_machines_core.*` and falls back to `triune_core.*`.
+- Native loader lookup prefers `lucid_machines_core.*`.
 - Existing `triune_tokenizer.json`, checkpoints, datasets, exports, and papers remain unchanged.
-- OS credential keyring lookup recognizes Polysom Studio and retains a legacy Triune Studio fallback.
+- OS credential keyring lookup stores under `"Polysom Studio"` (retaining legacy keyring fallback read support).
 
 ## Rejected Draft Purge
 

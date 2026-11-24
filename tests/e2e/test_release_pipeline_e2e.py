@@ -1,7 +1,7 @@
 """Opaque-Box End-to-End Release Pipeline Test Suite (R1-R5) for Lucid Machines v1.0.0.
 
-Runs against the active `lucid_machines` package (with `triune` backward-compatibility
-shim verification) via dynamic package resolution.
+Runs against the active `lucid_machines` package and verifies the Triune neural
+architecture, Junkie flagship model presets, and Polysom Studio workbench.
 """
 
 from __future__ import annotations

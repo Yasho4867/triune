@@ -407,8 +407,8 @@ def install_dependencies(py_bin: Path) -> None:
 # ---------------------------------------------------------------------------
 def create_desktop_shortcut(hw: HardwareProfile, create_shortcuts: bool = True) -> None:
     """Create 1-click Desktop and Start Menu shortcuts on Windows, Linux, or macOS."""
-    studio_bat = STUDIO_DIR / "TriuneStudio.bat"
-    studio_sh = STUDIO_DIR / "TriuneStudio.sh"
+    studio_bat = STUDIO_DIR / "PolysomStudio.bat"
+    studio_sh = STUDIO_DIR / "PolysomStudio.sh"
     native_studio_candidates = (
         WORKSPACE_ROOT / "PolysomStudio.exe",
         WORKSPACE_ROOT / "studio" / "publish" / "PolysomStudio.exe",
@@ -416,7 +416,7 @@ def create_desktop_shortcut(hw: HardwareProfile, create_shortcuts: bool = True) 
         WORKSPACE_ROOT
         / "studio"
         / "windows"
-        / "TriuneStudio.Windows"
+        / "PolysomStudio.Windows"
         / "bin"
         / "Release"
         / "net10.0-windows"
@@ -424,7 +424,7 @@ def create_desktop_shortcut(hw: HardwareProfile, create_shortcuts: bool = True) 
         WORKSPACE_ROOT
         / "studio"
         / "windows"
-        / "TriuneStudio.Windows"
+        / "PolysomStudio.Windows"
         / "bin"
         / "Release"
         / "net10.0-windows"
@@ -439,7 +439,7 @@ def create_desktop_shortcut(hw: HardwareProfile, create_shortcuts: bool = True) 
         WORKSPACE_ROOT
         / "studio"
         / "windows"
-        / "TriuneStudio.Installer"
+        / "PolysomStudio.Installer"
         / "bin"
         / "Release"
         / "net10.0-windows"
@@ -447,7 +447,7 @@ def create_desktop_shortcut(hw: HardwareProfile, create_shortcuts: bool = True) 
     )
     native_setup_exe = next((path for path in native_setup_candidates if path.is_file()), None)
 
-    # Create studio/TriuneStudio.sh for Linux/macOS
+    # Create studio/PolysomStudio.sh for Linux/macOS
     sh_content = """#!/usr/bin/env bash
 cd "$(dirname "$0")/.."
 if [ -f "studio/studio_env/bin/python" ]; then
@@ -497,7 +497,7 @@ $DesktopDirs = @(
 ) | Where-Object {{ $_ -and (Test-Path $_) }} | Select-Object -Unique
 
 foreach ($DesktopPath in $DesktopDirs) {{
-    foreach ($Name in @("Polysom Studio.lnk", "Triune Studio.lnk", "Triune.lnk")) {{
+    foreach ($Name in @("Polysom Studio.lnk")) {{
         $LnkPath = Join-Path $DesktopPath $Name
         if (Test-Path $LnkPath) {{ Remove-Item $LnkPath -Force -ErrorAction SilentlyContinue }}
     }}
@@ -747,7 +747,7 @@ def main() -> None:
 
     print("Launch commands:")
     print(f"  • Windows: Double-click {BOLD}PolysomStudio.exe{RESET} or desktop icon 'Polysom Studio'")
-    print(f"  • Linux/macOS: Run {BOLD}studio/TriuneStudio.sh{RESET}")
+    print(f"  • Linux/macOS: Run {BOLD}studio/PolysomStudio.sh{RESET}")
     print(f"  • CLI / Custom Port: {BOLD}python scripts/launch_studio.py --port 8000{RESET}\n")
 
     # Prompt to launch

@@ -9,7 +9,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Windows;
 
-namespace TriuneStudio.Windows;
+namespace PolysomStudio.Windows;
 
 public partial class MainWindow : Window
 {

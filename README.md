@@ -2,9 +2,7 @@
 
 **Website:** [https://lucidmachines.co](https://lucidmachines.co) · **GitHub:** [https://github.com/lucid-machines/triune](https://github.com/lucid-machines/triune)
 
-**Lucid Machines** (`lucid-machines` / `lucid_machines`) is a modular, hardware-aware deep learning ecosystem built around **the Triune architecture by Lucid Machines** (`TriuneTransformer` / `TriuneModel` / `TriuneConfig` 3-tier multi-exit Mixture-of-Experts architecture, plus `UniversalTransformer`), **Polysom Studio v1.0.0** (a self-contained native desktop workbench), and **Junkie** (`models/configs/junkie.json`, `junkie-7b.json`, `junkie-3b.json`, `junkie-1b.json`, `junkie-mini.json`) — Lucid Machines' inaugural flagship model configurations to be trained on the Triune architecture.
-
-> **Seamless Backward Compatibility (`R1`):** Every `triune-*` architecture size template (`models/configs/triune-*.json`), `LUCID_MACHINES_*` environment variable, `"Polysom Studio"` OS keyring service, `import lucid_machines` module, and `lucid_machines_core` native library preserves automatic fallback to its legacy `import triune` shim, legacy preset aliases, `TRIUNE_*` env vars, `"Triune Studio"` keyring service, `triune_core.*` library, and `triune_tokenizer.json`, ensuring 100% compatibility with existing checkpoints (`checkpoints/*.pt`), datasets (`data/*.jsonl`), exports (`exports/*`), and papers (`papers/*`). See [`docs/RELEASE_NAME_REPORT.md`](docs/RELEASE_NAME_REPORT.md).
+**Lucid Machines** (`lucid-machines` / `lucid_machines`) is a modular, hardware-aware deep learning ecosystem built around **the Triune architecture by Lucid Machines** (`TriuneTransformer` / `TriuneModel` / `TriuneConfig` 3-tier multi-exit Mixture-of-Experts architecture, plus `UniversalTransformer`), **Polysom Studio v1.0.0** (a self-contained native desktop workbench), and **Junkie** (`models/configs/junkie.json`, `junkie-7b.json`, `junkie-3b.json`, `junkie-1b.json`, `junkie-mini.json`) — Lucid Machines' inaugural flagship model configurations to be trained on the Triune architecture. All existing checkpoints (`checkpoints/*.pt`), datasets (`data/*.jsonl`), exports (`exports/*`), papers (`papers/*`), `triune-*` architecture templates (`models/configs/triune-*.json`), and `triune_tokenizer.json` are preserved natively.
 
 ---
 
@@ -93,7 +91,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish_studio_windo
 ### Python SDK
 ```python
 import torch
-import lucid_machines  # (or `import triune` via compatibility shim)
+import lucid_machines
 
 # Load a Triune architecture template ("triune-2.5b") or first flagship target ("junkie")
 model = lucid_machines.load_model("triune-2.5b")

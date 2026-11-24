@@ -7,23 +7,28 @@
     <SelfContained>true</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
     <UseWPF>true</UseWPF>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>..\polysom.ico</ApplicationIcon>
-    <AssemblyName>PolysomStudioSetup</AssemblyName>
+    <AssemblyName>PolysomStudio</AssemblyName>
     <Version>1.0.0</Version>
     <Product>Polysom Studio</Product>
     <Company>Lucid Machines</Company>
     <Authors>Lucid Machines</Authors>
-    <Description>Polysom Studio Setup - Lucid Machines Triune research IDE</Description>
+    <Description>Polysom Studio - Lucid Machines Triune research IDE</Description>
     <Copyright>Copyright (c) Lucid Machines</Copyright>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <DebugType>none</DebugType>
-    <RootNamespace>TriuneStudio.Installer</RootNamespace>
+    <RootNamespace>PolysomStudio.Windows</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
     <Resource Include="..\polysom.ico" Link="polysom.ico" />
+    <Content Include="lucid_machines_core.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('lucid_machines_core.dll')" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4258.31" />
   </ItemGroup>
 </Project>

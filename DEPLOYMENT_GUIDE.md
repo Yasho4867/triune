@@ -17,7 +17,7 @@ Run the full verification and packaging pipeline from the repository root (`Powe
 # 2. Run mandatory lint, bytecode compile, unit, invariant, security, and E2E test suites
 .\studio\studio_env\Scripts\ruff.exe check .
 .\studio\studio_env\Scripts\ruff.exe format --check .
-.\studio\studio_env\Scripts\python.exe -m compileall -q lucid_machines triune scripts tests benchmarks
+.\studio\studio_env\Scripts\python.exe -m compileall -q lucid_machines scripts tests benchmarks
 .\studio\studio_env\Scripts\pytest.exe -q
 
 # 3. Confirm WORKSPACE_RULES.md remains untracked (must return empty output) and session_state step == 40555

@@ -4,7 +4,7 @@
 Discovers host C/C++ toolchains (MSVC, GCC, Clang, Apple Clang), builds
 `lucid_machines_core.dll` (Windows), `liblucid_machines_core.so` (Linux), or
 `liblucid_machines_core.dylib` (macOS), and places artifacts in
-`lucid_machines/ops/` and `studio/windows/LucidMachinesStudio.Windows/`.
+`lucid_machines/ops/` and `studio/windows/PolysomStudio.Windows/`.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from pathlib import Path
 CSRC_DIR = Path(__file__).resolve().parent
 REPO_ROOT = CSRC_DIR.parent
 OPS_DIR = REPO_ROOT / "lucid_machines" / "ops"
-STUDIO_WINDOWS_DIR = REPO_ROOT / "studio" / "windows" / "TriuneStudio.Windows"
+STUDIO_WINDOWS_DIR = REPO_ROOT / "studio" / "windows" / "PolysomStudio.Windows"
 
 
 def find_vswhere() -> Path | None:

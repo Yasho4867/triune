@@ -46,7 +46,7 @@ JSON configurations live in `models/configs/` (`triune-*.json` + `junkie.json`, 
 ## Loading Models
 
 ```python
-import lucid_machines  # (or `import triune` via compatibility shim)
+import lucid_machines
 
 # Load a Triune architecture template ("triune-2.5b") or first flagship target ("junkie")
 model = lucid_machines.load_model("triune-2.5b")
