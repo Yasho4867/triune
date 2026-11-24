@@ -3,17 +3,18 @@ import { SystemDrawing } from "./components/SystemDrawing";
 import { SurrealStudy } from "./components/SurrealStudy";
 
 const repository = "https://github.com/lucid-machines/triune";
+const releaseTag = `${repository}/releases/tag/v1.0.0`;
 
 const systems = [
   {
     name: "Polysom Studio",
     category: "The workspace",
     description:
-      "From an architecture on a canvas to a model running on your machine. A native environment for training, fine-tuning, inspecting, and serving language models.",
-    features: ["Visual model builder", "Live activation inspection", "Local-first workflows"],
+      "From an architecture on a canvas to a model running on your machine. A native environment for training, fine-tuning, inspecting, and serving language models—with an interactive Triune Neural Atlas and 6 perceptual themes.",
+    features: ["Visual model builder", "Triune Neural Atlas", "6 perceptual themes"],
     command: "kcx studio",
-    link: `${repository}#launching-polysom-studio`,
-    action: "Explore the studio",
+    link: releaseTag,
+    action: "Download v1.0.0",
   },
   {
     name: "Triune Engine",
@@ -29,11 +30,11 @@ const systems = [
     name: "CentroidSteer",
     category: "The optimizer",
     description:
-      "Rethinking how optimization uses memory. A partitioned optimizer combining centroid steering, subspace updates, and hardware-aware execution.",
-    features: ["Low-memory state", "Subspace optimization", "PyTorch integration"],
+      "Rethinking how optimization uses memory. An orthogonal direct-sum MoE optimizer capturing over 92% of routed gradient energy at <0.30 bytes/param across 5-seed FineWeb-Edu validation.",
+    features: ["<0.30 B/p expert state", "Grassmann transport", "5-seed FineWeb-Edu proof"],
     command: "lucid_machines.CentroidSteer",
-    link: `${repository}/tree/main/papers/paper1_centroidsteer`,
-    action: "Read the research",
+    link: `${repository}/blob/main/benchmarks/CENTROIDSTEER_UPGRADE_VALIDATION_REPORT.md`,
+    action: "Read the 5-seed validation",
   },
 ];
 
@@ -516,9 +517,9 @@ export default function App() {
             ))}
           </div>
           <div className="systems-footnote">
-            <span>Built in the open. Designed to be inspected.</span>
-            <a href={repository} target="_blank" rel="noreferrer">
-              View the Triune repository <Arrow />
+            <span>Lucid Machines v1.0.0 — built in the open. Designed to be inspected.</span>
+            <a href={releaseTag} target="_blank" rel="noreferrer">
+              Download v1.0.0 release <Arrow />
             </a>
           </div>
         </section>
@@ -748,23 +749,23 @@ export default function App() {
           <dl>
             <div>
               <dt>Current stage</dt>
-              <dd>Research & development</dd>
+              <dd>From-scratch training configs live (Mini · 1B · 3B · 7B)</dd>
             </div>
             <div>
               <dt>Technical foundation</dt>
-              <dd>The Triune research ecosystem</dd>
+              <dd>Triune MoE · CentroidSteer · Polysom KCX (kcx)</dd>
             </div>
             <div>
               <dt>Release information</dt>
-              <dd>To be announced</dd>
+              <dd>v1.0.0 training substrate open-source; weights in training</dd>
             </div>
           </dl>
           <p className="dialog-note">
             Architecture details, evaluation results, and availability will be shared as the
             research progresses.
           </p>
-          <a className="primary-button" href={repository} target="_blank" rel="noreferrer">
-            Explore the research foundation <Arrow />
+          <a className="primary-button" href={`${repository}/tree/main/cloud`} target="_blank" rel="noreferrer">
+            Explore Junkie configs & Colab kit <Arrow />
           </a>
         </div>
       </dialog>
