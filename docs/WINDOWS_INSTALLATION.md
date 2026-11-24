@@ -1,6 +1,6 @@
 ﻿# Polysom Studio (Lucid Machines) — Windows Setup & Portable Packaging (`v1.0.0`)
 
-**Polysom Studio** (by **Lucid Machines**) runs its Python backend and native C/AVX2 engine (`lucid_machines_core.dll`, with `triune_core.dll` fallback) natively on Windows; WSL is not required.
+**Polysom Studio** (by **Lucid Machines**) runs its Python backend and native C/AVX2 engine (`lucid_machines_core.dll`) natively on Windows; WSL is not required.
 
 The Windows desktop shell (`PolysomStudio.exe`) is published as a self-contained single-file executable bundling `.NET 10`, `WebView2`, all 6 Polysom Studio themes (`Hypnagogic`, `Phosphene`, `Pareidolia`, `Afterimage`, `Mirage`, `Euphoria`), and the native C/AVX2 shared library. Its first-launch **Install / repair Studio environment** action (or the standalone `PolysomStudioSetup.exe` installer) provisions the managed Python environment (`studio/studio_env`), PyTorch, CUDA-compatible dependencies, W&B, and Studio packages. If Python is missing, the setup launcher can bootstrap Python 3.12 via Windows Package Manager (`winget`) for the current user.
 

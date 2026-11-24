@@ -38,8 +38,8 @@ def _make_executable(path: Path) -> None:
 
 def build_windows_native(workspace: Path = WORKSPACE_ROOT) -> Dict[str, Any]:
     """Compile and publish PolysomStudio.exe and PolysomStudioSetup.exe on Windows."""
-    app_proj = workspace / "studio" / "windows" / "TriuneStudio.Windows" / "TriuneStudio.Windows.csproj"
-    setup_proj = workspace / "studio" / "windows" / "TriuneStudio.Installer" / "TriuneStudio.Installer.csproj"
+    app_proj = workspace / "studio" / "windows" / "PolysomStudio.Windows" / "PolysomStudio.Windows.csproj"
+    setup_proj = workspace / "studio" / "windows" / "PolysomStudio.Installer" / "PolysomStudio.Installer.csproj"
     publish_dir = workspace / "studio" / "windows" / "publish"
     publish_dir.mkdir(parents=True, exist_ok=True)
 

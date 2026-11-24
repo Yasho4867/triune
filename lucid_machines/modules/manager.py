@@ -379,8 +379,6 @@ class ModuleManager:
                 self.base_dir = Path("C:\\PolysomStudio")
             elif sys.platform == "win32" and os.path.exists("C:\\LucidMachinesStudio"):
                 self.base_dir = Path("C:\\LucidMachinesStudio")
-            elif sys.platform == "win32" and os.path.exists("C:\\TriuneStudio"):
-                self.base_dir = Path("C:\\TriuneStudio")
             elif (Path.home() / ".triune_studio").exists() and not (Path.home() / ".lucid_machines_studio").exists():
                 self.base_dir = Path.home() / ".triune_studio"
             else:

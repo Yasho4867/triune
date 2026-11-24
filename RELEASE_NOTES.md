@@ -29,15 +29,15 @@ This inaugural release delivers five core engineering pillars (**R1–R5**):
 - **Conflict-Screened 4-Layer Brand (`docs/RELEASE_NAME_REPORT.md`)**: Locked **Lucid Machines** (`lucid-machines` / `lucid_machines` company, package, CLI, and release brand), **Triune** (`TriuneTransformer` / `TriuneModel` / `TriuneConfig` core neural architecture), **Junkie** (inaugural flagship model to be trained), and **Polysom Studio** (`polysom` / `polysom-studio` workbench) via automated registry queries across PyPI, npm, GitHub, DNS, and web search alongside an explicit non-legal/trademark disclaimer (`docs/RELEASE_NAME_REPORT.md`).
 - **Unified Naming Surface (`v1.0.0`)**:
   - Python distribution & import package: `lucid-machines` / `lucid_machines` (`pyproject.toml` `version = "1.0.0"`).
-  - Primary CLI (`Polysom KCX`): `kcx` (`studio`, `serve`, `train`, `finetune`, `chat`, `eval`, `config`, `workspace`, `doctor`, `benchmark`, `plan-memory`), with `polysom`, `lucid-machines`, and `triune` compatibility aliases.
+  - Primary CLI (`Polysom KCX`): `kcx` (`studio`, `serve`, `train`, `finetune`, `chat`, `eval`, `config`, `workspace`, `doctor`, `benchmark`, `plan-memory`), with `polysom` and `lucid-machines` compatibility aliases.
   - Model configs: 12 Triune architecture size templates in `models/configs/triune-*.json` plus 4 inaugural **Junkie** training configurations (`models/configs/junkie-mini.json`, `junkie-1b.json`, `junkie-3b.json`, `junkie-7b.json` / `junkie.json`).
-  - Native C/AVX2/CUDA shared library: `lucid_machines_core.dll` / `liblucid_machines_core.so` / `liblucid_machines_core.dylib` (`1.0.0-native-avx2-cuda`, with `triune_core.*` fallback).
+  - Native C/AVX2/CUDA shared library: `lucid_machines_core.dll` / `liblucid_machines_core.so` / `liblucid_machines_core.dylib` (`1.0.0-native-avx2-cuda`).
   - Windows Desktop App & Installer: `PolysomStudio.exe` and `PolysomStudioSetup.exe` (`dist/PolysomStudio-1.0.0-win-x64.zip`).
   - Environment variable prefix: `LUCID_MACHINES_*` (`LUCID_MACHINES_API_TOKEN`, `LUCID_MACHINES_REQUIRE_AUTH`, `LUCID_MACHINES_PLUGIN_TRUSTED_KEYS`, `LUCID_MACHINES_ALLOW_PIP_INSTALL`, `LUCID_MACHINES_ALLOW_REMOTE_SANDBOX`, `LUCID_MACHINES_ALLOW_AGENT_WRITES`).
-- **Backward-Compatibility Shims**:
-  - `import triune` delegates transparently to `lucid_machines`, preserving `TriuneTransformer`, `TriuneModel`, `TriuneConfig`, `TriuneForCausalLM`, and `NativeTriuneEngine`.
+- **Architecture Presets & Data Preservation**:
+  - `lucid_machines` directly exports `TriuneTransformer`, `TriuneModel`, `TriuneConfig`, `TriuneForCausalLM`, and `NativeTriuneEngine`.
   - `_LEGACY_PRESET_ALIASES` maps shorthand aliases (`"triune-micro"`, `"triune-1.5b"`, `"triune-32b"`, etc.) cleanly to canonical `triune-*` architecture templates.
-  - All `LUCID_MACHINES_*` environment lookups fall back to `TRIUNE_*`, OS keyring lookups check `"Polysom Studio"` with `"Triune Studio"` fallback, and `triune_tokenizer.json` resolves natively.
+  - All `LUCID_MACHINES_*` environment lookups support `TRIUNE_*` fallback, OS keyring lookups store under `"Polysom Studio"`, and `triune_tokenizer.json` resolves natively.
 
 ---
 

@@ -57,4 +57,4 @@ Lucid Machines (`lucid_machines`) implements defense-in-depth measures across al
 - Autonomous agent workspace file writes via `/v1/agents/run` and `/v1/agents/orchestrate` are disabled by default unless `LUCID_MACHINES_ALLOW_AGENT_WRITES=1` is set.
 - vLLM serving configurations (`vllm_bridge.py` and `/v1/models/export`) default to `"trust_remote_code": False`.
 - Google Gemini API requests transmit credentials exclusively via the `x-goog-api-key` HTTP header and never in URL query strings (`?key=`).
-- `/v1/system/config` masks stored credentials with partial-prefix obfuscation and persists BYOK secrets in the OS credential store (`Polysom Studio`, with legacy `"Triune Studio"` fallback), failing closed if no secure credential store is available.
+- `/v1/system/config` masks stored credentials with partial-prefix obfuscation and persists BYOK secrets in the OS credential store (`Polysom Studio`), failing closed if no secure credential store is available.

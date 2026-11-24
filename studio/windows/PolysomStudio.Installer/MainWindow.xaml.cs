@@ -7,7 +7,7 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using Microsoft.Win32;
 
-namespace TriuneStudio.Installer;
+namespace PolysomStudio.Installer;
 
 public partial class MainWindow : Window
 {
@@ -28,7 +28,7 @@ public partial class MainWindow : Window
         }
         catch
         {
-            var fallback = Path.Combine(localAppData, "Triune", "logs");
+            var fallback = Path.Combine(localAppData, "Polysom Studio", "logs");
             Directory.CreateDirectory(fallback);
             return fallback;
         }
@@ -396,8 +396,8 @@ public partial class MainWindow : Window
         Path.Combine(root, "PolysomStudio.exe"),
         Path.Combine(root, "studio", "publish", "PolysomStudio.exe"),
         Path.Combine(root, "studio", "windows", "publish", "PolysomStudio.exe"),
-        Path.Combine(root, "studio", "windows", "TriuneStudio.Windows", "bin", "Release", "net10.0-windows", "PolysomStudio.exe"),
-        Path.Combine(root, "studio", "TriuneStudio.bat")
+        Path.Combine(root, "studio", "windows", "PolysomStudio.Windows", "bin", "Release", "net10.0-windows", "PolysomStudio.exe"),
+        Path.Combine(root, "studio", "PolysomStudio.bat")
     }.FirstOrDefault(File.Exists);
 
     private static string[] DesktopDirectories()

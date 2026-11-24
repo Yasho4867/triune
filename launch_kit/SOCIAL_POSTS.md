@@ -48,7 +48,7 @@ Training on a 200-compute-unit Colab Pro budget?
 **Post 8/8 (Quickstart & Links)**
 Upgrade any PyTorch or Hugging Face model in 1 line:
 `engine = lucid_machines.upgrade(model, lora_rank=16)`
-Full code (`import triune` compat shim included), Colab Pro notebook (`cloud/`), 2 companion LaTeX/PDF papers, benchmark scripts, and Windows Studio installer instructions are available at `https://lucidmachines.co` and `https://github.com/lucid-machines/triune`.
+Full code, Colab Pro notebook (`cloud/`), 2 companion LaTeX/PDF papers, benchmark scripts, and Windows Studio installer instructions are available at `https://lucidmachines.co` and `https://github.com/lucid-machines/triune`.
 
 ---
 

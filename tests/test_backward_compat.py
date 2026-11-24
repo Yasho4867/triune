@@ -13,8 +13,10 @@ Verifies:
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import json
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -37,25 +39,27 @@ class TestTriuneBackwardCompatibility(unittest.TestCase):
         self.assertTrue(hasattr(lm, "TriuneFineTuner"))
         self.assertTrue(hasattr(lm, "LucidMachinesUniversalEngine"))
 
-    def test_triune_backward_compatibility_shim_delegates_cleanly(self) -> None:
-        import warnings
-
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always", DeprecationWarning)
-            triune_mod = importlib.import_module("triune")
-            triune_mod = importlib.reload(triune_mod)
-            self.assertTrue(any(issubclass(w.category, DeprecationWarning) for w in caught))
+    def test_root_triune_compat_folder_removed_and_lucid_machines_exports_triune_architecture(self) -> None:
+        self.assertFalse((self.repo_root / "triune").exists())
+        sys.modules.pop("triune", None)
+        importlib.invalidate_caches()
+        self.assertIsNone(importlib.util.find_spec("triune"))
 
         lm = importlib.import_module("lucid_machines")
-        self.assertIs(triune_mod.TriuneTransformer, lm.TriuneTransformer)
-        self.assertIs(triune_mod.TriuneModel, lm.TriuneModel)
-        self.assertIs(triune_mod.TriuneConfig, lm.TriuneConfig)
+        for symbol in (
+            "TriuneTransformer",
+            "TriuneModel",
+            "TriuneConfig",
+            "TriuneForCausalLM",
+            "TriuneFineTuner",
+            "CentroidSteerOptimizer",
+        ):
+            self.assertTrue(hasattr(lm, symbol), f"lucid_machines missing export {symbol}")
 
-        from triune.model.transformer import TriuneTransformer as ShimTransformer
-        from triune.optim.centroid_steer import CentroidSteerOptimizer as ShimOpt
-
-        self.assertIs(ShimTransformer, lm.TriuneTransformer)
-        self.assertIs(ShimOpt, lm.CentroidSteerOptimizer)
+        cfg_dir = self.repo_root / "models" / "configs"
+        self.assertGreaterEqual(len(list(cfg_dir.glob("triune-*.json"))), 4)
+        self.assertTrue((cfg_dir / "junkie.json").is_file())
+        self.assertTrue((self.repo_root / "triune_tokenizer.json").is_file())
 
     def test_keyring_service_prefers_polysom_studio_with_legacy_fallback(self) -> None:
         from lucid_machines.modules import manager as mgr_mod

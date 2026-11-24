@@ -67,10 +67,10 @@ def _load_native_library() -> Optional[ctypes.CDLL]:
     if sys.platform == "win32":
         candidates.append(ops_dir / "lucid_machines_core.dll")
         candidates.append(
-            ops_dir.parent.parent / "studio" / "windows" / "TriuneStudio.Windows" / "lucid_machines_core.dll"
+            ops_dir.parent.parent / "studio" / "windows" / "PolysomStudio.Windows" / "lucid_machines_core.dll"
         )
         candidates.append(ops_dir / "triune_core.dll")
-        candidates.append(ops_dir.parent.parent / "studio" / "windows" / "TriuneStudio.Windows" / "triune_core.dll")
+        candidates.append(ops_dir.parent.parent / "studio" / "windows" / "PolysomStudio.Windows" / "triune_core.dll")
         # Pre-load PyTorch's bundled cudart64 DLL into process address space if present
         torch_lib_dir = Path(torch.__file__).resolve().parent / "lib"
         if torch_lib_dir.is_dir():

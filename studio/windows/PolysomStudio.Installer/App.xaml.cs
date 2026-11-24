@@ -1,6 +1,6 @@
 using System.Windows;
 
-namespace TriuneStudio.Installer;
+namespace PolysomStudio.Installer;
 
 public partial class App : Application
 {

@@ -8,7 +8,7 @@ $package = Join-Path $dist $name
 $zip = Join-Path $dist "$name.zip"
 $publishLocal = Join-Path $repo 'studio/publish'
 
-foreach ($project in 'TriuneStudio.Windows', 'TriuneStudio.Installer') {
+foreach ($project in 'PolysomStudio.Windows', 'PolysomStudio.Installer') {
     Write-Host "Publishing $project..."
     dotnet publish (Join-Path $repo "studio/windows/$project/$project.csproj") --configuration Release --runtime win-x64 --self-contained true --output $publishLocal
     if ($LASTEXITCODE -ne 0) { throw "$project publish failed with exit code $LASTEXITCODE" }
@@ -27,7 +27,7 @@ foreach ($file in 'pyproject.toml', 'README.md', 'requirements.txt') {
 foreach ($dir in 'docs', 'lucid_machines', 'models', 'studio/src', 'studio/installer') {
     Copy-Item (Join-Path $repo $dir) (Join-Path $package $dir) -Recurse
 }
-Copy-Item (Join-Path $repo 'studio/TriuneStudio.bat') (Join-Path $package 'studio')
+Copy-Item (Join-Path $repo 'studio/PolysomStudio.bat') (Join-Path $package 'studio')
 Copy-Item (Join-Path $repo 'studio/windows/polysom.ico') (Join-Path $package 'studio/windows')
 foreach ($script in 'launch_studio.py', 'benchmark_inference.py') {
     Copy-Item (Join-Path $repo "scripts/$script") (Join-Path $package 'scripts')

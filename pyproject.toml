@@ -87,11 +87,10 @@ Issues = "https://github.com/lucid-machines/triune/issues"
 kcx = "lucid_machines.cli:main"
 lucid-machines = "lucid_machines.cli:main"
 polysom = "lucid_machines.cli:main"
-triune = "lucid_machines.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["lucid_machines", "lucid_machines.*", "triune", "scripts", "scripts.*", "studio.src", "studio.src.*"]
+include = ["lucid_machines", "lucid_machines.*", "scripts", "scripts.*", "studio.src", "studio.src.*"]
 exclude = ["tests*", "studio.windows*", "studio.studio_env*", "studio.publish*", "studio.installer*", "models*", "triune_fast*"]
 
 [tool.setuptools.package-data]

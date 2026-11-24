@@ -1,4 +1,4 @@
-name: Triune CI
+name: Lucid Machines CI
 
 on:
   push:
@@ -65,6 +65,7 @@ jobs:
         python -m pip install --no-deps --target "$RUNNER_TEMP/lucid-machines-wheel" dist/*.whl
         python -m venv "$RUNNER_TEMP/lucid-machines-venv"
         "$RUNNER_TEMP/lucid-machines-venv/bin/pip" install --no-deps dist/*.whl
+        "$RUNNER_TEMP/lucid-machines-venv/bin/kcx" --help
         "$RUNNER_TEMP/lucid-machines-venv/bin/lucid-machines" --help
         cd "$RUNNER_TEMP"
         PYTHONPATH="$RUNNER_TEMP/lucid-machines-wheel" python -c "import scripts.train, scripts.chat, lucid_machines.cli; print('Wheel CLI modules import from the installed artifact.')"

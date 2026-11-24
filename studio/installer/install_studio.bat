@@ -24,11 +24,6 @@ if "%~1"=="" (
         start "" "%~dp0..\windows\publish\PolysomStudioSetup.exe"
         exit /b 0
     )
-    if exist "%~dp0..\..\TriuneStudioSetup.exe" (
-        echo [Setup] Launching Legacy Windows Setup Wizard (TriuneStudioSetup.exe)...
-        start "" "%~dp0..\..\TriuneStudioSetup.exe"
-        exit /b 0
-    )
 )
 
 :: 1. Detect Python
