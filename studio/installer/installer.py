@@ -170,11 +170,25 @@ class HardwareProfile:
                         if not self.has_nvidia:
                             self.gpu_name = f"WSL2 GPU: {wsl_smi.stdout.strip()}"
                             self.has_nvidia = True
-                    # Check for existing venv in WSL
-                    for cand in [
-                        "/home/yasho4867/venvs/triune/bin/python",
+                    # Check for existing venv in WSL dynamically via $HOME
+                    wsl_cands = [
+                        "/root/venvs/lucid_machines/bin/python",
                         "/root/venvs/triune/bin/python",
-                    ]:
+                    ]
+                    home_res = subprocess.run(
+                        ["wsl.exe", "-e", "sh", "-c", 'printf "%s" "$HOME"'],
+                        capture_output=True,
+                        text=True,
+                        timeout=3.0,
+                    )
+                    if home_res.returncode == 0 and home_res.stdout.strip():
+                        wsl_home = home_res.stdout.strip().rstrip("/")
+                        wsl_cands = [
+                            f"{wsl_home}/venvs/lucid_machines/bin/python",
+                            f"{wsl_home}/venvs/triune/bin/python",
+                            *wsl_cands,
+                        ]
+                    for cand in wsl_cands:
                         r = subprocess.run(["wsl.exe", "-e", "test", "-f", cand], capture_output=True, timeout=3.0)
                         if r.returncode == 0:
                             self.wsl_python_path = cand

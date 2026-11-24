@@ -298,6 +298,21 @@ class MemoryPlanner:
                 target_vram_gb=vram_gb,
                 available_vram_gb=vram_gb,
             )
+            train_est_fp8 = MemoryPlanner.estimate_vram(
+                {**spec.to_dict(), "galore_rank": 256 if hidden >= 2048 else 64, "use_fp8": True},
+                target_vram_gb=vram_gb,
+                available_vram_gb=vram_gb,
+            )
+            fp8_train_static_gb = round(train_est_fp8.total_vram_gb + (total_params * 0.5) / (1024**3), 3)
+            safe_train_vram_gb = vram_gb * 0.85
+            if train_est.total_vram_gb <= safe_train_vram_gb:
+                train_mode = "resident_bf16_train"
+            elif fp8_train_static_gb <= safe_train_vram_gb:
+                train_mode = "resident_fp8_train (--use_fp8)"
+            elif bf16_gb <= ram_gb * 0.65:
+                train_mode = "layer_streaming_train (--streaming --use_fp8)"
+            else:
+                train_mode = "disk_nvfp4_streaming_train (--streaming --use_fp8)"
             return {
                 "model": str(model_id_or_dir),
                 "preset_id": spec.model_id,
@@ -315,9 +330,11 @@ class MemoryPlanner:
                 "per_layer_nvfp4_mb": round(per_layer_nvfp4_mb, 1),
                 "centroid_steer_opt_gb": train_est.optimizer_memory_gb,
                 "centroid_steer_static_vram_gb": train_est.total_vram_gb,
+                "centroid_steer_fp8_static_vram_gb": fp8_train_static_gb,
                 "available_vram_gb": round(vram_gb, 2),
                 "host_ram_gb": round(ram_gb, 2),
                 "recommended_mode": mode,
+                "recommended_train_mode": train_mode,
             }
 
         from transformers import AutoConfig

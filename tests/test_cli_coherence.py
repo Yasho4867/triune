@@ -375,3 +375,24 @@ def test_train_steer_mode_and_packaging_eye_svg() -> None:
     assert "#7b3f3c" in POLYSOM_SVG_ICON
     assert "#f4ecda" in POLYSOM_SVG_ICON
     assert "gradient" not in POLYSOM_SVG_ICON.lower()
+
+
+def test_plan_memory_train_modes_and_installer_no_personal_wsl_path() -> None:
+    est_8gb = MemoryPlanner.estimate_hf_model("junkie-3b", available_vram_gb=8.0)
+    assert "streaming" in est_8gb["recommended_train_mode"]
+    assert "resident_bf16" not in est_8gb["recommended_train_mode"]
+
+    est_12gb = MemoryPlanner.estimate_hf_model("junkie-3b", available_vram_gb=12.0)
+    assert est_12gb["recommended_train_mode"] == "resident_fp8_train (--use_fp8)"
+
+    est_24gb = MemoryPlanner.estimate_hf_model("junkie-3b", available_vram_gb=24.0)
+    assert est_24gb["recommended_train_mode"] == "resident_bf16_train"
+
+    code_pm8, out_pm8 = _run_cli_inproc(["plan-memory", "--model", "junkie-3b", "--vram-gb", "8"], prog="kcx")
+    assert code_pm8 == 0
+    assert "Inference Mode" in out_pm8
+    assert "Training Mode" in out_pm8
+    assert "streaming" in out_pm8
+
+    installer_text = (REPO_ROOT / "studio" / "installer" / "installer.py").read_text(encoding="utf-8")
+    assert ("yasho" + "4867") not in installer_text

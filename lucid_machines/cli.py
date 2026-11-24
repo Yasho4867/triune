@@ -1343,18 +1343,24 @@ def main() -> None:
                 ]
             )
             if hf_plan.get("centroid_steer_static_vram_gb") is not None:
-                plan_rows.append(
-                    (
-                        "CentroidSteer Train",
-                        f"{hf_plan['centroid_steer_static_vram_gb']} GB static (opt={hf_plan['centroid_steer_opt_gb']} GB)",
-                    )
-                )
-            plan_rows.extend(
-                [
-                    ("Hardware", f"{hf_plan['available_vram_gb']} GB VRAM  ·  {hf_plan['host_ram_gb']} GB Host RAM"),
-                    ("Recommended Mode", hf_plan["recommended_mode"]),
-                ]
+                fp8_static = hf_plan.get("centroid_steer_fp8_static_vram_gb")
+                if fp8_static is not None:
+                    train_str = f"{hf_plan['centroid_steer_static_vram_gb']} GB BF16 / {fp8_static} GB FP8 static (opt={hf_plan['centroid_steer_opt_gb']} GB)"
+                else:
+                    train_str = f"{hf_plan['centroid_steer_static_vram_gb']} GB static (opt={hf_plan['centroid_steer_opt_gb']} GB)"
+                plan_rows.append(("CentroidSteer Train", train_str))
+            plan_rows.append(
+                ("Hardware", f"{hf_plan['available_vram_gb']} GB VRAM  ·  {hf_plan['host_ram_gb']} GB Host RAM")
             )
+            if hf_plan.get("recommended_train_mode"):
+                plan_rows.extend(
+                    [
+                        ("Inference Mode", hf_plan["recommended_mode"]),
+                        ("Training Mode", hf_plan["recommended_train_mode"]),
+                    ]
+                )
+            else:
+                plan_rows.append(("Recommended Mode", hf_plan["recommended_mode"]))
             render_kv_panel(
                 f"Hardware Memory Plan · {hf_plan['model']}",
                 plan_rows,
