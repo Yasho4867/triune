@@ -1967,43 +1967,55 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                         st["variance"] = batch_var[idx]
 
             if active_s_idx:
-                for b_i in active_s_idx:
-                    c_0 = g_list[b_i]["C_e"][:, 0].float()
-                    Q_in = (QL_stack[b_i, :, :r] if centroid_on_ql else QR_stack[b_i, :, :r]).float()
-                    Q_out = (QR_stack[b_i, :, :r] if centroid_on_ql else QL_stack[b_i, :, :r]).float()
-                    u_in = c_0 - torch.mv(Q_in, torch.mv(Q_in.t(), c_0))
-                    u_in = u_in - torch.mv(Q_in, torch.mv(Q_in.t(), u_in))
-                    u_in_norm = float(u_in.norm().item())
-                    if u_in_norm <= 1e-6:
-                        for col_try in range(min(r + 2, Q_in.size(0))):
-                            e_try = torch.zeros_like(c_0)
+                idx_t = torch.tensor(active_s_idx, device=device, dtype=torch.long)
+                c_0 = C_act[:, :, 0]  # [K_s, d_in]
+                Q_in = (QL_stack[idx_t, :, :r] if centroid_on_ql else QR_stack[idx_t, :, :r]).float()
+                Q_out = (QR_stack[idx_t, :, :r] if centroid_on_ql else QL_stack[idx_t, :, :r]).float()
+
+                u_in = c_0 - torch.bmm(Q_in, torch.bmm(Q_in.transpose(1, 2), c_0.unsqueeze(-1))).squeeze(-1)
+                u_in = u_in - torch.bmm(Q_in, torch.bmm(Q_in.transpose(1, 2), u_in.unsqueeze(-1))).squeeze(-1)
+                u_in_norm = u_in.norm(dim=1, keepdim=True)
+                if bool((u_in_norm <= 1e-6).any().item()):
+                    for k_pos in (u_in_norm.squeeze(-1) <= 1e-6).nonzero(as_tuple=True)[0].tolist():
+                        q_in_i = Q_in[k_pos]
+                        for col_try in range(min(r + 2, q_in_i.size(0))):
+                            e_try = torch.zeros_like(u_in[k_pos])
                             e_try[col_try] = 1.0
-                            u_in = e_try - torch.mv(Q_in, torch.mv(Q_in.t(), e_try))
-                            u_in = u_in - torch.mv(Q_in, torch.mv(Q_in.t(), u_in))
-                            u_in_norm = float(u_in.norm().item())
-                            if u_in_norm > 1e-6:
+                            cand = e_try - torch.mv(q_in_i, torch.mv(q_in_i.t(), e_try))
+                            cand = cand - torch.mv(q_in_i, torch.mv(q_in_i.t(), cand))
+                            nrm = float(cand.norm().item())
+                            if nrm > 1e-6:
+                                u_in[k_pos].copy_(cand)
+                                u_in_norm[k_pos, 0] = nrm
                                 break
-                    q_in_f = u_in / max(u_in_norm, 1e-12)
-                    v_0 = torch.mv(G_f32[b_i], q_in_f)
-                    u_out = v_0 - torch.mv(Q_out, torch.mv(Q_out.t(), v_0))
-                    u_out = u_out - torch.mv(Q_out, torch.mv(Q_out.t(), u_out))
-                    u_out_norm = float(u_out.norm().item())
-                    if u_out_norm <= 1e-6:
-                        for col_try in range(min(r + 2, Q_out.size(0))):
-                            e_try = torch.zeros(Q_out.size(0), device=device, dtype=torch.float32)
+                q_in_f = u_in / u_in_norm.clamp_min(1e-12)
+
+                v_0 = torch.bmm(G_f32[idx_t], q_in_f.unsqueeze(-1)).squeeze(-1)
+                u_out = v_0 - torch.bmm(Q_out, torch.bmm(Q_out.transpose(1, 2), v_0.unsqueeze(-1))).squeeze(-1)
+                u_out = u_out - torch.bmm(Q_out, torch.bmm(Q_out.transpose(1, 2), u_out.unsqueeze(-1))).squeeze(-1)
+                u_out_norm = u_out.norm(dim=1, keepdim=True)
+                if bool((u_out_norm <= 1e-6).any().item()):
+                    for k_pos in (u_out_norm.squeeze(-1) <= 1e-6).nonzero(as_tuple=True)[0].tolist():
+                        q_out_i = Q_out[k_pos]
+                        for col_try in range(min(r + 2, q_out_i.size(0))):
+                            e_try = torch.zeros(q_out_i.size(0), device=device, dtype=torch.float32)
                             e_try[col_try] = 1.0
-                            u_out = e_try - torch.mv(Q_out, torch.mv(Q_out.t(), e_try))
-                            u_out = u_out - torch.mv(Q_out, torch.mv(Q_out.t(), u_out))
-                            u_out_norm = float(u_out.norm().item())
-                            if u_out_norm > 1e-6:
+                            cand = e_try - torch.mv(q_out_i, torch.mv(q_out_i.t(), e_try))
+                            cand = cand - torch.mv(q_out_i, torch.mv(q_out_i.t(), cand))
+                            nrm = float(cand.norm().item())
+                            if nrm > 1e-6:
+                                u_out[k_pos].copy_(cand)
+                                u_out_norm[k_pos, 0] = nrm
                                 break
-                    q_out_f = u_out / max(u_out_norm, 1e-12)
-                    if centroid_on_ql:
-                        QL_stack[b_i, :, r].copy_(q_in_f.to(dtype=dtype))
-                        QR_stack[b_i, :, r].copy_(q_out_f.to(dtype=dtype))
-                    else:
-                        QR_stack[b_i, :, r].copy_(q_in_f.to(dtype=dtype))
-                        QL_stack[b_i, :, r].copy_(q_out_f.to(dtype=dtype))
+                q_out_f = u_out / u_out_norm.clamp_min(1e-12)
+
+                if centroid_on_ql:
+                    QL_stack[idx_t, :, r] = q_in_f.to(dtype=dtype)
+                    QR_stack[idx_t, :, r] = q_out_f.to(dtype=dtype)
+                else:
+                    QR_stack[idx_t, :, r] = q_in_f.to(dtype=dtype)
+                    QL_stack[idx_t, :, r] = q_out_f.to(dtype=dtype)
+                del idx_t, Q_in, Q_out, u_in, u_in_norm, q_in_f, v_0, u_out, u_out_norm, q_out_f
 
             QL_act = QL_stack[:, :, :r]
             QR_act = QR_stack[:, :, :r]

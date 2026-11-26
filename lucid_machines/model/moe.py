@@ -353,7 +353,7 @@ class MoE_FFN(nn.Module):
 
         can_batch_bmm = (
             not self.use_fp4
-            and not self.use_fp8
+            and not any(hasattr(getattr(m, "weight", None), "_fp8_tensor") for m in self.experts.modules())
             and not any(hasattr(m, "packed_weight") for m in self.experts.modules())
             and not mixed_biases
             and (has_lora_e0 or no_lora_e0)

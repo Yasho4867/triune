@@ -14,15 +14,16 @@ import torch.nn.functional as F
 
 
 def is_fp8_available(device: Optional[torch.device] = None) -> bool:
-    """Checks whether hardware FP8 acceleration via scaled_mm is supported."""
+    """Checks whether hardware FP8 acceleration via scaled_mm is supported (SM89 Ada / Hopper / Blackwell)."""
     if not torch.cuda.is_available():
         return False
     if device is None:
         device = torch.device("cuda:0")
     if device.type != "cuda":
         return False
-    major, _ = torch.cuda.get_device_capability(device)
-    return major >= 9 and hasattr(torch, "_scaled_mm")
+    from lucid_machines.runtime.capabilities import PrecisionCapabilities
+
+    return bool(PrecisionCapabilities.detect(device).native_scaled_mm)
 
 
 class _FastFP8LinearFunction(torch.autograd.Function):
@@ -44,12 +45,12 @@ class _FastFP8LinearFunction(torch.autograd.Function):
         inv_scale_w = (1.0 / scale_w).float()
         w_fp8 = (weight.float() * inv_scale_w).clamp(-448.0, 448.0).to(torch.float8_e4m3fn)
 
-        # torch._scaled_mm computes A @ B where A is [M, K] and B is [K, N]
-        w_fp8_t = w_fp8.t().contiguous()
+        # torch._scaled_mm requires row-major A [M, K] and column-major B [K, N]
+        w_fp8_col = w_fp8.contiguous().t()
 
         out_2d = torch._scaled_mm(
             x_fp8,
-            w_fp8_t,
+            w_fp8_col,
             scale_a=scale_x,
             scale_b=scale_w,
             out_dtype=x.dtype,
@@ -84,7 +85,7 @@ class _FastFP8LinearFunction(torch.autograd.Function):
 
         grad_x = torch._scaled_mm(
             g_fp8,
-            w_fp8.contiguous(),
+            w_fp8.t().contiguous().t(),
             scale_a=scale_g,
             scale_b=scale_w,
             out_dtype=ctx.x_dtype,
@@ -95,7 +96,7 @@ class _FastFP8LinearFunction(torch.autograd.Function):
         g_fp8_t = g_fp8.t().contiguous()
         grad_w = torch._scaled_mm(
             g_fp8_t,
-            x_fp8.contiguous(),
+            x_fp8.t().contiguous().t(),
             scale_a=scale_g,
             scale_b=scale_x,
             out_dtype=ctx.w_dtype,
