@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import getpass
 import json
 import os
@@ -490,7 +491,7 @@ def main(argv: list[str] | None = None) -> dict:
     overrides["streaming_chunk_size"] = args.streaming_chunk_size
     overrides["streaming_pin_memory"] = args.streaming_pin_memory
     overrides["streaming_prefetch"] = args.streaming_prefetch
-    overrides["streaming_fp8_weights"] = getattr(args, "streaming_fp8_weights", False)
+    overrides["streaming_fp8_weights"] = bool(args.streaming and getattr(args, "streaming_fp8_weights", False))
     config = build_config(overrides)
     if requested_steer_mode == "nosteer":
         config["steer_mode"] = "nosteer"
@@ -643,7 +644,8 @@ def main(argv: list[str] | None = None) -> dict:
             model_defaults.CENTROID_SUBSPACE_DIRS = max(1, int(args.steer_dirs))
 
         try:
-            # Build model with BF16 default dtype
+            # Build model with BF16 default dtype (directly on CUDA when not streaming to avoid CPU RAM spike)
+            build_ctx = torch.device(device) if (not args.streaming and device.type == "cuda") else contextlib.nullcontext()
             if is_hf_candidate:
                 try:
                     from transformers import AutoModelForCausalLM
@@ -654,13 +656,15 @@ def main(argv: list[str] | None = None) -> dict:
                     print(f"⚠️ Could not load via transformers ({e}); building Triune model...", flush=True)
                     torch.set_default_dtype(torch.bfloat16)
                     try:
-                        raw_model = _build_triune_from_config(config)
+                        with build_ctx:
+                            raw_model = _build_triune_from_config(config)
                     finally:
                         torch.set_default_dtype(torch.float32)
             else:
                 torch.set_default_dtype(torch.bfloat16)
                 try:
-                    raw_model = _build_triune_from_config(config)
+                    with build_ctx:
+                        raw_model = _build_triune_from_config(config)
                 finally:
                     torch.set_default_dtype(torch.float32)
         finally:

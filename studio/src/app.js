@@ -1612,18 +1612,19 @@
   }
 
   const APPEARANCE_THEMES = [
-    { id: 'hypnagogic', name: 'Hypnagogic', mode: 'Dark', edition: 'Polysom', description: 'Vivid lucid-twilight threshold with deep violet-indigo surfaces.', palette: { bg: '#0b0a14', surface: '#121020', card: '#18162b', hover: '#221f3b', input: '#0e0c19', text: '#f2f0ff', muted: '#b2aed1', dim: '#9490bc', border: '#2d294a', accent: '#8b7cff' } },
-    { id: 'phosphene', name: 'Phosphene', mode: 'Dark', edition: 'Polysom', description: 'Pitch-black void illuminated by crisp cyan phosphor luminescence.', palette: { bg: '#020304', surface: '#070b0d', card: '#0d1418', hover: '#132026', input: '#05080a', text: '#ecfeff', muted: '#92bccd', dim: '#749db0', border: '#1a2b34', accent: '#22d3ee' } },
-    { id: 'pareidolia', name: 'Pareidolia', mode: 'Dark', edition: 'Polysom', description: 'Cold mineral slate with glacial silver and ice-blue signal lines.', palette: { bg: '#0f141b', surface: '#171e28', card: '#1e2734', hover: '#283445', input: '#121821', text: '#eef2f7', muted: '#b0bdd0', dim: '#92a2b6', border: '#324054', accent: '#94c5ff' } },
-    { id: 'afterimage', name: 'Afterimage', mode: 'Dark', edition: 'Polysom', description: 'High-contrast crimson and amber retinal burn for deep focus.', palette: { bg: '#12090b', surface: '#1b0e11', card: '#241317', hover: '#331b21', input: '#160b0e', text: '#fff1f2', muted: '#dfbac1', dim: '#c697a0', border: '#45232b', accent: '#fb7185' } },
-    { id: 'mirage', name: 'Mirage', mode: 'Light', edition: 'Polysom', description: 'Clean high-contrast daylight surfaces with crisp indigo ink.', palette: { bg: '#f5f7fa', surface: '#eaedf2', card: '#ffffff', hover: '#f0f3f7', input: '#ffffff', text: '#111827', muted: '#374151', dim: '#4b5563', border: '#d1d5db', accent: '#4f46e5' } },
-    { id: 'euphoria', name: 'Euphoria', mode: 'Light', edition: 'Polysom', description: 'Warm luminous sunlit vellum with vermilion ink and rich editorial contrast.', palette: { bg: '#faf5ec', surface: '#f2e9da', card: '#fffdf8', hover: '#f7efe1', input: '#fffcf5', text: '#231410', muted: '#5e4338', dim: '#6e5044', border: '#dfd0ba', accent: '#b23808' } }
+    { id: 'hypnagogic', name: 'Hypnagogic', mode: 'Dark', edition: 'Editorial', description: 'Warm obsidian surfaces with burnished copper and Instrument Serif display typography.', palette: { bg: '#0c0b0a', surface: '#141210', card: '#1b1815', hover: '#25201c', input: '#100e0c', text: '#f4eee6', muted: '#b8aea2', dim: '#968b7e', border: '#2e2721', accent: '#d99b76' } },
+    { id: 'phosphene', name: 'Phosphene', mode: 'Dark', edition: 'Instrument', description: 'Matte hardware chassis with warm CRT phosphor amber and crisp monospace indices.', palette: { bg: '#090a09', surface: '#101210', card: '#161916', hover: '#1f241f', input: '#0c0e0c', text: '#f2f1e8', muted: '#adb0a4', dim: '#8a9082', border: '#2a3029', accent: '#f2a93b' } },
+    { id: 'pareidolia', name: 'Pareidolia', mode: 'Dark', edition: 'Swiss', description: 'Architectural concrete slate with blueprint cobalt and hairline geometry.', palette: { bg: '#111316', surface: '#181b1f', card: '#20242a', hover: '#292f37', input: '#14171b', text: '#eef1f5', muted: '#adb6c2', dim: '#8d97a6', border: '#323943', accent: '#6ea8ff' } },
+    { id: 'afterimage', name: 'Afterimage', mode: 'Dark', edition: 'Safelight', description: 'Analog darkroom espresso noir with signal vermilion and brass highlights.', palette: { bg: '#100b0a', surface: '#181110', card: '#221816', hover: '#2e201d', input: '#140d0c', text: '#faf0ea', muted: '#cfb8ae', dim: '#ae9388', border: '#422b27', accent: '#f06d52' } },
+    { id: 'mirage', name: 'Mirage', mode: 'Light', edition: 'Gallery', description: 'Swiss archival paper stock with high-contrast ultramarine ink.', palette: { bg: '#f3f1eb', surface: '#e9e6dd', card: '#ffffff', hover: '#f7f5ef', input: '#ffffff', text: '#151412', muted: '#45413b', dim: '#57524b', border: '#d4cfc3', accent: '#1d4ed8' } },
+    { id: 'euphoria', name: 'Euphoria', mode: 'Light', edition: 'Letterpress', description: 'Sunlit warm washi paper with burnt persimmon ink and serif elegance.', palette: { bg: '#f6efe2', surface: '#ece2cf', card: '#fffcf5', hover: '#f4ead7', input: '#fffdf8', text: '#1f1611', muted: '#523e33', dim: '#634d40', border: '#d8cab3', accent: '#b53810' } }
   ];
 
   let activeApiBase = '';
   let apiAuthToken = '';
   let apiAuthPrompt = null;
   let apiDiscoveryPromise = null;
+  let lastHealthzOkAt = 0;
 
   function isLocalStudioHost(hostname) {
     const host = (hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
@@ -1667,7 +1668,11 @@
         const res = await fetch(base + '/healthz', { signal: controller.signal });
         if (!res.ok) return null;
         const data = await res.json();
-        return isValidHealthz(data) ? base : null;
+        if (isValidHealthz(data)) {
+          lastHealthzOkAt = Date.now();
+          return base;
+        }
+        return null;
       } catch (e) {
         return null;
       } finally {
@@ -3803,54 +3808,56 @@
           )
         );
       })(),
-      e('div', { className: 'neuron-theater-hud' },
-        upgradeResult && e('div', {
-          className: 'neuron-hud-item',
-          style: { color: 'var(--accent-emerald)', borderColor: 'var(--border-color)', fontWeight: 600 }
-        }, [
-          renderIcon('branch', 10, { marginRight: '4px' }),
-          `${(upgradeResult.model_name || 'TriuneTransformer').toUpperCase()}: architecture estimate`
-        ]),
-        e('div', {
-          className: 'neuron-hud-item',
-          style: { color: 'var(--primary)', fontWeight: 600 }
-        }, layoutMode === 'atlas2d' ? 'Obsidian 2D Atlas' : (layoutMode === 'obsidian' ? '3D Manifold' : '3D Pipeline')),
-        e('div', { className: `neuron-hud-item ${(streamVelocity && streamVelocity.current > 0) || isGenerating ? 'accent' : ''}` },
-          renderIcon('bolt', 11, { marginRight: '2px' }),
-          (streamVelocity && streamVelocity.current > 0) ? `${streamVelocity.current} tok/s` : (isGenerating ? 'Active Flow' : '0 tok/s')
+      e('div', { className: 'ps-atlas-footer' },
+        e('div', { className: 'neuron-theater-hud' },
+          upgradeResult && e('div', {
+            className: 'neuron-hud-item',
+            style: { color: 'var(--accent-emerald)', borderColor: 'var(--border-color)', fontWeight: 600 }
+          }, [
+            renderIcon('branch', 10, { marginRight: '4px' }),
+            `${(upgradeResult.model_name || 'TriuneTransformer').toUpperCase()}: architecture estimate`
+          ]),
+          e('div', {
+            className: 'neuron-hud-item',
+            style: { color: 'var(--primary)', fontWeight: 600 }
+          }, layoutMode === 'atlas2d' ? 'Obsidian 2D Atlas' : (layoutMode === 'obsidian' ? '3D Manifold' : '3D Pipeline')),
+          e('div', { className: `neuron-hud-item ${(streamVelocity && streamVelocity.current > 0) || isGenerating ? 'accent' : ''}` },
+            renderIcon('bolt', 11, { marginRight: '2px' }),
+            (streamVelocity && streamVelocity.current > 0) ? `${streamVelocity.current} tok/s` : (isGenerating ? 'Active Flow' : '0 tok/s')
+          ),
+          e('div', { className: 'neuron-hud-item', title: 'Canvas frame rate measured from animation frames' }, `Canvas ${fps} FPS`),
+          e('div', { className: 'neuron-hud-item' },
+            `${particlesRef.current ? particlesRef.current.length : '—'} nodes · ${wiresRef.current ? wiresRef.current.length : '—'} links`
+          )
         ),
-        e('div', { className: 'neuron-hud-item', title: 'Canvas frame rate measured from animation frames' }, `Canvas ${fps} FPS`),
-        e('div', { className: 'neuron-hud-item' },
-          `${particlesRef.current ? particlesRef.current.length : '—'} nodes · ${wiresRef.current ? wiresRef.current.length : '—'} links`
+        e('div', { className: 'neuron-theater-controls' },
+          e('button', {
+            className: 'btn-stimulate-synapse',
+            title: 'Trigger telemetry-weighted photon cascade across active Triune tiers',
+            onClick: triggerStimulate
+          }, [renderIcon('bolt', 11, { marginRight: '3px' }), 'Stimulate']),
+          e('button', {
+            className: `neuron-ctrl-btn ${layoutMode === 'atlas2d' ? 'active' : ''}`,
+            title: 'Cycle between 2D Obsidian Atlas, 3D Manifold, and 3D Pipeline views',
+            onClick: () => {
+              const order = ['atlas2d', 'obsidian', 'pipeline'];
+              const next = order[(order.indexOf(layoutMode) + 1) % order.length];
+              setLayoutMode(next);
+              try { localStorage.setItem('lucid_machines_canvas_layout', next); } catch (_) {}
+            }
+          }, [renderIcon('hub', 11, { marginRight: '3px' }), layoutMode === 'atlas2d' ? '2D Obsidian Atlas' : (layoutMode === 'obsidian' ? '3D Manifold' : '3D Pipeline')]),
+          e('button', {
+            className: 'neuron-ctrl-btn',
+            title: 'Reset camera pan, orbit & zoom',
+            onClick: resetCamera
+          }, [renderIcon('refresh', 11, { marginRight: '3px' }), 'Reset View']),
+          !customHeight && e('button', {
+            className: `neuron-ctrl-btn ${isExpanded ? 'active' : ''}`,
+            title: isExpanded ? 'Collapse visualizer to compact view' : 'Expand visualizer to theater mode',
+            onClick: () => setIsExpanded(!isExpanded)
+          }, [renderIcon('frame', 11, { marginRight: '4px' }), isExpanded ? 'Compact' : 'Expand']),
+          e('span', { className: 'neuron-mouse-hint' }, layoutMode === 'atlas2d' ? 'Drag node/bg · Double-click: Focus · Scroll: Zoom' : 'Drag: Orbit · Scroll: Zoom · Bottom: Resize')
         )
-      ),
-      e('div', { className: 'neuron-theater-controls' },
-        e('button', {
-          className: 'btn-stimulate-synapse',
-          title: 'Trigger telemetry-weighted photon cascade across active Triune tiers',
-          onClick: triggerStimulate
-        }, [renderIcon('bolt', 11, { marginRight: '3px' }), 'Stimulate']),
-        e('button', {
-          className: `neuron-ctrl-btn ${layoutMode === 'atlas2d' ? 'active' : ''}`,
-          title: 'Cycle between 2D Obsidian Atlas, 3D Manifold, and 3D Pipeline views',
-          onClick: () => {
-            const order = ['atlas2d', 'obsidian', 'pipeline'];
-            const next = order[(order.indexOf(layoutMode) + 1) % order.length];
-            setLayoutMode(next);
-            try { localStorage.setItem('lucid_machines_canvas_layout', next); } catch (_) {}
-          }
-        }, [renderIcon('hub', 11, { marginRight: '3px' }), layoutMode === 'atlas2d' ? '2D Obsidian Atlas' : (layoutMode === 'obsidian' ? '3D Manifold' : '3D Pipeline')]),
-        e('button', {
-          className: 'neuron-ctrl-btn',
-          title: 'Reset camera pan, orbit & zoom',
-          onClick: resetCamera
-        }, [renderIcon('refresh', 11, { marginRight: '3px' }), 'Reset View']),
-        !customHeight && e('button', {
-          className: `neuron-ctrl-btn ${isExpanded ? 'active' : ''}`,
-          title: isExpanded ? 'Collapse visualizer to compact view' : 'Expand visualizer to theater mode',
-          onClick: () => setIsExpanded(!isExpanded)
-        }, [renderIcon('frame', 11, { marginRight: '4px' }), isExpanded ? 'Compact' : 'Expand']),
-        e('span', { className: 'neuron-mouse-hint' }, layoutMode === 'atlas2d' ? 'Drag node/bg · Double-click: Focus · Scroll: Zoom' : 'Drag: Orbit · Scroll: Zoom · Bottom: Resize')
       ),
       !isExpanded && !customHeight && e('div', {
         className: `canvas-resize-handle ${isResizing ? 'active' : ''}`,
@@ -4563,75 +4570,69 @@
     },
       themeId === 'hypnagogic' && e('svg', { viewBox: '0 0 1200 800', preserveAspectRatio: 'xMidYMid slice', style: svgStyle, fill: 'none', stroke: 'currentColor' },
         e('g', { className: 'ps-perceptual-spin' },
-          e('circle', { cx: 1020, cy: 175, r: 195, strokeWidth: 1, strokeDasharray: '8 10' }),
-          e('circle', { cx: 1020, cy: 175, r: 142, strokeWidth: 1.1 }),
-          e('circle', { cx: 1020, cy: 175, r: 88, strokeWidth: 1, strokeDasharray: '4 6' }),
-          e('line', { x1: 805, y1: 175, x2: 1185, y2: 175, strokeWidth: 0.7, strokeDasharray: '3 7' }),
-          e('line', { x1: 1020, y1: 10, x2: 1020, y2: 390, strokeWidth: 0.7, strokeDasharray: '3 7' })
+          e('circle', { cx: 1090, cy: 110, r: 145, strokeWidth: 0.75, strokeDasharray: '6 10' }),
+          e('circle', { cx: 1090, cy: 110, r: 96, strokeWidth: 0.9 }),
+          e('circle', { cx: 1090, cy: 110, r: 44, strokeWidth: 0.7, strokeDasharray: '3 6' }),
+          e('line', { x1: 930, y1: 110, x2: 1185, y2: 110, strokeWidth: 0.65, strokeDasharray: '2 8' }),
+          e('line', { x1: 1090, y1: 12, x2: 1090, y2: 265, strokeWidth: 0.65, strokeDasharray: '2 8' })
         ),
-        e('path', { d: 'M128 96c-30 34-22 76 18 98-60 4-76-79-18-98Z', strokeWidth: 1.1 }),
-        e('ellipse', { cx: 210, cy: 730, rx: 140, ry: 18, strokeWidth: 0.9, strokeDasharray: '4 6' }),
-        e('path', { d: 'M84 720h66v-22h-66ZM102 698h66v-22h-66ZM120 676h66v-22h-66ZM138 654h66v-22h-66Z', strokeWidth: 0.85 }),
-        e('path', { className: 'ps-perceptual-pulse', d: 'M0 648 Q180 598 360 648 T720 648 T1200 648', strokeWidth: 1.3 }),
-        e('path', { d: 'M0 682 Q180 638 360 682 T720 682 T1200 682', strokeWidth: 0.95, strokeDasharray: '5 5' }),
-        e('polygon', { points: '1088,540 1094,556 1110,562 1094,568 1088,584 1082,568 1066,562 1082,556', strokeWidth: 1 })
+        e('path', { d: 'M304 42 H346 M304 42 V84', strokeWidth: 0.85 }),
+        e('path', { d: 'M1168 764 H1126 M1168 764 V722', strokeWidth: 0.85 }),
+        e('path', { className: 'ps-perceptual-pulse', d: 'M300 742 Q580 714 860 742 T1180 742', strokeWidth: 0.85 }),
+        e('circle', { cx: 342, cy: 742, r: 3.5, strokeWidth: 0.9 })
       ),
       themeId === 'phosphene' && e('svg', { viewBox: '0 0 1200 800', preserveAspectRatio: 'xMidYMid slice', style: svgStyle, fill: 'none', stroke: 'currentColor' },
         e('g', { className: 'ps-perceptual-pulse' },
-          e('circle', { cx: 1030, cy: 170, r: 150, strokeWidth: 1.2, strokeDasharray: '3 7' }),
-          e('circle', { cx: 1030, cy: 170, r: 98, strokeWidth: 1.1 }),
-          e('circle', { cx: 1030, cy: 170, r: 42, strokeWidth: 1 }),
-          e('path', { d: 'M850 170 H1190 M1030 12 V330 M915 55 L1145 285 M1145 55 L915 285', strokeWidth: 0.85, strokeDasharray: '4 8' })
+          e('circle', { cx: 1086, cy: 114, r: 128, strokeWidth: 0.85, strokeDasharray: '2 8' }),
+          e('circle', { cx: 1086, cy: 114, r: 78, strokeWidth: 0.9 }),
+          e('circle', { cx: 1086, cy: 114, r: 28, strokeWidth: 0.8 }),
+          e('path', { d: 'M945 114 H1185 M1086 12 V248', strokeWidth: 0.7, strokeDasharray: '4 8' })
         ),
-        e('path', { d: 'M74 745 V525 a110 110 0 0 1 220 0 v220 Z', strokeWidth: 1.1 }),
-        e('path', { d: 'M104 745 V535 a80 80 0 0 1 160 0 v210', strokeWidth: 0.9, strokeDasharray: '5 5' }),
-        e('circle', { cx: 184, cy: 560, r: 24, strokeWidth: 1 }),
-        e('path', { d: 'M420 715 C540 605 660 765 780 655 C900 545 1020 745 1160 635', strokeWidth: 1.2 }),
-        e('rect', { x: 40, y: 42, width: 84, height: 18, rx: 9, strokeWidth: 0.9, strokeDasharray: '3 4' })
+        e('path', { d: 'M298 34 H338 M298 34 V74 M1172 34 H1132 M1172 34 V74', strokeWidth: 0.9 }),
+        e('path', { d: 'M298 768 H338 M298 768 V728 M1172 768 H1132 M1172 768 V728', strokeWidth: 0.9 }),
+        e('line', { x1: 320, y1: 754, x2: 1150, y2: 754, strokeWidth: 0.65, strokeDasharray: '2 10' }),
+        e('rect', { x: 318, y: 52, width: 56, height: 10, rx: 5, strokeWidth: 0.75, strokeDasharray: '2 4' })
       ),
       themeId === 'pareidolia' && e('svg', { viewBox: '0 0 1200 800', preserveAspectRatio: 'xMidYMid slice', style: svgStyle, fill: 'none', stroke: 'currentColor' },
-        e('polygon', { points: '985,68 1145,198 1072,358 902,318 852,154', strokeWidth: 1.15 }),
-        e('polygon', { points: '985,112 1104,205 1052,320 924,292 888,168', strokeWidth: 0.85, strokeDasharray: '4 4' }),
-        e('path', { d: 'M852 154 L1145 198 M985 68 L1072 358 M902 318 L1145 198', strokeWidth: 0.9 }),
-        e('ellipse', { cx: 998, cy: 222, rx: 52, ry: 24, strokeWidth: 1.2 }),
-        e('circle', { cx: 998, cy: 222, r: 10, strokeWidth: 1.2 }),
-        e('circle', { cx: 998, cy: 222, r: 3.5, fill: 'currentColor' }),
-        e('path', { d: 'M74 720 L214 585 L372 685 L528 545 L694 670 L842 560', strokeWidth: 1, strokeDasharray: '4 6' }),
-        e('rect', { x: 96, y: 84, width: 120, height: 120, strokeWidth: 0.85, strokeDasharray: '6 6' }),
-        e('line', { x1: 96, y1: 84, x2: 216, y2: 204, strokeWidth: 0.8 })
+        e('polygon', { points: '1065,42 1170,132 1120,248 996,218 962,104', strokeWidth: 0.85 }),
+        e('polygon', { points: '1065,78 1138,140 1106,220 1018,198 992,116', strokeWidth: 0.7, strokeDasharray: '4 5' }),
+        e('path', { d: 'M962 104 L1170 132 M1065 42 L1120 248', strokeWidth: 0.65, strokeDasharray: '3 6' }),
+        e('ellipse', { cx: 1068, cy: 150, rx: 38, ry: 17, strokeWidth: 0.9 }),
+        e('circle', { cx: 1068, cy: 150, r: 7, strokeWidth: 0.9 }),
+        e('circle', { cx: 1068, cy: 150, r: 2.5, fill: 'currentColor' }),
+        e('path', { d: 'M312 748 L430 712 L560 744 L695 708 L830 742 L970 714', strokeWidth: 0.8, strokeDasharray: '4 6' }),
+        e('rect', { x: 304, y: 42, width: 72, height: 72, strokeWidth: 0.7, strokeDasharray: '5 6' })
       ),
       themeId === 'afterimage' && e('svg', { viewBox: '0 0 1200 800', preserveAspectRatio: 'xMidYMid slice', style: svgStyle, fill: 'none', stroke: 'currentColor' },
         e('g', { className: 'ps-perceptual-pulse' },
-          e('circle', { cx: 955, cy: 205, r: 138, strokeWidth: 1.3 }),
-          e('circle', { cx: 1025, cy: 205, r: 138, strokeWidth: 1.15, strokeDasharray: '7 5' }),
-          e('circle', { cx: 990, cy: 205, r: 74, strokeWidth: 1 }),
-          e('circle', { cx: 990, cy: 205, r: 22, strokeWidth: 1.2 })
+          e('circle', { cx: 1048, cy: 132, r: 108, strokeWidth: 0.95 }),
+          e('circle', { cx: 1104, cy: 132, r: 108, strokeWidth: 0.8, strokeDasharray: '6 5' }),
+          e('circle', { cx: 1076, cy: 132, r: 54, strokeWidth: 0.75 }),
+          e('circle', { cx: 1076, cy: 132, r: 14, strokeWidth: 0.9 })
         ),
-        e('path', { d: 'M58 72 H136 M58 72 V150 M1142 728 H1064 M1142 728 V650', strokeWidth: 1.4 }),
-        e('path', { d: 'M86 680 V515 a96 96 0 0 1 192 0 v165', strokeWidth: 1.1 }),
-        e('ellipse', { cx: 182, cy: 688, rx: 128, ry: 16, strokeWidth: 0.9, strokeDasharray: '4 5' }),
-        e('path', { d: 'M920 560 h210 M940 592 h170 M960 624 h130', strokeWidth: 0.9, strokeDasharray: '5 5' })
+        e('path', { d: 'M300 44 H356 M300 44 V100 M1168 762 H1112 M1168 762 V706', strokeWidth: 1.0 }),
+        e('line', { x1: 312, y1: 742, x2: 520, y2: 742, strokeWidth: 0.75, strokeDasharray: '4 6' }),
+        e('line', { x1: 930, y1: 728, x2: 1140, y2: 728, strokeWidth: 0.75, strokeDasharray: '4 6' })
       ),
       themeId === 'mirage' && e('svg', { viewBox: '0 0 1200 800', preserveAspectRatio: 'xMidYMid slice', style: svgStyle, fill: 'none', stroke: 'currentColor' },
-        e('circle', { cx: 1010, cy: 175, r: 84, strokeWidth: 1.2 }),
-        e('circle', { cx: 1010, cy: 175, r: 126, strokeWidth: 0.9, strokeDasharray: '5 6' }),
-        e('path', { d: 'M938 148 c32 10 92 12 146 0 M930 176 c40 12 106 12 160 0', strokeWidth: 0.85 }),
-        e('path', { d: 'M72 720 v-34 h78 v-32 h88 v-30 h98 v96', strokeWidth: 1.1 }),
-        e('path', { d: 'M0 555 H1200 M0 590 Q300 566 600 590 T1200 590 M0 628 Q300 606 600 628 T1200 628 M0 666 H1200', strokeWidth: 1.05 }),
-        e('ellipse', { cx: 1020, cy: 710, rx: 118, ry: 15, strokeWidth: 0.9, strokeDasharray: '4 5' }),
-        e('polygon', { points: '148,118 153,132 167,137 153,142 148,156 143,142 129,137 143,132', strokeWidth: 1 })
+        e('circle', { cx: 1082, cy: 118, r: 64, strokeWidth: 0.95 }),
+        e('circle', { cx: 1082, cy: 118, r: 98, strokeWidth: 0.75, strokeDasharray: '5 6' }),
+        e('path', { d: 'M1026 98 c26 8 76 10 112 0 M1020 124 c32 10 86 10 124 0', strokeWidth: 0.75 }),
+        e('path', { d: 'M304 756 H1164', strokeWidth: 0.8 }),
+        e('path', { d: 'M320 726 Q620 704 920 726 T1156 726', strokeWidth: 0.85 }),
+        e('path', { d: 'M304 42 H360 M304 42 V94', strokeWidth: 0.85 }),
+        e('ellipse', { cx: 1082, cy: 740, rx: 94, ry: 11, strokeWidth: 0.75, strokeDasharray: '4 5' })
       ),
       themeId === 'euphoria' && e('svg', { viewBox: '0 0 1200 800', preserveAspectRatio: 'xMidYMid slice', style: svgStyle, fill: 'none', stroke: 'currentColor' },
         e('g', { className: 'ps-perceptual-spin' },
-          e('circle', { cx: 1010, cy: 185, r: 172, strokeWidth: 1.15 }),
-          e('circle', { cx: 1010, cy: 185, r: 114, strokeWidth: 1, strokeDasharray: '5 5' }),
-          e('circle', { cx: 1010, cy: 185, r: 52, strokeWidth: 1.1 }),
-          e('path', { d: 'M1010 4 V366 M828 185 H1192 M882 57 L1138 313 M1138 57 L882 313', strokeWidth: 0.9 })
+          e('circle', { cx: 1076, cy: 122, r: 124, strokeWidth: 0.85 }),
+          e('circle', { cx: 1076, cy: 122, r: 82, strokeWidth: 0.75, strokeDasharray: '4 5' }),
+          e('circle', { cx: 1076, cy: 122, r: 36, strokeWidth: 0.85 }),
+          e('path', { d: 'M1076 14 V230 M968 122 H1184 M998 44 L1154 200 M1154 44 L998 200', strokeWidth: 0.7 })
         ),
-        e('path', { d: 'M78 730 V540 a104 104 0 0 1 208 0 v190', strokeWidth: 1.1 }),
-        e('path', { d: 'M110 730 V555 a72 72 0 0 1 144 0 v175', strokeWidth: 0.9, strokeDasharray: '4 4' }),
-        e('circle', { cx: 182, cy: 562, r: 22, strokeWidth: 1 }),
-        e('path', { d: 'M380 698 Q560 648 740 698 T1120 698', strokeWidth: 1.05 })
+        e('path', { d: 'M304 42 H352 M304 42 V90', strokeWidth: 0.85 }),
+        e('path', { d: 'M312 742 Q590 712 870 742 T1164 742', strokeWidth: 0.85 }),
+        e('path', { d: 'M1168 762 H1120 M1168 762 V714', strokeWidth: 0.85 })
       )
     );
   });
@@ -7799,7 +7800,8 @@
         fetchInFlight = true;
         let healthCheckSucceeded = false;
         try {
-          const healthRes = await apiFetch('/healthz');
+          const healthFresh = Boolean(activeApiBase && (Date.now() - lastHealthzOkAt) < 1500);
+          const healthRes = healthFresh ? { ok: true } : await apiFetch('/healthz');
           if (!healthRes.ok) {
             backendHealthFailures += 1;
             if (backendHealthFailures >= 3) {
@@ -7810,6 +7812,7 @@
           }
           healthCheckSucceeded = true;
           backendHealthFailures = 0;
+          if (!healthFresh) lastHealthzOkAt = Date.now();
           setBackendStatus(prev => (prev === 'online' ? prev : 'online'));
 
           const curTab = activeTabRef.current;
@@ -7988,12 +7991,17 @@
       };
     }, [backendRetry]);
 
-    // Auto-scroll chat smoothly on new messages or instant-scroll during high-speed token generation
+    // Auto-scroll chat smoothly only once the user starts chatting or during live streaming
     useEffect(() => {
       if (activeTab !== 'chat') return undefined;
+      const hasUserTurn = messages.some(m => !m.isAssistant && m.sender !== 'System');
       const raf = window.requestAnimationFrame(() => {
         try {
           const area = chatScrollAreaRef.current;
+          if (!hasUserTurn && !isGenerating) {
+            if (area) area.scrollTop = 0;
+            return;
+          }
           if (area) {
             area.scrollTop = area.scrollHeight;
           }
@@ -13189,6 +13197,7 @@
           )
         ),
         e('nav', { className: 'react-nav', 'aria-label': 'Studio sections' },
+          !sidebarCollapsed && e('div', { className: 'nav-section-label' }, 'Workspace'),
           e('button', { className: `nav-item ${activeTab === 'chat' ? 'active' : ''}`, title: 'Chat & Playground', onClick: () => setActiveTab('chat') },
             e('span', { className: 'nav-icon' }, renderIcon('chat', 17)),
             !sidebarCollapsed && e('span', { className: 'nav-label' }, 'Chat & Playground'),
@@ -13204,6 +13213,7 @@
             !sidebarCollapsed && e('span', { className: 'nav-label' }, 'Visual Node Canvas'),
             !sidebarCollapsed && e('span', { className: 'nav-badge' }, 'DAG')
           ),
+          !sidebarCollapsed && e('div', { className: 'nav-section-label' }, 'Training & Weights'),
           e('button', { className: `nav-item ${activeTab === 'training' ? 'active' : ''}`, title: 'Training & Telemetry', onClick: () => setActiveTab('training') },
             e('span', { className: 'nav-icon' }, renderIcon('training', 17)),
             !sidebarCollapsed && e('span', { className: 'nav-label' }, 'Training & Telemetry'),
@@ -13219,6 +13229,7 @@
             !sidebarCollapsed && e('span', { className: 'nav-label' }, 'LoRA / QLoRA Tuner'),
             !sidebarCollapsed && e('span', { className: 'nav-badge' }, 'PEFT')
           ),
+          !sidebarCollapsed && e('div', { className: 'nav-section-label' }, 'Models & Data'),
           e('button', { className: `nav-item ${activeTab === 'modules' ? 'active' : ''}`, title: 'Modules & Repos', onClick: () => { setActiveTab('modules'); fetchInstalledModules(); searchMarketplace(); } },
             e('span', { className: 'nav-icon' }, renderIcon('modules', 17)),
             !sidebarCollapsed && e('span', { className: 'nav-label' }, 'Extensions Marketplace'),
@@ -13242,6 +13253,7 @@
             e('span', { className: 'nav-icon' }, renderIcon('datasets', 17)),
             !sidebarCollapsed && e('span', { className: 'nav-label' }, 'Dataset & Tokenizer')
           ),
+          !sidebarCollapsed && e('div', { className: 'nav-section-label' }, 'Tools'),
           e('button', { className: `nav-item ${activeTab === 'notebook' ? 'active' : ''}`, title: 'Python Sandbox', onClick: () => setActiveTab('notebook') },
             e('span', { className: 'nav-icon' }, renderIcon('notebook', 17)),
             !sidebarCollapsed && e('span', { className: 'nav-label' }, 'Python Sandbox')
@@ -13531,7 +13543,7 @@
               return e('div', { style: { display: 'inline-flex', alignItems: 'center', gap: '4px' } },
                 e('div', {
                   className: 'pill',
-                  style: { display: 'inline-flex', alignItems: 'center', gap: '5px', borderColor: 'var(--border-glow)', padding: '2px 8px' },
+                  style: { display: 'inline-flex', alignItems: 'center', gap: '6px', borderColor: 'var(--border-glow)', padding: '3px 10px', minHeight: '28px' },
                   title: 'Select or Load Active Model (Triune, Saved Checkpoints, HF, vLLM, Hermes, Ollama)'
                 },
                   renderIcon('models', 13, { color: 'var(--primary)' }),
@@ -13777,7 +13789,7 @@
                   e('div', { className: 'playground-toolbar-right' },
                     /^(triune|junkie|lucid_machines|lucid)/i.test(activeModel) && e('button', {
                       className: `btn-clear-chat neural-console-toggle-pill ${showNeuralConsole ? 'active' : ''}`,
-                      style: showNeuralConsole ? { borderColor: 'var(--primary)', color: 'var(--primary)', background: 'rgba(139, 92, 246, 0.12)' } : {},
+                      style: showNeuralConsole ? { borderColor: 'var(--primary)', color: 'var(--primary)', background: 'var(--primary-glow)' } : {},
                       onClick: () => {
                         const nextState = !showNeuralConsole;
                         setShowNeuralConsole(nextState);
@@ -14038,33 +14050,37 @@
                             e('div', { className: 'neural-console-tabs' },
                               e('button', {
                                 className: `neural-console-tab-btn ${neuralConsoleView === '3d' ? 'active' : ''}`,
+                                title: '3D Synapses Topology Inspector',
                                 onClick: () => {
                                   setNeuralConsoleView('3d');
                                   try { window.localStorage.setItem('lucid_machines.playground.neuralConsoleView', '3d'); } catch (_) {}
                                 }
-                              }, [renderIcon('bolt', 11), '3D Synapses']),
+                              }, [renderIcon('bolt', 11), '3D Atlas']),
                               e('button', {
                                 className: `neural-console-tab-btn ${neuralConsoleView === 'mind' ? 'active' : ''}`,
+                                title: 'Polysom Mind Hypnogram & Expert Matrix',
                                 onClick: () => {
                                   setNeuralConsoleView('mind');
                                   try { window.localStorage.setItem('lucid_machines.playground.neuralConsoleView', 'mind'); } catch (_) {}
                                   refreshMindTelemetry();
                                 }
-                              }, [renderIcon('brain', 11), 'Polysom Mind']),
+                              }, [renderIcon('brain', 11), 'Mind']),
                               e('button', {
                                 className: `neural-console-tab-btn ${neuralConsoleView === 'transmute' ? 'active' : ''}`,
+                                title: 'Architecture Transmutation Inspector',
                                 onClick: () => {
                                   setNeuralConsoleView('transmute');
                                   try { window.localStorage.setItem('lucid_machines.playground.neuralConsoleView', 'transmute'); } catch (_) {}
                                 }
-                              }, [renderIcon('branch', 11), 'Architecture Transmutation']),
+                              }, [renderIcon('branch', 11), 'Transmute']),
                               e('button', {
                                 className: `neural-console-tab-btn ${neuralConsoleView === 'split' ? 'active' : ''}`,
+                                title: 'Split 3D + Transmutation View',
                                 onClick: () => {
                                   setNeuralConsoleView('split');
                                   try { window.localStorage.setItem('lucid_machines.playground.neuralConsoleView', 'split'); } catch (_) {}
                                 }
-                              }, [renderIcon('columns', 11), 'Split View'])
+                              }, [renderIcon('columns', 11), 'Split'])
                             )
                           ),
                           e('button', {
@@ -14318,7 +14334,7 @@
                     ),
                     lineageBanner,
                     e('div', { className: 'chat-scroll-area', ref: chatScrollAreaRef },
-                      messages.map((m, idx) => {
+                      messages.some(m => !m.isAssistant && m.sender !== 'System') && messages.map((m, idx) => {
                         const isLastAssistant = m.isAssistant && idx === messages.length - 1;
                         const isThoughtExpanded = expandedThoughts[m.id || idx] !== undefined
                           ? expandedThoughts[m.id || idx]
@@ -14342,6 +14358,61 @@
                           onCopy: text => handleCopyMessage(text)
                         });
                       }),
+                      !isGenerating && !messages.some(m => !m.isAssistant && m.sender !== 'System') && e('div', { className: 'ps-chat-launchpad' },
+                        e('div', { className: 'ps-launchpad-head' },
+                          e('div', { className: 'ps-launchpad-eyebrow' }, [
+                            renderIcon('brain', 13, { color: 'var(--primary)' }),
+                            e('span', null, `${activeModel} · ${weightsLoaded ? 'Weights Resident' : 'Architecture Ready'} · ${systemDiagnostics.device_name || 'CPU'}`)
+                          ]),
+                          e('h3', { className: 'ps-launchpad-title' }, 'Polysom Mind Observatory'),
+                          e('p', { className: 'ps-launchpad-subtitle' }, 'Select a Triune hierarchical exit depth or launch an empirical prompt directly into the live Tensor Core & MoE telemetry stream.')
+                        ),
+                        e('div', { className: 'ps-depth-selector-grid' },
+                          [
+                            { id: 'auto', label: 'Auto Exit', tag: 'CALM', desc: 'Adaptive depth gating across Reflex, Limbic & Cortex.' },
+                            { id: 'reflex', label: 'Reflex', tag: '4.3x FAST', desc: 'Shallow early-exit head for rapid syntax & lookup.' },
+                            { id: 'limbic', label: 'Limbic', tag: 'MoE CORE', desc: 'Mid-trunk Sparse Scatter-Gather Mixture-of-Experts.' },
+                            { id: 'cortex', label: 'Cortex', tag: 'DEEP GLA', desc: 'Full-depth O(1) recurrent Gated Linear Attention synthesis.' }
+                          ].map(tier => e('button', {
+                            key: tier.id,
+                            type: 'button',
+                            className: `ps-depth-tier-card ${route === tier.id ? 'active' : ''}`,
+                            onClick: () => {
+                              setRoute(tier.id);
+                              showToast(`Execution route set to ${tier.label}`);
+                            }
+                          },
+                            e('div', { className: 'ps-depth-tier-top' },
+                              e('span', { className: 'ps-depth-tier-name' }, tier.label),
+                              e('span', { className: 'ps-depth-tier-tag' }, tier.tag)
+                            ),
+                            e('span', { className: 'ps-depth-tier-desc' }, tier.desc)
+                          ))
+                        ),
+                        e('div', { className: 'ps-starter-grid' },
+                          [
+                            { title: 'Constant-Memory GLA Mechanics', tag: 'Architecture', prompt: 'Explain how VectorisedGLA maintains O(1) recurrent memory at 16,384 tokens compared to Softmax SDPA KV cache scaling.' },
+                            { title: 'CentroidSteer Stiefel Update', tag: 'Optimizer', prompt: 'Walk through how CentroidSteer orthogonally decomposes expert gradients along Block-Oja activation subspaces and sCholQR2.' },
+                            { title: 'Conformal CALM Exit Calibration', tag: 'Speculative', prompt: 'Derive how Triune early-exit thresholds trade off Reflex token coverage, Cortex agreement, and transformer FLOPs saved.' },
+                            { title: 'Fused Triton Kernel Trace', tag: 'Systems', prompt: 'Show a concise PyTorch / Triton pattern for chunked vocabulary cross-entropy without materializing full [B*T, V] logit buffers.' }
+                          ].map((starter, sIdx) => e('button', {
+                            key: sIdx,
+                            type: 'button',
+                            className: 'ps-starter-card',
+                            onClick: () => {
+                              chatInputRef.current = starter.prompt;
+                              handleSendMessage(null);
+                            }
+                          },
+                            e('div', { className: 'ps-starter-head' },
+                              e('span', { className: 'ps-starter-tag' }, starter.tag),
+                              renderIcon('arrowRight', 12, { color: 'var(--primary)' })
+                            ),
+                            e('span', { className: 'ps-starter-title' }, starter.title),
+                            e('span', { className: 'ps-starter-prompt' }, starter.prompt)
+                          ))
+                        )
+                      ),
                       isGenerating && e('div', { className: 'chat-bubble assistant generating' },
                         e('div', { className: 'bubble-header' },
                           e('span', { className: 'bubble-sender' }, /^(triune|junkie|lucid_machines|lucid)/i.test(activeModel) ? 'Triune MoE Engine' : activeModel),
