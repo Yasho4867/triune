@@ -73,7 +73,7 @@ class _FP8MatmulFn(torch.autograd.Function):
             try:
                 res = torch._scaled_mm(
                     x_fp8,
-                    w_fp8.t().contiguous(),
+                    w_fp8.contiguous().t(),
                     scale_a=scale_x,
                     scale_b=scale_w,
                     out_dtype=x.dtype,
