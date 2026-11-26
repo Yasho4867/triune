@@ -93,6 +93,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Number of orthogonal activation subspace directions for CentroidSteer",
     )
     parser.add_argument(
+        "--steer_update_gap",
+        "--steer-update-gap",
+        dest="steer_update_gap",
+        type=int,
+        default=None,
+        help="Steps between CentroidSteer C_e activation-subspace refreshes (default: config value)",
+    )
+    parser.add_argument(
         "--steer_mode",
         "--steer-mode",
         dest="steer_mode",
@@ -404,6 +412,7 @@ def main(argv: list[str] | None = None) -> dict:
             "exploration",
             "exploration_steps",
             "steer_scale",
+            "steer_update_gap",
             "use_muon",
             "muon_lr",
             "use_triangular_core",
