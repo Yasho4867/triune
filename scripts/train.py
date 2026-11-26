@@ -222,6 +222,30 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--shuffle_buffer", type=int)
     parser.add_argument("--dataset_name", "--dataset-name", dest="dataset_name")
     parser.add_argument("--dataset_config", "--dataset-config", dest="dataset_config")
+    parser.add_argument(
+        "--dataset_mix",
+        "--dataset-mix",
+        dest="dataset_mix",
+        type=str,
+        default=None,
+        help="Weighted curriculum preset (junkie_stage1, junkie_stage2, junkie_tool_sft) or repo:cfg:weight list",
+    )
+    parser.add_argument(
+        "--lr_schedule",
+        "--lr-schedule",
+        dest="lr_schedule",
+        choices=("cosine", "wsd"),
+        default=None,
+        help="Learning rate schedule: cosine (default) or wsd (Warmup-Stable-Decay)",
+    )
+    parser.add_argument(
+        "--wsd_decay_frac",
+        "--wsd-decay-frac",
+        dest="wsd_decay_frac",
+        type=float,
+        default=None,
+        help="Fraction of post-warmup training allocated to WSD cooldown decay (default: 0.15)",
+    )
     parser.add_argument("--num_workers", "--num-workers", dest="num_workers", type=int)
     return parser
 
@@ -424,6 +448,9 @@ def main(argv: list[str] | None = None) -> dict:
             "galore_weight_decay",
             "dataset_name",
             "dataset_config",
+            "dataset_mix",
+            "lr_schedule",
+            "wsd_decay_frac",
             "num_workers",
             "num_layers",
             "num_experts",

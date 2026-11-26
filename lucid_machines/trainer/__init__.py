@@ -22,6 +22,7 @@ from .finetune import (
     list_adapters,
     merge_adapter_checkpoint,
 )
+from .grpo import GRPOHarnessTrainer, VerifiableTask, default_verifiable_task_bank, verify_rollout
 from .logger import NullLogger, WandbLogger
 from .trainer import Trainer
 
@@ -49,4 +50,8 @@ __all__ = [
     "list_adapters",
     "export_adapter",
     "merge_adapter_checkpoint",
+    "GRPOHarnessTrainer",
+    "VerifiableTask",
+    "default_verifiable_task_bank",
+    "verify_rollout",
 ]
