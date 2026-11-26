@@ -28,8 +28,17 @@ def _quantize_to_fp8(tensor: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     return tensor_fp8, scale_inv
 
 
+def _quantize_to_fp8_e5m2(tensor: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Dynamically quantize a tensor to float8_e5m2 with per-tensor scaling for backward grads."""
+    amax = tensor.abs().amax().clamp_min(1e-12)
+    scale = (57344.0 / amax).to(dtype=tensor.dtype)
+    tensor_fp8 = (tensor * scale).to(torch.float8_e5m2)
+    scale_inv = 1.0 / scale.float()
+    return tensor_fp8, scale_inv
+
+
 class _FP8MatmulFn(torch.autograd.Function):
-    """Custom autograd function: FP8 forward pass, BF16 backward pass.
+    """Custom autograd function: native FP8 (E4M3 fwd / E5M2 bwd) scaled GEMM with BF16 master fallback.
 
     Explicitly separates the master weight Parameter (for autograd identity) from
     the temporary FP8 compute representation and scale metadata.
@@ -37,19 +46,16 @@ class _FP8MatmulFn(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, x, weight_master, bias, weight_fp8=None, weight_inv_scale=None):
-        # Save originals for backward (in master precision)
-        ctx.save_for_backward(x, weight_master, bias)
-
         orig_shape = x.shape
         flat_x = x.reshape(-1, x.shape[-1])
+        m_rows = flat_x.shape[0]
 
-        # Check if hardware native scaled_mm is available and matrix dimensions meet SM89/100/120 %16 alignment
+        # Check if hardware native scaled_mm is available and matrix dimensions meet SM89/90/100/120 %16 alignment
         use_native = False
         if (
             _HAS_SCALED_MM
             and x.is_cuda
-            and flat_x.shape[0] >= 16
-            and (flat_x.shape[0] % 16 == 0)
+            and m_rows >= 16
             and (flat_x.shape[1] % 16 == 0)
             and (weight_master.shape[0] % 16 == 0)
         ):
@@ -58,15 +64,17 @@ class _FP8MatmulFn(torch.autograd.Function):
                 use_native = True
 
         if use_native:
-            # Quantize activations to FP8
-            x_fp8, scale_x = _quantize_to_fp8(flat_x)
+            pad_m = (-m_rows) % 16
+            flat_x_pad = torch.nn.functional.pad(flat_x, (0, 0, 0, pad_m)) if pad_m > 0 else flat_x
+            x_fp8, scale_x = _quantize_to_fp8(flat_x_pad)
 
-            # Use pre-quantized weight if provided, otherwise quantize dynamically
             if weight_fp8 is not None and weight_inv_scale is not None:
                 w_fp8 = weight_fp8
                 scale_w = weight_inv_scale
                 if not isinstance(scale_w, torch.Tensor):
                     scale_w = torch.tensor(scale_w, device=x.device, dtype=torch.float32)
+                else:
+                    scale_w = scale_w.to(device=x.device, dtype=torch.float32)
             else:
                 w_fp8, scale_w = _quantize_to_fp8(weight_master)
 
@@ -77,31 +85,83 @@ class _FP8MatmulFn(torch.autograd.Function):
                     scale_a=scale_x,
                     scale_b=scale_w,
                     out_dtype=x.dtype,
+                    use_fast_accum=True,
                 )
                 out = res[0] if isinstance(res, (tuple, list)) else res
+                if pad_m > 0:
+                    out = out[:m_rows]
                 if bias is not None:
                     out = out + bias
+                ctx.save_for_backward(x_fp8, w_fp8, scale_x, scale_w, weight_master, bias)
+                ctx.use_fp8_bwd = True
+                ctx.pad_m = pad_m
+                ctx.orig_shape = orig_shape
+                ctx.x_dtype = x.dtype
+                ctx.master_dtype = weight_master.dtype
                 return out.reshape(*orig_shape[:-1], weight_master.shape[0])
             except (RuntimeError, NotImplementedError):
                 pass
 
-        # Fallback path: FP8-weight compute with dequantization
+        # Fallback path: pre-quantized FP8 dequantization or fast BF16 linear (no fake quant->dequant overhead)
+        ctx.save_for_backward(x, weight_master, bias)
+        ctx.use_fp8_bwd = False
         if weight_fp8 is not None and weight_inv_scale is not None:
             inv = (
                 weight_inv_scale.to(x.dtype) if isinstance(weight_inv_scale, torch.Tensor) else float(weight_inv_scale)
             )
             w_compute = weight_fp8.to(x.dtype) * inv
-        else:
-            w_fp8, inv = _quantize_to_fp8(weight_master)
-            w_compute = w_fp8.to(x.dtype) * inv.to(x.dtype)
+            out = flat_x @ w_compute.t()
+            if bias is not None:
+                out = out + bias
+            return out.reshape(*orig_shape[:-1], weight_master.shape[0])
 
-        out = flat_x @ w_compute.t()
-        if bias is not None:
-            out = out + bias
+        w_compute = weight_master.to(x.dtype) if weight_master.dtype != x.dtype else weight_master
+        b_compute = bias.to(x.dtype) if (bias is not None and bias.dtype != x.dtype) else bias
+        out = torch.nn.functional.linear(flat_x, w_compute, b_compute)
         return out.reshape(*orig_shape[:-1], weight_master.shape[0])
 
     @staticmethod
     def backward(ctx, grad_output):
+        if getattr(ctx, "use_fp8_bwd", False):
+            x_fp8, w_fp8, scale_x, scale_w, weight_master, bias = ctx.saved_tensors
+            master_dtype = ctx.master_dtype
+            grad_output_flat = grad_output.reshape(-1, grad_output.shape[-1])
+            grad_bias = grad_output_flat.sum(dim=0).to(dtype=bias.dtype) if bias is not None else None
+            g_pad = (
+                torch.nn.functional.pad(grad_output_flat, (0, 0, 0, ctx.pad_m))
+                if ctx.pad_m > 0
+                else grad_output_flat
+            )
+            try:
+                g_fp8, scale_g = _quantize_to_fp8_e5m2(g_pad)
+                grad_x_pad = torch._scaled_mm(
+                    g_fp8,
+                    w_fp8.t().contiguous().t(),
+                    scale_a=scale_g,
+                    scale_b=scale_w,
+                    out_dtype=ctx.x_dtype,
+                    use_fast_accum=True,
+                )
+                grad_w = torch._scaled_mm(
+                    g_fp8.t().contiguous(),
+                    x_fp8.t().contiguous().t(),
+                    scale_a=scale_g,
+                    scale_b=scale_x,
+                    out_dtype=master_dtype,
+                    use_fast_accum=True,
+                )
+                grad_x = (grad_x_pad[: grad_output_flat.shape[0]] if ctx.pad_m > 0 else grad_x_pad).reshape(
+                    ctx.orig_shape
+                )
+                return grad_x, grad_w, grad_bias, None, None
+            except (RuntimeError, NotImplementedError):
+                x_deq = (x_fp8.to(master_dtype) * scale_x.to(master_dtype))[: grad_output_flat.shape[0]]
+                grad_out = grad_output_flat.to(dtype=master_dtype, device=weight_master.device)
+                w = weight_master.to(master_dtype)
+                grad_x = (grad_out @ w).reshape(ctx.orig_shape).to(dtype=ctx.x_dtype)
+                grad_w = (grad_out.t() @ x_deq).to(dtype=master_dtype)
+                return grad_x, grad_w, grad_bias, None, None
+
         # Backward pass runs in master weight dtype for numerical stability
         x, weight_master, bias = ctx.saved_tensors
         master_dtype = weight_master.dtype

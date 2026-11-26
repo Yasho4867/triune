@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 # Cache probe results per device index to avoid redundant probe overhead
 _SCALED_MM_PROBE_CACHE: dict[int, bool] = {}
+_CAPABILITIES_CACHE: dict[tuple[str, int], "PrecisionCapabilities"] = {}
 
 
 def _probe_cublas_scaled_mm(device: torch.device) -> bool:
@@ -72,7 +73,11 @@ class PrecisionCapabilities:
             dev = device
 
         if dev.type != "cuda" or not torch.cuda.is_available():
-            return cls(
+            cache_key = ("cpu", -1)
+            cached = _CAPABILITIES_CACHE.get(cache_key)
+            if cached is not None:
+                return cached
+            caps = cls(
                 device=dev,
                 compute_capability=(0, 0),
                 fp8_gemm=False,
@@ -81,6 +86,14 @@ class PrecisionCapabilities:
                 native_scaled_mm=False,
                 bf16_supported=False,
             )
+            _CAPABILITIES_CACHE[cache_key] = caps
+            return caps
+
+        dev_idx = dev.index if dev.index is not None else torch.cuda.current_device()
+        cache_key = ("cuda", dev_idx)
+        cached = _CAPABILITIES_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
 
         major, minor = torch.cuda.get_device_capability(dev)
         bf16_supported = (major >= 8) and torch.cuda.is_bf16_supported()
@@ -120,7 +133,7 @@ class PrecisionCapabilities:
         fp4_gemm = (major >= 10) and has_te_fp4
         mxfp8_gemm = (major >= 10) and has_te_mxfp8
 
-        return cls(
+        caps = cls(
             device=dev,
             compute_capability=(major, minor),
             fp8_gemm=fp8_gemm,
@@ -130,6 +143,8 @@ class PrecisionCapabilities:
             bf16_supported=bf16_supported,
             mxfp8_gemm=mxfp8_gemm,
         )
+        _CAPABILITIES_CACHE[cache_key] = caps
+        return caps
 
     def resolve_precision(self, requested: str, fallback: bool = True) -> str:
         """Resolves requested precision string against detected capabilities.

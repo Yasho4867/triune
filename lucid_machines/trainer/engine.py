@@ -537,10 +537,6 @@ class TrainingEngine:
             loss_accum[2] += router_loss.detach()
             loss_accum[3] += balance_loss.detach()
             loss_accum[4] += z_loss.detach()
-            for module in self.model.modules():
-                if isinstance(module, MoE_FFN):
-                    totals["overflow"] += module.overflow_counter
-                    module.overflow_counter = 0
             last_labels, last_route_logits = labels, route_logits.detach()
 
         if streaming_engine is not None:
@@ -549,9 +545,14 @@ class TrainingEngine:
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config["grad_clip"])
             self.optimizer.step()
 
-        for module in self.model.modules():
-            if isinstance(module, MoE_FFN) and hasattr(module, "step_bias"):
-                module.step_bias()
+        moe_modules = [module for module in self.model.modules() if isinstance(module, MoE_FFN)]
+        if moe_modules:
+            overflow_total_t = torch.stack([m._overflow_counter.to(device=self.trainer.device) for m in moe_modules]).sum()
+            totals["overflow"] = int(overflow_total_t.item())
+            for module in moe_modules:
+                module.overflow_counter = 0
+                if hasattr(module, "step_bias"):
+                    module.step_bias()
         self.model.last_route_logits = None
         self.model.last_depth_choice = None
         self.model.last_balance_loss = None
