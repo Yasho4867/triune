@@ -65,6 +65,9 @@ def default_config() -> dict[str, Any]:
         "shuffle_buffer": defaults.SHUFFLE_BUFFER,
         "dataset_name": "HuggingFaceFW/fineweb-edu",
         "dataset_config": "sample-10BT",
+        "dataset_mix": None,
+        "lr_schedule": "cosine",
+        "wsd_decay_frac": 0.15,
         "num_workers": 0,
     }
 

@@ -117,7 +117,11 @@ class Trainer:
         self.engine.step = 0 if weights_only else checkpoint["step"]
 
     def compile(self) -> None:
-        self.model.forward = torch.compile(self.model.forward, fullgraph=False, dynamic=True)
+        if hasattr(self.model, "layers") and isinstance(self.model.layers, nn.ModuleList):
+            for idx in range(len(self.model.layers)):
+                self.model.layers[idx] = torch.compile(self.model.layers[idx], fullgraph=False, dynamic=True)
+        else:
+            self.model.forward = torch.compile(self.model.forward, fullgraph=False, dynamic=True)
 
     @staticmethod
     def lr_schedule(config: dict, step: int) -> float:
