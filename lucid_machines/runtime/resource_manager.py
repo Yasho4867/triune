@@ -546,6 +546,8 @@ class DynamicResourceManager:
                 model.router.to(device=device, dtype=dtype)
             if hasattr(model, "final_norm"):
                 model.final_norm.to(device=device, dtype=dtype)
+            if hasattr(model, "final_head"):
+                model.final_head.to(device=device, dtype=dtype)
 
             # 2. Transfer layers iteratively
             if hasattr(model, "layers"):
@@ -561,9 +563,8 @@ class DynamicResourceManager:
                             f"Pass '--force' to override this check, or optimize precision/model size."
                         )
 
-            # 3. Any remaining submodules
-            # Removed self-defeating final model.to() call that bulk-transfers everything
-            # model.to(device=device, dtype=dtype)
+            # 3. Release any CPU staging references before reporting allocated VRAM
+            gc.collect()
             allocated_gb = torch.cuda.memory_allocated(device) / (1024**3)
             print(
                 f"[Resource Manager] Staged transfer complete. Allocated: {allocated_gb:.2f}/{total_bytes / (1024**3):.2f} GB",
