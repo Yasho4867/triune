@@ -142,5 +142,9 @@ def export_model(model: torch.nn.Module, output_path: str | Path, fmt: str = "sa
         from .hf_compat import export_to_huggingface
 
         return export_to_huggingface(model, output_path)
+    elif fmt_lower == "vllm":
+        from .vllm_bridge import export_vllm_bundle
+
+        return export_vllm_bundle(model, output_path)
     else:
         return export_safetensors(model, output_path)

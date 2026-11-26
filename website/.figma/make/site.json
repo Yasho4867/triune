@@ -1,5 +1,5 @@
 {
-  "description": "Explore Lucid Machines, an AI and machine learning research company, and discover Junkie, its upcoming frontier model.",
+  "description": "Lucid Machines builds the Triune recurrent linear-attention MoE architecture, CentroidSteer Stiefel-manifold optimizer, Junkie model family, and Polysom Studio v1.0.0.",
   "robots": {
     "index": true
   },
@@ -10,5 +10,8 @@
   "title": "Lucid Machines — Intelligence, in a new light",
   "icons": {
     "icon": "/lucid-symbol.svg"
+  },
+  "openGraph": {
+    "image": "https://lucidmachines.co/og-image.png"
   }
 }

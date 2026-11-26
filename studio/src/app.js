@@ -694,27 +694,30 @@
     return null;
   };
 
+  const POLYSOM_LOGO_FALLBACK = 'assets/polysom-logo.svg';
   const renderPolysomLogo = (size = 32, extraStyle = {}) => {
-    return e('img', {
-      src: 'polysom-logo.svg',
-      alt: 'Polysom Studio Emblem',
+    return e('svg', {
+      viewBox: '0 0 64 64',
       width: size,
       height: size,
+      role: 'img',
+      'aria-label': 'Polysom Studio Emblem',
+      fill: 'none',
       style: {
         width: `${size}px`,
         height: `${size}px`,
-        objectFit: 'contain',
         display: 'inline-block',
         verticalAlign: 'middle',
+        flexShrink: 0,
         ...extraStyle
-      },
-      onError: (ev) => {
-        if (ev && ev.target && !ev.target.dataset.fallback) {
-          ev.target.dataset.fallback = '1';
-          ev.target.src = 'assets/polysom-logo.svg';
-        }
       }
-    });
+    },
+      e('rect', { x: 4, y: 4, width: 56, height: 56, rx: 14, fill: 'var(--bg-surface, #161426)', stroke: 'var(--primary, #8b5cf6)', strokeWidth: 2 }),
+      e('polygon', { points: '32,12 50,24 44,48 20,48 14,24', stroke: 'var(--primary, #8b5cf6)', strokeWidth: 2.2, fill: 'none' }),
+      e('circle', { cx: 32, cy: 32, r: 7, stroke: 'var(--accent-emerald, #10b981)', strokeWidth: 2, fill: 'none' }),
+      e('circle', { cx: 32, cy: 32, r: 2.5, fill: 'var(--primary, #8b5cf6)' }),
+      e('path', { d: 'M32 12v13M14 24l11 8M50 24l-11 8', stroke: 'var(--primary, #8b5cf6)', strokeWidth: 1.5, opacity: 0.7 })
+    );
   };
   const renderTriuneLogo = renderPolysomLogo;
 
@@ -3074,19 +3077,20 @@
           ctx.font = '600 9px "Fira Code", Consolas, monospace';
           ctx.textAlign = 'center';
           tierBands.forEach(tb => {
-            const sx = cx + (tb.x + pan.x) * pan.zoom;
-            if (sx < -60 || sx > width + 60) return;
+            const rawSx = cx + (tb.x + pan.x) * pan.zoom;
+            if (rawSx < -60 || rawSx > width + 60) return;
+            const sx = Math.min(width - 62, Math.max(62, rawSx));
             ctx.strokeStyle = tColors.border;
-            ctx.globalAlpha = 0.45;
+            ctx.globalAlpha = 0.42;
             ctx.setLineDash([3, 5]);
             ctx.beginPath();
-            ctx.moveTo(sx, 36);
-            ctx.lineTo(sx, height - 34);
+            ctx.moveTo(rawSx, 56);
+            ctx.lineTo(rawSx, height - 46);
             ctx.stroke();
             ctx.setLineDash([]);
             ctx.fillStyle = tb.color;
-            ctx.globalAlpha = 0.78;
-            ctx.fillText(tb.label, sx, height - 38);
+            ctx.globalAlpha = 0.9;
+            ctx.fillText(tb.label, sx, 48);
           });
           ctx.restore();
 
@@ -3204,7 +3208,8 @@
             ctx.fill();
           }
 
-          // Draw nodes + CentroidSteer C_e energy rings + theme-token labels
+          // Draw nodes + CentroidSteer C_e energy rings + collision-free theme-token labels
+          const atlasLabelRects = [];
           pos2d.forEach(({ p, proj }) => {
             p.charge *= 0.92;
             const visible = matchesNodeFilter(p);
@@ -3234,9 +3239,15 @@
               ctx.fillStyle = tColors.text;
               ctx.font = '600 9.5px "Fira Code", Consolas, monospace';
               ctx.textAlign = 'left';
-              const lx = Math.min(width - 70, Math.max(6, proj.sx + r + 5));
-              const ly = Math.min(height - 36, Math.max(40, proj.sy + 3));
-              ctx.fillText(p.label, lx, ly);
+              const estW = Math.min(110, Math.max(34, (p.label || '').length * 5.8 + 8));
+              const lx = Math.min(width - estW - 6, Math.max(8, proj.sx + r + 5));
+              const ly = Math.min(height - 52, Math.max(64, proj.sy + 3));
+              const rect = { x: lx, y: ly - 10, w: estW, h: 12 };
+              const overlaps = atlasLabelRects.some(o => !(rect.x + rect.w < o.x || rect.x > o.x + o.w || rect.y + rect.h < o.y || rect.y > o.y + o.h));
+              if (!overlaps || p.isInput || p.isOutput || p.isRouterHub || (liveSelectedNode && liveSelectedNode.id === p.id)) {
+                atlasLabelRects.push(rect);
+                ctx.fillText(p.label, lx, ly);
+              }
             }
             ctx.restore();
           });
@@ -4460,45 +4471,57 @@
   function renderPerceptualThemeMotif(themeId, size = 36) {
     const id = String(themeId || 'hypnagogic').toLowerCase();
     if (id === 'phosphene') {
-      return e('svg', { width: size, height: size, viewBox: '0 0 64 64', fill: 'none', stroke: 'currentColor', strokeWidth: '1.4' },
-        e('circle', { cx: 32, cy: 32, r: 22, strokeDasharray: '4 3' }),
-        e('circle', { cx: 32, cy: 32, r: 12 }),
-        e('path', { d: 'M32 4v10M32 50v10M4 32h10M50 32h10M12 12l7 7M45 45l7 7M52 12l-7 7M19 45l-7 7' })
+      // Surreal emerald retinal afterglow: nested aperture arches & calibration reticle
+      return e('svg', { width: size, height: size, viewBox: '0 0 64 64', fill: 'none', stroke: 'currentColor', strokeWidth: '1.35' },
+        e('path', { d: 'M14 54V28a18 18 0 0 1 36 0v26Z' }),
+        e('path', { d: 'M21 54V30a11 11 0 0 1 22 0v24', strokeDasharray: '3 2' }),
+        e('circle', { cx: 32, cy: 28, r: 5.5 }),
+        e('path', { d: 'M32 6v8M10 28h8M46 28h8M17 13l5 5M47 13l-5 5' }),
+        e('path', { d: 'M10 54h44' })
       );
     }
     if (id === 'pareidolia') {
+      // Architectural monolith polyhedron + ocular zenith aperture
       return e('svg', { width: size, height: size, viewBox: '0 0 64 64', fill: 'none', stroke: 'currentColor', strokeWidth: '1.3' },
         e('polygon', { points: '32,6 56,22 48,54 16,54 8,22' }),
-        e('path', { d: 'M8 22l24 14 24-14M32 6v30M16 54l16-18 16 18' }),
-        e('ellipse', { cx: 32, cy: 32, rx: 10, ry: 5 }),
-        e('circle', { cx: 32, cy: 32, r: 2.2, fill: 'currentColor' })
+        e('path', { d: 'M8 22l24 14 24-14M32 6v30M16 54l16-18 16 18M22 14h20' }),
+        e('ellipse', { cx: 32, cy: 32, rx: 11, ry: 5.5 }),
+        e('circle', { cx: 32, cy: 32, r: 2.3, fill: 'currentColor' })
       );
     }
     if (id === 'afterimage') {
-      return e('svg', { width: size, height: size, viewBox: '0 0 64 64', fill: 'none', stroke: 'currentColor', strokeWidth: '1.4' },
-        e('circle', { cx: 28, cy: 32, r: 16 }),
-        e('circle', { cx: 36, cy: 32, r: 16, strokeDasharray: '5 4' }),
-        e('path', { d: 'M10 14h12M10 50h12M42 14h12M42 50h12M32 10v8M32 46v8' })
+      // Complementary crimson-gold solar eclipse & twin retinal interference rings
+      return e('svg', { width: size, height: size, viewBox: '0 0 64 64', fill: 'none', stroke: 'currentColor', strokeWidth: '1.35' },
+        e('circle', { cx: 26, cy: 32, r: 15 }),
+        e('circle', { cx: 38, cy: 32, r: 15, strokeDasharray: '5 3' }),
+        e('circle', { cx: 32, cy: 32, r: 6.5 }),
+        e('path', { d: 'M8 14h14M8 50h14M42 14h14M42 50h14M32 8v10M32 46v10' })
       );
     }
     if (id === 'mirage') {
+      // Surreal desert sun disc, stepped ziggurat horizon & atmospheric shimmer waves
       return e('svg', { width: size, height: size, viewBox: '0 0 64 64', fill: 'none', stroke: 'currentColor', strokeWidth: '1.3' },
-        e('path', { d: 'M6 26h52M10 34q11-6 22 0t22 0M10 42q11-5 22 0t22 0M14 50h36' }),
-        e('circle', { cx: 32, cy: 16, r: 7 })
+        e('circle', { cx: 42, cy: 17, r: 8.5 }),
+        e('path', { d: 'M8 50h18v-8h8v-8h10v16h12' }),
+        e('path', { d: 'M6 27h52M10 35q11-5 22 0t22 0M10 42q11-4 22 0t22 0' }),
+        e('ellipse', { cx: 32, cy: 55, rx: 20, ry: 3 })
       );
     }
     if (id === 'euphoria') {
+      // Warm daylight sunburst astrolabe & ascending architectural arch
       return e('svg', { width: size, height: size, viewBox: '0 0 64 64', fill: 'none', stroke: 'currentColor', strokeWidth: '1.3' },
-        e('circle', { cx: 32, cy: 32, r: 20 }),
-        e('circle', { cx: 32, cy: 32, r: 7 }),
-        e('path', { d: 'M32 6v10M32 48v10M6 32h10M48 32h10M14 14l7 7M43 43l7 7M50 14l-7 7M21 43l-7 7' })
+        e('circle', { cx: 32, cy: 26, r: 17 }),
+        e('circle', { cx: 32, cy: 26, r: 6.5 }),
+        e('path', { d: 'M32 4v10M32 38v10M10 26h10M44 26h10M16 11l6 6M42 36l6 6M48 11l-6 6M22 36l-6 6' }),
+        e('path', { d: 'M14 56V46a18 18 0 0 1 36 0v10' })
       );
     }
-    // hypnagogic default: phase-interference arcs + REM spindle wave
+    // hypnagogic default: nocturnal crescent portal, celestial stairs & REM harmonic wave
     return e('svg', { width: size, height: size, viewBox: '0 0 64 64', fill: 'none', stroke: 'currentColor', strokeWidth: '1.3' },
-      e('circle', { cx: 32, cy: 32, r: 22, strokeDasharray: '6 4' }),
-      e('circle', { cx: 32, cy: 32, r: 14 }),
-      e('path', { d: 'M8 32q8-12 16 0t16 0 16 0' })
+      e('circle', { cx: 34, cy: 24, r: 16, strokeDasharray: '6 4' }),
+      e('circle', { cx: 34, cy: 24, r: 9.5 }),
+      e('path', { d: 'M14 14c-6 7-4 15 4 19-11 1-14-15-4-19Z' }),
+      e('path', { d: 'M8 46q8-9 16 0t16 0 16 0M12 54h40' })
     );
   }
 
@@ -4540,45 +4563,75 @@
     },
       themeId === 'hypnagogic' && e('svg', { viewBox: '0 0 1200 800', preserveAspectRatio: 'xMidYMid slice', style: svgStyle, fill: 'none', stroke: 'currentColor' },
         e('g', { className: 'ps-perceptual-spin' },
-          e('circle', { cx: 980, cy: 170, r: 210, strokeWidth: 1, strokeDasharray: '8 10' }),
-          e('circle', { cx: 980, cy: 170, r: 150, strokeWidth: 1 }),
-          e('circle', { cx: 980, cy: 170, r: 92, strokeWidth: 1, strokeDasharray: '4 6' })
+          e('circle', { cx: 1020, cy: 175, r: 195, strokeWidth: 1, strokeDasharray: '8 10' }),
+          e('circle', { cx: 1020, cy: 175, r: 142, strokeWidth: 1.1 }),
+          e('circle', { cx: 1020, cy: 175, r: 88, strokeWidth: 1, strokeDasharray: '4 6' }),
+          e('line', { x1: 805, y1: 175, x2: 1185, y2: 175, strokeWidth: 0.7, strokeDasharray: '3 7' }),
+          e('line', { x1: 1020, y1: 10, x2: 1020, y2: 390, strokeWidth: 0.7, strokeDasharray: '3 7' })
         ),
-        e('path', { className: 'ps-perceptual-pulse', d: 'M0 640 Q150 580 300 640 T600 640 T900 640 T1200 640', strokeWidth: 1.4 }),
-        e('path', { d: 'M0 670 Q150 620 300 670 T600 670 T900 670 T1200 670', strokeWidth: 1, strokeDasharray: '5 5' })
+        e('path', { d: 'M128 96c-30 34-22 76 18 98-60 4-76-79-18-98Z', strokeWidth: 1.1 }),
+        e('ellipse', { cx: 210, cy: 730, rx: 140, ry: 18, strokeWidth: 0.9, strokeDasharray: '4 6' }),
+        e('path', { d: 'M84 720h66v-22h-66ZM102 698h66v-22h-66ZM120 676h66v-22h-66ZM138 654h66v-22h-66Z', strokeWidth: 0.85 }),
+        e('path', { className: 'ps-perceptual-pulse', d: 'M0 648 Q180 598 360 648 T720 648 T1200 648', strokeWidth: 1.3 }),
+        e('path', { d: 'M0 682 Q180 638 360 682 T720 682 T1200 682', strokeWidth: 0.95, strokeDasharray: '5 5' }),
+        e('polygon', { points: '1088,540 1094,556 1110,562 1094,568 1088,584 1082,568 1066,562 1082,556', strokeWidth: 1 })
       ),
       themeId === 'phosphene' && e('svg', { viewBox: '0 0 1200 800', preserveAspectRatio: 'xMidYMid slice', style: svgStyle, fill: 'none', stroke: 'currentColor' },
         e('g', { className: 'ps-perceptual-pulse' },
-          e('circle', { cx: 1020, cy: 160, r: 140, strokeWidth: 1.2, strokeDasharray: '3 7' }),
-          e('circle', { cx: 1020, cy: 160, r: 85, strokeWidth: 1 }),
-          e('path', { d: 'M850 160 H1190 M1020 10 V320', strokeWidth: 0.9, strokeDasharray: '4 8' })
+          e('circle', { cx: 1030, cy: 170, r: 150, strokeWidth: 1.2, strokeDasharray: '3 7' }),
+          e('circle', { cx: 1030, cy: 170, r: 98, strokeWidth: 1.1 }),
+          e('circle', { cx: 1030, cy: 170, r: 42, strokeWidth: 1 }),
+          e('path', { d: 'M850 170 H1190 M1030 12 V330 M915 55 L1145 285 M1145 55 L915 285', strokeWidth: 0.85, strokeDasharray: '4 8' })
         ),
-        e('path', { d: 'M120 700 C240 580 360 760 480 640 C600 520 720 740 840 620', strokeWidth: 1.2 })
+        e('path', { d: 'M74 745 V525 a110 110 0 0 1 220 0 v220 Z', strokeWidth: 1.1 }),
+        e('path', { d: 'M104 745 V535 a80 80 0 0 1 160 0 v210', strokeWidth: 0.9, strokeDasharray: '5 5' }),
+        e('circle', { cx: 184, cy: 560, r: 24, strokeWidth: 1 }),
+        e('path', { d: 'M420 715 C540 605 660 765 780 655 C900 545 1020 745 1160 635', strokeWidth: 1.2 }),
+        e('rect', { x: 40, y: 42, width: 84, height: 18, rx: 9, strokeWidth: 0.9, strokeDasharray: '3 4' })
       ),
       themeId === 'pareidolia' && e('svg', { viewBox: '0 0 1200 800', preserveAspectRatio: 'xMidYMid slice', style: svgStyle, fill: 'none', stroke: 'currentColor' },
-        e('polygon', { points: '960,80 1120,210 1040,360 880,320 840,160', strokeWidth: 1 }),
-        e('path', { d: 'M840 160 L1120 210 M960 80 L1040 360 M880 320 L1120 210', strokeWidth: 0.9 }),
-        e('ellipse', { cx: 980, cy: 220, rx: 46, ry: 22, strokeWidth: 1.2 }),
-        e('circle', { cx: 980, cy: 220, r: 9, strokeWidth: 1.2 }),
-        e('path', { d: 'M80 720 L220 580 L380 680 L540 540 L700 660', strokeWidth: 1, strokeDasharray: '4 6' })
+        e('polygon', { points: '985,68 1145,198 1072,358 902,318 852,154', strokeWidth: 1.15 }),
+        e('polygon', { points: '985,112 1104,205 1052,320 924,292 888,168', strokeWidth: 0.85, strokeDasharray: '4 4' }),
+        e('path', { d: 'M852 154 L1145 198 M985 68 L1072 358 M902 318 L1145 198', strokeWidth: 0.9 }),
+        e('ellipse', { cx: 998, cy: 222, rx: 52, ry: 24, strokeWidth: 1.2 }),
+        e('circle', { cx: 998, cy: 222, r: 10, strokeWidth: 1.2 }),
+        e('circle', { cx: 998, cy: 222, r: 3.5, fill: 'currentColor' }),
+        e('path', { d: 'M74 720 L214 585 L372 685 L528 545 L694 670 L842 560', strokeWidth: 1, strokeDasharray: '4 6' }),
+        e('rect', { x: 96, y: 84, width: 120, height: 120, strokeWidth: 0.85, strokeDasharray: '6 6' }),
+        e('line', { x1: 96, y1: 84, x2: 216, y2: 204, strokeWidth: 0.8 })
       ),
       themeId === 'afterimage' && e('svg', { viewBox: '0 0 1200 800', preserveAspectRatio: 'xMidYMid slice', style: svgStyle, fill: 'none', stroke: 'currentColor' },
         e('g', { className: 'ps-perceptual-pulse' },
-          e('circle', { cx: 960, cy: 210, r: 135, strokeWidth: 1.3 }),
-          e('circle', { cx: 1005, cy: 210, r: 135, strokeWidth: 1.1, strokeDasharray: '7 5' })
+          e('circle', { cx: 955, cy: 205, r: 138, strokeWidth: 1.3 }),
+          e('circle', { cx: 1025, cy: 205, r: 138, strokeWidth: 1.15, strokeDasharray: '7 5' }),
+          e('circle', { cx: 990, cy: 205, r: 74, strokeWidth: 1 }),
+          e('circle', { cx: 990, cy: 205, r: 22, strokeWidth: 1.2 })
         ),
-        e('path', { d: 'M60 80 H110 M60 80 V130 M1140 720 H1090 M1140 720 V670', strokeWidth: 1.5 })
+        e('path', { d: 'M58 72 H136 M58 72 V150 M1142 728 H1064 M1142 728 V650', strokeWidth: 1.4 }),
+        e('path', { d: 'M86 680 V515 a96 96 0 0 1 192 0 v165', strokeWidth: 1.1 }),
+        e('ellipse', { cx: 182, cy: 688, rx: 128, ry: 16, strokeWidth: 0.9, strokeDasharray: '4 5' }),
+        e('path', { d: 'M920 560 h210 M940 592 h170 M960 624 h130', strokeWidth: 0.9, strokeDasharray: '5 5' })
       ),
       themeId === 'mirage' && e('svg', { viewBox: '0 0 1200 800', preserveAspectRatio: 'xMidYMid slice', style: svgStyle, fill: 'none', stroke: 'currentColor' },
-        e('path', { d: 'M0 540 H1200 M0 570 Q300 548 600 570 T1200 570 M0 605 Q300 586 600 605 T1200 605 M0 645 H1200', strokeWidth: 1.1 }),
-        e('circle', { cx: 980, cy: 190, r: 78, strokeWidth: 1.1, strokeDasharray: '4 4' })
+        e('circle', { cx: 1010, cy: 175, r: 84, strokeWidth: 1.2 }),
+        e('circle', { cx: 1010, cy: 175, r: 126, strokeWidth: 0.9, strokeDasharray: '5 6' }),
+        e('path', { d: 'M938 148 c32 10 92 12 146 0 M930 176 c40 12 106 12 160 0', strokeWidth: 0.85 }),
+        e('path', { d: 'M72 720 v-34 h78 v-32 h88 v-30 h98 v96', strokeWidth: 1.1 }),
+        e('path', { d: 'M0 555 H1200 M0 590 Q300 566 600 590 T1200 590 M0 628 Q300 606 600 628 T1200 628 M0 666 H1200', strokeWidth: 1.05 }),
+        e('ellipse', { cx: 1020, cy: 710, rx: 118, ry: 15, strokeWidth: 0.9, strokeDasharray: '4 5' }),
+        e('polygon', { points: '148,118 153,132 167,137 153,142 148,156 143,142 129,137 143,132', strokeWidth: 1 })
       ),
       themeId === 'euphoria' && e('svg', { viewBox: '0 0 1200 800', preserveAspectRatio: 'xMidYMid slice', style: svgStyle, fill: 'none', stroke: 'currentColor' },
         e('g', { className: 'ps-perceptual-spin' },
-          e('circle', { cx: 990, cy: 190, r: 170, strokeWidth: 1.1 }),
-          e('circle', { cx: 990, cy: 190, r: 112, strokeWidth: 1, strokeDasharray: '5 5' }),
-          e('path', { d: 'M990 10 V370 M810 190 H1170 M862 62 L1118 318 M1118 62 L862 318', strokeWidth: 0.9 })
-        )
+          e('circle', { cx: 1010, cy: 185, r: 172, strokeWidth: 1.15 }),
+          e('circle', { cx: 1010, cy: 185, r: 114, strokeWidth: 1, strokeDasharray: '5 5' }),
+          e('circle', { cx: 1010, cy: 185, r: 52, strokeWidth: 1.1 }),
+          e('path', { d: 'M1010 4 V366 M828 185 H1192 M882 57 L1138 313 M1138 57 L882 313', strokeWidth: 0.9 })
+        ),
+        e('path', { d: 'M78 730 V540 a104 104 0 0 1 208 0 v190', strokeWidth: 1.1 }),
+        e('path', { d: 'M110 730 V555 a72 72 0 0 1 144 0 v175', strokeWidth: 0.9, strokeDasharray: '4 4' }),
+        e('circle', { cx: 182, cy: 562, r: 22, strokeWidth: 1 }),
+        e('path', { d: 'M380 698 Q560 648 740 698 T1120 698', strokeWidth: 1.05 })
       )
     );
   });
@@ -5375,7 +5428,7 @@
             ),
             e('span', {
               className: `pill ${weightsLoaded ? 'online' : 'warning'}`,
-              style: { fontSize: '10.5px', padding: '2px 7px' },
+              style: { fontSize: '10.5px', padding: '2px 7px', maxWidth: '175px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-block', verticalAlign: 'middle' },
               title: weightsLoaded ? `Trained weights: ${activeCheckpointName || 'loaded'}` : 'No checkpoint weights loaded'
             }, weightsLoaded ? (activeCheckpointName ? activeCheckpointName.replace('.pt', '') : 'Weights Loaded') : 'Untrained'),
             !cudaAvailable && e('span', {
@@ -5384,11 +5437,11 @@
             }, 'CPU')
           ) : e('span', {
             className: 'pill',
-            style: { fontSize: '10.5px', background: isLocalModel ? 'rgba(16, 185, 129, 0.14)' : 'rgba(217, 119, 6, 0.15)', color: isLocalModel ? '#10b981' : 'var(--accent-bronze, #d97706)' }
+            style: { fontSize: '10.5px', maxWidth: '175px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-block', verticalAlign: 'middle', background: isLocalModel ? 'rgba(16, 185, 129, 0.14)' : 'rgba(217, 119, 6, 0.15)', color: isLocalModel ? '#10b981' : 'var(--accent-bronze, #d97706)' }
           }, String(activeModel || '').toUpperCase()),
           activeAdapter && e('span', {
             className: 'pill online',
-            style: { fontSize: '10.5px' },
+            style: { fontSize: '10.5px', maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-block', verticalAlign: 'middle' },
             title: `LoRA: ${activeAdapter.name}`
           }, [renderIcon('finetune', 11, { marginRight: '3px' }), activeAdapter.name]),
           e('button', {
@@ -5531,6 +5584,8 @@
     const [vramUsage, setVramUsage] = useState({ allocated: 0.0, reserved: 0.0, total: 0.0, oom_risk: false });
     const [systemDiagnostics, setSystemDiagnostics] = useState({ device_name: 'PyTorch Engine', cuda_available: false });
     const [kernelTelemetry, setKernelTelemetry] = useState(null);
+    const [engineBenchmarks, setEngineBenchmarks] = useState(null);
+    const [isRunningBenchmarks, setIsRunningBenchmarks] = useState(false);
     const [optimizerTelemetry, setOptimizerTelemetry] = useState(null);
     const [activeModel, setActiveModel] = useState(() => {
     try {
@@ -5687,8 +5742,9 @@
     const [neuralConsoleWidth, setNeuralConsoleWidth] = useState(() => {
       try {
         const w = parseInt(window.localStorage.getItem('lucid_machines.playground.neuralConsoleWidth') || window.localStorage.getItem('triune.playground.neuralConsoleWidth'), 10);
-        return (!isNaN(w) && w >= 320 && w <= 1100) ? w : 500;
-      } catch (_) { return 500; }
+        if (!isNaN(w) && w >= 320 && w <= 1100) return w;
+      } catch (_) {}
+      return (typeof window !== 'undefined' && window.innerWidth <= 1500) ? 400 : 480;
     });
     const [neuralConsoleHeight, setNeuralConsoleHeight] = useState(() => {
       try {
@@ -5709,7 +5765,7 @@
     const consoleDragOffsetRef = useRef({ x: 0, y: 0 });
 
     // Resizable SplitPane sizes (persisted) & R4 Perceptual Effects Mode
-    const [chatSidebarWidth, setChatSidebarWidth] = usePersistentSplit('lucid_machines.split.chatSidebar', 260, 180, 440);
+    const [chatSidebarWidth, setChatSidebarWidth] = usePersistentSplit('lucid_machines.split.chatSidebar', 210, 180, 440);
     const [wsSidebarWidth, setWsSidebarWidth] = usePersistentSplit('lucid_machines.split.wsSidebar', 260, 170, 440);
     const [wsCockpitWidth, setWsCockpitWidth] = usePersistentSplit('lucid_machines.split.wsCockpit', 370, 260, 560);
     const [dagRightWidth, setDagRightWidth] = usePersistentSplit('lucid_machines.split.dagRight', 380, 260, 640);
@@ -5889,7 +5945,11 @@
       }));
     };
 
-    const refreshNeuronScope = async () => {
+    const lastNeuronFetchRef = useRef(0);
+    const refreshNeuronScope = async (force = false) => {
+      const now = Date.now();
+      if (!force && now - lastNeuronFetchRef.current < 1500) return;
+      lastNeuronFetchRef.current = now;
       try {
         const res = await apiFetch('/v1/playground/neurons');
         if (res.ok) {
@@ -5902,17 +5962,10 @@
     const refreshMindTelemetry = async () => {
       setIsLoadingMind(true);
       try {
-        const [mindRes, gpuRes] = await Promise.all([
-          apiFetch('/v1/telemetry/mind'),
-          apiFetch('/v1/telemetry/gpu')
-        ]);
+        const mindRes = await apiFetch('/v1/telemetry/mind');
         if (mindRes.ok) {
           const mindData = await mindRes.json();
           setMindTelemetry(mindData);
-        }
-        if (gpuRes.ok) {
-          const gpuData = await gpuRes.json();
-          setGpuTelemetry(gpuData);
         }
       } catch (_) {}
       setIsLoadingMind(false);
@@ -6049,12 +6102,11 @@
     };
 
     const refreshWorkspaceState = async () => {
+      // Load workspace tree + state first without blocking behind slow git status calls
       try {
-        const [stRes, gitRes, treeRes, supRes] = await Promise.all([
+        const [stRes, treeRes] = await Promise.all([
           apiFetch('/v1/workspace/state'),
-          apiFetch('/v1/workspace/git'),
-          apiFetch('/v1/workspace/tree?depth=2'),
-          apiFetch('/v1/agents/supervisor/status')
+          apiFetch('/v1/workspace/tree?depth=2')
         ]);
         if (stRes.ok) {
           const st = await stRes.json();
@@ -6062,13 +6114,19 @@
           setWsFolderInput(st.root || '');
           if (Array.isArray(st.recent)) setWsRecentWorkspaces(st.recent);
         }
-        if (gitRes.ok) {
-          const g = await gitRes.json();
-          setWsGitInfo(g);
-        }
         if (treeRes.ok) {
           const tr = await treeRes.json();
           setWsTreeEntries(Array.isArray(tr.entries) ? tr.entries : []);
+        }
+      } catch (_) {}
+      try {
+        const [gitRes, supRes] = await Promise.all([
+          apiFetch('/v1/workspace/git'),
+          apiFetch('/v1/agents/supervisor/status')
+        ]);
+        if (gitRes.ok) {
+          const g = await gitRes.json();
+          setWsGitInfo(g);
         }
         if (supRes.ok) {
           const sup = await supRes.json();
@@ -6438,12 +6496,34 @@
         refreshNeuronScope();
         refreshMindTelemetry();
       } else if (activeTab === 'nodegraph') {
+        refreshNodeCatalog();
         fetchDagAndAgentHistory();
-      } else if (activeTab === 'training') {
-        refreshMindTelemetry();
-        fetchModelConfigs();
+        setTimeout(() => handleFitCanvasView(), 60);
+      } else if (activeTab === 'training' || activeTab === 'datasets') {
+        if (activeTab === 'training') {
+          refreshMindTelemetry();
+          fetchModelConfigs();
+        }
+        apiFetch('/v1/datasets/stream/status').then(r => r.ok ? r.json() : null).then(sData => {
+          if (sData && sData.is_streaming) {
+            setHfStreamResult(sData);
+            if (sData.dataset_name) { setActiveDataset(sData.dataset_name); setHfDatasetInput(sData.dataset_name); }
+            if (sData.config) setHfConfigInput(sData.config);
+            if (sData.split) setHfSplitInput(sData.split);
+            if (sData.text_column) setHfTextColInput(sData.text_column);
+            if (sData.active_batch_preview) setActiveBatchPreview(sData.active_batch_preview);
+          }
+        }).catch(() => {});
       } else if (activeTab === 'workspace') {
         refreshWorkspaceState();
+      } else if (activeTab === 'modules') {
+        fetchInstalledModules();
+        if (!marketplaceData || !Array.isArray(marketplaceData.curated) || marketplaceData.curated.length === 0) {
+          searchMarketplace('', moduleFilter, 'curated');
+        }
+      } else if (activeTab === 'environment') {
+        if (!systemScan) fetchSystemScan();
+        fetchEngineBenchmarks();
       }
     }, [activeTab]);
 
@@ -6843,7 +6923,7 @@
       const kind = isErr ? 'error' : (isWarn ? 'warning' : 'success');
       const id = `toast-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       const ttl = isErr ? 6500 : 3500;
-      setToastStack(prev => [...prev.slice(-3), { id, text, kind }]);
+      setToastStack(prev => [...prev.filter(t => t.text !== text).slice(-1), { id, text, kind }]);
       setTimeout(() => {
         setToastStack(prev => prev.filter(t => t.id !== id));
       }, ttl);
@@ -7539,8 +7619,6 @@
 
     // System Diagnostics, Catalog & Live Telemetry WebSocket
     useEffect(() => {
-      refreshNodeCatalog();
-
       // Connect to WebSocket telemetry stream for live DAG and training events (with auto-reconnect)
       let ws = null;
       let wsReconnectTimer = null;
@@ -7744,8 +7822,8 @@
             fetchJsonQuiet('/v1/telemetry/gpu'),
             needEnvOrTrain ? fetchJsonQuiet('/v1/system/diagnostics') : Promise.resolve(null),
             needEnvOrTrain ? fetchJsonQuiet('/v1/hardware/profile') : Promise.resolve(null),
-            (forceHeavy || pollCounter === 1 || curTab === 'environment') ? fetchJsonQuiet('/v1/engine/kernels') : Promise.resolve(null),
-            (forceHeavy || pollCounter === 1 || curTab === 'training' || curTab === 'environment') ? fetchJsonQuiet('/v1/training/optimizer') : Promise.resolve(null)
+            (curTab === 'environment') ? fetchJsonQuiet('/v1/engine/kernels') : Promise.resolve(null),
+            (curTab === 'training' || curTab === 'environment') ? fetchJsonQuiet('/v1/training/optimizer') : Promise.resolve(null)
           ]);
 
           if (dataGpu && (dataGpu.device_name || dataGpu.device_type)) {
@@ -7955,11 +8033,15 @@
     }, []);
 
     // Keep active session messages in sync with chatSessions and persist
+    const chatSyncMountedRef = useRef(false);
     useEffect(() => {
       if (!activeSessionId) return;
       try {
         localStorage.setItem('lucid_machines_active_session_id', activeSessionId);
       } catch (_) {}
+
+      const isInitialSync = !chatSyncMountedRef.current;
+      chatSyncMountedRef.current = true;
 
       setChatSessions(prevSessions => {
         let titleUpdated = false;
@@ -7997,13 +8079,15 @@
           localStorage.setItem('lucid_machines_chat_sessions', JSON.stringify(updated));
         } catch (_) {}
 
-        const cur = updated.find(s => s.id === activeSessionId);
-        if (cur) {
-          apiFetch('/v1/chat/sessions', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(cur)
-          }).catch(() => {});
+        if (!isInitialSync && messages.length > 1) {
+          const cur = updated.find(s => s.id === activeSessionId);
+          if (cur) {
+            apiFetch('/v1/chat/sessions', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(cur)
+            }).catch(() => {});
+          }
         }
 
         return updated;
@@ -8110,20 +8194,6 @@
         const data = await res.json();
         if (data.datasets && data.datasets.length > 0) {
           setDatasetList(data.datasets);
-        }
-        // Also query active dataset stream telemetry
-        const sRes = await apiFetch('/v1/datasets/stream/status');
-        const sData = await sRes.json();
-        if (sData.is_streaming) {
-          setHfStreamResult(sData);
-          if (sData.dataset_name) {
-            setActiveDataset(sData.dataset_name);
-            setHfDatasetInput(sData.dataset_name);
-          }
-          if (sData.config) setHfConfigInput(sData.config);
-          if (sData.split) setHfSplitInput(sData.split);
-          if (sData.text_column) setHfTextColInput(sData.text_column);
-          if (sData.active_batch_preview) setActiveBatchPreview(sData.active_batch_preview);
         }
       } catch (err) {}
     };
@@ -8978,18 +9048,43 @@
       }
     };
 
-    // On-Mount Initialization & Automatic Update Check on Startup
+    const fetchEngineBenchmarks = async () => {
+      try {
+        const res = await apiFetch('/v1/engine/benchmarks');
+        if (res.ok) {
+          const data = await res.json();
+          setEngineBenchmarks(data);
+        }
+      } catch (_) {}
+    };
+
+    const handleRunEngineBenchmarks = async () => {
+      if (isRunningBenchmarks) return;
+      setIsRunningBenchmarks(true);
+      try {
+        const res = await apiFetch('/v1/engine/benchmarks/run', { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || data.message || `Benchmark failed (${res.status})`);
+        setEngineBenchmarks(data);
+        if (data.telemetry) setKernelTelemetry(data.telemetry);
+        else if (data.benchmarks_vs_baselines) {
+          setKernelTelemetry(prev => prev ? { ...prev, benchmarks_vs_baselines: data.benchmarks_vs_baselines } : prev);
+        }
+        showToast('Live kernel benchmarks updated!');
+      } catch (err) {
+        showToast(`Benchmark error: ${err.message || 'failed to run'}`);
+      } finally {
+        setIsRunningBenchmarks(false);
+      }
+    };
+
+    // On-Mount Initialization (slim critical boot; heavy tabs load lazily on activation)
     useEffect(() => {
-      fetchSystemScan();
       fetchSystemConfig();
-      fetchHardwareProfile();
-      fetchInstalledModules();
       fetchDatasets();
       fetchCheckpoints();
       fetchSavedModels();
       fetchAvailableAdapters();
-      searchMarketplace('', 'all');
-      checkModuleUpdates();
     }, []);
 
     // Non-Blocking Active Hardware Telemetry Polling Loop (WS pushes steps; slow fallback only)
@@ -9062,8 +9157,9 @@
       return () => clearInterval(interval);
     }, [isTraining]);
 
-    // Tokenizer Sandbox
+    // Tokenizer Sandbox (lazy until Tokenizer tab is open)
     useEffect(() => {
+      if (activeTab !== 'tokenizer') return undefined;
       if (!sampleText) {
         setTokens([]);
         setTokenizerStatus('Enter text to preview tokens.');
@@ -10048,13 +10144,16 @@
         fast_gla: { name: 'Chunked Gated Linear Attention', status: 'Backend telemetry unavailable' },
         fast_lora: { name: 'Dual-Rank LoRA GEMM', status: 'Backend telemetry unavailable' },
       };
-      const bmarks = kernelTelemetry?.benchmarks_vs_baselines;
+      const bmarks = (kernelTelemetry?.benchmarks_vs_baselines?.status === 'measured'
+        ? kernelTelemetry.benchmarks_vs_baselines
+        : null) || (engineBenchmarks?.benchmarks_vs_baselines?.status === 'measured' ? engineBenchmarks.benchmarks_vs_baselines : null);
       const hasMeasuredBenchmarks = bmarks?.status === 'measured';
+      const perKernelTimings = engineBenchmarks?.per_kernel_timings || {};
 
       return e('div', { className: 'kernel-deck-card' },
         e('div', { className: 'kernel-deck-header' },
           e('div', null,
-            e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+            e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
               e('h3', { style: { fontFamily: 'var(--font-heading)', fontSize: '18px', margin: 0, display: 'flex', alignItems: 'center' } },
                 renderIcon('bolt', 16, { marginRight: '6px', color: 'var(--accent-terracotta, #e05b38)' }),
                 'Triune Custom Kernel Accelerator & Engine Turbo'
@@ -10064,32 +10163,42 @@
               )
             ),
             e('p', { style: { color: 'var(--text-muted)', fontSize: '12.5px', margin: '4px 0 0 0' } },
-              `Hardware: ${kernelTelemetry?.hardware_arch || 'Unknown'} | Backend: ${kernelTelemetry?.backend || 'Checking…'}`
+              `Hardware: ${kernelTelemetry?.hardware_arch || 'Unknown'} | Backend: ${kernelTelemetry?.backend || 'Checking…'}${engineBenchmarks?.source ? ` | Benchmarks: ${engineBenchmarks.source}` : ''}`
             )
           ),
-          e('button', {
-            className: `kernel-turbo-toggle ${isTurbo ? 'active' : 'inactive'}`,
-            onClick: handleToggleTurboMode,
-            title: isTurbo ? 'Click to disable custom kernel fusion' : 'Click to enable Engine Turbo Mode'
-          }, [renderIcon('bolt', 12), isTurbo ? 'Turbo Mode: ON' : 'Turbo Mode: OFF'])
+          e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
+            e('button', {
+              type: 'button',
+              className: 'btn-sec',
+              style: { height: '32px', padding: '0 12px', fontSize: '12px', fontWeight: 600, whiteSpace: 'nowrap' },
+              disabled: isRunningBenchmarks,
+              onClick: handleRunEngineBenchmarks,
+              title: 'Run live micro-benchmarks comparing Triune kernels against PyTorch'
+            }, [renderIcon('refresh', 12, { marginRight: '5px' }), isRunningBenchmarks ? 'Benchmarking...' : 'Run Benchmarks']),
+            e('button', {
+              className: `kernel-turbo-toggle ${isTurbo ? 'active' : 'inactive'}`,
+              onClick: handleToggleTurboMode,
+              title: isTurbo ? 'Click to disable custom kernel fusion' : 'Click to enable Engine Turbo Mode'
+            }, [renderIcon('bolt', 12), isTurbo ? 'Turbo Mode: ON' : 'Turbo Mode: OFF'])
+          )
         ),
 
         // Live Benchmark Comparison vs Baselines
         e('div', { className: 'benchmark-comparison-grid' },
           e('div', { className: 'benchmark-box highlight' },
             e('div', { className: 'benchmark-title' }, 'Triune Kernel Path'),
-            e('div', { className: 'benchmark-speedup', style: { color: 'var(--accent-olive, #2b4c3f)' } }, hasMeasuredBenchmarks ? `${bmarks.triune_native_speedup}x` : 'Not benchmarked'),
-            e('span', { className: 'benchmark-badge', style: { background: 'rgba(43, 76, 63, 0.15)', color: 'var(--accent-olive, #2b4c3f)' } }, hasMeasuredBenchmarks ? `-${bmarks.triune_vram_reduction_pct}% VRAM` : 'No measured VRAM comparison')
+            e('div', { className: 'benchmark-speedup', style: { color: 'var(--accent-olive, #2b4c3f)' } }, hasMeasuredBenchmarks && bmarks.triune_native_speedup ? `${bmarks.triune_native_speedup}x` : 'Not benchmarked'),
+            e('span', { className: 'benchmark-badge', style: { background: 'rgba(43, 76, 63, 0.15)', color: 'var(--accent-olive, #2b4c3f)' } }, hasMeasuredBenchmarks && bmarks.triune_vram_reduction_pct !== null && bmarks.triune_vram_reduction_pct !== undefined ? `-${bmarks.triune_vram_reduction_pct}% VRAM` : 'Click Run Benchmarks')
           ),
           e('div', { className: 'benchmark-box' },
             e('div', { className: 'benchmark-title' }, 'Unsloth Baseline'),
-            e('div', { className: 'benchmark-speedup' }, hasMeasuredBenchmarks ? `${bmarks.unsloth_speedup}x` : 'Not benchmarked'),
-            e('span', { className: 'benchmark-badge', style: { background: 'rgba(0,0,0,0.06)', color: 'var(--text-muted)' } }, hasMeasuredBenchmarks ? `-${bmarks.unsloth_vram_reduction_pct}% VRAM` : 'No measured VRAM comparison')
+            e('div', { className: 'benchmark-speedup' }, hasMeasuredBenchmarks && bmarks.unsloth_speedup ? `${bmarks.unsloth_speedup}x` : (engineBenchmarks?.unsloth_baseline?.reason || 'Unavailable (Linux/Triton only)')),
+            e('span', { className: 'benchmark-badge', style: { background: 'rgba(0,0,0,0.06)', color: 'var(--text-muted)' } }, hasMeasuredBenchmarks && bmarks.unsloth_vram_reduction_pct !== null && bmarks.unsloth_vram_reduction_pct !== undefined ? `-${bmarks.unsloth_vram_reduction_pct}% VRAM` : 'No measured VRAM comparison')
           ),
           e('div', { className: 'benchmark-box' },
             e('div', { className: 'benchmark-title' }, 'Standard PyTorch'),
-            e('div', { className: 'benchmark-speedup' }, hasMeasuredBenchmarks ? `${bmarks.vanilla_pytorch_speedup}x` : 'Not benchmarked'),
-            e('span', { className: 'benchmark-badge', style: { background: 'rgba(0,0,0,0.06)', color: 'var(--text-muted)' } }, hasMeasuredBenchmarks ? 'Baseline reference' : 'No measured VRAM comparison')
+            e('div', { className: 'benchmark-speedup' }, hasMeasuredBenchmarks ? `${bmarks.vanilla_pytorch_speedup || 1.0}x` : '1.0x Baseline'),
+            e('span', { className: 'benchmark-badge', style: { background: 'rgba(0,0,0,0.06)', color: 'var(--text-muted)' } }, hasMeasuredBenchmarks && engineBenchmarks?.standard_pytorch?.total_time_ms ? `${engineBenchmarks.standard_pytorch.total_time_ms} ms total` : 'Reference baseline')
           )
         ),
 
@@ -10097,10 +10206,14 @@
         e('div', { className: 'kernel-suite-grid' },
           Object.keys(kernels).map(kKey => {
             const k = kernels[kKey];
+            const timing = perKernelTimings[kKey];
+            const timingText = timing && timing.triune_ms !== null && timing.triune_ms !== undefined
+              ? `${timing.triune_ms} ms${timing.speedup_vs_pytorch ? ` (${timing.speedup_vs_pytorch}x)` : ''}`
+              : null;
             return e('div', { key: kKey, className: 'kernel-chip' },
               e('div', null,
                 e('span', { className: 'kernel-chip-title' }, k.name),
-                e('span', { className: 'kernel-chip-desc' }, k.status)
+                e('span', { className: 'kernel-chip-desc' }, timingText ? `${k.status} · ${timingText}` : k.status)
               ),
               e('span', { className: 'kernel-status-tag' }, !kernelTelemetry ? 'Checking…' : (!kernelTelemetry.turbo_mode ? 'Disabled' : (kernelTelemetry.triton_available ? 'Triton path available' : 'Fallback path')))
             );
@@ -11582,19 +11695,22 @@
     };
 
     const handleFitCanvasView = (graphNodes = nodes) => {
-      if (!graphNodes.length || !gridRef.current) return;
-      const minX = Math.min(...graphNodes.map(n => n.x));
-      const maxX = Math.max(...graphNodes.map(n => n.x + NODE_WIDTH));
-      const minY = Math.min(...graphNodes.map(n => n.y));
-      const maxY = Math.max(...graphNodes.map(n => n.y + 260));
+      const targetNodes = Array.isArray(graphNodes) ? graphNodes : nodes;
+      if (!targetNodes.length || !gridRef.current) return;
+      const minX = Math.min(...targetNodes.map(n => n.x));
+      const maxX = Math.max(...targetNodes.map(n => n.x + NODE_WIDTH));
+      const minY = Math.min(...targetNodes.map(n => n.y));
+      const maxY = Math.max(...targetNodes.map(n => n.y + 260));
       const rect = gridRef.current.getBoundingClientRect();
+      const rw = Math.max(480, rect.width || 0);
+      const rh = Math.max(360, rect.height || 0);
       const graphW = (maxX - minX) + 160;
       const graphH = (maxY - minY) + 160;
-      const scale = Math.min(Math.max(Math.min((rect.width - 60) / graphW, (rect.height - 60) / graphH), 0.35), 1.15);
+      const scale = Math.min(Math.max(Math.min((rw - 60) / graphW, (rh - 60) / graphH), 0.35), 1.15);
       setCanvasZoom(scale);
       setCanvasPan({
-        x: (rect.width - graphW * scale) / 2 - minX * scale + 80 * scale,
-        y: (rect.height - graphH * scale) / 2 - minY * scale + 80 * scale
+        x: (rw - graphW * scale) / 2 - minX * scale + 80 * scale,
+        y: (rh - graphH * scale) / 2 - minY * scale + 80 * scale
       });
       showToast('Centered & Fitted DAG View');
     };
@@ -16243,7 +16359,7 @@
                     const isFailed = exec && exec.status === 'failed';
                     const isSelected = selectedNodeIds.includes(n.id);
                     const isMuted = !!n.muted;
-                    const cardClass = `node-card-react ${isSelected ? 'node-selected' : ''} ${isRunning ? 'running' : (isCompleted ? 'completed' : (isFailed ? 'failed' : (isSpecification ? 'specification' : '')))} ${isMuted ? 'node-muted' : ''}`;
+                    const cardClass = `ps-dag-node node-card-react ${isSelected ? 'node-selected' : ''} ${isRunning ? 'running' : (isCompleted ? 'completed' : (isFailed ? 'failed' : (isSpecification ? 'specification' : '')))} ${isMuted ? 'node-muted' : ''}`;
                     const { inputs, outputs } = getNodePorts(n);
                     const tensorBadge = getNodeTensorBadge(n, exec && exec.output);
 
@@ -16619,7 +16735,7 @@
                     e('button', { className: 'canvas-nav-btn', title: 'Zoom In (+)', onClick: () => setCanvasZoom(z => Math.min(2.5, z * 1.15)) }, renderIcon('plus', 13)),
                     e('button', { className: 'canvas-nav-btn', title: 'Zoom Out (-)', onClick: () => setCanvasZoom(z => Math.max(0.25, z / 1.15)) }, renderIcon('minus', 13)),
                     e('button', { className: 'canvas-nav-btn', title: 'Reset to 100%', onClick: () => { setCanvasZoom(1.0); setCanvasPan({ x: 0, y: 0 }); } }, '100%'),
-                    e('button', { className: 'canvas-nav-btn', title: 'Fit DAG to Viewport', onClick: handleFitCanvasView }, renderIcon('frame', 13)),
+                    e('button', { className: 'canvas-nav-btn', title: 'Fit DAG to Viewport', onClick: () => handleFitCanvasView() }, renderIcon('frame', 13)),
                     e('button', { className: 'canvas-nav-btn', title: 'Duplicate Selected Node', onClick: handleDuplicateSelectedNode, disabled: !selectedNodeId }, renderIcon('copy', 13)),
                     e('button', { className: 'canvas-nav-btn', title: 'Delete Selected Node', onClick: () => { if (selectedNodeId) handleDeleteNode(selectedNodeId); }, disabled: !selectedNodeId }, renderIcon('trash', 13))
                   ),
@@ -17340,21 +17456,22 @@
                                         : e('span', { className: 'badge-ckpt-idle' }, 'On Disk')
                                     ),
                                     e('td', { style: { textAlign: 'right' } },
-                                      e('div', { style: { display: 'flex', gap: '6px', justifyContent: 'flex-end', alignItems: 'center' } },
+                                      e('div', { style: { display: 'flex', gap: '4px', justifyContent: 'flex-end', alignItems: 'center', flexWrap: 'wrap' } },
                                         e('button', {
                                           className: 'btn-sec',
                                           disabled: isActive || isLoadingCkpt,
                                           style: {
-                                            padding: '3px 8px',
+                                            padding: '3px 7px',
                                             fontSize: '11px',
                                             color: isActive ? 'var(--text-muted)' : 'var(--accent-sage)',
-                                            fontWeight: 600
+                                            fontWeight: 600,
+                                            whiteSpace: 'nowrap'
                                           },
                                           onClick: () => handleLoadCheckpoint(c.path)
                                         }, isActive ? 'Active' : [renderIcon('download', 11, { marginRight: '4px' }), 'Load']),
                                         e('button', {
                                           className: 'btn-sec',
-                                          style: { padding: '3px 7px', fontSize: '11px', color: 'var(--primary)', fontWeight: 600 },
+                                          style: { padding: '3px 6px', fontSize: '11px', color: 'var(--primary)', fontWeight: 600, whiteSpace: 'nowrap' },
                                           title: 'Select this saved checkpoint in Universal Model Upgrader',
                                           onClick: () => {
                                             setUpgradeModelName(c.path);
@@ -17365,13 +17482,13 @@
                                         }, [renderIcon('branch', 11, { marginRight: '3px' }), 'Upgrade']),
                                         e('button', {
                                           className: 'btn-sec',
-                                          style: { padding: '3px 7px', fontSize: '11px', color: 'var(--text-main)' },
+                                          style: { padding: '3px 6px', fontSize: '11px', color: 'var(--text-main)', whiteSpace: 'nowrap' },
                                           title: 'Export this checkpoint as SafeTensors',
                                           onClick: () => handleExportCheckpoint(c.path)
                                         }, [renderIcon('modules', 11, { marginRight: '3px' }), 'Export']),
                                         checkpointProjects.length > 1 && e('select', {
                                           className: 'ckpt-input',
-                                          style: { padding: '2px 5px', fontSize: '10.5px', height: '24px', width: 'auto', maxWidth: '110px' },
+                                          style: { padding: '2px 4px', fontSize: '10.5px', height: '24px', width: 'auto', maxWidth: '68px' },
                                           value: c.project || project.name,
                                           title: 'Move this checkpoint to another project cohort',
                                           onChange: ev => handleAssignCheckpointProject(c.path, ev.target.value)
@@ -17382,7 +17499,7 @@
                                         ),
                                         e('button', {
                                           className: 'btn-sec',
-                                          style: { padding: '3px 7px', fontSize: '11px', color: '#dc2626' },
+                                          style: { padding: '3px 6px', fontSize: '11px', color: '#dc2626', whiteSpace: 'nowrap' },
                                           title: 'Delete this checkpoint',
                                           onClick: () => handleDeleteCheckpoint(c.path)
                                         }, renderIcon('trash', 12))
@@ -17490,7 +17607,7 @@
                         e('button', {
                           type: 'button',
                           className: 'btn-sec',
-                          style: { padding: '2px 7px', fontSize: '11px' },
+                          style: { padding: '2px 8px', fontSize: '11px', whiteSpace: 'nowrap', flexShrink: 0, display: 'inline-flex', alignItems: 'center' },
                           title: 'Scan PC across Ollama, Hugging Face, vLLM, Hermes, LM Studio, and checkpoints',
                           onClick: () => { setShowModelScannerModal(true); handleScanPcModels(); }
                         }, [renderIcon('search', 11, { marginRight: '3px' }), 'Scan PC'])
@@ -17759,13 +17876,13 @@
                   e('div', { className: 'model-actions', style: { marginTop: '12px', display: 'flex', flexWrap: 'wrap', gap: '6px' } },
                     e('button', {
                       className: isCurrent ? 'btn-action' : 'btn-sec',
-                      style: isCurrent ? { background: 'var(--accent-olive, #2b4c3f)', color: '#fff', flex: '1 1 100%' } : { flex: '1 1 100%', fontWeight: 600, borderColor: 'var(--accent-olive, #2b4c3f)', color: 'var(--accent-olive, #2b4c3f)' },
+                      style: isCurrent ? { background: 'var(--accent-emerald, #047857)', color: '#ffffff', flex: '1 1 100%' } : { flex: '1 1 100%', fontWeight: 600, borderColor: 'var(--accent-olive, #2b4c3f)', color: 'var(--accent-olive, #2b4c3f)' },
                       onClick: () => handleSelectModelPreset(m.id)
                     }, isCurrent ? [renderIcon('check', 13, { marginRight: '6px' }), 'Active Architecture (Synced)'] : [renderIcon('play', 13, { marginRight: '6px' }), 'Load Architecture & Sync IDE']),
                     e('div', { style: { display: 'flex', gap: '6px', width: '100%', marginTop: '6px' } },
                       e('button', {
                         className: 'btn-sec',
-                        style: { flex: '1 1 50%', fontSize: '11.5px', fontWeight: 600, borderColor: '#e05b38', color: '#e05b38' },
+                        style: { flex: '1 1 50%', fontSize: '11.5px', fontWeight: 600, borderColor: 'var(--accent-terracotta)', color: 'var(--accent-terracotta)' },
                         disabled: !isCurrent,
                         title: isCurrent ? 'Export ready-to-run Ollama Modelfile and copy CLI launch command.' : 'Activate this architecture first.',
                         onClick: () => handleExportModel(m.id, 'ollama')

@@ -99,6 +99,7 @@ class NodeRegistry:
 
             self._nodes[node_name] = schema
             try:
+                target._lucid_machines_node_schema = schema
                 target._triune_node_schema = schema
             except Exception:
                 pass

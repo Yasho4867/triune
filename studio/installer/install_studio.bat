@@ -9,9 +9,19 @@ echo.
 
 :: If interactive and the native WPF Setup Wizard exists, launch Setup Wizard
 if "%~1"=="" (
+    if exist "%~dp0..\..\app\PolysomStudioSetup.exe" (
+        echo [Setup] Launching Native Windows Setup Wizard (app\PolysomStudioSetup.exe)...
+        start "" "%~dp0..\..\app\PolysomStudioSetup.exe"
+        exit /b 0
+    )
     if exist "%~dp0..\..\PolysomStudioSetup.exe" (
         echo [Setup] Launching Native Windows Setup Wizard (PolysomStudioSetup.exe)...
         start "" "%~dp0..\..\PolysomStudioSetup.exe"
+        exit /b 0
+    )
+    if exist "%~dp0..\publish\app\PolysomStudioSetup.exe" (
+        echo [Setup] Launching Native Windows Setup Wizard (studio\publish\app\PolysomStudioSetup.exe)...
+        start "" "%~dp0..\publish\app\PolysomStudioSetup.exe"
         exit /b 0
     )
     if exist "%~dp0..\publish\PolysomStudioSetup.exe" (

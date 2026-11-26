@@ -3,19 +3,92 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta
-      name="description"
-      content="Lucid Machines is an AI research company building adaptive, efficient, and verifiable intelligence. Meet Junkie, our upcoming frontier reasoning model."
-    />
-    <meta name="keywords" content="Lucid Machines, Triune, Junkie, Polysom Studio, Reflex, Limbic, Cortex, CentroidSteer, security" />
+    <meta name="keywords" content="Lucid Machines, Triune, TriuneTransformer, Junkie, Polysom Studio, Reflex, Limbic, Cortex, CentroidSteer, VectorisedGLA, LayerStreamingEngine, kcx" />
     <meta name="theme-color" content="#d99b76" />
     <title>Lucid Machines — Intelligence, in a new light</title>
     <link rel="canonical" href="https://lucidmachines.co/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Lucid Machines" />
     <meta property="og:url" content="https://lucidmachines.co/" />
-    <link rel="icon" type="image/svg+xml" href="/lucid-symbol.svg" />
+    <meta name="twitter:title" content="Lucid Machines — Intelligence, in a new light" />
+    <meta name="twitter:description" content="Triune recurrent linear-attention MoE architecture, CentroidSteer optimizer, Junkie model family, and Polysom Studio v1.0.0." />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "Organization",
+            "name": "Lucid Machines",
+            "url": "https://lucidmachines.co/",
+            "email": "contact@lucidmachines.co",
+            "logo": "https://lucidmachines.co/lucid-symbol.svg",
+            "sameAs": [
+              "https://github.com/lucid-machines/triune"
+            ]
+          },
+          {
+            "@type": "SoftwareApplication",
+            "name": "Polysom Studio & Triune (lucid-machines)",
+            "softwareVersion": "1.0.0",
+            "operatingSystem": "Windows, Linux, macOS",
+            "applicationCategory": "DeveloperApplication",
+            "url": "https://lucidmachines.co/",
+            "downloadUrl": "https://github.com/lucid-machines/triune/releases",
+            "offers": {
+              "@type": "Offer",
+              "price": "0",
+              "priceCurrency": "USD"
+            }
+          }
+        ]
+      }
+    </script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div hidden>
+      <header>
+        <h1>Lucid Machines — Intelligence, in a new light</h1>
+        <p>Modular, hardware-aware deep learning ecosystem built around the Triune architecture, CentroidSteer Stiefel-manifold optimizer, Junkie model family, and Polysom Studio v1.0.0.</p>
+        <nav aria-label="Primary navigation">
+          <a href="#triune">Triune Architecture</a>
+          <a href="#centroidsteer">CentroidSteer</a>
+          <a href="#junkie">Junkie Models</a>
+          <a href="#downloads">Polysom Studio &amp; CLI</a>
+          <a href="#research">Research Papers</a>
+          <a href="https://github.com/lucid-machines/triune">GitHub</a>
+        </nav>
+      </header>
+      <main>
+        <section id="triune">
+          <h2>Triune Architecture (TriuneTransformer)</h2>
+          <p>Constant-memory O(1) recurrent Gated Linear Attention (VectorisedGLA, 64.0 KiB state cache up to L=16,384 tokens, 99.8% cache reduction vs. Softmax SDPA), Gated DeltaNet (100% MQAR recall), Sparse Scatter-Gather MoE, 3-tier Reflex/Limbic/Cortex hierarchical early exits with Conformal CALM calibration and self-speculative decoding, and Activation-Checkpointed LayerStreamingEngine training 1.52B models inside an 8 GB consumer GPU.</p>
+        </section>
+        <section id="centroidsteer">
+          <h2>CentroidSteer 3-Tier Partitioned Optimizer</h2>
+          <p>Tri-tier partitioned manifold optimization combining Muon Newton-Schulz orthogonalization (Tier 1), CentroidSteer Block-Oja activation-subspace steering with sCholQR2 retraction and Grassmann parallel transport on Stiefel manifolds (Tier 2, 0.1118 B/p / 98.4% reduction vs. FP32 AdamW, validated across 5 seeds), and base AdamW (Tier 3).</p>
+        </section>
+        <section id="junkie">
+          <h2>Junkie Model Family</h2>
+          <p>Inaugural Triune model configurations across consumer and datacenter tiers: junkie-mini (535M), junkie-1b (1.16B), junkie-3b (2.99B, 16 experts, 206.73M dynamic active), junkie-7b-dus (36L ~7.02B depth-upscaled), and junkie-7b (7.40B flagship).</p>
+        </section>
+        <section id="downloads">
+          <h2>Polysom Studio v1.0.0 &amp; kcx CLI</h2>
+          <p>Install the native Windows .NET 10 + WebView2 workbench (PolysomStudio-1.0.0-win-x64.zip / PolysomStudioSetup.exe) with 40-node visual DAG IDE and 3D topology inspector, or run via Python SDK: pip install lucid-machines and kcx studio / kcx serve / kcx doctor. Verify releases with SHA256SUMS.txt.</p>
+        </section>
+        <section id="research">
+          <h2>Research Papers</h2>
+          <ul>
+            <li><a href="/papers/centroidsteer.pdf">CentroidSteer: Activation-Guided Stiefel Manifold Steering for Sparse MoE Optimization (PDF)</a></li>
+            <li><a href="/papers/triune_architecture.pdf">Triune Systems: Constant-Memory Recurrent Execution &amp; Layer Streaming on Consumer Silicon (PDF)</a></li>
+          </ul>
+        </section>
+      </main>
+      <footer>
+        <p>Contact: <a href="mailto:contact@lucidmachines.co">contact@lucidmachines.co</a> · <a href="mailto:founder@lucidmachines.co">founder@lucidmachines.co</a> · <a href="https://github.com/lucid-machines/triune">github.com/lucid-machines/triune</a></p>
+      </footer>
+      </div>
+    </div>
     <noscript>Lucid Machines — Triune architecture — Junkie — Polysom Studio.</noscript>
     <script type="module" src="./src/main.tsx"></script>
   </body>

@@ -34,17 +34,17 @@ def profile_model(
         checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
         state_dict = checkpoint["model_state"]
         saved = checkpoint.get("config", {})
-        config = build_config(
+        merged_cfg = dict(saved) if isinstance(saved, dict) else {}
+        merged_cfg.update(
             {
-                "vocab_size": saved.get("vocab_size", tokenizer.get_vocab_size()),
-                "hidden_dim": saved.get("hidden_dim"),
-                "num_layers": saved.get("num_layers"),
-                "use_fp4": saved.get(
+                "vocab_size": merged_cfg.get("vocab_size", tokenizer.get_vocab_size()),
+                "use_fp4": merged_cfg.get(
                     "use_fp4", any(".ffn.experts." in key and ".linear.weight" in key for key in state_dict)
                 ),
                 "seq_len": seq_len,
             }
         )
+        config = build_config(merged_cfg)
         if any(key.startswith("_orig_mod.") for key in state_dict):
             state_dict = {key.removeprefix("_orig_mod."): value for key, value in state_dict.items()}
     model = build_model(config).to(device).bfloat16().train()

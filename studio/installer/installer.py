@@ -5,6 +5,7 @@ Cross-platform installer for Windows, Linux, WSL2, and macOS.
 Inspects hardware stack, provisions virtual environment, installs optimal
 PyTorch wheels with CUDA/ROCm/MPS acceleration, installs Studio IDE dependencies,
 creates desktop shortcuts, and verifies installation health.
+Support: contact@lucidmachines.co | https://lucidmachines.co
 """
 
 from __future__ import annotations
@@ -351,10 +352,10 @@ def install_pytorch(py_bin: Path, hw: HardwareProfile, cuda_choice: str = "auto"
 
 
 # ---------------------------------------------------------------------------
-# Studio Dependencies & Triune Editable Package
+# Studio Dependencies & Lucid Machines Editable Package
 # ---------------------------------------------------------------------------
 def install_dependencies(py_bin: Path) -> None:
-    """Install Studio UI, API server, and Triune core framework."""
+    """Install Studio UI, API server, and Lucid Machines core framework."""
     log_info("Installing Studio API & UI requirements (FastAPI, Uvicorn, PyWebView, Safetensors)...")
     core_pkgs = [
         "fastapi>=0.100.0",
@@ -394,12 +395,12 @@ def install_dependencies(py_bin: Path) -> None:
             )
     log_success("Studio dependencies installed.")
 
-    log_info("Installing Triune Framework in development mode (pip install -e .)...")
+    log_info("Installing Lucid Machines framework in development mode (pip install -e .)...")
     code = run_command([str(py_bin), "-m", "pip", "install", "-e", str(WORKSPACE_ROOT)], show_output=False)
     if code == 0:
-        log_success("Triune Framework installed in editable mode.")
+        log_success("Lucid Machines framework installed in editable mode.")
     else:
-        log_warning("Editable install note: Triune module will load via local workspace path.")
+        log_warning("Editable install note: lucid_machines module will load via local workspace path.")
 
 
 # ---------------------------------------------------------------------------
@@ -410,7 +411,9 @@ def create_desktop_shortcut(hw: HardwareProfile, create_shortcuts: bool = True) 
     studio_bat = STUDIO_DIR / "PolysomStudio.bat"
     studio_sh = STUDIO_DIR / "PolysomStudio.sh"
     native_studio_candidates = (
+        WORKSPACE_ROOT / "app" / "PolysomStudio.exe",
         WORKSPACE_ROOT / "PolysomStudio.exe",
+        WORKSPACE_ROOT / "studio" / "publish" / "app" / "PolysomStudio.exe",
         WORKSPACE_ROOT / "studio" / "publish" / "PolysomStudio.exe",
         WORKSPACE_ROOT / "studio" / "windows" / "publish" / "PolysomStudio.exe",
         WORKSPACE_ROOT
@@ -433,7 +436,9 @@ def create_desktop_shortcut(hw: HardwareProfile, create_shortcuts: bool = True) 
     )
     native_studio_exe = next((path for path in native_studio_candidates if path.is_file()), studio_bat)
     native_setup_candidates = (
+        WORKSPACE_ROOT / "app" / "PolysomStudioSetup.exe",
         WORKSPACE_ROOT / "PolysomStudioSetup.exe",
+        WORKSPACE_ROOT / "studio" / "publish" / "app" / "PolysomStudioSetup.exe",
         WORKSPACE_ROOT / "studio" / "publish" / "PolysomStudioSetup.exe",
         WORKSPACE_ROOT / "studio" / "windows" / "publish" / "PolysomStudioSetup.exe",
         WORKSPACE_ROOT
@@ -447,7 +452,11 @@ def create_desktop_shortcut(hw: HardwareProfile, create_shortcuts: bool = True) 
     )
     native_setup_exe = next((path for path in native_setup_candidates if path.is_file()), None)
 
-    # Create studio/PolysomStudio.sh for Linux/macOS
+    if not create_shortcuts:
+        log_info("Skipping shortcut and launcher script writes as requested (--no-shortcuts).")
+        return
+
+    # Create studio/PolysomStudio.sh for Linux/macOS with LF line endings
     sh_content = """#!/usr/bin/env bash
 cd "$(dirname "$0")/.."
 if [ -f "studio/studio_env/bin/python" ]; then
@@ -458,17 +467,13 @@ else
     python3 scripts/launch_studio.py "$@"
 fi
 """
-    studio_sh.write_text(sh_content, encoding="utf-8")
+    studio_sh.write_text(sh_content, encoding="utf-8", newline="\n")
     try:
         studio_sh.chmod(0o755)
     except Exception:
         pass
 
     log_success("Configured Studio launch scripts in studio/ directory.")
-
-    if not create_shortcuts:
-        log_info("Skipping shortcut creation as requested (--no-shortcuts).")
-        return
 
     # Create Windows Desktop & Start Menu .lnk shortcuts via PowerShell
     if hw.is_windows:
@@ -541,7 +546,7 @@ Path={WORKSPACE_ROOT}
 Terminal=false
 Categories=Development;Science;ArtificialIntelligence;
 """
-            desktop_file.write_text(content, encoding="utf-8")
+            desktop_file.write_text(content, encoding="utf-8", newline="\n")
             desktop_file.chmod(0o755)
             log_success(f"Created Linux application launcher: {desktop_file}")
         except Exception as e:
@@ -555,10 +560,14 @@ def register_cli_on_path(py_bin: Path, hw: HardwareProfile, enable_path: bool = 
         return
 
     scripts_dir = str(py_bin.parent.resolve())
+    scripts_path = Path(scripts_dir)
+    cli_names = ("kcx", "polysom", "lucid-machines")
     if hw.is_windows:
         try:
             import winreg
 
+            available_clis = [cli for cli in cli_names if (scripts_path / f"{cli}.exe").exists()]
+            cli_label = ", ".join(f"'{c}'" for c in (available_clis or cli_names))
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment", 0, winreg.KEY_READ | winreg.KEY_WRITE) as key:
                 try:
                     current_path, reg_type = winreg.QueryValueEx(key, "Path")
@@ -571,24 +580,28 @@ def register_cli_on_path(py_bin: Path, hw: HardwareProfile, enable_path: bool = 
                     entries.insert(0, scripts_dir)
                     new_path = ";".join(entries)
                     winreg.SetValueEx(key, "Path", 0, reg_type, new_path)
-                    log_success(f"Registered 'lucid-machines' CLI on Windows User PATH: {scripts_dir}")
+                    log_success(f"Registered {cli_label} CLIs on Windows User PATH: {scripts_dir}")
                 else:
-                    log_success(f"Unified 'lucid-machines' CLI already registered on Windows User PATH: {scripts_dir}")
+                    log_success(f"Unified {cli_label} CLIs already registered on Windows User PATH: {scripts_dir}")
         except Exception as e:
             log_warning(f"Could not update Windows User PATH: {e}")
     else:
         local_bin = Path.home() / ".local" / "bin"
         try:
             local_bin.mkdir(parents=True, exist_ok=True)
-            lucid_machines_bin = py_bin.parent / "lucid-machines"
-            if lucid_machines_bin.exists():
-                target_link = local_bin / "lucid-machines"
-                if target_link.is_symlink() or target_link.exists():
-                    target_link.unlink()
-                target_link.symlink_to(lucid_machines_bin)
-                log_success(f"Linked 'lucid-machines' CLI to {target_link}")
+            for cli_name in cli_names:
+                cli_bin = py_bin.parent / cli_name
+                if cli_bin.exists():
+                    target_link = local_bin / cli_name
+                    try:
+                        if target_link.is_symlink() or target_link.exists():
+                            target_link.unlink()
+                        target_link.symlink_to(cli_bin)
+                        log_success(f"Linked '{cli_name}' CLI to {target_link}")
+                    except Exception as e:
+                        log_warning(f"Could not symlink '{cli_name}' into ~/.local/bin: {e}")
         except Exception as e:
-            log_warning(f"Could not symlink 'triune' into ~/.local/bin: {e}")
+            log_warning(f"Could not prepare ~/.local/bin for CLI symlinks: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -657,7 +670,10 @@ def verify_installation(py_bin: Path, hw: HardwareProfile, allow_cpu: bool = Fal
 # Main Orchestrator
 # ---------------------------------------------------------------------------
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Polysom Studio Comprehensive Automated Installer (Lucid Machines)")
+    parser = argparse.ArgumentParser(
+        description="Polysom Studio Comprehensive Automated Installer (Lucid Machines)",
+        epilog="Support: contact@lucidmachines.co | https://lucidmachines.co",
+    )
     parser.add_argument(
         "--venv", default="studio/studio_env", help="Target virtual environment directory (default: studio/studio_env)"
     )
@@ -669,7 +685,7 @@ def main() -> None:
     )
     parser.add_argument("--skip-torch", action="store_true", help="Skip PyTorch installation")
     parser.add_argument("--no-shortcuts", action="store_true", help="Skip Desktop and Start Menu shortcut creation")
-    parser.add_argument("--no-path", action="store_true", help="Skip registering triune CLI on User PATH")
+    parser.add_argument("--no-path", action="store_true", help="Skip registering kcx, polysom, and lucid-machines CLIs on User PATH")
     parser.add_argument("--no-launch", action="store_true", help="Do not launch Studio after install")
     parser.add_argument("--verify", action="store_true", help="Only verify existing environment health")
     parser.add_argument("-y", "--yes", action="store_true", help="Automatic yes to all prompts (unattended mode)")
@@ -699,11 +715,11 @@ def main() -> None:
         py_name = "python.exe" if is_win else "python"
         bin_dir = "Scripts" if is_win else "bin"
         cand = venv_path / bin_dir / py_name
-        py_bin = cand if cand.exists() else Path(sys.executable)
-        create_desktop_shortcut(hw, create_shortcuts=not args.no_shortcuts)
-        register_cli_on_path(py_bin, hw, enable_path=not args.no_path)
+        if not cand.is_file():
+            log_error(f"Virtual environment interpreter not found at: {cand}")
+            raise SystemExit(1)
         log_step(2, TOTAL_STEPS, "System Health Verification")
-        if not verify_installation(py_bin, hw, allow_cpu=args.cuda == "cpu"):
+        if not verify_installation(cand, hw, allow_cpu=args.cuda == "cpu"):
             raise SystemExit(1)
         return
 

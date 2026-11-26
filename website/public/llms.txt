@@ -1,0 +1,41 @@
+# Lucid Machines (v1.0.0)
+
+> Modular, hardware-aware deep learning ecosystem built around the Triune recurrent linear-attention MoE architecture, CentroidSteer Stiefel-manifold optimizer, Junkie model family, kcx CLI, and Polysom Studio v1.0.0 desktop workbench.
+
+- Website: https://lucidmachines.co/
+- Repository: https://github.com/lucid-machines/triune
+- Contact: contact@lucidmachines.co · founder@lucidmachines.co
+- License: Apache-2.0 (code) · CC BY 4.0 (research papers & figures)
+
+## Core Systems & Architecture
+
+- **Triune (`TriuneTransformer`)**: 3-tier multi-exit Sparse Mixture-of-Experts with `VectorisedGLA` (O(N) prefill, O(1) 64.0 KiB recurrent state cache up to L=16,384 tokens, 99.8% cache reduction vs. Softmax SDPA) and Gated DeltaNet (100% standard & overwrite MQAR recall).
+- **Hierarchical Dynamic Exits & CALM Speculative Decoding**: Reflex, Limbic, and Cortex exits with conformal CALM gating and Leviathan rejection sampling (4.31x Reflex vs. Cortex prefill speedup on the 90.79M rescued checkpoint).
+- **CentroidSteer 3-Tier Optimizer**: Tier 1 Muon (5th-order Newton-Schulz), Tier 2 CentroidSteer activation-subspace steering on compact Stiefel manifolds with `sCholQR2` and Grassmann parallel transport (`0.1118 B/p`, 98.4% reduction vs. FP32 AdamW, 5-seed statistically validated on FineWeb-Edu), Tier 3 AdamW / 8-bit AdamW.
+- **LayerStreamingEngine & Custom Kernels**: Streams transformer blocks between host RAM and consumer GPUs (fits 1.52B + CentroidSteer inside 8 GB VRAM; 1.97x faster than Windows WDDM spill), paired with chunked vocabulary cross-entropy (98.5% transient VRAM reduction vs. PyTorch) and native C/AVX2/CUDA/Triton kernels.
+- **Polysom Studio v1.0.0**: Native `.NET 10` + `WebView2` desktop workbench with 6 perceptual themes, 40-node typed DAG IDE, 3D brain topology inspector, and OpenAI-compatible inference/training backend.
+
+## Junkie Model Family
+
+- `junkie-mini`: 535.10M total / 230.81M expected active (12L / 1024D / 4E+1S)
+- `junkie-1b`: 1.16B total / 374.99M expected active (22L / 1024D / 4E+1S)
+- `junkie-3b`: 2.99B total / 206.73M dynamic active (16L / 1024D / 16E+1S, `< 20 GiB` Colab L4 FP8)
+- `junkie-7b-dus`: ~7.02B depth-upscaled 36-layer Triune model (best-layer looped from trained `junkie-3b` via `scripts/expand_depth.py`)
+- `junkie-7b`: 7.40B total / 1.95B expected active (32L / 2048D / 8E+1S flagship)
+
+## Quickstart
+
+```bash
+pip install lucid-machines
+kcx doctor
+kcx plan-memory --vram-gb 8.0
+kcx studio --port 8000
+kcx serve --port 8000
+```
+
+## Research & Artifacts
+
+- [CentroidSteer Paper (PDF)](https://lucidmachines.co/papers/centroidsteer.pdf)
+- [Triune Systems Paper (PDF)](https://lucidmachines.co/papers/triune_architecture.pdf)
+- [GitHub Releases](https://github.com/lucid-machines/triune/releases)
+- [OG Preview Image](https://lucidmachines.co/og-image.png)

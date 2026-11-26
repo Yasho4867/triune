@@ -13,8 +13,6 @@
 \usepackage{microtype}
 \usepackage{hyperref}
 \usepackage{xcolor}
-\usepackage{algorithm}
-\usepackage{algpseudocode}
 \usepackage{cite}
 
 \hypersetup{
@@ -33,7 +31,7 @@
 \title{\textbf{Triune: A Memory-Virtualizing and Constant-State Transformer Architecture for Long-Context Autoregressive Models}}
 
 \author{
-    \textbf{Yash Bhardwaj} \\
+    \textbf{Yash Bhardwaj}\thanks{Correspondence: \texttt{founder@lucidmachines.co}. Manuscript and figures are licensed under CC BY 4.0; the reference implementation in \texttt{lucid\_machines} is licensed under Apache 2.0.} \\
     Lucid Machines \\
     \texttt{https://lucidmachines.co} \;$\cdot$\; \texttt{https://github.com/lucid-machines/triune}
 }
@@ -171,7 +169,7 @@ Cortex (Layer 8) & $26.76\text{ ms}$ & $9.32\text{ ms/tok}$ & $76,543$ & \textbf
 }
 \end{table}
 
-To eliminate redundant computation on low-entropy tokens (e.g., syntax boilerplate, punctuation), Triune integrates three hierarchical execution exit points~\cite{xin2020deebert,liu2020fastbert,schuster2022confident}:
+To eliminate redundant computation on low-entropy tokens (e.g., syntax boilerplate, punctuation), Triune integrates three hierarchical execution exit points~\cite{xin2020deebert,liu2020fastbert,schuster2022confident} (Table~\ref{tab:dynamic_exits}):
 \begin{enumerate}
     \item \textbf{Reflex Exit (Layer 2)}: Shallow early exit for low-entropy tokens.
     \item \textbf{Limbic Exit (Layer 5)}: Intermediate depth for standard syntactic phrases.
@@ -203,7 +201,7 @@ with exit weights $w_2 = 0.2, w_5 = 0.3, w_8 = 0.5$. Because unbalanced training
     \label{fig:chunked_ce}
 \end{figure}
 
-Standard cross-entropy loss materializes the complete logit tensor $\mathcal{Z} = H W_{\text{head}}^T \in \mathbb{R}^{N \times V}$ across all $N = B \times T$ sequence tokens simultaneously, creating an unsustainable $\mathcal{O}(NV)$ transient memory footprint.
+Standard cross-entropy loss materializes the complete logit tensor $\mathcal{Z} = H W_{\text{head}}^T \in \mathbb{R}^{N \times V}$ across all $N = B \times T$ sequence tokens simultaneously (Figure~\ref{fig:chunked_ce}), creating an unsustainable $\mathcal{O}(NV)$ transient memory footprint.
 Triune integrates an exact, fused streaming cross-entropy formulation (\texttt{\_FusedLinearCrossEntropy}) that tiles the sequence into micro-chunks of size $B_c \le 1024$.
 Let $N_{\text{valid}} = \sum_{i=1}^N \mathbb{I}(y_i \neq \text{ignore\_index})$ denote the count of unmasked target tokens. For each chunk $c \in \{1, \dots, \lceil N / B_c \rceil\}$:
 \begin{enumerate}
@@ -390,7 +388,7 @@ To bring Triune's consumer-GPU tooling to open-weights models beyond custom chec
 \subsection{Unified Suite Framing, Junkie Architectural Sizing, \& Polysom Studio}
 \label{sec:suite_junkie}
 
-Within \textbf{Lucid Machines \texttt{v1.0.0}}, \texttt{TriuneTransformer} serves as the core neural architecture backing the \texttt{lucid\_machines} Python framework (preserving \texttt{triune} backward-compatibility shims), the \texttt{kcx} CLI (\texttt{kcx studio}, \texttt{kcx train}, \texttt{kcx chat}, \texttt{kcx doctor}, with \texttt{polysom} and \texttt{lucid-machines} aliases), and the \textbf{Polysom Studio} desktop workbench (\texttt{.NET 10} + \texttt{WebView2} + \texttt{lucid\_machines\_core.dll}). Table~\ref{tab:junkie_meta} summarizes the inaugural \textbf{Junkie} target model configurations measured directly on \texttt{torch.device("meta")} (\texttt{vocab\_size=32000}, \texttt{shared\_expert=true}); we strictly separate these untrained target parameter and static VRAM budgets from our hardware-verified $90.79\text{M}$ checkpoint and RTX~5070 streaming measurements.
+Within \textbf{Lucid Machines \texttt{v1.0.0}}, \texttt{TriuneTransformer} serves as the core neural architecture backing the \texttt{lucid\_machines} Python framework, the \texttt{kcx} CLI (\texttt{kcx studio}, \texttt{kcx train}, \texttt{kcx chat}, \texttt{kcx doctor}, with \texttt{polysom} and \texttt{lucid-machines} aliases), and the \textbf{Polysom Studio} desktop workbench (\texttt{.NET 10} + \texttt{WebView2} + \texttt{lucid\_machines\_core.dll}). Table~\ref{tab:junkie_meta} summarizes the inaugural \textbf{Junkie} target model configurations measured directly on \texttt{torch.device("meta")} (\texttt{vocab\_size=32000}, \texttt{shared\_expert=true}); we strictly separate these untrained target parameter and static VRAM budgets from our hardware-verified $90.79\text{M}$ checkpoint and RTX~5070 streaming measurements.
 
 \begin{table*}[t]
 \centering
@@ -558,10 +556,10 @@ We highlight five concrete engineering and experimental boundaries established b
 
 \section{Reproducibility \& Artifact Provenance}
 
-All models, kernels, runtime engines, benchmark drivers, raw telemetry JSONs, and automated regression checks are versioned in the Lucid Machines repository (\texttt{https://github.com/lucid-machines/triune}, with \texttt{triune} backward-compatibility shims):
+All models, kernels, runtime engines, benchmark drivers, raw telemetry JSONs, and automated regression checks are versioned in the Lucid Machines repository (\url{https://github.com/lucid-machines/triune}):
 \begin{itemize}\raggedright\setlength{\itemsep}{2pt}
     \item \textbf{Core Modules}: \texttt{lucid\_machines/model/transformer.py} (CALM exits, \texttt{mean\_pool}/\texttt{order\_pool}/\texttt{expand}), \texttt{lucid\_machines/model/moe.py} (default sparse \texttt{MoE\_FFN}), \texttt{lucid\_machines/model/speculative.py} ($T=0$ greedy exact match and Leviathan et~al.\ rejection sampling), \texttt{lucid\_machines/model/fp8.py} \& \texttt{lucid\_machines/kernels/fast\_nvfp4.py}, \texttt{lucid\_machines/kernels/fast\_gla.py} (stabilized GLA \& Gated DeltaNet), \texttt{lucid\_machines/runtime/streaming.py} \& \texttt{lucid\_machines/runtime/staging.py} (checkpointed layer streaming), and \texttt{lucid\_machines/export/hf\_compat.py} / \texttt{lucid\_machines/model/adapters.py} (HuggingFace bridge).
-    \item \textbf{Checkpoint, Rescue, \& Benchmark Drivers}: Rescued checkpoint \texttt{checkpoints/triune\_studio\_step\_36500\_rescued.pt} (\texttt{scripts/rescue\_checkpoint.py} $\to$ \texttt{benchmarks/checkpoint\_rescue\_results.json}); \texttt{benchmarks/calm\_calibration.py} $\to$ \texttt{benchmarks/calm\_calibration.json}; \texttt{scripts/benchmark\_full\_model\_e2e.py} $\to$ \texttt{benchmarks/full\_model\_e2e.json}; \texttt{scripts/benchmark\_layer\_streaming.py} $\to$ \texttt{benchmarks/layer\_streaming\_results.json}; \texttt{scripts/benchmark\_competitors.py} $\to$ \texttt{benchmarks/benchmark\_results.json}; \texttt{benchmarks/moe\_ffn\_sparse\_vs\_dense.py}; \texttt{scripts/benchmark\_long\_context.py}; and \texttt{scripts/benchmark\_associative\_recall.py}.
+    \item \textbf{Checkpoint, Rescue, \& Benchmark Drivers}: Rescued checkpoint \texttt{checkpoints/\allowbreak{}triune\_studio\_step\_36500\_rescued.pt} (\texttt{scripts/rescue\_checkpoint.py} $\to$ \texttt{benchmarks/checkpoint\_rescue\_results.json}); \texttt{benchmarks/calm\_calibration.py} $\to$ \texttt{benchmarks/calm\_calibration.json}; \texttt{scripts/benchmark\_full\_model\_e2e.py} $\to$ \texttt{benchmarks/full\_model\_e2e.json}; \texttt{scripts/benchmark\_layer\_streaming.py} $\to$ \texttt{benchmarks/layer\_streaming\_results.json}; \texttt{scripts/benchmark\_competitors.py} $\to$ \texttt{benchmarks/benchmark\_results.json}; \texttt{benchmarks/moe\_ffn\_sparse\_vs\_dense.py}; \texttt{scripts/benchmark\_long\_context.py}; and \texttt{scripts/benchmark\_associative\_recall.py}.
     \item \textbf{Automated Verification}: Validated via \texttt{pytest tests/test\_kernels.py tests/test\_streaming\_engine.py tests/test\_streaming\_layer\_discovery.py tests/test\_self\_speculative\_decoding.py tests/test\_hf\_export.py tests/test\_hf\_training\_bridge.py tests/test\_adapters.py tests/test\_benchmark\_validity.py} on Python 3.14.7, PyTorch 2.14.1+cu132, CUDA 13.2 (RTX 5070 Laptop GPU).
 \end{itemize}
 
@@ -569,141 +567,14 @@ All models, kernels, runtime engines, benchmark drivers, raw telemetry JSONs, an
 
 Triune demonstrates that long-context autoregressive foundation models and billion-scale parameter workloads can be trained and served reliably on consumer $8\text{ GB}$ GPUs. By unifying stabilized sub-quadratic GLA and Gated DeltaNet kernels, chunked vocabulary-projection loss, conformal calibrated early exits, self-speculative decoding, multi-tier quantization, activation-checkpointed layer streaming, and HuggingFace export/adapter interfaces---while documenting exact system trade-offs where hardware or batching limits persist---Triune provides a transparent, reproducible full-stack blueprint for memory-constrained deep learning.
 
+\section*{Ethics, Broader Impact, \& Compute Disclosure}
+
+\textbf{Compute Footprint}: All empirical experiments were executed on a single consumer GPU (\texttt{NVIDIA GeForce RTX 5070 Laptop GPU}, $7.93$\,GiB VRAM, Python 3.14.7, PyTorch 2.14.1+cu132, CUDA 13.2), encompassing sub-hour kernel/end-to-end microbenchmarks and a $61.04$\,s KL hierarchy rescue (\texttt{step\_40555}).
+\textbf{Data Provenance \& Privacy}: Language modeling calibration, rescue, and perplexity evaluations rely solely on public educational documents from \texttt{HuggingFaceFW/fineweb-edu} (\texttt{sample-10BT}), with zero human-subjects collection and zero personally identifiable information (PII).
+\textbf{Broader Impact}: Enabling $1.52\text{B}$-scale streamed training, conformal early-exit verification, and constant-state long-context inference inside $8\text{ GB}$ consumer GPUs democratizes local edge-LLM research and reduces hardware energy barriers; standard dual-use considerations for autoregressive language modeling apply, mitigated by transparent reporting of failure modes and calibration guarantees.
+\textbf{Licensing}: This manuscript and its accompanying figures are released under the Creative Commons Attribution 4.0 International License (\textbf{CC BY 4.0}); the reference implementation and benchmark drivers in \texttt{lucid\_machines} are licensed under the \textbf{Apache License 2.0}.
+
 \bibliographystyle{IEEEtran}
-\begin{thebibliography}{99}
-
-\bibitem{vaswani2017attention}
-A.~Vaswani et~al., ``Attention is all you need,'' in \emph{NeurIPS}, 2017.
-
-\bibitem{dao2022flashattention}
-T.~Dao et~al., ``FlashAttention: Fast and memory-efficient exact attention with IO-awareness,'' in \emph{NeurIPS}, 2022.
-
-\bibitem{dao2023flashattention2}
-T.~Dao, ``FlashAttention-2: Faster attention with better parallelism and work partitioning,'' in \emph{ICLR}, 2024.
-
-\bibitem{williams2009roofline}
-S.~Williams, A.~Waterman, and D.~Patterson, ``Roofline: an insightful visual performance model for multicore architectures,'' \emph{CACM}, vol.~52, no.~4, pp.~65--76, 2009.
-
-\bibitem{yang2023gated}
-S.~Yang et~al., ``Gated linear attention transformers with hardware-efficient sub-quadratic training,'' in \emph{ICML}, 2024.
-
-\bibitem{yang2024gateddeltanet}
-S.~Yang, J.~Kautz, and A.~Hatamizadeh, ``Gated delta networks: Improving Mamba2 with delta rule,'' in \emph{ICLR}, 2025.
-
-\bibitem{schlag2021linear}
-I.~Schlag, K.~Irie, and J.~Schmidhuber, ``Linear transformers are secretly fast weight programmers,'' in \emph{ICML}, 2021.
-
-\bibitem{arora2024zoology}
-S.~Arora et~al., ``Zoology: Measuring and improving recall in efficient language models,'' in \emph{ICLR}, 2024.
-
-\bibitem{katharopoulos2020transformers}
-A.~Katharopoulos et~al., ``Transformers are RNNs: Fast autoregressive transformers with linear attention,'' in \emph{ICML}, 2020.
-
-\bibitem{peng2023rwkv}
-B.~Peng et~al., ``RWKV: Reinventing RNNs for the transformer era,'' in \emph{EMNLP}, 2023.
-
-\bibitem{sun2023retentive}
-Y.~Sun et~al., ``Retentive network: A successor to transformer for large language models,'' \emph{arXiv preprint arXiv:2307.08621}, 2023.
-
-\bibitem{gu2023mamba}
-A.~Gu and T.~Dao, ``Mamba: Linear-time sequence modeling with selective state spaces,'' \emph{arXiv preprint arXiv:2312.00752}, 2023.
-
-\bibitem{tillet2019triton}
-P.~Tillet, H.~T.~Kung, and D.~Cox, ``Triton: An intermediate language and compiler for tiled neural network computations,'' in \emph{MAPL}, 2019.
-
-\bibitem{liger2024}
-LinkedIn, ``Liger Kernel: Efficient Triton kernels for LLM training,'' \emph{GitHub repository}, 2024.
-
-\bibitem{shoeybi2019megatron}
-M.~Shoeybi et~al., ``Megatron-LM: Training multi-billion parameter language models using model parallelism,'' \emph{arXiv preprint arXiv:1909.08053}, 2019.
-
-\bibitem{ren2021zerooffload}
-J.~Ren et~al., ``ZeRO-Offload: Democratizing billion-scale model training,'' in \emph{USENIX ATC}, 2021.
-
-\bibitem{rajbhandari2021zeroinfinity}
-S.~Rajbhandari et~al., ``ZeRO-Infinity: Breaking the GPU memory wall for extreme scale deep learning,'' in \emph{SC}, 2021.
-
-\bibitem{chen2016training}
-T.~Chen et~al., ``Training deep nets with sublinear memory cost,'' \emph{arXiv preprint arXiv:1604.06174}, 2016.
-
-\bibitem{pudipeddi2020l2l}
-B.~Pudipeddi et~al., ``Training large neural networks with constant memory using a new execution algorithm,'' \emph{arXiv preprint arXiv:2002.05645}, 2020.
-
-\bibitem{xin2020deebert}
-J.~Xin et~al., ``DeeBERT: Dynamic early exiting for accelerating BERT inference,'' in \emph{ACL}, 2020.
-
-\bibitem{liu2020fastbert}
-W.~Liu et~al., ``FastBERT: a self-distilling BERT with adaptive inference time,'' in \emph{ACL}, 2020.
-
-\bibitem{schuster2022confident}
-T.~Schuster et~al., ``Confident adaptive language modeling,'' in \emph{NeurIPS}, 2022.
-
-\bibitem{elhoushi2024layerskip}
-M.~Elhoushi et~al., ``LayerSkip: Enabling early exit inference and self-speculative decoding,'' in \emph{ACL}, 2024.
-
-\bibitem{leviathan2023fast}
-Y.~Leviathan, M.~Kalman, and Y.~Matias, ``Fast inference from transformers via speculative decoding,'' in \emph{ICML}, 2023.
-
-\bibitem{chen2023accelerating}
-C.~Chen et~al., ``Accelerating large language model decoding with speculative sampling,'' \emph{arXiv preprint arXiv:2302.01318}, 2023.
-
-\bibitem{angelopoulos2021gentle}
-A.~N.~Angelopoulos and S.~Bates, ``A gentle introduction to conformal prediction and distribution-free uncertainty quantification,'' \emph{arXiv preprint arXiv:2107.07511}, 2021.
-
-\bibitem{guo2017calibration}
-C.~Guo et~al., ``On calibration of modern neural networks,'' in \emph{ICML}, 2017.
-
-\bibitem{wilson1927probable}
-E.~B.~Wilson, ``Probable inference, the law of succession, and statistical inference,'' \emph{JASA}, vol.~22, no.~158, pp.~209--212, 1927.
-
-\bibitem{shazeer2017outrageously}
-N.~Shazeer et~al., ``Outrageously large neural networks: The sparsely-gated mixture-of-experts layer,'' in \emph{ICLR}, 2017.
-
-\bibitem{fedus2022switch}
-W.~Fedus, B.~Zoph, and N.~Shazeer, ``Switch transformers: Scaling to trillion parameter models with simple and efficient sparsity,'' \emph{JMLR}, vol.~23, no.~120, pp.~1--39, 2022.
-
-\bibitem{jiang2024mixtral}
-A.~Q.~Jiang et~al., ``Mixtral of experts,'' \emph{arXiv preprint arXiv:2401.04088}, 2024.
-
-\bibitem{gale2023megablocks}
-T.~Gale et~al., ``MegaBlocks: Efficient sparse training with mixture-of-experts,'' in \emph{MLSys}, 2023.
-
-\bibitem{micikevicius2022fp8}
-P.~Micikevicius et~al., ``FP8 formats for deep learning,'' \emph{arXiv preprint arXiv:2209.05433}, 2022.
-
-\bibitem{liu2024spinquant}
-Z.~Liu et~al., ``SpinQuant: LLM quantization with learned rotations,'' in \emph{ICLR}, 2025.
-
-\bibitem{ashkboos2024quarot}
-S.~Ashkboos et~al., ``QuaRot: Outlier-free 4-bit inference in rotated LLMs,'' in \emph{NeurIPS}, 2024.
-
-\bibitem{frantar2023gptq}
-E.~Frantar et~al., ``GPTQ: Accurate post-training quantization for generative pre-trained transformers,'' in \emph{ICLR}, 2023.
-
-\bibitem{lin2024awq}
-J.~Lin et~al., ``AWQ: Activation-aware weight quantization for LLM compression and acceleration,'' in \emph{MLSys}, 2024.
-
-\bibitem{dettmers2022optimizers}
-T.~Dettmers et~al., ``8-bit optimizers via block-wise quantization,'' in \emph{ICLR}, 2022.
-
-\bibitem{jordan2024muon}
-K.~Jordan et~al., ``Muon: An optimizer for hidden layers in neural networks,'' 2024.
-
-\bibitem{hu2022lora}
-E.~J.~Hu et~al., ``LoRA: Low-rank adaptation of large language models,'' in \emph{ICLR}, 2022.
-
-\bibitem{su2024roformer}
-J.~Su et~al., ``RoFormer: Enhanced transformer with rotary position embedding,'' \emph{Neurocomputing}, vol.~568, 2024.
-
-\bibitem{sennrich2016bpe}
-R.~Sennrich, B.~Haddow, and A.~Birch, ``Neural machine translation of rare words with subword units,'' in \emph{ACL}, 2016.
-
-\bibitem{bhardwaj2026centroidsteer}
-Y.~Bhardwaj, ``CentroidSteer: Activation-guided low-rank subspace optimization on the Stiefel manifold for sparse mixture-of-experts,'' Lucid Machines Technical Report, 2026.
-
-\bibitem{golub2013matrix}
-G.~H.~Golub and C.~F.~Van~Loan, \emph{Matrix Computations}, 4th~ed.\hskip 1em plus 0.5em minus 0.4em\relax Johns Hopkins University Press, 2013.
-
-\end{thebibliography}
+\bibliography{references}
 
 \end{document}

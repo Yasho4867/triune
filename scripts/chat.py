@@ -20,7 +20,12 @@ from lucid_machines.cli_ui import (
     route_badge_ansi,
     status_spinner,
 )
-from lucid_machines.inference import generate_response, load_checkpoint_model, load_model_for_inference
+from lucid_machines.inference import (
+    generate_response,
+    load_checkpoint_model,
+    load_model_for_inference,
+    resolve_default_checkpoint,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -33,7 +38,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="HF model repo ID, local HF directory, NVFP4 cache, or ollama:<tag>",
     )
-    parser.add_argument("--checkpoint", default="checkpoints_full/best.pt")
+    parser.add_argument(
+        "--checkpoint",
+        default=None,
+        help="Model checkpoint path (auto-resolves active/latest checkpoint when omitted)",
+    )
     parser.add_argument("--tokenizer_path", default="triune_tokenizer.json")
     parser.add_argument("--adapter", default=None, help="LoRA adapter directory or safetensors path to attach")
     parser.add_argument("--temperature", type=float, default=0.7)
@@ -80,6 +89,12 @@ def main(argv: list[str] | None = None) -> None:
     """Run an interactive terminal chat loop with live streaming and telemetry."""
     ensure_utf8_stdio()
     args = build_parser().parse_args(argv)
+    if not args.model:
+        try:
+            args.checkpoint = str(resolve_default_checkpoint(args.checkpoint))
+        except FileNotFoundError as exc:
+            render_notice(str(exc), level="error")
+            raise SystemExit(1) from exc
     source = args.model or args.checkpoint
     depth_map: dict[str, int | None] = {"auto": None, "reflex": 0, "limbic": 1, "cortex": 2}
     active_depth: int | None = depth_map.get(args.depth)
@@ -109,39 +124,43 @@ def main(argv: list[str] | None = None) -> None:
         mode_label = "Ollama Live Runtime"
     else:
         quantize = "nvfp4" if args.nvfp4 else None
-        with status_spinner(f"Loading model '{source}'..."):
-            if getattr(args, "transmute", False) and (args.model or Path(source).is_dir()):
-                from lucid_machines.model import transmuter as _transmuter
+        try:
+            with status_spinner(f"Loading model '{source}'..."):
+                if getattr(args, "transmute", False) and (args.model or Path(source).is_dir()):
+                    from lucid_machines.model import transmuter as _transmuter
 
-                _transmute_fn = getattr(_transmuter, "transmute_hf_to_triune", None) or getattr(
-                    _transmuter, "transmute_hf_to_lucid", None
-                )
-                model, tokenizer, metadata, device, pad_id, eos_id = _transmute_fn(
-                    source,
-                    reflex_ratio=args.reflex_ratio,
-                    quantize=quantize,
-                    disk_stream=args.disk_stream,
-                    disk_cache_dir=args.disk_cache,
-                    device=args.device,
-                    tokenizer_path=args.tokenizer_path,
-                )
-                mode_label = "Triune 3-Tier Transmuted HF"
-            elif args.model is not None or args.nvfp4 or args.disk_stream or Path(source).is_dir():
-                model, tokenizer, metadata, device, pad_id, eos_id = load_model_for_inference(
-                    source,
-                    args.tokenizer_path,
-                    device=args.device,
-                    adapter_path=args.adapter,
-                    quantize=quantize,
-                    disk_stream=args.disk_stream,
-                    disk_cache_dir=args.disk_cache,
-                )
-                mode_label = "Triune Native" if hasattr(model, "init_cache") else "HF / NVFP4 PyTorch"
-            else:
-                model, tokenizer, metadata, device, pad_id, eos_id = load_checkpoint_model(
-                    args.checkpoint, args.tokenizer_path, device=args.device, adapter_path=args.adapter
-                )
-                mode_label = "Triune Checkpoint"
+                    _transmute_fn = getattr(_transmuter, "transmute_hf_to_triune", None) or getattr(
+                        _transmuter, "transmute_hf_to_lucid", None
+                    )
+                    model, tokenizer, metadata, device, pad_id, eos_id = _transmute_fn(
+                        source,
+                        reflex_ratio=args.reflex_ratio,
+                        quantize=quantize,
+                        disk_stream=args.disk_stream,
+                        disk_cache_dir=args.disk_cache,
+                        device=args.device,
+                        tokenizer_path=args.tokenizer_path,
+                    )
+                    mode_label = "Triune 3-Tier Transmuted HF"
+                elif args.model is not None or args.nvfp4 or args.disk_stream or Path(source).is_dir():
+                    model, tokenizer, metadata, device, pad_id, eos_id = load_model_for_inference(
+                        source,
+                        args.tokenizer_path,
+                        device=args.device,
+                        adapter_path=args.adapter,
+                        quantize=quantize,
+                        disk_stream=args.disk_stream,
+                        disk_cache_dir=args.disk_cache,
+                    )
+                    mode_label = "Triune Native" if hasattr(model, "init_cache") else "HF / NVFP4 PyTorch"
+                else:
+                    model, tokenizer, metadata, device, pad_id, eos_id = load_checkpoint_model(
+                        args.checkpoint, args.tokenizer_path, device=args.device, adapter_path=args.adapter
+                    )
+                    mode_label = "Triune Checkpoint"
+        except (FileNotFoundError, OSError, RuntimeError, ValueError, EOFError, KeyError) as exc:
+            render_notice(f"Failed to load model '{source}': {exc}", level="error")
+            raise SystemExit(1) from exc
 
     is_triune_model = bool(
         not is_ollama

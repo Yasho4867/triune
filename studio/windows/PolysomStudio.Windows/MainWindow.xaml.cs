@@ -4,6 +4,7 @@ using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Threading;
@@ -269,17 +270,32 @@ public partial class MainWindow : Window
         StudioView.Source = baseUri;
     }
 
-    private static string FindWorkspaceRoot()
+    internal static string FindWorkspaceRoot()
     {
-        if (File.Exists(Path.Combine(Environment.CurrentDirectory, "pyproject.toml")) &&
-            File.Exists(Path.Combine(Environment.CurrentDirectory, "studio", "src", "index.html")))
-            return Environment.CurrentDirectory;
+        static bool IsValidWorkspace(string candidate) =>
+            File.Exists(Path.Combine(candidate, "pyproject.toml")) &&
+            File.Exists(Path.Combine(candidate, "studio", "src", "index.html"));
 
-        for (var directory = new DirectoryInfo(Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
+        var seeds = new[]
         {
-            if (File.Exists(Path.Combine(directory.FullName, "pyproject.toml")) &&
-                File.Exists(Path.Combine(directory.FullName, "studio", "src", "index.html")))
-                return directory.FullName;
+            Environment.CurrentDirectory,
+            Path.GetDirectoryName(Environment.ProcessPath),
+            AppContext.BaseDirectory
+        }
+        .Where(s => !string.IsNullOrWhiteSpace(s))
+        .Distinct(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var seed in seeds)
+        {
+            for (var directory = new DirectoryInfo(seed!); directory is not null; directory = directory.Parent)
+            {
+                if (IsValidWorkspace(directory.FullName))
+                    return directory.FullName;
+
+                var appChild = Path.Combine(directory.FullName, "app");
+                if (IsValidWorkspace(appChild))
+                    return appChild;
+            }
         }
 
         throw new DirectoryNotFoundException("Could not locate the Lucid Machines workspace. Build or run this app from the repository installation.");
@@ -304,23 +320,6 @@ public partial class MainWindow : Window
         }
 
         throw new FileNotFoundException("Python was not found. Install Studio from the project environment first.");
-    }
-
-        private static void TryKillOrphanedStudioProcesses()
-    {
-        try
-        {
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = "powershell.exe",
-                Arguments = "-NoProfile -Command \"$p = (Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue).OwningProcess; if ($p) { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue }\"",
-                CreateNoWindow = true,
-                UseShellExecute = false
-            };
-            using var p = Process.Start(startInfo);
-            p?.WaitForExit(1000);
-        }
-        catch { }
     }
 
     private async Task<int> FindStudioPortAsync()
@@ -604,13 +603,52 @@ internal static class JobTracker
 
 internal static class NativeCoreInterop
 {
-    [DllImport("lucid_machines_core.dll", CallingConvention = CallingConvention.Cdecl)]
+    private const string CoreLibName = "lucid_machines_core.dll";
+    private static volatile string? _workspaceRoot;
+
+    static NativeCoreInterop()
+    {
+        NativeLibrary.SetDllImportResolver(typeof(NativeCoreInterop).Assembly, ResolveNativeLibrary);
+    }
+
+    public static void SetWorkspaceRoot(string? workspaceRoot)
+    {
+        if (!string.IsNullOrWhiteSpace(workspaceRoot))
+            _workspaceRoot = workspaceRoot;
+    }
+
+    private static IntPtr ResolveNativeLibrary(string libraryName, Assembly assembly, DllImportSearchPath? searchPath)
+    {
+        if (!string.Equals(libraryName, CoreLibName, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(libraryName, "lucid_machines_core", StringComparison.OrdinalIgnoreCase))
+        {
+            return IntPtr.Zero;
+        }
+
+        var root = _workspaceRoot;
+        var candidates = new List<string>(3);
+        if (!string.IsNullOrWhiteSpace(root))
+            candidates.Add(Path.Combine(root, "lucid_machines", "ops", CoreLibName));
+        candidates.Add(Path.Combine(AppContext.BaseDirectory, CoreLibName));
+        if (Path.GetDirectoryName(Environment.ProcessPath) is { } procDir)
+            candidates.Add(Path.Combine(procDir, CoreLibName));
+
+        foreach (var candidate in candidates.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (File.Exists(candidate) && NativeLibrary.TryLoad(candidate, out var handle))
+                return handle;
+        }
+
+        return IntPtr.Zero;
+    }
+
+    [DllImport(CoreLibName, CallingConvention = CallingConvention.Cdecl)]
     private static extern IntPtr lucid_machines_engine_version();
 
-    [DllImport("lucid_machines_core.dll", CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(CoreLibName, CallingConvention = CallingConvention.Cdecl)]
     private static extern int lucid_machines_has_cuda_runtime();
 
-    [DllImport("lucid_machines_core.dll", CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(CoreLibName, CallingConvention = CallingConvention.Cdecl)]
     public static extern void lucid_machines_compute_neuron_heatmap_f32(
         IntPtr activations,
         IntPtr binsOut,
@@ -618,17 +656,11 @@ internal static class NativeCoreInterop
         int numElements,
         int numBins);
 
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern bool SetDllDirectory(string lpPathName);
-
     public static string? TryGetEngineStatus(string workspaceRoot)
     {
         try
         {
-            var opsDir = Path.Combine(workspaceRoot, "lucid_machines", "ops");
-            if (Directory.Exists(opsDir))
-                SetDllDirectory(opsDir);
-
+            SetWorkspaceRoot(workspaceRoot);
             var versionPtr = lucid_machines_engine_version();
             var version = versionPtr != IntPtr.Zero ? Marshal.PtrToStringAnsi(versionPtr) : "1.0.0";
             var cudaReady = lucid_machines_has_cuda_runtime() != 0;
@@ -644,9 +676,7 @@ internal static class NativeCoreInterop
     {
         try
         {
-            var opsDir = Path.Combine(workspaceRoot, "lucid_machines", "ops");
-            if (Directory.Exists(opsDir))
-                SetDllDirectory(opsDir);
+            SetWorkspaceRoot(workspaceRoot);
             return lucid_machines_has_cuda_runtime() != 0;
         }
         catch { return false; }

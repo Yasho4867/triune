@@ -2736,6 +2736,216 @@
   }
 }
 
+/* Lucid Machines v1.0.0 Release Distribution & Research Papers */
+.release-distro-bar {
+  margin-top: 34px;
+  padding: 28px 30px;
+  border: 1px solid var(--line);
+  background: #ede1cd;
+}
+.release-distro-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.release-distro-head h3 {
+  margin-top: 6px;
+  font-family: var(--serif);
+  font-size: 28px;
+  font-weight: 400;
+}
+.release-distro-head h3 code {
+  font-family: var(--mono);
+  font-size: 16px;
+}
+.os-switcher {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.os-switch-btn {
+  padding: 7px 14px;
+  border: 1px solid var(--line);
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+.os-switch-btn.is-active {
+  background: var(--plum);
+  border-color: var(--plum);
+  color: var(--paper);
+}
+.release-os-panel {
+  margin-top: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.release-primary-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.release-cta-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 18px;
+  background: var(--plum);
+  color: var(--paper);
+  font-family: var(--mono);
+  font-size: 11px;
+  border: 1px solid var(--plum);
+}
+.release-cta-link.secondary {
+  background: var(--paper);
+  color: var(--ink);
+  border-color: var(--line);
+}
+.release-cta-link .arrow-icon {
+  width: 12px;
+  height: 12px;
+}
+.release-smartscreen-note {
+  font-size: 12px;
+  line-height: 1.65;
+  color: #5c4b42;
+}
+.release-smartscreen-note a {
+  text-decoration: underline;
+  color: var(--ink);
+}
+.release-cmd-block {
+  margin: 0;
+  padding: 12px 16px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.6;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.release-checksums-grid {
+  margin-top: 18px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 10px;
+}
+.release-checksum-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  background: var(--paper);
+  min-width: 0;
+}
+.checksum-name {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.checksum-meta {
+  font-size: 11px;
+  color: #6b584d;
+}
+.checksum-hash {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: #7d695a;
+  overflow-wrap: anywhere;
+}
+.paper-cards-grid {
+  margin-top: 36px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 20px;
+}
+.paper-card {
+  padding: 24px;
+  border: 1px solid var(--line);
+  background: #ede1cd;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.paper-card-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.paper-contact-link {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--plum);
+  text-decoration: underline;
+}
+.paper-card h3 {
+  font-family: var(--serif);
+  font-size: 23px;
+  font-weight: 400;
+  line-height: 1.2;
+}
+.paper-card > p {
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: #5c4b42;
+}
+.paper-card-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+}
+.bibtex-block {
+  margin: 4px 0 0;
+  padding: 10px 12px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1.5;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.company-contact-row {
+  margin-top: 16px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: #6b584d;
+}
+.company-contact-row a {
+  color: var(--plum);
+  text-decoration: underline;
+}
+.footer-bottom a {
+  color: inherit;
+  text-decoration: underline;
+}
+
+@media (max-width: 640px) {
+  .release-distro-bar {
+    padding: 18px 16px;
+  }
+  .paper-cards-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   html {
     scroll-behavior: auto;

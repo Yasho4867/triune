@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import inspect
 import math
 import random
 
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 
-from lucid_machines.kernels.fast_cross_entropy import fast_cross_entropy
+from lucid_machines.kernels.fast_cross_entropy import chunked_cross_entropy_from_hidden, fast_cross_entropy
 from lucid_machines.model import MoE_FFN
 from lucid_machines.runtime.cuda_graph import CUDAGraphEngine
 from lucid_machines.runtime.resource_manager import LiveVRAMMonitor
@@ -63,6 +65,119 @@ class TrainingEngine:
         if pad_id is None:
             pad_id = -100
         return fast_cross_entropy(logits.reshape(-1, vocab_size), y_flat, ignore_index=int(pad_id))
+
+    @staticmethod
+    def _is_valid_chunked_head(head: object, vocab_size: int, device: torch.device) -> bool:
+        if type(head) is not nn.Linear:
+            return False
+        if getattr(head, "lora_A", None) is not None or getattr(head, "lora_B", None) is not None:
+            return False
+        weight = getattr(head, "weight", None)
+        if not isinstance(weight, torch.Tensor) or weight.is_meta or weight.device != device:
+            return False
+        return int(head.out_features) == int(vocab_size)
+
+    def _forward_lm_loss(
+        self,
+        input_ids: torch.Tensor,
+        y_flat: torch.Tensor,
+        vocab_size: int,
+        *,
+        force_depth: int | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        """Forward model and compute CE loss directly from hidden states via chunked_cross_entropy_from_hidden when safe."""
+        pad_id = getattr(self.trainer, "pad_token_id", -100)
+        pad_idx = -100 if pad_id is None else int(pad_id)
+        use_chunked = bool(self.config.get("use_chunked_ce", True))
+        is_capturing = bool(input_ids.is_cuda and torch.cuda.is_current_stream_capturing())
+
+        if use_chunked and not is_capturing:
+            chunk_size = max(1, int(self.config.get("ce_chunk_size", 512)))
+            base = getattr(self.model, "module", self.model)
+
+            # 1. UniversalDenseTransformer or custom model exposing forward(..., return_hidden=True) + lm_head
+            supports_ret_hidden = getattr(base, "_lucid_supports_return_hidden", None)
+            if supports_ret_hidden is None:
+                try:
+                    sig = inspect.signature(base.forward)
+                    supports_ret_hidden = "return_hidden" in sig.parameters
+                except (TypeError, ValueError):
+                    supports_ret_hidden = False
+                try:
+                    base._lucid_supports_return_hidden = supports_ret_hidden
+                except Exception:
+                    pass
+
+            lm_head = getattr(base, "lm_head", None)
+            if supports_ret_hidden and self._is_valid_chunked_head(lm_head, vocab_size, input_ids.device):
+                hidden, _ = self.model(input_ids, return_hidden=True)
+                if hidden.dtype != lm_head.weight.dtype:
+                    hidden = hidden.to(lm_head.weight.dtype)
+                loss = chunked_cross_entropy_from_hidden(
+                    hidden, lm_head, y_flat, chunk_size=chunk_size, ignore_index=pad_idx
+                )
+                return loss, None
+
+            # 2. TriuneTransformer / UniversalMoETransformer / TriuneForCausalLM on full-depth Cortex (force_depth == 2)
+            core = getattr(base, "core", getattr(base, "transformer", base))
+            final_head = getattr(core, "final_head", None)
+            if (
+                force_depth == 2
+                and hasattr(core, "final_norm")
+                and hasattr(core, "layers")
+                and self._is_valid_chunked_head(final_head, vocab_size, input_ids.device)
+            ):
+                captured: dict[str, torch.Tensor | None] = {"h": None}
+                orig_head_forward = final_head.forward
+
+                def _capture_head(h: torch.Tensor) -> torch.Tensor:
+                    captured["h"] = h
+                    return h.new_empty((*h.shape[:-1], 0))
+
+                final_head.forward = _capture_head
+                try:
+                    _, route_logits = forward_causal_lm(self.model, input_ids, force_depth=2)
+                finally:
+                    final_head.forward = orig_head_forward
+
+                hidden = captured["h"]
+                if hidden is not None:
+                    if hidden.dtype != final_head.weight.dtype:
+                        hidden = hidden.to(final_head.weight.dtype)
+                    loss = chunked_cross_entropy_from_hidden(
+                        hidden, final_head, y_flat, chunk_size=chunk_size, ignore_index=pad_idx
+                    )
+                    return loss, route_logits
+
+            # 3. Hugging Face AutoModelForCausalLM (.model + .lm_head)
+            backbone = getattr(base, "model", None)
+            if (
+                force_depth in (None, 2)
+                and isinstance(backbone, nn.Module)
+                and getattr(base, "config", None) is not None
+                and self._is_valid_chunked_head(lm_head, vocab_size, input_ids.device)
+            ):
+                try:
+                    sig_bb = inspect.signature(backbone.forward)
+                    accepts_use_cache = "use_cache" in sig_bb.parameters or any(
+                        p.kind == inspect.Parameter.VAR_KEYWORD for p in sig_bb.parameters.values()
+                    )
+                except (TypeError, ValueError):
+                    accepts_use_cache = False
+                if accepts_use_cache:
+                    bb_out = backbone(input_ids=input_ids, use_cache=False)
+                else:
+                    bb_out = backbone(input_ids)
+                hidden = bb_out.last_hidden_state if hasattr(bb_out, "last_hidden_state") else bb_out[0]
+                if hidden.dtype != lm_head.weight.dtype:
+                    hidden = hidden.to(lm_head.weight.dtype)
+                loss = chunked_cross_entropy_from_hidden(
+                    hidden, lm_head, y_flat, chunk_size=chunk_size, ignore_index=pad_idx
+                )
+                return loss, None
+
+        logits, route_logits = forward_causal_lm(self.model, input_ids, force_depth=force_depth)
+        return self._compute_lm_loss(logits, y_flat, vocab_size), route_logits
 
     def _compute_joint_lm_loss(
         self,
@@ -251,8 +366,9 @@ class TrainingEngine:
                     for sub_x, sub_y in zip(sub_xs, sub_ys):
                         sub_y_flat = sub_y.reshape(-1)
                         with self.trainer.model_autocast():
-                            sub_logits, sub_route_logits = forward_causal_lm(self.model, sub_x, force_depth=2)
-                            sub_lm_loss = self._compute_lm_loss(sub_logits, sub_y_flat, vocab_size)
+                            sub_lm_loss, sub_route_logits = self._forward_lm_loss(
+                                sub_x, sub_y_flat, vocab_size, force_depth=2
+                            )
                         (sub_lm_loss / (grad_accum * num_sub)).backward()
                         lm_sum += sub_lm_loss.detach().float()
                         if sub_route_logits is not None:
@@ -269,13 +385,12 @@ class TrainingEngine:
                     micro_loss = lm_loss
                 else:
                     with self.trainer.model_autocast():
-                        logits, parsed_route = forward_causal_lm(self.model, x, force_depth=2)
+                        lm_loss, parsed_route = self._forward_lm_loss(x, y_flat, vocab_size, force_depth=2)
                         route_logits = (
                             parsed_route
                             if parsed_route is not None
                             else torch.zeros((x.size(0), 3), device=self.trainer.device)
                         )
-                    lm_loss = self._compute_lm_loss(logits, y_flat, vocab_size)
                     router_loss = torch.tensor(0.0, device=self.trainer.device)
                     z_loss = torch.tensor(0.0, device=self.trainer.device)
                     balance_loss = torch.tensor(0.0, device=self.trainer.device)
@@ -303,7 +418,8 @@ class TrainingEngine:
                         sub_lbls = self._router_labels_from_logits(reflex_l, limbic_l, cortex_l, sub_x, sub_y)
                         sub_lm = self._compute_joint_lm_loss(reflex_l, limbic_l, cortex_l, sub_y_flat, vocab_size)
                         rf = route_l.float()
-                        sub_r_loss = self.trainer.router_loss_fn(rf, sub_lbls)
+                        router_loss_fn = getattr(self.trainer, "router_loss_fn", F.cross_entropy)
+                        sub_r_loss = router_loss_fn(rf, sub_lbls)
                         sub_z = torch.logsumexp(rf, dim=-1).pow(2).mean()
                         sub_bal = getattr(self.model, "last_balance_loss", None)
                         if sub_bal is None:
@@ -330,7 +446,8 @@ class TrainingEngine:
                         reflex_logits, limbic_logits, cortex_logits, y_flat, vocab_size
                     )
                     route_f = route_logits.float()
-                    router_loss = self.trainer.router_loss_fn(route_f, labels)
+                    router_loss_fn = getattr(self.trainer, "router_loss_fn", F.cross_entropy)
+                    router_loss = router_loss_fn(route_f, labels)
                     z_loss = torch.logsumexp(route_f, dim=-1).pow(2).mean()
                     balance_loss = getattr(self.model, "last_balance_loss", None)
                     if balance_loss is None:
@@ -355,14 +472,14 @@ class TrainingEngine:
                     for sub_x, sub_y, sub_lbl in zip(sub_xs, sub_ys, sub_lbls):
                         sub_y_flat = sub_y.reshape(-1)
                         with self.trainer.model_autocast():
-                            sub_logits, sub_route_logits = forward_causal_lm(
-                                self.model, sub_x, force_depth=chosen_depth
+                            sub_lm_loss, sub_route_logits = self._forward_lm_loss(
+                                sub_x, sub_y_flat, vocab_size, force_depth=chosen_depth
                             )
                             if sub_route_logits is None:
                                 sub_route_logits = torch.zeros((sub_x.size(0), 3), device=self.trainer.device)
-                        sub_lm_loss = self._compute_lm_loss(sub_logits, sub_y_flat, vocab_size)
                         sub_route_f = sub_route_logits.float()
-                        sub_r_loss = self.trainer.router_loss_fn(sub_route_f, sub_lbl)
+                        router_loss_fn = getattr(self.trainer, "router_loss_fn", F.cross_entropy)
+                        sub_r_loss = router_loss_fn(sub_route_f, sub_lbl)
                         sub_z = torch.logsumexp(sub_route_f, dim=-1).pow(2).mean()
                         sub_bal = getattr(self.model, "last_balance_loss", None)
                         if sub_bal is None:
@@ -381,7 +498,9 @@ class TrainingEngine:
                     route_logits = torch.cat(route_chunks, dim=0)
                 else:
                     with self.trainer.model_autocast():
-                        logits, route_logits = forward_causal_lm(self.model, x, force_depth=chosen_depth)
+                        lm_loss, route_logits = self._forward_lm_loss(
+                            x, y_flat, vocab_size, force_depth=chosen_depth
+                        )
                         if route_logits is None:
                             route_logits = torch.zeros((x.size(0), 3), device=self.trainer.device)
                         last_choice = getattr(self.model, "last_depth_choice", None)
@@ -393,16 +512,17 @@ class TrainingEngine:
                             and last_choice is not None
                             and not (last_choice == 2).any()
                         ):
-                            c_logits, _ = forward_causal_lm(self.model, x[:1], force_depth=2)
+                            cortex_anchor_loss, _ = self._forward_lm_loss(
+                                x[:1], y[:1].reshape(-1), vocab_size, force_depth=2
+                            )
                             self.model.last_route_logits = route_logits
                             self.model.last_depth_choice = last_choice
                             self.model.last_balance_loss = saved_balance
-                            cortex_anchor_loss = self._compute_lm_loss(c_logits, y[:1].reshape(-1), vocab_size)
                     route_f = route_logits.float()
-                    lm_loss = self._compute_lm_loss(logits, y_flat, vocab_size)
                     if cortex_anchor_loss is not None:
                         lm_loss = 0.80 * lm_loss + 0.20 * cortex_anchor_loss
-                    router_loss = self.trainer.router_loss_fn(route_f, labels)
+                    router_loss_fn = getattr(self.trainer, "router_loss_fn", F.cross_entropy)
+                    router_loss = router_loss_fn(route_f, labels)
                     z_loss = torch.logsumexp(route_f, dim=-1).pow(2).mean()
                     balance_loss = getattr(self.model, "last_balance_loss", None)
                     if balance_loss is None:

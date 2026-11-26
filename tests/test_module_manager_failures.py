@@ -101,6 +101,15 @@ class TestModuleManagerFailures(unittest.TestCase):
         self.assertFalse(self.manager.git_pull("../../outside")["success"])
 
     def test_cloning_plugin_does_not_execute_or_register_its_python(self) -> None:
+        import subprocess as _real_subprocess
+
+        orig_run = _real_subprocess.run
+
+        def _mock_git_only(cmd, *args, **kwargs):
+            if isinstance(cmd, (list, tuple)) and cmd and Path(str(cmd[0])).name.lower() in {"git", "git.exe"}:
+                return SimpleNamespace(returncode=0, stdout="cloned", stderr="")
+            return orig_run(cmd, *args, **kwargs)
+
         inspection = {
             "git_info": {"commit": "abc123"},
             "file_count": 1,
@@ -110,7 +119,7 @@ class TestModuleManagerFailures(unittest.TestCase):
         with (
             patch(
                 "lucid_machines.modules.manager.subprocess.run",
-                return_value=SimpleNamespace(returncode=0, stdout="cloned", stderr=""),
+                side_effect=_mock_git_only,
             ),
             patch.object(self.manager, "inspect_directory", return_value=inspection),
             patch.object(self.manager, "discover_and_register_nodes") as discover,

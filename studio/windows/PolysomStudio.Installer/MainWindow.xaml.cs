@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows;
@@ -11,6 +12,23 @@ namespace PolysomStudio.Installer;
 
 public partial class MainWindow : Window
 {
+    private const string UninstallKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\PolysomStudio";
+    private const string ShortcutName = "Polysom Studio.lnk";
+    private const string SetupShortcutName = "Polysom Studio Setup.lnk";
+    private const uint WmSettingChange = 0x001A;
+    private const uint SmtoAbortIfHung = 0x0002;
+    private static readonly IntPtr HwndBroadcast = new(0xffff);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr SendMessageTimeout(
+        IntPtr hWnd,
+        uint msg,
+        UIntPtr wParam,
+        string lParam,
+        uint fuFlags,
+        uint uTimeout,
+        out UIntPtr lpdwResult);
+
     private string? _workspaceRoot;
     private Process? _activeProcess;
     private bool _unattended;
@@ -40,41 +58,192 @@ public partial class MainWindow : Window
         Loaded += async (_, _) => await InitializeInstallerAsync();
     }
 
+    internal static async Task<int> RunHeadlessCliAsync(string[] args)
+    {
+        var logPath = Path.Combine(ResolveLogDirectory(), $"studio-setup-{DateTime.Now:yyyyMMdd-HHmmss}.log");
+        void Log(string line)
+        {
+            var clean = StripAnsi(line);
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
+                File.AppendAllText(logPath, clean + Environment.NewLine);
+            }
+            catch (IOException) { }
+            Console.WriteLine(clean);
+        }
+
+        if (App.HasArg(args, "--smoke-test"))
+        {
+            return RunSmokeTest(Log);
+        }
+
+        var fullUninstall = App.HasArg(args, "--full") || App.HasArg(args, "--remove-env");
+        if (App.HasArg(args, "--uninstall"))
+        {
+            var rootForUninstall = TryFindWorkspaceRoot();
+            var scheduledSelfCleanup = PerformUninstall(fullUninstall, rootForUninstall, Log);
+            if (scheduledSelfCleanup)
+                Log("[Uninstall] Scheduled post-exit cleanup for installed app files.");
+            return 0;
+        }
+
+        var verifyOnly = App.HasArg(args, "--verify");
+        var root = TryFindWorkspaceRoot();
+        if (root is null)
+        {
+            Log("[ERROR] Could not locate Lucid Machines workspace root (pyproject.toml and studio/installer/installer.py).");
+            Log("        Extract the PolysomStudio-<version>-win-x64.zip archive completely or install via 'pip install lucid-machines'.");
+            return 1;
+        }
+
+        var cudaChoice = GetArgValue(args, "--cuda") ?? "auto";
+        var skipTorch = App.HasArg(args, "--skip-torch");
+        var noShortcuts = verifyOnly || App.HasArg(args, "--no-shortcuts");
+        var noPath = verifyOnly || App.HasArg(args, "--no-path");
+
+        var py = TryFindBootstrapPython(root);
+        if (py is null && !verifyOnly)
+        {
+            py = await TryBootstrapPythonViaWingetAsync(Log, root);
+        }
+        if (py is null)
+        {
+            LogMissingPythonGuidance(Log, root);
+            return 1;
+        }
+
+        if (!verifyOnly && !noShortcuts)
+        {
+            await EnsureWindowsShortcutsCoreAsync(root, Log);
+        }
+
+        var exitCode = await ExecutePythonInstallerAsync(
+            root,
+            py,
+            cudaChoice,
+            verifyOnly,
+            skipTorch,
+            noShortcuts,
+            noPath,
+            Log,
+            proc => { });
+
+        if (exitCode == 0 && !verifyOnly)
+        {
+            RegisterUninstallEntryCore(root, Log);
+        }
+
+        return exitCode;
+    }
+
+    private static string? GetArgValue(string[] args, string key)
+    {
+        for (var i = 0; i < args.Length - 1; i++)
+        {
+            if (args[i].Equals(key, StringComparison.OrdinalIgnoreCase))
+                return args[i + 1];
+        }
+        return null;
+    }
+
+    private static int RunSmokeTest(Action<string> log)
+    {
+        try
+        {
+            var iconInfo = Application.GetResourceStream(new Uri("pack://application:,,,/polysom.ico"));
+            if (iconInfo?.Stream is null || iconInfo.Stream.Length == 0)
+            {
+                log("[SMOKE FAIL] Embedded polysom.ico resource is missing or empty.");
+                return 1;
+            }
+            iconInfo.Stream.Dispose();
+
+            var root = TryFindWorkspaceRoot();
+            if (root is null)
+            {
+                log("[SMOKE FAIL] TryFindWorkspaceRoot() returned null (missing pyproject.toml / studio/installer/installer.py).");
+                return 1;
+            }
+
+            var indexHtml = Path.Combine(root, "studio", "src", "index.html");
+            var appJs = Path.Combine(root, "studio", "src", "app.js");
+            var installerPy = Path.Combine(root, "studio", "installer", "installer.py");
+            if (!File.Exists(indexHtml) || !File.Exists(appJs) || !File.Exists(installerPy))
+            {
+                log($"[SMOKE FAIL] Required Studio bundle assets missing under '{root}'.");
+                return 1;
+            }
+
+            var target = ResolveStudioTarget(root);
+            if (target is null)
+            {
+                log($"[SMOKE FAIL] ResolveStudioTarget() could not find PolysomStudio.exe or PolysomStudio.bat under '{root}'.");
+                return 1;
+            }
+
+            log($"[SMOKE OK] PolysomStudio.Installer | workspace={root} | target={target} | icon=embedded");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            log($"[SMOKE FAIL] {ex.Message}");
+            return 1;
+        }
+    }
+
     private async Task InitializeInstallerAsync()
     {
         var args = App.StartupArgs;
-        _unattended = args.Any(a => a.Equals("--yes", StringComparison.OrdinalIgnoreCase) || a.Equals("-y", StringComparison.OrdinalIgnoreCase));
-        _noLaunch = args.Any(a => a.Equals("--no-launch", StringComparison.OrdinalIgnoreCase));
-        var verifyOnly = args.Any(a => a.Equals("--verify", StringComparison.OrdinalIgnoreCase));
-        var uninstall = args.Any(a => a.Equals("--uninstall", StringComparison.OrdinalIgnoreCase));
+        _unattended = App.HasArg(args, "--yes") || App.HasArg(args, "-y");
+        _noLaunch = App.HasArg(args, "--no-launch");
+        var verifyOnly = App.HasArg(args, "--verify");
+        var smokeTest = App.HasArg(args, "--smoke-test");
+        var uninstall = App.HasArg(args, "--uninstall");
+        var fullUninstall = App.HasArg(args, "--full") || App.HasArg(args, "--remove-env");
+
+        if (smokeTest)
+        {
+            Application.Current.Shutdown(RunSmokeTest(AppendLog));
+            return;
+        }
+
+        if (fullUninstall)
+        {
+            FullUninstallCheck.IsChecked = true;
+        }
 
         if (uninstall)
         {
             InstallButton.IsEnabled = false;
             VerifyButton.IsEnabled = false;
-            Uninstall();
-            if (_unattended) Application.Current.Shutdown(0);
+            ShortcutButton.IsEnabled = false;
+            _workspaceRoot = TryFindWorkspaceRoot();
+            var scheduledSelfCleanup = PerformUninstall(fullUninstall || FullUninstallCheck.IsChecked == true, _workspaceRoot, AppendLog);
+            StatusHeadlineText.Text = fullUninstall
+                ? "Polysom Studio shortcuts, registry, PATH, and environment were removed."
+                : "Polysom Studio shortcuts, PATH entry, and uninstall entry were removed.";
+            if (_unattended || scheduledSelfCleanup) Application.Current.Shutdown(0);
             return;
         }
 
-        try
+        _workspaceRoot = TryFindWorkspaceRoot();
+        if (_workspaceRoot is null)
         {
-            _workspaceRoot = FindWorkspaceRoot();
-            WorkspacePathText.Text = $"Workspace: {_workspaceRoot}";
-        }
-        catch (Exception ex)
-        {
-            StatusHeadlineText.Text = "Could not locate Lucid Machines repository root.";
-            AppendLog($"[ERROR] {ex.Message}");
+            StatusHeadlineText.Text = "Could not locate Lucid Machines workspace.";
+            WorkspacePathText.Text = "Workspace not found — extract PolysomStudio ZIP or run from repository root.";
+            AppendLog("[ERROR] Could not locate pyproject.toml and studio/installer/installer.py.");
+            AppendLog("        If you downloaded PolysomStudioSetup.exe standalone, extract PolysomStudio-<version>-win-x64.zip first or run: pip install lucid-machines");
             InstallButton.IsEnabled = false;
             VerifyButton.IsEnabled = false;
+            ShortcutButton.IsEnabled = false;
             if (_unattended || verifyOnly) Application.Current.Shutdown(1);
             return;
         }
 
+        WorkspacePathText.Text = $"Workspace: {_workspaceRoot}";
         await ProbeHardwareSummaryAsync();
 
-        // Check if existing studio_env with CUDA PyTorch is already present to default fast-repair option
         var existingPy = Path.Combine(_workspaceRoot, "studio", "studio_env", "Scripts", "python.exe");
         if (File.Exists(existingPy))
         {
@@ -83,7 +252,8 @@ public partial class MainWindow : Window
             AppendLog($"[Detected] Existing managed environment found at: {existingPy} (Fast repair mode enabled)");
         }
 
-        if (DesktopShortcutCheck.IsChecked == true)
+        // Never mutate shortcuts during --verify or --smoke-test
+        if (!verifyOnly && !smokeTest && DesktopShortcutCheck.IsChecked == true)
         {
             await EnsureWindowsShortcutsAsync();
         }
@@ -134,51 +304,226 @@ public partial class MainWindow : Window
         AppendLog("[Hardware Probe] No NVIDIA GPU detected via nvidia-smi; CPU execution profile available.");
     }
 
-    private static string FindWorkspaceRoot()
+    internal static string? TryFindWorkspaceRoot()
     {
-        for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
+        static bool IsWorkspaceDir(string candidate) =>
+            File.Exists(Path.Combine(candidate, "pyproject.toml")) &&
+            File.Exists(Path.Combine(candidate, "studio", "installer", "installer.py"));
+
+        var seeds = new[]
         {
-            if (File.Exists(Path.Combine(dir.FullName, "pyproject.toml")) &&
-                File.Exists(Path.Combine(dir.FullName, "studio", "installer", "installer.py")))
+            Path.GetDirectoryName(Environment.ProcessPath),
+            AppContext.BaseDirectory,
+            Directory.GetCurrentDirectory()
+        }
+        .Where(s => !string.IsNullOrWhiteSpace(s))
+        .Distinct(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var seed in seeds)
+        {
+            for (var dir = new DirectoryInfo(seed!); dir is not null; dir = dir.Parent)
             {
-                return dir.FullName;
+                if (IsWorkspaceDir(dir.FullName))
+                    return dir.FullName;
+
+                var appChild = Path.Combine(dir.FullName, "app");
+                if (IsWorkspaceDir(appChild))
+                    return appChild;
             }
         }
-        var cwd = new DirectoryInfo(Directory.GetCurrentDirectory());
-        for (var dir = cwd; dir is not null; dir = dir.Parent)
-        {
-            if (File.Exists(Path.Combine(dir.FullName, "pyproject.toml")) &&
-                File.Exists(Path.Combine(dir.FullName, "studio", "installer", "installer.py")))
-            {
-                return dir.FullName;
-            }
-        }
-        throw new DirectoryNotFoundException("Could not locate pyproject.toml and studio/installer/installer.py.");
+
+        return null;
     }
 
-    private static string FindBootstrapPython(string root)
+    private static bool IsWindowsAppsStub(string path) =>
+        path.Contains(@"\Microsoft\WindowsApps\", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsValidPythonCandidate(string exePath, bool isPyLauncher)
     {
-        var candidates = new[]
+        if (string.IsNullOrWhiteSpace(exePath) || !File.Exists(exePath) || IsWindowsAppsStub(exePath))
+            return false;
+
+        try
         {
-            Path.Combine(root, "studio", "studio_env", "Scripts", "python.exe"),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "Python", "Python314", "python.exe"),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "Python", "Python313", "python.exe"),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "Python", "Python312", "python.exe"),
-        };
-        foreach (var cand in candidates)
+            var psi = new ProcessStartInfo(exePath)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            if (isPyLauncher) psi.ArgumentList.Add("-3");
+            psi.ArgumentList.Add("-c");
+            psi.ArgumentList.Add("import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)");
+
+            using var proc = Process.Start(psi);
+            if (proc is null) return false;
+            if (!proc.WaitForExit(5000))
+            {
+                try { proc.Kill(); } catch { }
+                return false;
+            }
+            return proc.ExitCode == 0;
+        }
+        catch
         {
-            if (File.Exists(cand)) return cand;
+            return false;
+        }
+    }
+
+    private static IEnumerable<string> EnumerateRegistryPythons()
+    {
+        var results = new List<string>();
+        var versions = new[] { "3.14", "3.13", "3.12", "3.11", "3.10" };
+        foreach (var hive in new[] { Registry.CurrentUser, Registry.LocalMachine })
+        {
+            foreach (var ver in versions)
+            {
+                try
+                {
+                    using var key = hive.OpenSubKey($@"SOFTWARE\Python\PythonCore\{ver}\InstallPath");
+                    if (key is null) continue;
+                    var execPath = key.GetValue("ExecutablePath") as string;
+                    if (!string.IsNullOrWhiteSpace(execPath))
+                        results.Add(execPath);
+                    var installDir = key.GetValue(null) as string;
+                    if (!string.IsNullOrWhiteSpace(installDir))
+                        results.Add(Path.Combine(installDir, "python.exe"));
+                }
+                catch { }
+            }
+        }
+        return results;
+    }
+
+    internal static string? TryFindBootstrapPython(string? root)
+    {
+        var candidates = new List<string>();
+        if (!string.IsNullOrWhiteSpace(root))
+        {
+            candidates.Add(Path.Combine(root, "studio", "studio_env", "Scripts", "python.exe"));
+            candidates.Add(Path.Combine(root, ".venv", "Scripts", "python.exe"));
         }
 
+        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+        var programFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+
+        foreach (var minor in new[] { "314", "313", "312", "311", "310" })
+        {
+            if (!string.IsNullOrWhiteSpace(localAppData))
+                candidates.Add(Path.Combine(localAppData, "Programs", "Python", $"Python{minor}", "python.exe"));
+            if (!string.IsNullOrWhiteSpace(programFiles))
+                candidates.Add(Path.Combine(programFiles, $"Python{minor}", "python.exe"));
+            if (!string.IsNullOrWhiteSpace(programFilesX86))
+                candidates.Add(Path.Combine(programFilesX86, $"Python{minor}", "python.exe"));
+        }
+
+        candidates.AddRange(EnumerateRegistryPythons());
+
+        foreach (var cand in candidates.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (IsValidPythonCandidate(cand, isPyLauncher: false))
+                return cand;
+        }
+
+        var pathEntries = Environment.GetEnvironmentVariable("PATH")?.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries) ?? [];
         foreach (var cmd in new[] { "python.exe", "py.exe" })
         {
-            var path = Environment.GetEnvironmentVariable("PATH")?.Split(Path.PathSeparator)
-                .Select(p => Path.Combine(p.Trim('"'), cmd))
-                .FirstOrDefault(File.Exists);
-            if (path is not null) return path;
+            var isPy = cmd.Equals("py.exe", StringComparison.OrdinalIgnoreCase);
+            foreach (var folder in pathEntries)
+            {
+                var trimmed = folder.Trim().Trim('"');
+                if (string.IsNullOrWhiteSpace(trimmed)) continue;
+                var candidate = Path.Combine(trimmed, cmd);
+                if (IsValidPythonCandidate(candidate, isPyLauncher: isPy))
+                    return candidate;
+            }
         }
 
-        throw new FileNotFoundException("Python 3.10+ was not found on this machine. Install Python from python.org first.");
+        return null;
+    }
+
+    private static string? FindWingetExecutable()
+    {
+        var pathEntries = Environment.GetEnvironmentVariable("PATH")?.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries) ?? [];
+        foreach (var folder in pathEntries)
+        {
+            var candidate = Path.Combine(folder.Trim().Trim('"'), "winget.exe");
+            if (File.Exists(candidate)) return candidate;
+        }
+        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        var windowsAppsWinget = Path.Combine(localAppData, "Microsoft", "WindowsApps", "winget.exe");
+        return File.Exists(windowsAppsWinget) ? windowsAppsWinget : null;
+    }
+
+    private static async Task<string?> TryBootstrapPythonViaWingetAsync(Action<string> log, string? workspaceRoot)
+    {
+        var winget = FindWingetExecutable();
+        if (winget is null)
+        {
+            log("[Bootstrap] Python 3.10+ not found and winget is unavailable on this system.");
+            return null;
+        }
+
+        log("[Bootstrap] Python 3.10+ was not detected. Attempting automatic user-scoped Python 3.12 installation via winget...");
+        try
+        {
+            var psi = new ProcessStartInfo(winget)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8
+            };
+            foreach (var arg in new[]
+            {
+                "install", "--id", "Python.Python.3.12", "--exact", "--scope", "user",
+                "--silent", "--accept-source-agreements", "--accept-package-agreements"
+            })
+            {
+                psi.ArgumentList.Add(arg);
+            }
+
+            using var proc = new Process { StartInfo = psi };
+            proc.OutputDataReceived += (_, e) => { if (!string.IsNullOrWhiteSpace(e.Data)) log($"  [winget] {e.Data}"); };
+            proc.ErrorDataReceived += (_, e) => { if (!string.IsNullOrWhiteSpace(e.Data)) log($"  [winget] {e.Data}"); };
+            if (!proc.Start())
+                return null;
+            proc.BeginOutputReadLine();
+            proc.BeginErrorReadLine();
+            await proc.WaitForExitAsync();
+
+            var localPy312 = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Programs", "Python", "Python312", "python.exe");
+            if (IsValidPythonCandidate(localPy312, isPyLauncher: false))
+                return localPy312;
+
+            return TryFindBootstrapPython(workspaceRoot);
+        }
+        catch (Exception ex)
+        {
+            log($"[Bootstrap Notice] winget invocation failed: {ex.Message}");
+            return null;
+        }
+    }
+
+    private static void LogMissingPythonGuidance(Action<string> log, string? workspaceRoot)
+    {
+        log("[ERROR] Python 3.10+ could not be located or automatically provisioned.");
+        log("        To resolve this:");
+        log("        1. Run: winget install --id Python.Python.3.12 --exact --scope user");
+        log("        2. Or install Python 3.10–3.12 from https://www.python.org/downloads/ (check 'Add python.exe to PATH')");
+        if (!string.IsNullOrWhiteSpace(workspaceRoot))
+        {
+            var batPath = Path.Combine(workspaceRoot, "studio", "installer", "install_studio.bat");
+            if (File.Exists(batPath))
+                log($"        3. Or run the fallback script: \"{batPath}\"");
+        }
+        log("        Support: contact@lucidmachines.co | https://lucidmachines.co");
     }
 
     private void ResetStageIndicators()
@@ -278,6 +623,73 @@ public partial class MainWindow : Window
         });
     }
 
+    private static async Task<int> ExecutePythonInstallerAsync(
+        string workspaceRoot,
+        string pythonExe,
+        string selectedCuda,
+        bool verifyOnly,
+        bool skipTorch,
+        bool noShortcuts,
+        bool noPath,
+        Action<string> log,
+        Action<Process?> trackProcess)
+    {
+        var script = Path.Combine(workspaceRoot, "studio", "installer", "installer.py");
+        var psi = new ProcessStartInfo
+        {
+            FileName = pythonExe,
+            WorkingDirectory = workspaceRoot,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8
+        };
+        psi.Environment["PYTHONUTF8"] = "1";
+        psi.Environment["PYTHONIOENCODING"] = "utf-8";
+
+        if (Path.GetFileNameWithoutExtension(pythonExe).Equals("py", StringComparison.OrdinalIgnoreCase))
+            psi.ArgumentList.Add("-3");
+
+        psi.ArgumentList.Add(script);
+        psi.ArgumentList.Add("--yes");
+        psi.ArgumentList.Add("--no-launch");
+        psi.ArgumentList.Add("--cuda");
+        psi.ArgumentList.Add(selectedCuda);
+
+        if (verifyOnly)
+        {
+            psi.ArgumentList.Add("--verify");
+            psi.ArgumentList.Add("--no-shortcuts");
+            psi.ArgumentList.Add("--no-path");
+        }
+        else
+        {
+            if (skipTorch)
+                psi.ArgumentList.Add("--skip-torch");
+            if (noShortcuts)
+                psi.ArgumentList.Add("--no-shortcuts");
+            if (noPath)
+                psi.ArgumentList.Add("--no-path");
+        }
+
+        using var proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
+        trackProcess(proc);
+        proc.OutputDataReceived += (_, e) => { if (e.Data is not null) log(e.Data); };
+        proc.ErrorDataReceived += (_, e) => { if (e.Data is not null) log(e.Data); };
+
+        if (!proc.Start())
+            throw new InvalidOperationException("Failed to start Python installer process.");
+
+        proc.BeginOutputReadLine();
+        proc.BeginErrorReadLine();
+        await proc.WaitForExitAsync();
+        var exitCode = proc.ExitCode;
+        trackProcess(null);
+        return exitCode;
+    }
+
     private async Task<int> RunInstallerProcessAsync(bool verifyOnly)
     {
         if (_workspaceRoot is null) return 1;
@@ -292,74 +704,42 @@ public partial class MainWindow : Window
 
         try
         {
-            var py = FindBootstrapPython(_workspaceRoot);
-            var script = Path.Combine(_workspaceRoot, "studio", "installer", "installer.py");
+            var py = TryFindBootstrapPython(_workspaceRoot);
+            if (py is null && !verifyOnly)
+            {
+                StatusHeadlineText.Text = "Python 3.10+ not detected; bootstrapping via winget...";
+                py = await TryBootstrapPythonViaWingetAsync(AppendLog, _workspaceRoot);
+            }
+            if (py is null)
+            {
+                LogMissingPythonGuidance(AppendLog, _workspaceRoot);
+                StatusHeadlineText.Text = "Python 3.10+ is required before setup can continue.";
+                return 1;
+            }
+
             var selectedCuda = (CudaComboBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "auto";
+            var noShortcuts = verifyOnly || DesktopShortcutCheck.IsChecked == false;
+            var noPath = verifyOnly || RegisterPathCheck.IsChecked == false;
 
-            var psi = new ProcessStartInfo
-            {
-                FileName = py,
-                WorkingDirectory = _workspaceRoot,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                StandardOutputEncoding = Encoding.UTF8,
-                StandardErrorEncoding = Encoding.UTF8
-            };
-            psi.Environment["PYTHONUTF8"] = "1";
-            psi.Environment["PYTHONIOENCODING"] = "utf-8";
-
-            if (Path.GetFileNameWithoutExtension(py).Equals("py", StringComparison.OrdinalIgnoreCase))
-                psi.ArgumentList.Add("-3");
-
-            psi.ArgumentList.Add(script);
-            psi.ArgumentList.Add("--yes");
-            psi.ArgumentList.Add("--no-launch");
-            psi.ArgumentList.Add("--cuda");
-            psi.ArgumentList.Add(selectedCuda);
-
-            if (verifyOnly)
-            {
-                psi.ArgumentList.Add("--verify");
-                if (DesktopShortcutCheck.IsChecked == false)
-                    psi.ArgumentList.Add("--no-shortcuts");
-                if (RegisterPathCheck.IsChecked == false)
-                    psi.ArgumentList.Add("--no-path");
-            }
-            else
-            {
-                if (SkipTorchCheck.IsChecked == true)
-                    psi.ArgumentList.Add("--skip-torch");
-                if (DesktopShortcutCheck.IsChecked == false)
-                    psi.ArgumentList.Add("--no-shortcuts");
-                if (RegisterPathCheck.IsChecked == false)
-                    psi.ArgumentList.Add("--no-path");
-            }
-
-            if (DesktopShortcutCheck.IsChecked == true)
+            if (!verifyOnly && DesktopShortcutCheck.IsChecked == true)
             {
                 await EnsureWindowsShortcutsAsync();
             }
 
-            _activeProcess = new Process { StartInfo = psi, EnableRaisingEvents = true };
-            _activeProcess.OutputDataReceived += (_, e) => { if (e.Data is not null) AppendLog(e.Data); };
-            _activeProcess.ErrorDataReceived += (_, e) => { if (e.Data is not null) AppendLog(e.Data); };
-
-            if (!_activeProcess.Start())
-                throw new InvalidOperationException("Failed to start Python installer process.");
-
-            _activeProcess.BeginOutputReadLine();
-            _activeProcess.BeginErrorReadLine();
-            await _activeProcess.WaitForExitAsync();
-
-            var exitCode = _activeProcess.ExitCode;
-            _activeProcess.Dispose();
-            _activeProcess = null;
+            var exitCode = await ExecutePythonInstallerAsync(
+                _workspaceRoot,
+                py,
+                selectedCuda,
+                verifyOnly,
+                SkipTorchCheck.IsChecked == true,
+                noShortcuts,
+                noPath,
+                AppendLog,
+                proc => _activeProcess = proc);
 
             if (exitCode == 0)
             {
-                if (!verifyOnly) RegisterUninstallEntry();
+                if (!verifyOnly) RegisterUninstallEntryCore(_workspaceRoot, AppendLog);
                 MarkAllStagesComplete();
                 StatusHeadlineText.Text = verifyOnly
                     ? "All Polysom Studio & Lucid Machines subsystems passed verification!"
@@ -386,17 +766,17 @@ public partial class MainWindow : Window
         }
     }
 
-    private const string UninstallKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\PolysomStudio";
-    private const string ShortcutName = "Polysom Studio.lnk";
-    private const string SetupShortcutName = "Polysom Studio Setup.lnk";
-
-    private static string? ResolveStudioTarget(string root) => new[]
+    internal static string? ResolveStudioTarget(string root) => new[]
     {
         Path.Combine(AppContext.BaseDirectory, "PolysomStudio.exe"),
+        Path.Combine(AppContext.BaseDirectory, "app", "PolysomStudio.exe"),
+        Path.Combine(root, "app", "PolysomStudio.exe"),
         Path.Combine(root, "PolysomStudio.exe"),
+        Path.Combine(root, "studio", "publish", "app", "PolysomStudio.exe"),
         Path.Combine(root, "studio", "publish", "PolysomStudio.exe"),
         Path.Combine(root, "studio", "windows", "publish", "PolysomStudio.exe"),
         Path.Combine(root, "studio", "windows", "PolysomStudio.Windows", "bin", "Release", "net10.0-windows", "PolysomStudio.exe"),
+        Path.Combine(root, "studio", "windows", "PolysomStudio.Windows", "bin", "Release", "net10.0-windows", "win-x64", "PolysomStudio.exe"),
         Path.Combine(root, "studio", "PolysomStudio.bat")
     }.FirstOrDefault(File.Exists);
 
@@ -415,25 +795,120 @@ public partial class MainWindow : Window
         .ToArray();
     }
 
-    private void RegisterUninstallEntry()
+    private static void RegisterUninstallEntryCore(string workspaceRoot, Action<string> log)
     {
-        if (_workspaceRoot is null || Environment.ProcessPath is not { } setupExe) return;
-        var studioExe = ResolveStudioTarget(_workspaceRoot);
+        if (Environment.ProcessPath is not { } setupExe) return;
+        var studioExe = ResolveStudioTarget(workspaceRoot);
         using var key = Registry.CurrentUser.CreateSubKey(UninstallKeyPath);
         key.SetValue("DisplayName", "Polysom Studio");
         key.SetValue("DisplayVersion", typeof(App).Assembly.GetName().Version?.ToString(3) ?? "0.0.0");
         key.SetValue("Publisher", "Lucid Machines");
-        key.SetValue("InstallLocation", _workspaceRoot);
+        key.SetValue("Contact", "contact@lucidmachines.co");
+        key.SetValue("HelpLink", "https://lucidmachines.co");
+        key.SetValue("URLInfoAbout", "https://lucidmachines.co");
+        key.SetValue("InstallLocation", workspaceRoot);
         key.SetValue("DisplayIcon", studioExe ?? setupExe);
         key.SetValue("UninstallString", $"\"{setupExe}\" --uninstall");
         key.SetValue("QuietUninstallString", $"\"{setupExe}\" --uninstall --yes");
         key.SetValue("NoModify", 1, RegistryValueKind.DWord);
         key.SetValue("NoRepair", 1, RegistryValueKind.DWord);
-        AppendLog("[Registry] Registered Apps & Features uninstall entry (HKCU).");
+        log("[Registry] Registered Apps & Features uninstall entry (HKCU).");
     }
 
-    private void Uninstall()
+    private static void RemoveScriptsFromUserPath(string? installRoot, Action<string> log)
     {
+        try
+        {
+            using var envKey = Registry.CurrentUser.OpenSubKey("Environment", writable: true);
+            if (envKey is null) return;
+            var current = envKey.GetValue("Path", "", RegistryValueOptions.DoNotExpandEnvironmentNames) as string ?? "";
+            if (string.IsNullOrWhiteSpace(current)) return;
+
+            var targetScripts = !string.IsNullOrWhiteSpace(installRoot)
+                ? Path.GetFullPath(Path.Combine(installRoot, "studio", "studio_env", "Scripts"))
+                : null;
+
+            var parts = current.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var kept = new List<string>(parts.Length);
+            var removedCount = 0;
+
+            foreach (var part in parts)
+            {
+                var isMatch = false;
+                try
+                {
+                    var normPart = Path.GetFullPath(Environment.ExpandEnvironmentVariables(part));
+                    if (targetScripts is not null && normPart.Equals(targetScripts, StringComparison.OrdinalIgnoreCase))
+                        isMatch = true;
+                    else if (normPart.EndsWith(Path.Combine("studio", "studio_env", "Scripts"), StringComparison.OrdinalIgnoreCase))
+                        isMatch = true;
+                }
+                catch
+                {
+                    if (part.EndsWith(@"studio\studio_env\Scripts", StringComparison.OrdinalIgnoreCase))
+                        isMatch = true;
+                }
+
+                if (isMatch) removedCount++;
+                else kept.Add(part);
+            }
+
+            if (removedCount > 0)
+            {
+                envKey.SetValue("Path", string.Join(";", kept), RegistryValueKind.ExpandString);
+                SendMessageTimeout(HwndBroadcast, WmSettingChange, UIntPtr.Zero, "Environment", SmtoAbortIfHung, 2000, out _);
+                log($"[Uninstall] Removed {removedCount} Studio CLI entry from Windows User PATH.");
+            }
+        }
+        catch (Exception ex)
+        {
+            log($"[Uninstall Notice] Could not clean User PATH: {ex.Message}");
+        }
+    }
+
+    private static bool HasProtectedRepoOrUserData(string installRoot)
+    {
+        foreach (var marker in new[] { ".git", "checkpoints", "data", "exports" })
+        {
+            if (Directory.Exists(Path.Combine(installRoot, marker)) || File.Exists(Path.Combine(installRoot, marker)))
+                return true;
+        }
+        return false;
+    }
+
+    private static void StopRunningStudioProcesses(string? installRoot, Action<string> log)
+    {
+        if (string.IsNullOrWhiteSpace(installRoot)) return;
+        var normRoot = Path.GetFullPath(installRoot).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        foreach (var proc in Process.GetProcessesByName("PolysomStudio"))
+        {
+            try
+            {
+                var exePath = proc.MainModule?.FileName;
+                if (!string.IsNullOrWhiteSpace(exePath) &&
+                    Path.GetFullPath(exePath).StartsWith(normRoot, StringComparison.OrdinalIgnoreCase))
+                {
+                    proc.Kill(entireProcessTree: true);
+                    proc.WaitForExit(3000);
+                    log($"[Uninstall] Stopped running PolysomStudio.exe (PID {proc.Id}).");
+                }
+            }
+            catch { }
+            finally { proc.Dispose(); }
+        }
+    }
+
+    private static bool PerformUninstall(bool fullUninstall, string? workspaceRoot, Action<string> log)
+    {
+        string? installRoot = workspaceRoot;
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(UninstallKeyPath);
+            if (string.IsNullOrWhiteSpace(installRoot))
+                installRoot = key?.GetValue("InstallLocation") as string;
+        }
+        catch { }
+
         var removed = 0;
         var links = DesktopDirectories()
             .Select(d => Path.Combine(d, ShortcutName))
@@ -444,25 +919,110 @@ public partial class MainWindow : Window
             });
         foreach (var link in links.Where(File.Exists))
         {
-            File.Delete(link);
-            removed++;
+            try
+            {
+                File.Delete(link);
+                removed++;
+            }
+            catch { }
         }
         Registry.CurrentUser.DeleteSubKeyTree(UninstallKeyPath, throwOnMissingSubKey: false);
-        StatusHeadlineText.Text = "Polysom Studio shortcuts and uninstall entry were removed.";
-        AppendLog($"[Uninstall] Removed {removed} shortcut(s) and the HKCU uninstall entry. Program files and the managed Python environment were left in place.");
-    }
-    private async Task EnsureWindowsShortcutsAsync()
-    {
-        if (_workspaceRoot is null) return;
+        RemoveScriptsFromUserPath(installRoot, log);
+        log($"[Uninstall] Removed {removed} shortcut(s) and HKCU uninstall registry entry.");
+
+        if (!fullUninstall)
+        {
+            log("[Uninstall] Program files and the managed Python environment were preserved (pass --full to remove them).");
+            return false;
+        }
+
+        StopRunningStudioProcesses(installRoot, log);
+
+        if (!string.IsNullOrWhiteSpace(installRoot))
+        {
+            var studioEnvDir = Path.Combine(installRoot, "studio", "studio_env");
+            if (Directory.Exists(studioEnvDir))
+            {
+                try
+                {
+                    Directory.Delete(studioEnvDir, recursive: true);
+                    log($"[Uninstall] Removed managed virtual environment: {studioEnvDir}");
+                }
+                catch (Exception ex)
+                {
+                    log($"[Uninstall Notice] Could not remove {studioEnvDir}: {ex.Message}");
+                }
+            }
+        }
+
+        var webViewData = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "LucidMachines", "PolysomStudio", "WebView2");
+        if (Directory.Exists(webViewData))
+        {
+            try
+            {
+                Directory.Delete(webViewData, recursive: true);
+                log($"[Uninstall] Removed WebView2 cache: {webViewData}");
+            }
+            catch (Exception ex)
+            {
+                log($"[Uninstall Notice] Could not remove WebView2 cache: {ex.Message}");
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(installRoot) || !Directory.Exists(installRoot))
+            return false;
+
+        if (HasProtectedRepoOrUserData(installRoot))
+        {
+            log("[Uninstall] Protected repository or user data (.git/checkpoints/data/exports) detected; preserving source/workspace files.");
+            return false;
+        }
+
+        var cleanupTargets = new List<string>();
+        var appDir = Path.Combine(installRoot, "app");
+        if (Directory.Exists(appDir)) cleanupTargets.Add($"rmdir /s /q \"{appDir}\"");
+
+        if (Environment.ProcessPath is { } procExe &&
+            Path.GetFullPath(procExe).StartsWith(Path.GetFullPath(installRoot), StringComparison.OrdinalIgnoreCase))
+        {
+            cleanupTargets.Add($"del /f /q \"{procExe}\"");
+        }
+
+        if (cleanupTargets.Count == 0) return false;
+
         try
         {
-            var studioExe = ResolveStudioTarget(_workspaceRoot) ?? Path.Combine(_workspaceRoot, "PolysomStudio.exe");
-            var setupExe = Environment.ProcessPath ?? Path.Combine(_workspaceRoot, "PolysomStudioSetup.exe");
-            var iconPath = Path.Combine(_workspaceRoot, "studio", "windows", "polysom.ico");
+            var cmdChain = string.Join(" & ", cleanupTargets);
+            Process.Start(new ProcessStartInfo("cmd.exe", $"/c ping -n 3 127.0.0.1 >nul & {cmdChain}")
+            {
+                WorkingDirectory = Path.GetTempPath(),
+                CreateNoWindow = true,
+                UseShellExecute = false
+            });
+            return true;
+        }
+        catch (Exception ex)
+        {
+            log($"[Uninstall Notice] Could not schedule post-exit cleanup: {ex.Message}");
+            return false;
+        }
+    }
+
+    private Task EnsureWindowsShortcutsAsync() =>
+        _workspaceRoot is null ? Task.CompletedTask : EnsureWindowsShortcutsCoreAsync(_workspaceRoot, AppendLog);
+
+    private static async Task EnsureWindowsShortcutsCoreAsync(string workspaceRoot, Action<string> log)
+    {
+        try
+        {
+            var studioExe = ResolveStudioTarget(workspaceRoot) ?? Path.Combine(workspaceRoot, "app", "PolysomStudio.exe");
+            var setupExe = Environment.ProcessPath ?? Path.Combine(workspaceRoot, "PolysomStudioSetup.exe");
+            var iconPath = Path.Combine(workspaceRoot, "studio", "windows", "polysom.ico");
             var iconTarget = File.Exists(iconPath) ? iconPath : studioExe;
 
             var desktopDirs = DesktopDirectories();
-
             var startMenuDir = Environment.GetFolderPath(Environment.SpecialFolder.Programs);
             var sb = new StringBuilder();
             sb.AppendLine("$WshShell = New-Object -comObject WScript.Shell");
@@ -472,7 +1032,7 @@ public partial class MainWindow : Window
                 try { if (File.Exists(lnk)) File.Delete(lnk); } catch { }
                 sb.AppendLine($"$s = $WshShell.CreateShortcut('{lnk.Replace("'", "''")}');");
                 sb.AppendLine($"$s.TargetPath = '{studioExe.Replace("'", "''")}';");
-                sb.AppendLine($"$s.WorkingDirectory = '{_workspaceRoot.Replace("'", "''")}';");
+                sb.AppendLine($"$s.WorkingDirectory = '{workspaceRoot.Replace("'", "''")}';");
                 sb.AppendLine($"$s.IconLocation = '{iconTarget.Replace("'", "''")},0';");
                 sb.AppendLine("$s.Description = 'Polysom Studio - Lucid Machines AI Engine and Visual Research IDE';");
                 sb.AppendLine("$s.Save();");
@@ -484,7 +1044,7 @@ public partial class MainWindow : Window
                 try { if (File.Exists(startLnk)) File.Delete(startLnk); } catch { }
                 sb.AppendLine($"$sm = $WshShell.CreateShortcut('{startLnk.Replace("'", "''")}');");
                 sb.AppendLine($"$sm.TargetPath = '{studioExe.Replace("'", "''")}';");
-                sb.AppendLine($"$sm.WorkingDirectory = '{_workspaceRoot.Replace("'", "''")}';");
+                sb.AppendLine($"$sm.WorkingDirectory = '{workspaceRoot.Replace("'", "''")}';");
                 sb.AppendLine($"$sm.IconLocation = '{iconTarget.Replace("'", "''")},0';");
                 sb.AppendLine("$sm.Description = 'Polysom Studio - Lucid Machines AI Engine and Visual Research IDE';");
                 sb.AppendLine("$sm.Save();");
@@ -495,7 +1055,7 @@ public partial class MainWindow : Window
                     try { if (File.Exists(setupLnk)) File.Delete(setupLnk); } catch { }
                     sb.AppendLine($"$su = $WshShell.CreateShortcut('{setupLnk.Replace("'", "''")}');");
                     sb.AppendLine($"$su.TargetPath = '{setupExe.Replace("'", "''")}';");
-                    sb.AppendLine($"$su.WorkingDirectory = '{_workspaceRoot.Replace("'", "''")}';");
+                    sb.AppendLine($"$su.WorkingDirectory = '{workspaceRoot.Replace("'", "''")}';");
                     sb.AppendLine($"$su.IconLocation = '{iconTarget.Replace("'", "''")},0';");
                     sb.AppendLine("$su.Description = 'Polysom Studio Setup - Repair or Reconfigure Lucid Machines Engine';");
                     sb.AppendLine("$su.Save();");
@@ -519,13 +1079,13 @@ public partial class MainWindow : Window
                 await proc.WaitForExitAsync();
                 if (proc.ExitCode == 0)
                 {
-                    AppendLog($"[Shortcuts] Created Desktop & Start Menu shortcuts ({string.Join(", ", desktopDirs)}) -> {Path.GetFileName(studioExe)}");
+                    log($"[Shortcuts] Created Desktop & Start Menu shortcuts ({string.Join(", ", desktopDirs)}) -> {Path.GetFileName(studioExe)}");
                 }
             }
         }
         catch (Exception ex)
         {
-            AppendLog($"[Shortcuts Notice] {ex.Message}");
+            log($"[Shortcuts Notice] {ex.Message}");
         }
     }
 
@@ -543,6 +1103,19 @@ public partial class MainWindow : Window
     private async void VerifyButton_Click(object sender, RoutedEventArgs e)
     {
         await RunInstallerProcessAsync(verifyOnly: true);
+    }
+
+    private void UninstallButton_Click(object sender, RoutedEventArgs e)
+    {
+        var full = FullUninstallCheck.IsChecked == true;
+        var scheduledSelfCleanup = PerformUninstall(full, _workspaceRoot, AppendLog);
+        StatusHeadlineText.Text = full
+            ? "Polysom Studio shortcuts, registry, PATH, and environment were removed."
+            : "Polysom Studio shortcuts, PATH entry, and uninstall entry were removed.";
+        if (scheduledSelfCleanup)
+        {
+            Application.Current.Shutdown(0);
+        }
     }
 
     private void LaunchStudioButton_Click(object sender, RoutedEventArgs e)
