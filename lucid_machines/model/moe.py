@@ -478,18 +478,50 @@ class MoE_FFN(nn.Module):
             out = out + (self.shared_scale * shared_out).to(out.dtype)
 
         if can_batch_bmm:
-            W1_stack = torch.stack([_get_submod_weight_bias(e[0])[0] for e in self.experts], dim=0)
-            W2_stack = torch.stack([_get_submod_weight_bias(e[2])[0] for e in self.experts], dim=0)
-            b1_stack = (
-                torch.stack([_get_submod_weight_bias(e[0])[1] for e in self.experts], dim=0).unsqueeze(1)
-                if all_b1
-                else None
-            )
-            b2_stack = (
-                torch.stack([_get_submod_weight_bias(e[2])[1] for e in self.experts], dim=0).unsqueeze(1)
-                if all_b2
-                else None
-            )
+            nograd_stacks = None
+            if not torch.is_grad_enabled() and no_lora_e0 and no_lora_e2:
+                w_pairs = [(_get_submod_weight_bias(e[0])[0], _get_submod_weight_bias(e[2])[0]) for e in self.experts]
+                cache_sig = (
+                    x.device,
+                    w_pairs[0][0].dtype,
+                    tuple((w1.data_ptr(), w1._version, w2.data_ptr(), w2._version) for w1, w2 in w_pairs),
+                )
+                cached = getattr(self, "_nograd_weight_stack_cache", None)
+                if cached is not None and cached[0] == cache_sig:
+                    nograd_stacks = cached[1]
+                else:
+                    W1_c = torch.stack([w1 for w1, _ in w_pairs], dim=0)
+                    W2_c = torch.stack([w2 for _, w2 in w_pairs], dim=0)
+                    b1_c = (
+                        torch.stack([_get_submod_weight_bias(e[0])[1] for e in self.experts], dim=0).unsqueeze(1)
+                        if all_b1
+                        else None
+                    )
+                    b2_c = (
+                        torch.stack([_get_submod_weight_bias(e[2])[1] for e in self.experts], dim=0).unsqueeze(1)
+                        if all_b2
+                        else None
+                    )
+                    nograd_stacks = (W1_c, W2_c, b1_c, b2_c)
+                    self._nograd_weight_stack_cache = (cache_sig, nograd_stacks)
+            elif getattr(self, "_nograd_weight_stack_cache", None) is not None:
+                self._nograd_weight_stack_cache = None
+
+            if nograd_stacks is not None:
+                W1_stack, W2_stack, b1_stack, b2_stack = nograd_stacks
+            else:
+                W1_stack = torch.stack([_get_submod_weight_bias(e[0])[0] for e in self.experts], dim=0)
+                W2_stack = torch.stack([_get_submod_weight_bias(e[2])[0] for e in self.experts], dim=0)
+                b1_stack = (
+                    torch.stack([_get_submod_weight_bias(e[0])[1] for e in self.experts], dim=0).unsqueeze(1)
+                    if all_b1
+                    else None
+                )
+                b2_stack = (
+                    torch.stack([_get_submod_weight_bias(e[2])[1] for e in self.experts], dim=0).unsqueeze(1)
+                    if all_b2
+                    else None
+                )
             if has_lora_e0:
                 A1_stack = torch.stack([e[0].lora_A for e in self.experts], dim=0)
                 B1_stack = torch.stack([e[0].lora_B for e in self.experts], dim=0)
@@ -909,6 +941,50 @@ class MoE_FFN(nn.Module):
         self.last_hidden_subspace.copy_(torch.where(has_tokens.unsqueeze(-1), ortho_hid, self.last_hidden_subspace))
         self._recorded_centroids_snapshot = self.last_centroids.detach().clone()
         self._recorded_hidden_snapshot = self.last_hidden_centroids.detach().clone()
+
+    @torch.no_grad()
+    def get_batch_steering_subspaces(
+        self,
+        steer_role: str = "input",
+        num_dirs: int = 4,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> tuple[torch.Tensor, list[bool]] | None:
+        """Return batched subspaces [E, D, k_eff] and per-expert validity flags without per-expert .item() syncs."""
+        if self.last_centroids is None or num_dirs < 1:
+            return None
+        centroids_overridden = (
+            self._recorded_centroids_snapshot is None
+            or self._recorded_centroids_snapshot.shape != self.last_centroids.shape
+            or self._recorded_centroids_snapshot.device != self.last_centroids.device
+            or not torch.equal(self.last_centroids, self._recorded_centroids_snapshot)
+        )
+        if centroids_overridden:
+            return None
+        if steer_role == "hidden":
+            h_cents = getattr(self, "last_hidden_centroids", None)
+            if h_cents is None:
+                return None
+            hidden_overridden = (
+                self._recorded_hidden_snapshot is None
+                or self._recorded_hidden_snapshot.shape != h_cents.shape
+                or self._recorded_hidden_snapshot.device != h_cents.device
+                or not torch.equal(h_cents, self._recorded_hidden_snapshot)
+            )
+            if hidden_overridden:
+                return None
+            sub = getattr(self, "last_hidden_subspace", None)
+        else:
+            sub = getattr(self, "last_input_subspace", None)
+        if sub is None:
+            return None
+
+        k_eff = min(num_dirs, sub.size(-1))
+        sub_k = sub[:, :, :k_eff]
+        valid_flags = (sub_k.float().norm(dim=(1, 2)) > 1e-8).tolist()
+        dev = device or sub_k.device
+        dt = dtype or sub_k.dtype
+        return sub_k.to(device=dev, dtype=dt), valid_flags
 
     @torch.no_grad()
     def get_expert_steering_directions(

@@ -1659,6 +1659,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
 
         bucket_cache = []
         step_list = [0.0] * N
+        mod_sub_cache: dict[tuple[int, str, int], tuple[torch.Tensor, list[bool]] | None] = {}
 
         for (m, n, r, steer_role), chunk_idx, start, end, g_list in shape_buckets:
             K = end - start
@@ -1682,26 +1683,55 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
             G_raw = torch.stack([g["param"].grad.data for g in g_list], dim=0)  # [K, d_out, d_in]
             G_f32 = G_raw.float()
 
-            # 1. Subspace C_e Refresh & Grassmann/Stiefel Parallel Transport (C_old -> C_new)
+            # 1. Subspace C_e Refresh & Batched Grassmann/Stiefel Parallel Transport (C_old -> C_new)
             active_s_idx: list[int] = []
             if self.steer_scale > 0:
+                ref_indices: list[int] = []
                 for b_i, g in enumerate(g_list):
                     mod = g.get("module")
                     e_idx = g.get("expert_idx")
                     if mod is None or e_idx is None:
                         g["steer_applied"] = False
                         continue
-                    st = g["state"]
                     needs_c_ref = (
                         g.get("C_e") is None
                         or g.get("last_steer_step") is None
                         or (self.step_count - g.get("last_steer_step", 0)) >= self.steer_update_gap
                     )
                     if needs_c_ref:
-                        c_new: torch.Tensor | None = None
-                        if self.steer_mode == "upgraded":
-                            if hasattr(mod, "get_expert_steering_directions"):
-                                _, sub_mat = mod.get_expert_steering_directions(
+                        ref_indices.append(b_i)
+                    else:
+                        g["steer_applied"] = g.get("C_e") is not None
+                        if g["steer_applied"]:
+                            active_s_idx.append(b_i)
+
+                if ref_indices:
+                    c_cand_map: dict[int, torch.Tensor] = {}
+                    if self.steer_mode == "upgraded":
+                        eye_pad_full: torch.Tensor | None = None
+                        for b_i in ref_indices:
+                            mod = g_list[b_i]["module"]
+                            e_idx = g_list[b_i]["expert_idx"]
+                            mkey = (id(mod), steer_role, k_c)
+                            if mkey not in mod_sub_cache:
+                                mod_sub_cache[mkey] = (
+                                    mod.get_batch_steering_subspaces(
+                                        steer_role=steer_role,
+                                        num_dirs=k_c,
+                                        device=device,
+                                        dtype=torch.float32,
+                                    )
+                                    if hasattr(mod, "get_batch_steering_subspaces")
+                                    else None
+                                )
+                            batch_sub = mod_sub_cache[mkey]
+                            sub_mat: torch.Tensor | None = None
+                            if batch_sub is not None:
+                                sub_all, valid_flags = batch_sub
+                                if 0 <= e_idx < len(valid_flags) and valid_flags[e_idx]:
+                                    sub_mat = sub_all[e_idx]
+                            elif hasattr(mod, "get_expert_steering_directions"):
+                                _, sub_cand = mod.get_expert_steering_directions(
                                     e_idx,
                                     steer_role=steer_role,
                                     num_dirs=k_c,
@@ -1709,62 +1739,105 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                                     device=device,
                                     dtype=torch.float32,
                                 )
-                            else:
-                                sub_mat = None
-                            if sub_mat is not None and sub_mat.ndim == 2 and float(sub_mat.norm().item()) > 1e-8:
+                                if sub_cand is not None and sub_cand.ndim == 2 and float(sub_cand.norm().item()) > 1e-8:
+                                    sub_mat = sub_cand
+                            if sub_mat is not None and sub_mat.ndim == 2:
                                 if sub_mat.size(1) >= k_c:
                                     c_cand = sub_mat[:, :k_c].float()
                                 else:
                                     k_eff = sub_mat.size(1)
-                                    eye_pad = torch.eye(d_in, k_c, device=device, dtype=torch.float32)
-                                    c_cand = torch.cat([sub_mat.float(), eye_pad[:, : k_c - k_eff]], dim=1)
-                                gram_err = float(
-                                    (torch.mm(c_cand.t(), c_cand) - torch.eye(k_c, device=device, dtype=torch.float32))
-                                    .norm()
-                                    .item()
-                                )
-                                if gram_err > 1e-5:
-                                    c_new = _batched_qr(c_cand.unsqueeze(0), target_dtype=torch.float32).squeeze(0)
-                                else:
-                                    c_new = c_cand
-                        else:
-                            # Memory-matched random subspace control ("random_same_mem")
-                            r_raw = torch.randn(d_in, k_c, device=device, dtype=torch.float32)
-                            q_rand, r_rand = torch.linalg.qr(r_raw, mode="reduced")
-                            r_diag = torch.where(r_rand.diagonal() < 0.0, -1.0, 1.0).unsqueeze(0)
-                            c_new = q_rand * r_diag
+                                    if eye_pad_full is None:
+                                        eye_pad_full = torch.eye(d_in, k_c, device=device, dtype=torch.float32)
+                                    c_cand = torch.cat([sub_mat.float(), eye_pad_full[:, : k_c - k_eff]], dim=1)
+                                c_cand_map[b_i] = c_cand
 
+                        if c_cand_map:
+                            cand_keys = list(c_cand_map.keys())
+                            C_cand = torch.stack([c_cand_map[b_i] for b_i in cand_keys], dim=0)
+                            eye_kc = torch.eye(k_c, device=device, dtype=torch.float32).unsqueeze(0)
+                            gram_errs = (torch.bmm(C_cand.transpose(1, 2), C_cand) - eye_kc).norm(dim=(1, 2))
+                            need_qr = (gram_errs > 1e-5).nonzero(as_tuple=True)[0].tolist()
+                            if need_qr:
+                                C_qr = _batched_qr(C_cand[need_qr], target_dtype=torch.float32)
+                                for pos, idx_q in enumerate(need_qr):
+                                    C_cand[idx_q] = C_qr[pos]
+                            for pos, b_i in enumerate(cand_keys):
+                                c_cand_map[b_i] = C_cand[pos]
+                    else:
+                        # Memory-matched random subspace control ("random_same_mem")
+                        r_raw = torch.randn(len(ref_indices), d_in, k_c, device=device, dtype=torch.float32)
+                        q_rand, r_rand = torch.linalg.qr(r_raw, mode="reduced")
+                        r_diag = torch.where(r_rand.diagonal(dim1=-2, dim2=-1) < 0.0, -1.0, 1.0).unsqueeze(1)
+                        c_rand_all = q_rand * r_diag
+                        for pos, b_i in enumerate(ref_indices):
+                            c_cand_map[b_i] = c_rand_all[pos]
+
+                    transport_idx: list[int] = []
+                    for b_i in ref_indices:
+                        g = g_list[b_i]
+                        st = g["state"]
+                        c_new = c_cand_map.get(b_i)
                         if c_new is not None:
                             c_old = g.get("C_e")
-                            if c_old is not None and c_old.shape == c_new.shape:
-                                c_old_f = c_old.to(device=device, dtype=torch.float32)
-                                dots = (c_old_f * c_new).sum(dim=0, keepdim=True)
-                                c_new = c_new * torch.where(dots < 0.0, -1.0, 1.0)
-                                if st.get("M_c") is not None and st.get("V_c") is not None:
-                                    T = torch.mm(c_old_f.t(), c_new)
-                                    t_sq = T * T
-                                    col_energy = t_sq.sum(dim=0, keepdim=True).clamp(0.0, 1.0)
-                                    m_old = st["M_c"].to(device=device, dtype=torch.float32)
-                                    v_old = st["V_c"].to(device=device, dtype=torch.float32)
-                                    v_mean = v_old.mean(dim=1, keepdim=True)
-                                    st["M_c"] = torch.mm(m_old, T)
-                                    st["V_c"] = (torch.mm(v_old, t_sq) + v_mean * (1.0 - col_energy)).clamp_min_(0.0)
+                            if (
+                                c_old is not None
+                                and c_old.shape == c_new.shape
+                                and st.get("M_c") is not None
+                                and st.get("V_c") is not None
+                            ):
+                                transport_idx.append(b_i)
                             else:
+                                if c_old is not None and c_old.shape == c_new.shape:
+                                    c_old_f = c_old.to(device=device, dtype=torch.float32)
+                                    dots = (c_old_f * c_new).sum(dim=0, keepdim=True)
+                                    c_new = c_new * torch.where(dots < 0.0, -1.0, 1.0)
                                 st["M_c"] = torch.zeros(d_out, k_c, device=device, dtype=torch.float32)
                                 st["V_c"] = torch.zeros(d_out, k_c, device=device, dtype=torch.float32)
                                 st["transport_step"] = 0
-                            st["steer_step"] = 0
-                            st.setdefault("transport_step", 0)
-                            g["C_e"] = c_new
-                            g["last_steer_step"] = self.step_count
-                            g["steer_applied"] = True
+                                st["steer_step"] = 0
+                                g["C_e"] = c_new
+                                g["last_steer_step"] = self.step_count
+                                g["steer_applied"] = True
                         else:
                             g["steer_applied"] = g.get("C_e") is not None
-                    else:
-                        g["steer_applied"] = g.get("C_e") is not None
 
-                    if g["steer_applied"]:
-                        active_s_idx.append(b_i)
+                    if transport_idx:
+                        C_old_b = torch.stack(
+                            [g_list[b_i]["C_e"].to(device=device, dtype=torch.float32) for b_i in transport_idx], dim=0
+                        )
+                        C_new_b = torch.stack([c_cand_map[b_i] for b_i in transport_idx], dim=0)
+                        dots_b = (C_old_b * C_new_b).sum(dim=1, keepdim=True)
+                        C_new_b = C_new_b * torch.where(dots_b < 0.0, -1.0, 1.0)
+                        T_b = torch.bmm(C_old_b.transpose(1, 2), C_new_b)
+                        t_sq_b = T_b * T_b
+                        col_e_b = t_sq_b.sum(dim=1, keepdim=True).clamp(0.0, 1.0)
+                        M_old_b = torch.stack(
+                            [g_list[b_i]["state"]["M_c"].to(device=device, dtype=torch.float32) for b_i in transport_idx],
+                            dim=0,
+                        )
+                        V_old_b = torch.stack(
+                            [g_list[b_i]["state"]["V_c"].to(device=device, dtype=torch.float32) for b_i in transport_idx],
+                            dim=0,
+                        )
+                        v_mean_b = V_old_b.mean(dim=2, keepdim=True)
+                        M_new_b = torch.bmm(M_old_b, T_b)
+                        V_new_b = (torch.bmm(V_old_b, t_sq_b) + v_mean_b * (1.0 - col_e_b)).clamp_min_(0.0)
+                        for pos, b_i in enumerate(transport_idx):
+                            g = g_list[b_i]
+                            st = g["state"]
+                            st["M_c"] = M_new_b[pos]
+                            st["V_c"] = V_new_b[pos]
+                            st["steer_step"] = 0
+                            st.setdefault("transport_step", 0)
+                            g["C_e"] = C_new_b[pos]
+                            g["last_steer_step"] = self.step_count
+                            g["steer_applied"] = True
+                        del C_old_b, C_new_b, T_b, t_sq_b, col_e_b, M_old_b, V_old_b, v_mean_b, M_new_b, V_new_b
+
+                    for b_i in ref_indices:
+                        if g_list[b_i].get("steer_applied"):
+                            active_s_idx.append(b_i)
+                    active_s_idx.sort()
             else:
                 for g in g_list:
                     g["steer_applied"] = False
