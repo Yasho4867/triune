@@ -1259,6 +1259,7 @@ def enable_layer_streaming(
     capture_forward_snapshots: bool = True,
     optimizer: Optional[Any] = None,
     activation_checkpointing: bool = True,
+    layers_path: Optional[str] = None,
 ) -> LayerStreamingEngine:
     """Enable layer streaming on any PyTorch model (Triune, Llama, Mistral, Qwen, etc.)."""
     if device is None:
@@ -1278,8 +1279,9 @@ def enable_layer_streaming(
         resident_gpu_layers=resident_gpu_layers,
         capture_forward_snapshots=capture_forward_snapshots,
         activation_checkpointing=activation_checkpointing,
+        layers_path=layers_path,
     )
-    engine = LayerStreamingEngine(model, device=target_device, config=cfg, optimizer=optimizer)
+    engine = LayerStreamingEngine(model, device=target_device, config=cfg, optimizer=optimizer, layers_path=layers_path)
     engine.attach(optimizer=optimizer)
     return engine
 
@@ -1294,6 +1296,7 @@ def apply_layer_streaming_if_requested(
     if not config.get("streaming", False):
         return None
 
+    layers_path = config.get("streaming_layers_path")
     streaming_cfg = StreamingConfig(
         enabled=True,
         chunk_size=config.get("streaming_chunk_size", 1),
@@ -1306,7 +1309,8 @@ def apply_layer_streaming_if_requested(
         instant_optimizer=True,
         capture_forward_snapshots=config.get("streaming_capture_forward_snapshots", True),
         activation_checkpointing=config.get("streaming_activation_checkpointing", True),
+        layers_path=layers_path,
     )
-    engine = LayerStreamingEngine(model, device=device, config=streaming_cfg, optimizer=optimizer)
+    engine = LayerStreamingEngine(model, device=device, config=streaming_cfg, optimizer=optimizer, layers_path=layers_path)
     engine.attach()
     return engine
