@@ -36,7 +36,7 @@ def _probe_cublas_scaled_mm(device: torch.device) -> bool:
         if cap < (8, 9):  # FP8 requires Ada Lovelace or newer
             return False
         a = torch.zeros((16, 16), device=device, dtype=torch.float8_e4m3fn)
-        b = torch.zeros((16, 16), device=device, dtype=torch.float8_e4m3fn)
+        b = torch.zeros((16, 16), device=device, dtype=torch.float8_e4m3fn).t()
         sa = torch.tensor(1.0, device=device)
         sb = torch.tensor(1.0, device=device)
         torch._scaled_mm(a, b, scale_a=sa, scale_b=sb, out_dtype=torch.bfloat16)

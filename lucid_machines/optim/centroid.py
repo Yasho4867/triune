@@ -1633,12 +1633,17 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                 raw_buckets[key] = []
             raw_buckets[key].append(g)
 
+        MAX_BUCKET_ELEMS = 32_000_000
         shape_buckets = []
         cursor = 0
-        for key, g_list in raw_buckets.items():
-            K = len(g_list)
-            shape_buckets.append((key, cursor, cursor + K, g_list))
-            cursor += K
+        for key, full_g_list in raw_buckets.items():
+            m_k, n_k, _, _ = key
+            chunk_k = max(1, MAX_BUCKET_ELEMS // max(1, m_k * n_k))
+            for chunk_idx, offset in enumerate(range(0, len(full_g_list), chunk_k)):
+                g_chunk = full_g_list[offset : offset + chunk_k]
+                K = len(g_chunk)
+                shape_buckets.append((key, chunk_idx, cursor, cursor + K, g_chunk))
+                cursor += K
 
         def _batched_qr(Y_mat: torch.Tensor, target_dtype: torch.dtype = dtype) -> torch.Tensor:
             Q, diag = batched_qr(
@@ -1655,7 +1660,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
         bucket_cache = []
         step_list = [0.0] * N
 
-        for (m, n, r, steer_role), start, end, g_list in shape_buckets:
+        for (m, n, r, steer_role), chunk_idx, start, end, g_list in shape_buckets:
             K = end - start
             d_out, d_in = m, n
             d_small = min(m, n)
@@ -1664,7 +1669,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
             centroid_on_ql = m > n
             k_c = min(n_steer_dirs, d_in)
 
-            bkey = ("v3", K, m, n, r, steer_role, device, dtype)
+            bkey = ("v3", chunk_idx, K, m, n, r, steer_role, device, dtype)
             if bkey not in self._bucket_buffers:
                 self._bucket_buffers[bkey] = {
                     "QL_stack": torch.zeros(K, d_small, self.rank + 1, device=device, dtype=dtype),
@@ -1766,7 +1771,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
 
             # 2. Exact Orthogonal Direct-Sum Decomposition: G = G_parallel (+) G_perp
             C_act: torch.Tensor | None = None
-            dW_par_act: torch.Tensor | None = None
+            U_c_s_cache: torch.Tensor | None = None
             if active_s_idx:
                 C_act = torch.stack(
                     [g_list[b_i]["C_e"].to(device=device, dtype=torch.float32) for b_i in active_s_idx], dim=0
@@ -1808,7 +1813,8 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                     else:
                         st["M_c"] = M_c_s[k_pos].clone()
                         st["V_c"] = V_c_s[k_pos].clone()
-                dW_par_act = torch.bmm(U_c_s, C_act.transpose(1, 2))  # [K_s, d_out, d_in]
+                U_c_s_cache = U_c_s  # [K_s, d_out, k_c]
+                del G_act_f32, G_c_act, G_par_act, M_c_s, V_c_s
             else:
                 G_perp_f32 = G_f32
 
@@ -2020,8 +2026,9 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                 step_list[idx] = float(sub_step)
 
             bucket_cache.append(
-                (m, n, r, start, end, g_list, QL_act, QR_act, QL_stack, QR_stack, active_s_idx, C_act, dW_par_act)
+                (m, n, r, start, end, g_list, QL_act, QR_act, QL_stack, QR_stack, active_s_idx, C_act, U_c_s_cache)
             )
+            del G_raw, G_f32, G_perp_f32, G_stack, S_bmm
 
         first_sub = step_list[0]
         if all(s == first_sub for s in step_list):
@@ -2077,7 +2084,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
             QR_stack,
             active_s_idx,
             C_act,
-            dW_par_act,
+            U_c_s_cache,
         ) in bucket_cache:
             delta_stack_f32 = batch_delta_R[start:end, :r, :r].float()
             if m <= n:
@@ -2087,13 +2094,15 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                     torch.bmm(QR_act.float(), delta_stack_f32.transpose(1, 2)), QL_act.float().transpose(1, 2)
                 )
 
-            if active_s_idx and C_act is not None and dW_par_act is not None:
+            if active_s_idx and C_act is not None and U_c_s_cache is not None:
                 dw_perp_c = torch.bmm(Delta_W_perp[active_s_idx], C_act)
+                dW_par_act = torch.bmm(U_c_s_cache, C_act.transpose(1, 2))
                 Delta_W_perp[active_s_idx] = (
                     Delta_W_perp[active_s_idx]
                     - torch.bmm(dw_perp_c, C_act.transpose(1, 2))
                     + dW_par_act * float(self.steer_scale)
                 )
+                del dw_perp_c, dW_par_act
 
             if dtype == torch.bfloat16:
                 # Exact unbiased BF16 stochastic rounding prevents ULP quantization loss on subspace updates
@@ -2105,12 +2114,16 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                 w_sr = ((W_stack.view(torch.int32) + rand_bits) & -65536).view(torch.float32).to(dtype=torch.bfloat16)
                 for b_idx, g in enumerate(g_list):
                     g["param"].data.copy_(w_sr[b_idx])
+                del W_stack, rand_bits, w_sr
             else:
                 delta_W = Delta_W_perp.to(dtype=dtype)
                 params_b = [g["param"].data for g in g_list]
                 if expert_wd != 0:
                     torch._foreach_mul_(params_b, beta_wd)
                 torch._foreach_add_(params_b, list(delta_W.unbind(0)), alpha=alpha_upd)
+                del delta_W
+
+            del delta_stack_f32, Delta_W_perp
 
             if N < len(self.layer_groups):
                 for b_idx, g in enumerate(g_list):
