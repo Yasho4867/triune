@@ -5,7 +5,7 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
     <SelfContained>true</SelfContained>
-    <PublishSingleFile>true</PublishSingleFile>
+    <PublishSingleFile Condition="'$(PublishSingleFile)' == ''">false</PublishSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
     <UseWPF>true</UseWPF>
@@ -17,7 +17,8 @@
     <Version>1.0.0</Version>
     <Product>Polysom Studio</Product>
     <Company>Lucid Machines</Company>
-    <Authors>Lucid Machines</Authors>
+    <Authors>Lucid Machines (contact@lucidmachines.co)</Authors>
+    <PackageProjectUrl>https://lucidmachines.co</PackageProjectUrl>
     <Description>Polysom Studio - Lucid Machines Triune research IDE</Description>
     <Copyright>Copyright (c) Lucid Machines</Copyright>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>

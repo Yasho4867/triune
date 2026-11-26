@@ -24,6 +24,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from collections import deque
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 try:
@@ -81,11 +82,11 @@ except ImportError:
     except Exception:
         PythonSandbox = None
 
-try:
+def _load_lora_classes():
+    """Lazy-load trainer LoRA classes so importing API routes avoids pulling transformers/peft eagerly."""
     from lucid_machines.trainer import LoRAConfig, TriuneFineTuner
-except ImportError:
-    LoRAConfig = None
-    TriuneFineTuner = None
+
+    return LoRAConfig, TriuneFineTuner
 
 try:
     from lucid_machines.callbacks import global_emitter
@@ -1032,6 +1033,15 @@ if HAS_FASTAPI:
             """Persist session cumulative tokens and metadata to checkpoints/session_state.json."""
             try:
                 session_file = Path("checkpoints/session_state.json")
+                repo_session_file = Path(__file__).resolve().parents[2] / "checkpoints" / "session_state.json"
+                if (
+                    os.environ.get("LUCID_MACHINES_TESTING") == "1"
+                    or os.environ.get("TRIUNE_TESTING") == "1"
+                    or bool(os.environ.get("PYTEST_CURRENT_TEST"))
+                ) and os.path.normcase(os.path.abspath(session_file)) == os.path.normcase(
+                    os.path.abspath(repo_session_file)
+                ):
+                    return
                 session_file.parent.mkdir(parents=True, exist_ok=True)
                 data = {
                     "total_tokens_trained": self.total_tokens_trained,
@@ -1137,7 +1147,12 @@ if HAS_FASTAPI:
             return self.tokenizer
 
         def reconfigure_architecture(
-            self, preset_id: Optional[str] = None, *, instantiate_model: Optional[bool] = None, **kwargs
+            self,
+            preset_id: Optional[str] = None,
+            *,
+            instantiate_model: Optional[bool] = None,
+            persist: bool = True,
+            **kwargs,
         ) -> Dict[str, Any]:
             """Rebuild TriuneTransformer architecture and optimizer using canonical ModelSpec."""
             from lucid_machines.model.base import build_model_from_spec, get_model_spec
@@ -1327,7 +1342,8 @@ if HAS_FASTAPI:
             if "seq_len" in kwargs and kwargs["seq_len"]:
                 self.seq_len = kwargs["seq_len"]
 
-            self._save_persisted_session_state()
+            if persist:
+                self._save_persisted_session_state()
 
             log_msg = f"[Triune Engine] Architecture active: {base.get('name', p_id)} ({base['num_layers']}L, {base['hidden_dim']}d, {base['num_heads']}H, {base['num_experts']}E, {base['precision'].upper()}). Optimizer rebuilt."
             self.logs.insert(0, log_msg)
@@ -1396,6 +1412,7 @@ if HAS_FASTAPI:
             *,
             restore_optimizer: bool = True,
             precision_override: Optional[str] = None,
+            persist: bool = True,
         ) -> Dict[str, Any]:
             """Load a checkpoint only after matching the model architecture and validating every weight."""
             if getattr(getattr(self, "tokenizer", None), "hf", None) is not None:
@@ -1430,7 +1447,7 @@ if HAS_FASTAPI:
                 arch_overrides["precision"] = precision_override
                 arch_overrides["use_fp4"] = precision_override == "fp4"
                 arch_overrides["use_fp8"] = precision_override == "fp8"
-            self.reconfigure_architecture(model_id, **arch_overrides)
+            self.reconfigure_architecture(model_id, persist=persist, **arch_overrides)
 
             state_dict = checkpoint.get("model_state", checkpoint)
             state_dict = {str(key).removeprefix("_orig_mod."): value for key, value in state_dict.items()}
@@ -1558,7 +1575,8 @@ if HAS_FASTAPI:
                     }
                 )
 
-            self._save_persisted_session_state()
+            if persist:
+                self._save_persisted_session_state()
             return {
                 "checkpoint": p.name,
                 "step": self.step,
@@ -3375,25 +3393,46 @@ if HAS_FASTAPI:
         include_wsl: bool = True
         max_depth: int = 4
 
+    from lucid_machines.runtime.model_scanner import scan_pc_models as _scan_pc_models
+
+    _MODEL_SCAN_CACHE_TTL_S = 300.0
+    _LOCAL_SCAN_CACHE_TTL_S = 15.0
+    _model_scan_cache_lock = threading.Lock()
+    _model_scan_cache: Dict[str, Any] = {
+        "result": None,
+        "ts": 0.0,
+        "pc_scanned": False,
+        "local_result": None,
+        "local_ts": 0.0,
+    }
+
+    def _invalidate_model_scan_cache() -> None:
+        with _model_scan_cache_lock:
+            _model_scan_cache["result"] = None
+            _model_scan_cache["ts"] = 0.0
+            _model_scan_cache["pc_scanned"] = False
+            _model_scan_cache["local_result"] = None
+            _model_scan_cache["local_ts"] = 0.0
+
     def _discover_saved_models(
         extra_paths: Optional[List[str]] = None,
         *,
         include_wsl: bool = True,
         max_depth: int = 4,
+        include_pc_scan: bool = True,
     ) -> Dict[str, Any]:
         """Scan local checkpoints, Ollama, Hugging Face, vLLM, Hermes, LM Studio, and NVFP4 caches."""
-        from lucid_machines.runtime.model_scanner import scan_pc_models
-
         installed_mods: List[Dict[str, Any]] = []
         try:
             installed_mods = module_manager.get_installed_modules()
         except Exception:
             installed_mods = []
-        return scan_pc_models(
+        return _scan_pc_models(
             extra_paths=extra_paths,
             include_wsl=include_wsl,
             max_depth=max_depth,
             installed_modules=installed_mods,
+            include_pc_scan=include_pc_scan,
         )
 
     @router.post("/v1/models/scan")
@@ -3416,12 +3455,18 @@ if HAS_FASTAPI:
             safe_extra_paths,
             include_wsl=bool(req_obj.include_wsl),
             max_depth=max(1, min(6, int(req_obj.max_depth or 4))),
+            include_pc_scan=True,
         )
-        return {"status": "success", **scan_res}
+        if not safe_extra_paths:
+            with _model_scan_cache_lock:
+                _model_scan_cache["result"] = scan_res
+                _model_scan_cache["ts"] = time.monotonic()
+                _model_scan_cache["pc_scanned"] = True
+        return {"status": "success", "pc_scanned": True, "cached": False, **scan_res}
 
     @router.get("/v1/models")
-    async def list_models() -> Dict[str, Any]:
-        """List available model presets, local checkpoints, NVFP4 caches, Ollama, vLLM, Hermes, and HF models."""
+    async def list_models(scan: bool = False, include_pc_scan: Optional[bool] = None) -> Dict[str, Any]:
+        """List available model presets, local checkpoints, and optionally cached/live PC+WSL models."""
         from lucid_machines.model.base import CANONICAL_MODEL_SPECS
 
         models = [
@@ -3434,7 +3479,51 @@ if HAS_FASTAPI:
             }
             for k, v in CANONICAL_MODEL_SPECS.items()
         ]
-        scan_res = await asyncio.to_thread(_discover_saved_models)
+        want_pc_scan = bool(include_pc_scan) if include_pc_scan is not None else bool(scan)
+        cached_hit = False
+        pc_scanned = False
+        scan_res: Optional[Dict[str, Any]] = None
+
+        if want_pc_scan:
+            scan_res = await asyncio.to_thread(
+                _discover_saved_models,
+                include_wsl=True,
+                include_pc_scan=True,
+            )
+            pc_scanned = True
+            with _model_scan_cache_lock:
+                _model_scan_cache["result"] = scan_res
+                _model_scan_cache["ts"] = time.monotonic()
+                _model_scan_cache["pc_scanned"] = True
+        else:
+            with _model_scan_cache_lock:
+                now_m = time.monotonic()
+                cached_res = _model_scan_cache.get("result")
+                cached_ts = float(_model_scan_cache.get("ts") or 0.0)
+                if (
+                    cached_res is not None
+                    and bool(_model_scan_cache.get("pc_scanned"))
+                    and (now_m - cached_ts) < _MODEL_SCAN_CACHE_TTL_S
+                ):
+                    scan_res = cached_res
+                    cached_hit = True
+                    pc_scanned = True
+                else:
+                    local_res = _model_scan_cache.get("local_result")
+                    local_ts = float(_model_scan_cache.get("local_ts") or 0.0)
+                    if local_res is not None and (now_m - local_ts) < _LOCAL_SCAN_CACHE_TTL_S:
+                        scan_res = local_res
+                        cached_hit = True
+            if scan_res is None:
+                scan_res = await asyncio.to_thread(
+                    _discover_saved_models,
+                    include_wsl=False,
+                    include_pc_scan=False,
+                )
+                with _model_scan_cache_lock:
+                    _model_scan_cache["local_result"] = scan_res
+                    _model_scan_cache["local_ts"] = time.monotonic()
+
         saved_models = scan_res["models"]
         for item in saved_models:
             models.append(
@@ -3457,6 +3546,9 @@ if HAS_FASTAPI:
             "saved_models": saved_models,
             "counts_by_source": scan_res.get("counts_by_source", {}),
             "scanned_roots": scan_res.get("scanned_roots", []),
+            "scan_ms": scan_res.get("scan_ms", 0.0),
+            "cached": cached_hit,
+            "pc_scanned": pc_scanned,
         }
 
     @router.get("/v1/system/diagnostics")
@@ -4112,6 +4204,7 @@ if HAS_FASTAPI:
                     pytorch_state.active_finetuner.detach_lora()
                     pytorch_state.active_finetuner = None
 
+                LoRAConfig, TriuneFineTuner = _load_lora_classes()
                 cfg = LoRAConfig(
                     rank=req.lora_rank,
                     alpha=req.lora_alpha,
@@ -4272,6 +4365,7 @@ if HAS_FASTAPI:
             except Exception:
                 pass
 
+        LoRAConfig, TriuneFineTuner = _load_lora_classes()
         cfg = LoRAConfig(rank=rank_val, alpha=alpha_val, quantization=req.quantization)
         finetuner = TriuneFineTuner(pytorch_state.model, cfg)
 
@@ -6042,6 +6136,7 @@ if HAS_FASTAPI:
             filename, getattr(pytorch_state, "active_project", "Triune-Base · Adaptive CentroidSteer")
         )
         pytorch_state._save_persisted_session_state()
+        _invalidate_model_scan_cache()
         size_mb = round(ckpt_path.stat().st_size / (1024 * 1024), 2)
         log_msg = f"[CHECKPOINT] Saved checkpoint to {ckpt_path} ({size_mb} MB) at step {pytorch_state.step}."
         pytorch_state.logs.insert(0, log_msg)
@@ -6843,6 +6938,7 @@ if HAS_FASTAPI:
             pytorch_state.logs.insert(0, log_msg)
             if pytorch_state.active_checkpoint == p.name:
                 pytorch_state.active_checkpoint = None
+            _invalidate_model_scan_cache()
             return {"status": "success", "message": log_msg}
         except Exception as e:
             return {"status": "error", "message": f"Failed to delete: {e}"}
@@ -6889,6 +6985,7 @@ if HAS_FASTAPI:
 
                 await asyncio.to_thread(_save_safetensors_fallback, tensors, out_file)
             size_bytes = out_file.stat().st_size
+            _invalidate_model_scan_cache()
             return {
                 "status": "success",
                 "format": "safetensors",
@@ -7309,7 +7406,9 @@ if HAS_FASTAPI:
                         "current user's permissions. Review its source before explicitly activating it."
                     ),
                 }
-            nodes = module_manager.discover_and_register_nodes(p, trusted=is_trusted_curated)
+            nodes = await asyncio.to_thread(
+                module_manager.discover_and_register_nodes, p, trusted=is_trusted_curated
+            )
             if not nodes and not is_trusted_curated:
                 return {
                     "status": "error",
@@ -7321,6 +7420,7 @@ if HAS_FASTAPI:
                         "and must pass the strict safety checks."
                     ),
                 }
+            await asyncio.to_thread(module_manager.update_module_registered_nodes, module_id, list(nodes))
             res["message"] = f"Activated plugin! {len(nodes)} DAG node(s) registered in Studio."
             res["registered_nodes"] = nodes
         elif mod_type == "model":
@@ -7385,12 +7485,574 @@ if HAS_FASTAPI:
     class TurboModeRequest(BaseModel):
         enabled: bool = True
 
+    class BenchmarkRunRequest(BaseModel):
+        mode: str = "quick"
+        persist: bool = False
+
+    _latest_live_benchmark_lock = threading.Lock()
+    _latest_live_benchmark: Optional[Dict[str, Any]] = None
+
+    def _measure_kernel_op(fn, *, use_cuda: bool, warmup: int, reps: int) -> tuple[float, Optional[float]]:
+        """Execute warmup + timed reps for a callable and return (mean_ms, peak_delta_vram_mb)."""
+        for _ in range(warmup):
+            fn()
+        if use_cuda:
+            torch.cuda.synchronize()
+            torch.cuda.reset_peak_memory_stats()
+            base_alloc = torch.cuda.memory_allocated()
+            t0 = time.perf_counter()
+            for _ in range(reps):
+                fn()
+            torch.cuda.synchronize()
+            elapsed_ms = ((time.perf_counter() - t0) * 1000.0) / max(1, reps)
+            peak_delta = max(0.0, (torch.cuda.max_memory_allocated() - base_alloc) / (1024.0 * 1024.0))
+            return round(elapsed_ms, 4), round(peak_delta, 3)
+
+        t0 = time.perf_counter()
+        for _ in range(reps):
+            fn()
+        elapsed_ms = ((time.perf_counter() - t0) * 1000.0) / max(1, reps)
+        return round(elapsed_ms, 4), None
+
+    def _execute_live_kernel_benchmarks(mode: str = "quick") -> Dict[str, Any]:
+        """Run genuine micro-benchmarks across all 7 Triune kernels against PyTorch (and Unsloth if CUDA+available)."""
+        if not HAS_TORCH:
+            return {
+                "status": "unavailable",
+                "source": "live_api_runner",
+                "measured_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "device": "Host UI Mode",
+                "device_type": "none",
+                "dtype": "none",
+                "backend": "unavailable",
+                "vram_measured": False,
+                "triune_kernel_path": None,
+                "unsloth_baseline": {
+                    "status": "unavailable",
+                    "available": False,
+                    "speedup": None,
+                    "vram_reduction_pct": None,
+                    "total_time_ms": None,
+                    "reason": "PyTorch is not installed in the current process.",
+                },
+                "standard_pytorch": None,
+                "per_kernel_timings": {},
+                "benchmarks_vs_baselines": {
+                    "status": "unavailable",
+                    "message": "PyTorch is not available in the current runtime.",
+                },
+                "message": "PyTorch is not available in the current runtime.",
+            }
+
+        from lucid_machines.kernels import (
+            chunked_cross_entropy_from_hidden,
+            fast_chunk_gla,
+            fast_lora_forward,
+            fast_rmsnorm,
+            fast_rope,
+            fast_swiglu,
+            fast_zeropower_via_newtonschulz5,
+            get_kernel_backend,
+        )
+
+        mode_norm = "full" if str(mode or "quick").strip().lower() == "full" else "quick"
+        use_cuda = bool(torch.cuda.is_available())
+        device = torch.device("cuda:0" if use_cuda else "cpu")
+        if use_cuda and torch.cuda.is_bf16_supported():
+            dtype = torch.bfloat16
+            dtype_name = "bfloat16"
+        else:
+            dtype = torch.float32
+            dtype_name = "float32"
+
+        warmup = 4 if mode_norm == "full" else 2
+        reps = 10 if mode_norm == "full" else 5
+        measured_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        device_name = torch.cuda.get_device_name(0) if use_cuda else "CPU"
+
+        if use_cuda:
+            ce_n, ce_d, ce_v = (2048, 512, 16384) if mode_norm == "full" else (1024, 256, 8192)
+            norm_b, norm_s, norm_d = (8, 512, 1024) if mode_norm == "full" else (4, 256, 512)
+            gla_b, gla_t, gla_h, gla_hd = (2, 256, 4, 64) if mode_norm == "full" else (1, 128, 4, 64)
+            muon_m, muon_n = (256, 256) if mode_norm == "full" else (128, 128)
+            lora_n, lora_in, lora_out, lora_r = (1024, 512, 512, 16) if mode_norm == "full" else (512, 256, 256, 16)
+        else:
+            ce_n, ce_d, ce_v = (512, 128, 4096) if mode_norm == "full" else (256, 128, 2048)
+            norm_b, norm_s, norm_d = (4, 128, 256) if mode_norm == "full" else (2, 64, 256)
+            gla_b, gla_t, gla_h, gla_hd = (1, 128, 4, 32) if mode_norm == "full" else (1, 64, 2, 32)
+            muon_m, muon_n = (128, 128) if mode_norm == "full" else (64, 64)
+            lora_n, lora_in, lora_out, lora_r = (256, 256, 256, 16) if mode_norm == "full" else (128, 128, 128, 8)
+
+        import sys
+
+        unsloth_ce_fn = None
+        unsloth_norm_fn = None
+        unsloth_swiglu_fn = None
+        if not use_cuda:
+            unsloth_reason = "CPU host mode"
+        elif mode_norm != "full" and "unsloth" not in sys.modules:
+            unsloth_reason = "Unsloth comparison deferred in quick mode (pass mode='full' to benchmark Unsloth)."
+        else:
+            unsloth_reason = "unsloth not installed"
+            try:
+                from unsloth.kernels.cross_entropy_loss import fast_cross_entropy_loss as _u_ce
+
+                unsloth_ce_fn = _u_ce
+            except Exception as exc:
+                unsloth_reason = str(exc)
+            try:
+                from unsloth.kernels.rms_layernorm import fast_rms_layernorm as _u_norm
+
+                unsloth_norm_fn = _u_norm
+            except Exception:
+                pass
+            try:
+                from unsloth.kernels.swiglu import swiglu_fg_kernel as _u_swiglu
+
+                unsloth_swiglu_fn = _u_swiglu
+            except Exception:
+                pass
+
+        per_kernel: Dict[str, Dict[str, Any]] = {}
+
+        def _record_kernel(
+            key: str,
+            triune_fn,
+            pytorch_fn,
+            unsloth_fn=None,
+        ) -> None:
+            t_ms, t_vram = _measure_kernel_op(triune_fn, use_cuda=use_cuda, warmup=warmup, reps=reps)
+            p_ms, p_vram = _measure_kernel_op(pytorch_fn, use_cuda=use_cuda, warmup=warmup, reps=reps)
+            u_ms: Optional[float] = None
+            u_vram: Optional[float] = None
+            if unsloth_fn is not None:
+                try:
+                    u_ms, u_vram = _measure_kernel_op(unsloth_fn, use_cuda=use_cuda, warmup=warmup, reps=reps)
+                except Exception:
+                    u_ms, u_vram = None, None
+            speedup = round(p_ms / max(t_ms, 1e-6), 3) if t_ms > 0 else None
+            vram_saved = None
+            if use_cuda and p_vram is not None and t_vram is not None and p_vram > 0:
+                vram_saved = round(((p_vram - t_vram) / p_vram) * 100.0, 2)
+            per_kernel[key] = {
+                "status": "measured",
+                "triune_ms": t_ms,
+                "pytorch_ms": p_ms,
+                "unsloth_ms": u_ms,
+                "speedup_vs_pytorch": speedup,
+                "triune_vram_mb": t_vram,
+                "pytorch_vram_mb": p_vram,
+                "unsloth_vram_mb": u_vram,
+                "vram_saved_pct": vram_saved,
+                "measured_at": measured_at,
+            }
+
+        with torch.no_grad():
+            # 1. fast_cross_entropy
+            ce_h = torch.randn(ce_n, ce_d, device=device, dtype=dtype)
+            ce_w = torch.randn(ce_v, ce_d, device=device, dtype=dtype)
+            ce_y = torch.randint(0, ce_v, (ce_n,), device=device, dtype=torch.long)
+
+            def _triune_ce():
+                return chunked_cross_entropy_from_hidden(ce_h, ce_w, ce_y, chunk_size=max(128, ce_n // 2), force_chunked=True)
+
+            def _pytorch_ce():
+                logits = torch.nn.functional.linear(ce_h, ce_w)
+                return torch.nn.functional.cross_entropy(logits.float(), ce_y)
+
+            _unsloth_ce = None
+            if unsloth_ce_fn is not None:
+                def _unsloth_ce_call():
+                    logits = torch.nn.functional.linear(ce_h, ce_w)
+                    return unsloth_ce_fn(logits.unsqueeze(0), ce_y.unsqueeze(0))
+
+                _unsloth_ce = _unsloth_ce_call
+
+            _record_kernel("fast_cross_entropy", _triune_ce, _pytorch_ce, _unsloth_ce)
+
+            # 2. fast_rmsnorm
+            rn_x = torch.randn(norm_b, norm_s, norm_d, device=device, dtype=dtype)
+            rn_w = torch.ones(norm_d, device=device, dtype=dtype)
+
+            def _triune_rn():
+                return fast_rmsnorm(rn_x, rn_w, 1e-6)
+
+            def _pytorch_rn():
+                xf = rn_x.float()
+                return (xf * torch.rsqrt(xf.pow(2).mean(-1, keepdim=True) + 1e-6)).to(rn_x.dtype) * rn_w
+
+            _unsloth_rn = None
+            if unsloth_norm_fn is not None:
+                class _NormStub:
+                    def __init__(self, w):
+                        self.weight = w
+                        self.variance_epsilon = 1e-6
+
+                _rn_stub = _NormStub(rn_w)
+                _unsloth_rn = lambda: unsloth_norm_fn(_rn_stub, rn_x)
+
+            _record_kernel("fast_rmsnorm", _triune_rn, _pytorch_rn, _unsloth_rn)
+
+            # 3. fast_swiglu
+            sw_g = torch.randn(norm_b, norm_s, norm_d * 2, device=device, dtype=dtype)
+            sw_u = torch.randn(norm_b, norm_s, norm_d * 2, device=device, dtype=dtype)
+
+            def _triune_sw():
+                return fast_swiglu(sw_g, sw_u)
+
+            def _pytorch_sw():
+                return torch.nn.functional.silu(sw_g) * sw_u
+
+            _unsloth_sw = (lambda: unsloth_swiglu_fn(sw_g, sw_u)) if unsloth_swiglu_fn is not None else None
+            _record_kernel("fast_swiglu", _triune_sw, _pytorch_sw, _unsloth_sw)
+
+            # 4. fast_gla
+            gl_q = torch.randn(gla_b, gla_t, gla_h, gla_hd, device=device, dtype=dtype)
+            gl_k = torch.randn(gla_b, gla_t, gla_h, gla_hd, device=device, dtype=dtype)
+            gl_v = torch.randn(gla_b, gla_t, gla_h, gla_hd, device=device, dtype=dtype)
+            gl_g = -torch.rand(gla_b, gla_t, gla_h, gla_hd, device=device, dtype=dtype)
+
+            def _triune_gla():
+                return fast_chunk_gla(gl_q, gl_k, gl_v, gl_g, chunk_size=min(64, gla_t))
+
+            def _pytorch_gla():
+                return torch.nn.functional.scaled_dot_product_attention(
+                    gl_q.transpose(1, 2), gl_k.transpose(1, 2), gl_v.transpose(1, 2), is_causal=True
+                )
+
+            _record_kernel("fast_gla", _triune_gla, _pytorch_gla)
+
+            # 5. fast_rope
+            rp_q = torch.randn(gla_b, gla_h, gla_t, gla_hd, device=device, dtype=dtype)
+            rp_k = torch.randn(gla_b, gla_h, gla_t, gla_hd, device=device, dtype=dtype)
+            rp_cos = torch.ones(gla_t, gla_hd, device=device, dtype=dtype)
+            rp_sin = torch.zeros(gla_t, gla_hd, device=device, dtype=dtype)
+            rp_cos_4d = rp_cos.unsqueeze(0).unsqueeze(1)
+            rp_sin_4d = rp_sin.unsqueeze(0).unsqueeze(1)
+
+            def _triune_rope():
+                return fast_rope(rp_q, rp_k, rp_cos, rp_sin)
+
+            def _pytorch_rope():
+                q1, q2 = rp_q.chunk(2, dim=-1)
+                k1, k2 = rp_k.chunk(2, dim=-1)
+                qr = rp_q * rp_cos_4d + torch.cat((-q2, q1), dim=-1) * rp_sin_4d
+                kr = rp_k * rp_cos_4d + torch.cat((-k2, k1), dim=-1) * rp_sin_4d
+                return qr, kr
+
+            _record_kernel("fast_rope", _triune_rope, _pytorch_rope)
+
+            # 6. fast_muon
+            mu_g = torch.randn(muon_m, muon_n, device=device, dtype=dtype)
+
+            def _triune_muon():
+                return fast_zeropower_via_newtonschulz5(mu_g)
+
+            def _pytorch_muon():
+                u, _, vh = torch.linalg.svd(mu_g.float(), full_matrices=False)
+                return (u @ vh).to(mu_g.dtype)
+
+            _record_kernel("fast_muon", _triune_muon, _pytorch_muon)
+
+            # 7. fast_lora
+            lr_x = torch.randn(lora_n, lora_in, device=device, dtype=dtype)
+            lr_a = torch.randn(lora_r, lora_in, device=device, dtype=dtype)
+            lr_b = torch.randn(lora_out, lora_r, device=device, dtype=dtype)
+
+            def _triune_lora():
+                return fast_lora_forward(lr_x, lr_a, lr_b, 2.0)
+
+            def _pytorch_lora():
+                return 2.0 * torch.matmul(torch.matmul(lr_x, lr_a.t()), lr_b.t())
+
+            _record_kernel("fast_lora", _triune_lora, _pytorch_lora)
+
+        total_triune_ms = round(sum(float(v["triune_ms"]) for v in per_kernel.values()), 3)
+        total_pytorch_ms = round(sum(float(v["pytorch_ms"]) for v in per_kernel.values()), 3)
+        overall_speedup = round(total_pytorch_ms / max(total_triune_ms, 1e-6), 3)
+
+        triune_vram_vals = [float(v["triune_vram_mb"]) for v in per_kernel.values() if v["triune_vram_mb"] is not None]
+        pytorch_vram_vals = [float(v["pytorch_vram_mb"]) for v in per_kernel.values() if v["pytorch_vram_mb"] is not None]
+        triune_peak_vram = round(max(triune_vram_vals), 3) if triune_vram_vals else None
+        pytorch_peak_vram = round(max(pytorch_vram_vals), 3) if pytorch_vram_vals else None
+        triune_total_vram = sum(triune_vram_vals) if triune_vram_vals else 0.0
+        pytorch_total_vram = sum(pytorch_vram_vals) if pytorch_vram_vals else 0.0
+        triune_vram_red_pct = (
+            round(((pytorch_total_vram - triune_total_vram) / pytorch_total_vram) * 100.0, 2)
+            if (use_cuda and pytorch_total_vram > 0.0)
+            else None
+        )
+
+        unsloth_matched = [v for v in per_kernel.values() if v.get("unsloth_ms") is not None]
+        if unsloth_matched:
+            u_total_ms = round(sum(float(v["unsloth_ms"]) for v in unsloth_matched), 3)
+            p_matched_ms = sum(float(v["pytorch_ms"]) for v in unsloth_matched)
+            u_speedup = round(p_matched_ms / max(u_total_ms, 1e-6), 3)
+            u_vram_vals = [float(v["unsloth_vram_mb"]) for v in unsloth_matched if v.get("unsloth_vram_mb") is not None]
+            p_u_vram_vals = [float(v["pytorch_vram_mb"]) for v in unsloth_matched if v.get("pytorch_vram_mb") is not None]
+            u_vram_red_pct = (
+                round(((sum(p_u_vram_vals) - sum(u_vram_vals)) / sum(p_u_vram_vals)) * 100.0, 2)
+                if (use_cuda and p_u_vram_vals and sum(p_u_vram_vals) > 0.0)
+                else None
+            )
+            unsloth_baseline = {
+                "status": "measured",
+                "available": True,
+                "kernels_measured": len(unsloth_matched),
+                "speedup": u_speedup,
+                "vram_reduction_pct": u_vram_red_pct,
+                "total_time_ms": u_total_ms,
+                "peak_vram_mb": round(max(u_vram_vals), 3) if u_vram_vals else None,
+            }
+        else:
+            u_speedup = None
+            u_vram_red_pct = None
+            unsloth_baseline = {
+                "status": "unavailable",
+                "available": False,
+                "speedup": None,
+                "vram_reduction_pct": None,
+                "total_time_ms": None,
+                "reason": unsloth_reason,
+            }
+
+        benchmarks_vs_baselines = {
+            "status": "measured",
+            "source": "live_api_runner",
+            "device": device_name,
+            "measured_at": measured_at,
+            "triune_native_speedup": overall_speedup,
+            "triune_vram_reduction_pct": triune_vram_red_pct,
+            "unsloth_speedup": u_speedup,
+            "unsloth_vram_reduction_pct": u_vram_red_pct,
+            "vanilla_pytorch_speedup": 1.0,
+        }
+
+        return {
+            "status": "measured",
+            "source": "live_api_runner",
+            "mode": mode_norm,
+            "measured_at": measured_at,
+            "device": device_name,
+            "device_type": "cuda" if use_cuda else "cpu",
+            "dtype": dtype_name,
+            "backend": get_kernel_backend(),
+            "vram_measured": use_cuda,
+            "triune_kernel_path": {
+                "status": "measured",
+                "speedup": overall_speedup,
+                "total_time_ms": total_triune_ms,
+                "peak_vram_mb": triune_peak_vram,
+                "vram_reduction_pct": triune_vram_red_pct,
+            },
+            "unsloth_baseline": unsloth_baseline,
+            "standard_pytorch": {
+                "status": "measured",
+                "speedup": 1.0,
+                "total_time_ms": total_pytorch_ms,
+                "peak_vram_mb": pytorch_peak_vram,
+                "vram_reduction_pct": 0.0 if use_cuda else None,
+            },
+            "per_kernel_timings": per_kernel,
+            "benchmarks_vs_baselines": benchmarks_vs_baselines,
+        }
+
+    def _normalize_benchmark_artifact(raw: Dict[str, Any], results_path: Path) -> Dict[str, Any]:
+        """Normalize benchmarks/benchmark_results.json while preserving its 5 raw benchmark sections."""
+        mtime_iso = datetime.fromtimestamp(results_path.stat().st_mtime, tz=timezone.utc).isoformat().replace(
+            "+00:00", "Z"
+        )
+        ce_rows = (raw.get("cross_entropy") or {}).get("results") or []
+        ce_last = ce_rows[-1] if ce_rows else {}
+        gla_rows = (raw.get("attention_scaling") or {}).get("results") or []
+        gla_last = gla_rows[-1] if gla_rows else {}
+        opt = raw.get("optimizer") or {}
+        fused = raw.get("fused_activations") or {}
+
+        per_kernel: Dict[str, Dict[str, Any]] = {}
+        if ce_last:
+            per_kernel["fast_cross_entropy"] = {
+                "status": "measured",
+                "triune_ms": ce_last.get("triune_time_ms"),
+                "pytorch_ms": ce_last.get("standard_time_ms"),
+                "unsloth_ms": ce_last.get("unsloth_time_ms"),
+                "speedup_vs_pytorch": ce_last.get("speedup"),
+                "triune_vram_mb": ce_last.get("triune_vram_mb"),
+                "pytorch_vram_mb": ce_last.get("standard_vram_mb"),
+                "unsloth_vram_mb": ce_last.get("unsloth_vram_mb"),
+                "vram_saved_pct": ce_last.get("vram_saved_pct"),
+                "measured_at": mtime_iso,
+            }
+        if fused:
+            rn_p = fused.get("pytorch_rms_norm_time_ms") or fused.get("standard_norm_time_ms")
+            rn_t = fused.get("triune_norm_time_ms")
+            per_kernel["fast_rmsnorm"] = {
+                "status": "measured",
+                "triune_ms": rn_t,
+                "pytorch_ms": rn_p,
+                "unsloth_ms": fused.get("unsloth_norm_time_ms"),
+                "speedup_vs_pytorch": round(float(rn_p) / max(float(rn_t), 1e-6), 3) if (rn_p and rn_t) else fused.get("norm_speedup"),
+                "triune_vram_mb": fused.get("triune_norm_vram_mb"),
+                "pytorch_vram_mb": fused.get("standard_norm_vram_mb"),
+                "unsloth_vram_mb": fused.get("unsloth_norm_vram_mb"),
+                "vram_saved_pct": fused.get("norm_vram_saved_pct"),
+                "measured_at": mtime_iso,
+            }
+            sw_p = fused.get("standard_swiglu_time_ms")
+            sw_t = fused.get("triune_swiglu_time_ms")
+            sw_p_v = fused.get("standard_swiglu_vram_mb")
+            sw_t_v = fused.get("triune_swiglu_vram_mb")
+            per_kernel["fast_swiglu"] = {
+                "status": "measured",
+                "triune_ms": sw_t,
+                "pytorch_ms": sw_p,
+                "unsloth_ms": fused.get("unsloth_swiglu_time_ms"),
+                "speedup_vs_pytorch": fused.get("swiglu_speedup"),
+                "triune_vram_mb": sw_t_v,
+                "pytorch_vram_mb": sw_p_v,
+                "unsloth_vram_mb": fused.get("unsloth_swiglu_vram_mb"),
+                "vram_saved_pct": round(((float(sw_p_v) - float(sw_t_v)) / float(sw_p_v)) * 100.0, 2)
+                if (sw_p_v and sw_t_v is not None)
+                else None,
+                "measured_at": mtime_iso,
+            }
+        if gla_last:
+            per_kernel["fast_gla"] = {
+                "status": "measured",
+                "triune_ms": gla_last.get("triune_gla_time_ms"),
+                "pytorch_ms": gla_last.get("standard_time_ms"),
+                "unsloth_ms": None,
+                "speedup_vs_pytorch": gla_last.get("speedup"),
+                "triune_vram_mb": gla_last.get("triune_vram_mb"),
+                "pytorch_vram_mb": gla_last.get("standard_vram_mb"),
+                "unsloth_vram_mb": None,
+                "vram_saved_pct": gla_last.get("vram_saved_pct"),
+                "measured_at": mtime_iso,
+            }
+        if opt:
+            m_t = opt.get("muon_step_ms")
+            s_p = opt.get("standard_svd_ms")
+            per_kernel["fast_muon"] = {
+                "status": "measured",
+                "triune_ms": m_t,
+                "pytorch_ms": s_p,
+                "unsloth_ms": None,
+                "speedup_vs_pytorch": round(float(s_p) / max(float(m_t), 1e-6), 3) if (m_t and s_p) else opt.get("subspace_algo_speedup"),
+                "triune_vram_mb": opt.get("centroid_steer_state_mb"),
+                "pytorch_vram_mb": opt.get("adamw_fp32_state_mb"),
+                "unsloth_vram_mb": None,
+                "vram_saved_pct": opt.get("memory_reduction_vs_fp32_pct"),
+                "measured_at": mtime_iso,
+            }
+
+        for missing_key in ("fast_rope", "fast_lora"):
+            per_kernel.setdefault(
+                missing_key,
+                {
+                    "status": "not_in_artifact",
+                    "triune_ms": None,
+                    "pytorch_ms": None,
+                    "unsloth_ms": None,
+                    "speedup_vs_pytorch": None,
+                    "triune_vram_mb": None,
+                    "pytorch_vram_mb": None,
+                    "unsloth_vram_mb": None,
+                    "vram_saved_pct": None,
+                    "measured_at": mtime_iso,
+                },
+            )
+
+        t_times = [float(v["triune_ms"]) for v in per_kernel.values() if v.get("triune_ms") is not None]
+        p_times = [float(v["pytorch_ms"]) for v in per_kernel.values() if v.get("pytorch_ms") is not None]
+        total_t = round(sum(t_times), 3) if t_times else None
+        total_p = round(sum(p_times), 3) if p_times else None
+        speedup = round(total_p / max(total_t, 1e-6), 3) if (total_t and total_p) else None
+        vram_saved_vals = [float(v["vram_saved_pct"]) for v in per_kernel.values() if v.get("vram_saved_pct") is not None]
+        avg_vram_saved = round(sum(vram_saved_vals) / len(vram_saved_vals), 2) if vram_saved_vals else None
+
+        unsloth_rows = [v for v in per_kernel.values() if v.get("unsloth_ms") is not None]
+        if unsloth_rows:
+            u_total = round(sum(float(v["unsloth_ms"]) for v in unsloth_rows), 3)
+            p_u_total = sum(float(v["pytorch_ms"]) for v in unsloth_rows if v.get("pytorch_ms") is not None)
+            u_speedup = round(p_u_total / max(u_total, 1e-6), 3) if u_total > 0 and p_u_total > 0 else None
+            u_vram_vals = [float(v["unsloth_vram_mb"]) for v in unsloth_rows if v.get("unsloth_vram_mb") is not None]
+            p_u_vram_vals = [float(v["pytorch_vram_mb"]) for v in unsloth_rows if v.get("pytorch_vram_mb") is not None]
+            u_vram_red = (
+                round(((sum(p_u_vram_vals) - sum(u_vram_vals)) / sum(p_u_vram_vals)) * 100.0, 2)
+                if (p_u_vram_vals and sum(p_u_vram_vals) > 0)
+                else None
+            )
+            unsloth_baseline = {
+                "status": "measured",
+                "available": True,
+                "kernels_measured": len(unsloth_rows),
+                "speedup": u_speedup,
+                "vram_reduction_pct": u_vram_red,
+                "total_time_ms": u_total,
+                "peak_vram_mb": round(max(u_vram_vals), 3) if u_vram_vals else None,
+            }
+        else:
+            u_speedup = None
+            u_vram_red = None
+            unsloth_baseline = {
+                "status": "unavailable",
+                "available": False,
+                "speedup": None,
+                "vram_reduction_pct": None,
+                "total_time_ms": None,
+                "reason": "Not recorded in benchmark_results.json",
+            }
+
+        benchmarks_vs_baselines = {
+            "status": "measured",
+            "source": "benchmarks/benchmark_results.json",
+            "device": "recorded_artifact",
+            "measured_at": mtime_iso,
+            "triune_native_speedup": speedup,
+            "triune_vram_reduction_pct": avg_vram_saved,
+            "unsloth_speedup": u_speedup,
+            "unsloth_vram_reduction_pct": u_vram_red,
+            "vanilla_pytorch_speedup": 1.0,
+        }
+
+        out = dict(raw)
+        out.update(
+            {
+                "status": "measured",
+                "source": "benchmarks/benchmark_results.json",
+                "measured_at": mtime_iso,
+                "device": "recorded_artifact",
+                "triune_kernel_path": {
+                    "status": "measured",
+                    "speedup": speedup,
+                    "total_time_ms": total_t,
+                    "vram_reduction_pct": avg_vram_saved,
+                },
+                "unsloth_baseline": unsloth_baseline,
+                "standard_pytorch": {
+                    "status": "measured",
+                    "speedup": 1.0,
+                    "total_time_ms": total_p,
+                    "vram_reduction_pct": 0.0,
+                },
+                "per_kernel_timings": per_kernel,
+                "benchmarks_vs_baselines": benchmarks_vs_baselines,
+            }
+        )
+        return out
+
     @router.get("/v1/engine/kernels")
     async def get_kernels_telemetry_endpoint() -> Dict[str, Any]:
         """Return comprehensive live status and benchmark comparison of Triune custom kernels."""
         from lucid_machines.kernels.dispatcher import get_kernel_telemetry
 
-        return get_kernel_telemetry()
+        telemetry = get_kernel_telemetry()
+        with _latest_live_benchmark_lock:
+            live = dict(_latest_live_benchmark) if _latest_live_benchmark is not None else None
+        if live is not None:
+            telemetry["benchmarks_vs_baselines"] = dict(live.get("benchmarks_vs_baselines") or {})
+            telemetry["per_kernel_timings"] = dict(live.get("per_kernel_timings") or {})
+        return telemetry
 
     @router.post("/v1/engine/turbo_mode")
     async def toggle_turbo_mode_endpoint(req: TurboModeRequest) -> Dict[str, Any]:
@@ -7406,19 +8068,53 @@ if HAS_FASTAPI:
         pytorch_state.logs.insert(0, f"[ACCELERATOR] {msg}")
         return {"status": "success", "turbo_mode": new_val, "message": msg, "telemetry": get_kernel_telemetry()}
 
+    @router.post("/v1/engine/benchmarks/run")
+    async def run_competitive_benchmarks_endpoint(req: Optional[BenchmarkRunRequest] = None) -> Dict[str, Any]:
+        """Execute genuine live micro-benchmarks across all 7 Triune kernels."""
+        global _latest_live_benchmark
+        mode = (req.mode if req else "quick") or "quick"
+        persist = bool(req.persist) if req else False
+        result = await asyncio.to_thread(_execute_live_kernel_benchmarks, mode)
+        with _latest_live_benchmark_lock:
+            _latest_live_benchmark = result
+        if persist and result.get("status") == "measured":
+            results_path = Path("benchmarks/benchmark_results.json")
+            try:
+                existing = json.loads(results_path.read_text(encoding="utf-8")) if results_path.is_file() else {}
+                if isinstance(existing, dict):
+                    merged = dict(existing)
+                    merged["live_kernel_suite"] = result
+                    results_path.parent.mkdir(parents=True, exist_ok=True)
+                    results_path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
+            except Exception:
+                pass
+        return result
+
     @router.get("/v1/engine/benchmarks")
     async def get_competitive_benchmarks_endpoint() -> Dict[str, Any]:
-        """Return the latest tested empirical competitor benchmarks (PyTorch, AdamW, Unsloth, Fixed-Depth LLMs)."""
+        """Return the latest live benchmark run or normalized recorded benchmark artifact."""
+        with _latest_live_benchmark_lock:
+            if _latest_live_benchmark is not None:
+                return dict(_latest_live_benchmark)
+
         results_path = Path("benchmarks/benchmark_results.json")
         if results_path.is_file():
             try:
                 with open(results_path, "r", encoding="utf-8") as f:
-                    return json.load(f)
+                    raw = json.load(f)
+                if isinstance(raw, dict):
+                    return _normalize_benchmark_artifact(raw, results_path)
             except Exception as exc:
                 return {"status": "error", "message": str(exc)}
         return {
             "status": "not_run",
-            "message": "Run python scripts/benchmark_competitors.py to generate live benchmarks.",
+            "source": "none",
+            "measured_at": None,
+            "triune_kernel_path": None,
+            "unsloth_baseline": None,
+            "standard_pytorch": None,
+            "per_kernel_timings": {},
+            "message": "Run POST /v1/engine/benchmarks/run or python scripts/benchmark_competitors.py to generate live benchmarks.",
         }
 
     # Model Export Endpoints
@@ -7521,6 +8217,7 @@ SYSTEM \"\"\"You are a Triune neural language model by Lucid Machines, trained w
 
                 res_path = await asyncio.to_thread(export_to_huggingface, pytorch_state.model, hf_dir)
                 total_bytes = sum(f.stat().st_size for f in res_path.glob("**/*") if f.is_file())
+                _invalidate_model_scan_cache()
                 return {
                     "status": "success",
                     "format": "huggingface",
@@ -7539,6 +8236,7 @@ SYSTEM \"\"\"You are a Triune neural language model by Lucid Machines, trained w
         try:
             res_path = await asyncio.to_thread(export_model, pytorch_state.model, out_file, export_format)
             size_bytes = res_path.stat().st_size if res_path.exists() else 0
+            _invalidate_model_scan_cache()
             return {
                 "status": "success",
                 "format": export_format,
@@ -8144,24 +8842,151 @@ SYSTEM \"\"\"You are a Triune neural language model by Lucid Machines, trained w
         st = ctrl.shift(persona=req.name, reasoning_depth=req.default_depth)
         return {"status": "success", "state": {"persona": st.persona, "reasoning_depth": st.reasoning_depth}}
 
-    def _resolve_agent_backend(req_model: Optional[str]) -> tuple[Optional[str], Optional[Any]]:
-        if not req_model and getattr(pytorch_state, "weights_loaded", False):
-            if getattr(pytorch_state, "active_runtime", "pytorch") == "ollama" and pytorch_state.ollama_model_tag:
-                return f"ollama:{pytorch_state.ollama_model_tag}", None
+    _EXTERNAL_AGENT_MODEL_PREFIXES = (
+        "ollama:",
+        "gpt-",
+        "o1-",
+        "o3-",
+        "openai/",
+        "openrouter/",
+        "claude-",
+        "anthropic/",
+        "gemini-",
+        "gemini/",
+    )
 
-            def _local_pt_completion(messages, **_kwargs):
-                prompt_txt = "\n\n".join(f"{m['role']}: {m['content']}" for m in messages[-6:])
-                with pytorch_state.worker_lock:
-                    res = pytorch_state.generate_text(
-                        prompt_txt,
-                        max_new_tokens=256,
-                        temperature=float(_kwargs.get("temperature", 0.35)),
-                        prompt_is_formatted=False,
-                    )
-                return {"content": res["text"], "tool_calls": []}
+    def _is_external_model_ref(req_model: Optional[str]) -> bool:
+        low = str(req_model or "").strip().lower()
+        return bool(low) and low.startswith(_EXTERNAL_AGENT_MODEL_PREFIXES)
 
-            return pytorch_state.active_model_id, _local_pt_completion
-        return req_model, None
+    def _match_local_triune_spec(req_model: str) -> tuple[bool, str]:
+        """Determine whether req_model refers to a local Triune/Junkie preset or active PyTorch model."""
+        from lucid_machines.model.base import _LEGACY_PRESET_ALIASES, CANONICAL_MODEL_SPECS
+
+        low = req_model.strip().lower()
+        candidate = low
+        for prefix in ("lucid-machines/", "lucid/", "triune/", "junkie/"):
+            if low.startswith(prefix):
+                tail = low[len(prefix) :].strip()
+                if prefix == "junkie/" and f"junkie-{tail}" in CANONICAL_MODEL_SPECS:
+                    candidate = f"junkie-{tail}"
+                elif prefix == "junkie/" and f"junkie-{tail}" in _LEGACY_PRESET_ALIASES:
+                    candidate = f"junkie-{tail}"
+                elif prefix == "triune/" and f"triune-{tail}" in CANONICAL_MODEL_SPECS:
+                    candidate = f"triune-{tail}"
+                elif prefix == "triune/" and f"triune-{tail}" in _LEGACY_PRESET_ALIASES:
+                    candidate = f"triune-{tail}"
+                else:
+                    candidate = tail
+                break
+
+        if candidate in CANONICAL_MODEL_SPECS or candidate in _LEGACY_PRESET_ALIASES:
+            return True, candidate
+        if re.match(r"^(?:triune|junkie|lucid)(?:$|[-_/])", low):
+            return True, candidate
+
+        if getattr(pytorch_state, "active_runtime", "pytorch") == "pytorch":
+            active_id = str(getattr(pytorch_state, "active_model_id", "") or "").strip().lower()
+            active_ckpt = str(getattr(pytorch_state, "active_checkpoint", "") or "").strip().lower()
+            if (active_id and low == active_id) or (active_ckpt and low == active_ckpt):
+                return True, active_id or candidate
+
+        return False, candidate
+
+    def _ensure_local_triune_model(req_model: str, candidate_id: str) -> str:
+        """Ensure local Triune model + tokenizer are initialized without mutating session_state.json."""
+        if not HAS_TORCH or TriuneTransformer is None:
+            return req_model
+
+        from lucid_machines.model.base import _LEGACY_PRESET_ALIASES, CANONICAL_MODEL_SPECS, get_model_spec
+
+        with pytorch_state.worker_lock:
+            if candidate_id in CANONICAL_MODEL_SPECS or candidate_id in _LEGACY_PRESET_ALIASES:
+                target_id = candidate_id
+            else:
+                if (
+                    getattr(pytorch_state, "model", None) is not None
+                    and getattr(pytorch_state, "active_runtime", "pytorch") == "pytorch"
+                ):
+                    pytorch_state.load_tokenizer()
+                    return str(getattr(pytorch_state, "active_model_id", None) or req_model)
+                target_id = str(getattr(pytorch_state, "active_model_id", None) or "triune-small").strip().lower()
+
+            if (
+                getattr(pytorch_state, "model", None) is not None
+                and getattr(pytorch_state, "active_runtime", "pytorch") == "pytorch"
+            ):
+                cur_id = str(getattr(pytorch_state, "active_model_id", "") or "").strip().lower()
+                target_canon = _LEGACY_PRESET_ALIASES.get(target_id, target_id)
+                cur_canon = _LEGACY_PRESET_ALIASES.get(cur_id, cur_id)
+                if target_id == cur_id or target_canon == cur_canon:
+                    pytorch_state.load_tokenizer()
+                    return str(getattr(pytorch_state, "active_model_id", None) or req_model)
+
+            spec = get_model_spec(target_id)
+            total_p, _ = spec.compute_exact_params()
+            if total_p > 1_000_000_000:
+                if (
+                    getattr(pytorch_state, "model", None) is not None
+                    and getattr(pytorch_state, "active_runtime", "pytorch") == "pytorch"
+                ):
+                    pytorch_state.load_tokenizer()
+                    return str(getattr(pytorch_state, "active_model_id", None) or req_model)
+                pytorch_state.reconfigure_architecture("triune-small", instantiate_model=True, persist=False)
+                pytorch_state.explicit_architecture_active = True
+                return req_model
+
+            pytorch_state.reconfigure_architecture(target_id, instantiate_model=True, persist=False)
+            pytorch_state.explicit_architecture_active = True
+            return req_model
+
+    def resolve_agent_backend(req_model: Optional[str]) -> tuple[Optional[str], Optional[Any]]:
+        """Resolve agent model references across external providers and local Triune/Junkie runtimes."""
+
+        def _local_pt_completion(messages, **_kwargs):
+            recent = messages[-6:] if messages else []
+            prompt_txt = "\n\n".join(
+                f"{m.get('role', 'user')}: {m.get('content', '')}" for m in recent
+            ).strip() or "Hello"
+            is_cpu = getattr(getattr(pytorch_state, "device", None), "type", "cpu") == "cpu"
+            default_max = 64 if is_cpu else 256
+            max_tok = max(1, int(_kwargs.get("max_new_tokens") or _kwargs.get("max_tokens") or default_max))
+            temp = _kwargs.get("temperature")
+            temperature = float(0.35 if temp is None else temp)
+            with pytorch_state.worker_lock:
+                res = pytorch_state.generate_text(
+                    prompt_txt,
+                    max_new_tokens=max_tok,
+                    temperature=temperature,
+                    prompt_is_formatted=False,
+                )
+            return {"content": str(res.get("text") or ""), "tool_calls": []}
+
+        raw_model = str(req_model).strip() if req_model is not None else ""
+        if not raw_model:
+            has_loaded = bool(
+                getattr(pytorch_state, "weights_loaded", False)
+                or getattr(pytorch_state, "model", None) is not None
+            )
+            if has_loaded:
+                if getattr(pytorch_state, "active_runtime", "pytorch") == "ollama" and pytorch_state.ollama_model_tag:
+                    return f"ollama:{pytorch_state.ollama_model_tag}", None
+                if HAS_TORCH:
+                    pytorch_state.load_tokenizer()
+                return (getattr(pytorch_state, "active_model_id", None) or "triune-small"), _local_pt_completion
+            return None, None
+
+        if _is_external_model_ref(raw_model):
+            return raw_model, None
+
+        is_local, candidate_id = _match_local_triune_spec(raw_model)
+        if not is_local:
+            return raw_model, None
+
+        chosen_model = _ensure_local_triune_model(raw_model, candidate_id)
+        return chosen_model, _local_pt_completion
+
+    _resolve_agent_backend = resolve_agent_backend
 
     @router.post("/v1/agents/run")
     async def run_agent_harness_endpoint(req: AgentRunRequest) -> Any:
@@ -8179,7 +9004,7 @@ SYSTEM \"\"\"You are a Triune neural language model by Lucid Machines, trained w
                     "message": "Security restriction: agent workspace writes via API are disabled by default (set LUCID_MACHINES_ALLOW_AGENT_WRITES=1).",
                 },
             )
-        chosen_model, local_completion = _resolve_agent_backend(req.model)
+        chosen_model, local_completion = await asyncio.to_thread(resolve_agent_backend, req.model)
         harness = AgentHarness(
             workspace=".",
             model=chosen_model,
@@ -8254,7 +9079,7 @@ SYSTEM \"\"\"You are a Triune neural language model by Lucid Machines, trained w
                     "message": "Security restriction: agent workspace writes via API are disabled by default (set LUCID_MACHINES_ALLOW_AGENT_WRITES=1).",
                 },
             )
-        chosen_model, local_completion = _resolve_agent_backend(req.model)
+        chosen_model, local_completion = await asyncio.to_thread(resolve_agent_backend, req.model)
         harness = AgentHarness(
             workspace=".",
             model=chosen_model,

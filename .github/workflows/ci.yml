@@ -6,9 +6,16 @@ on:
   pull_request:
     branches: [ main, master ]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
-    name: Test & Lint (Python ${{ matrix.python-version }})
+  test-python:
+    name: Python Test & Wheel Smoke (${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -16,56 +23,211 @@ jobs:
         python-version: ["3.10", "3.11", "3.12", "3.13"]
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ matrix.python-version }}
-        cache: 'pip'
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install torch --index-url https://download.pytorch.org/whl/cpu
-        pip install -e .[all]
-        pip install ruff build
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e .[all]
+          pip install ruff build pytest
 
-    - name: Build Native C ABI Engine
-      run: |
-        python csrc/build_native.py
+      - name: Build Native C ABI Engine
+        run: |
+          python csrc/build_native.py
+          test -f lucid_machines/ops/liblucid_machines_core.so
 
-    - name: Lint with ruff
-      run: |
-        ruff check --select=E9,F63,F7,F82 .
+      - name: Lint with ruff
+        run: |
+          ruff check --select=E9,F63,F7,F82 .
 
-    - name: Compile source code smoke check
-      run: |
-        python -m compileall lucid_machines
+      - name: Compile source code smoke check
+        run: |
+          python -m compileall -q lucid_machines scripts
 
-    - name: Run Core Test Suite (CPU)
-      run: |
-        python -m unittest discover tests
+      - name: Run Full Unit & Integration Suite (CPU)
+        run: |
+          pytest -q --ignore=tests/e2e
 
-    - name: Verify Mathematical Invariants & Benchmark Validity
-      run: |
-        python -m unittest tests.test_pipeline_integration tests.test_self_speculative_decoding tests.test_staging_invariants tests.test_triangular_core_integrity tests.test_benchmark_validity
+      - name: Verify Mathematical Invariants & Benchmark Validity
+        run: |
+          pytest -q \
+            tests/test_pipeline_integration.py \
+            tests/test_self_speculative_decoding.py \
+            tests/test_staging_invariants.py \
+            tests/test_triangular_core_integrity.py \
+            tests/test_benchmark_validity.py
 
-    - name: Validate DAG Parser & Typed Port Contracts
-      run: |
-        python -c "from lucid_machines.plugins.node_schema import PortType, is_port_compatible; from lucid_machines.plugins.registry import global_registry; from lucid_machines.execution.dag import DAGParser, ExecutionEngine; catalog = global_registry.get_catalog(); assert len(catalog) >= 30, f'Expected at least 30 nodes, got {len(catalog)}'; print(f'Validated {len(catalog)} registered DAG nodes with typed contracts.')"
+      - name: Validate DAG Parser & Typed Port Contracts
+        run: |
+          python -c "from lucid_machines.plugins.node_schema import PortType, is_port_compatible; from lucid_machines.plugins.registry import global_registry; from lucid_machines.execution.dag import DAGParser, ExecutionEngine; catalog = global_registry.get_catalog(); assert len(catalog) >= 30, f'Expected at least 30 nodes, got {len(catalog)}'; print(f'Validated {len(catalog)} registered DAG nodes with typed contracts.')"
 
-    - name: Build wheel and sdist smoke test
-      run: |
-        python -m build --sdist --wheel
+      - name: Build wheel and sdist smoke test
+        run: |
+          python -m build --sdist --wheel
 
-    - name: Install built wheel and verify packaged CLI modules
-      run: |
-        python -m pip install --no-deps --target "$RUNNER_TEMP/lucid-machines-wheel" dist/*.whl
-        python -m venv "$RUNNER_TEMP/lucid-machines-venv"
-        "$RUNNER_TEMP/lucid-machines-venv/bin/pip" install --no-deps dist/*.whl
-        "$RUNNER_TEMP/lucid-machines-venv/bin/kcx" --help
-        "$RUNNER_TEMP/lucid-machines-venv/bin/lucid-machines" --help
-        cd "$RUNNER_TEMP"
-        PYTHONPATH="$RUNNER_TEMP/lucid-machines-wheel" python -c "import scripts.train, scripts.chat, lucid_machines.cli; print('Wheel CLI modules import from the installed artifact.')"
+      - name: Install built wheel and verify packaged CLI modules
+        run: |
+          python -m pip install --no-deps --target "$RUNNER_TEMP/lucid-machines-wheel" dist/*.whl
+          python -m venv "$RUNNER_TEMP/lucid-machines-venv"
+          "$RUNNER_TEMP/lucid-machines-venv/bin/pip" install --no-deps dist/*.whl
+          "$RUNNER_TEMP/lucid-machines-venv/bin/kcx" --help
+          "$RUNNER_TEMP/lucid-machines-venv/bin/lucid-machines" --help
+          "$RUNNER_TEMP/lucid-machines-venv/bin/polysom" --help
+          cd "$RUNNER_TEMP"
+          PYTHONPATH="$RUNNER_TEMP/lucid-machines-wheel" python -c "import scripts.train, scripts.chat, lucid_machines.cli; print('Wheel CLI modules import from the installed artifact.')"
+
+  build-windows-studio:
+    name: Windows .NET 10 Build, Packaging & Smoke Verify
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Set up Python 3.12 (for Native C Engine & --verify)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install Python Studio runtime dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e .[studio]
+
+      - name: Build Native Windows C ABI Engine (DLL)
+        shell: pwsh
+        run: |
+          python csrc/build_native.py
+          if (-not (Test-Path "lucid_machines\ops\lucid_machines_core.dll")) { throw "Missing lucid_machines_core.dll" }
+          if (-not (Test-Path "studio\windows\PolysomStudio.Windows\lucid_machines_core.dll")) { throw "Missing studio DLL copy" }
+
+      - name: Restore & Build PolysomStudio.sln (Release)
+        shell: pwsh
+        run: |
+          dotnet restore studio/windows/PolysomStudio.sln
+          dotnet build studio/windows/PolysomStudio.sln --configuration Release --no-restore
+
+      - name: Publish Structured App Bundle & Checksums
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/publish_studio_windows.ps1
+          foreach ($req in @(
+            "studio\publish\app\PolysomStudio.exe",
+            "studio\publish\app\PolysomStudioSetup.exe",
+            "studio\publish\PolysomStudioSetup.exe",
+            "dist\PolysomStudioSetup.exe",
+            "dist\PolysomStudioSetup.exe.sha256",
+            "dist\SHA256SUMS.txt"
+          )) {
+            if (-not (Test-Path $req)) { throw "Missing required packaged artifact: $req" }
+          }
+          $zip = Get-ChildItem dist\PolysomStudio-*-win-x64.zip | Select-Object -First 1
+          if (-not $zip) { throw "Missing dist/PolysomStudio-*-win-x64.zip" }
+          if (-not (Test-Path "$($zip.FullName).sha256")) { throw "Missing ZIP .sha256 file" }
+
+      - name: Headless --smoke-test & Non-Mutating --verify
+        shell: pwsh
+        run: |
+          foreach ($exe in @(
+            "studio\publish\app\PolysomStudio.exe",
+            "studio\publish\app\PolysomStudioSetup.exe",
+            "studio\publish\PolysomStudioSetup.exe"
+          )) {
+            $smoke = Start-Process -FilePath (Resolve-Path $exe) -ArgumentList "--smoke-test" -Wait -PassThru
+            if ($smoke.ExitCode -ne 0) { throw "$exe --smoke-test failed with exit code $($smoke.ExitCode)" }
+          }
+
+          $desktop = [Environment]::GetFolderPath('Desktop')
+          $programs = [Environment]::GetFolderPath('Programs')
+          $beforeDesktop = Test-Path (Join-Path $desktop "Polysom Studio.lnk")
+          $beforePrograms = Test-Path (Join-Path $programs "Polysom Studio.lnk")
+
+          $verify = Start-Process -FilePath (Resolve-Path "studio\publish\PolysomStudioSetup.exe") -ArgumentList "--verify" -Wait -PassThru
+          if ($verify.ExitCode -ne 0) {
+            throw "PolysomStudioSetup.exe --verify exited with code $($verify.ExitCode)"
+          }
+
+          if ((-not $beforeDesktop -and (Test-Path (Join-Path $desktop "Polysom Studio.lnk"))) -or
+              (-not $beforePrograms -and (Test-Path (Join-Path $programs "Polysom Studio.lnk")))) {
+            throw "--verify mutated Desktop or Start Menu shortcuts"
+          }
+
+  build-website:
+    name: Website TypeScript & Vite Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+          cache-dependency-path: 'website/pnpm-lock.yaml'
+
+      - name: Install dependencies (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+
+      - name: TypeScript typecheck
+        run: pnpm exec tsc --noEmit
+
+      - name: Vite production build
+        run: |
+          pnpm run build
+          test -f dist/index.html
+
+  build-papers:
+    name: Research Papers Tectonic Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Tectonic
+        uses: taiki-e/install-action@v2
+        with:
+          tool: tectonic
+
+      - name: Cache Tectonic TeX Live bundle
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/Tectonic
+          key: ${{ runner.os }}-tectonic-${{ hashFiles('papers/*/main.tex') }}
+          restore-keys: |
+            ${{ runner.os }}-tectonic-
+
+      - name: Compile papers via build_papers.py
+        run: |
+          python papers/scripts/build_papers.py
+          test -s papers/paper1_centroidsteer/centroidsteer.pdf
+          test -s papers/paper2_triune_systems/triune_architecture.pdf
+          rm -f papers/*/*.aux papers/*/*.out

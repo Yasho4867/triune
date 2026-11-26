@@ -11,9 +11,19 @@ echo.
 
 :: Prefer native Windows WPF application host when launched without custom CLI arguments
 if "%~1"=="" (
+    if exist "app\PolysomStudio.exe" (
+        echo [Studio] Launching Native Windows Application ^(app\PolysomStudio.exe^)...
+        start "" "app\PolysomStudio.exe"
+        exit /b 0
+    )
     if exist "PolysomStudio.exe" (
         echo [Studio] Launching Native Windows Application ^(PolysomStudio.exe^)...
         start "" "PolysomStudio.exe"
+        exit /b 0
+    )
+    if exist "studio\publish\app\PolysomStudio.exe" (
+        echo [Studio] Launching Native Windows Application ^(studio\publish\app\PolysomStudio.exe^)...
+        start "" "studio\publish\app\PolysomStudio.exe"
         exit /b 0
     )
     if exist "studio\publish\PolysomStudio.exe" (

@@ -9,6 +9,7 @@ from typing import Any
 import torch
 import torch.nn.functional as F
 
+from .cli import resolve_default_checkpoint as resolve_default_checkpoint
 from .configs.config import build_config
 from .data.tokenizer import load_tokenizer
 from .model.factory import build_model
@@ -851,6 +852,8 @@ def generate_response(
     repetition_penalty: float = 1.1,
     max_new_tokens: int = 100,
     prompt_is_formatted: bool = False,
+    system_prompt: str | None = None,
+    seed: int | None = None,
     cancel_event=None,
     on_text=None,
     return_info: bool = False,
@@ -867,19 +870,36 @@ def generate_response(
         raise ValueError("max_new_tokens must be positive")
     import time
 
+    if seed is not None:
+        torch.manual_seed(int(seed))
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(int(seed))
+
     if prompt_is_formatted:
         formatted = prompt
     elif hasattr(tokenizer, "apply_chat_template") and getattr(tokenizer, "chat_template", None):
+        chat_msgs: list[dict[str, str]] = []
+        if system_prompt:
+            chat_msgs.append({"role": "system", "content": system_prompt})
+        chat_msgs.append({"role": "user", "content": prompt})
         try:
             formatted = tokenizer.apply_chat_template(
-                [{"role": "user", "content": prompt}],
+                chat_msgs,
                 tokenize=False,
                 add_generation_prompt=True,
             )
         except Exception:
-            formatted = f"User: {prompt}\nAssistant:"
+            formatted = (
+                f"System: {system_prompt}\nUser: {prompt}\nAssistant:"
+                if system_prompt
+                else f"User: {prompt}\nAssistant:"
+            )
     else:
-        formatted = f"User: {prompt}\nAssistant:"
+        formatted = (
+            f"System: {system_prompt}\nUser: {prompt}\nAssistant:"
+            if system_prompt
+            else f"User: {prompt}\nAssistant:"
+        )
     token_ids = tokenizer.encode(formatted).ids
     if not token_ids:
         raise ValueError("The configured tokenizer returned no prompt tokens")

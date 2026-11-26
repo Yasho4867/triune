@@ -62,8 +62,16 @@
           </Grid>
 
           <CheckBox x:Name="DesktopShortcutCheck" Content="Create Windows Desktop &amp; Start Menu shortcuts (PolysomStudio.exe)" IsChecked="True" Foreground="#E5E7EB" FontSize="12.5" Margin="0,12,0,0" />
-          <CheckBox x:Name="RegisterPathCheck" Content="Register unified 'lucid-machines' &amp; 'polysom' CLIs on Windows User PATH" IsChecked="True" Foreground="#E5E7EB" FontSize="12.5" Margin="0,8,0,0" />
+          <CheckBox x:Name="RegisterPathCheck" Content="Register unified 'kcx', 'polysom' &amp; 'lucid-machines' CLIs on Windows User PATH" IsChecked="True" Foreground="#E5E7EB" FontSize="12.5" Margin="0,8,0,0" />
           <CheckBox x:Name="SkipTorchCheck" Content="Fast repair mode (keep existing PyTorch wheel if already verified)" IsChecked="False" Foreground="#E5E7EB" FontSize="12.5" Margin="0,8,0,0" />
+          <Grid Margin="0,8,0,0">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*" />
+              <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <CheckBox x:Name="FullUninstallCheck" Grid.Column="0" Content="Full uninstall (--full / --remove-env): also remove studio_env &amp; app files" IsChecked="False" Foreground="#FCA5A5" FontSize="12" VerticalAlignment="Center" />
+            <Button x:Name="UninstallButton" Grid.Column="1" Content="Uninstall" Padding="10,4" Margin="8,0,0,0" Background="#3F1D1D" Foreground="#FECACA" BorderBrush="#7F1D1D" FontSize="11.5" Click="UninstallButton_Click" />
+          </Grid>
         </StackPanel>
       </Border>
 
@@ -74,7 +82,7 @@
           <TextBlock x:Name="Stage1Text" Text="○  [1/6] Hardware Stack &amp; Driver Probing" FontSize="12.5" Foreground="#9CA3AF" Margin="0,8,0,0" />
           <TextBlock x:Name="Stage2Text" Text="○  [2/6] Isolated Studio Virtual Environment" FontSize="12.5" Foreground="#9CA3AF" Margin="0,4,0,0" />
           <TextBlock x:Name="Stage3Text" Text="○  [3/6] PyTorch &amp; CUDA Tensor Core Runtime" FontSize="12.5" Foreground="#9CA3AF" Margin="0,4,0,0" />
-          <TextBlock x:Name="Stage4Text" Text="○  [4/6] Studio API, WebSockets &amp; Triune Engine" FontSize="12.5" Foreground="#9CA3AF" Margin="0,4,0,0" />
+          <TextBlock x:Name="Stage4Text" Text="○  [4/6] Polysom Studio API, WebSockets &amp; Triune Engine" FontSize="12.5" Foreground="#9CA3AF" Margin="0,4,0,0" />
           <TextBlock x:Name="Stage5Text" Text="○  [5/6] Native Shortcuts &amp; Global CLI PATH" FontSize="12.5" Foreground="#9CA3AF" Margin="0,4,0,0" />
           <TextBlock x:Name="Stage6Text" Text="○  [6/6] End-to-End Subsystem Health Check" FontSize="12.5" Foreground="#9CA3AF" Margin="0,4,0,0" />
         </StackPanel>
@@ -110,7 +118,7 @@
         <ColumnDefinition Width="*" />
         <ColumnDefinition Width="Auto" />
       </Grid.ColumnDefinitions>
-      <TextBlock x:Name="FooterHintText" Grid.Column="0" Text="Native Windows WPF Host + WebView2 + Python/CUDA Engine" VerticalAlignment="Center" FontSize="12" Foreground="{StaticResource InstallerMuted}" />
+      <TextBlock x:Name="FooterHintText" Grid.Column="0" Text="Native Windows WPF Host + WebView2 + Python/CUDA Engine · contact@lucidmachines.co" VerticalAlignment="Center" FontSize="12" Foreground="{StaticResource InstallerMuted}" />
       <StackPanel Grid.Column="1" Orientation="Horizontal">
         <Button x:Name="ShortcutButton" Content="Create Desktop Shortcut" Padding="14,9" Margin="0,0,10,0" Background="#1E293B" Foreground="#38BDF8" BorderBrush="#334155" Click="ShortcutButton_Click" />
         <Button x:Name="VerifyButton" Content="Verify Health Only" Padding="16,9" Margin="0,0,10,0" Background="#1F2937" Foreground="#F3F4F6" BorderBrush="#374151" Click="VerifyButton_Click" />

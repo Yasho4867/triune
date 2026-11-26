@@ -153,12 +153,12 @@ class MemoryPlanner:
             )
         else:
             # CentroidSteer + Muon + Base 3-tier footprint:
-            # - Expert matrices: low-rank subspace (rank) + CentroidSteer directional buffers (~0.199-0.368 B/p)
+            # - Expert matrices: low-rank Q_L/Q_R + projection + steering centroids + moments
+            #   Empirically scales with galore_rank & num_steer_dirs (~3.48 B/p at rank=64, ~1.23 B/p at rank=16)
             # - Non-expert 2D hidden matrices: Muon BF16/FP32 single momentum buffer (~4.0 B/p)
             # - Embeddings / exit heads / norms / routers: Base AdamW (8.0 B/p)
             rank_ratio = min(1.0, galore_rank / max(1, hidden_dim))
-            # Empirical rank=64/d=1024 (~0.199 B/p) to rank=256/d=2048 (~0.368 B/p)
-            expert_bpp = min(2.0, max(0.18, (2.6 * rank_ratio) + (0.008 * num_steer_dirs)))
+            expert_bpp = min(6.0, max(0.40, (48.0 * rank_ratio) + (0.12 * num_steer_dirs)))
             muon_bpp = 4.0
             base_bpp = 8.0
             opt_bytes = (
@@ -173,7 +173,9 @@ class MemoryPlanner:
         activation_per_sample_bytes = num_layers * seq_len * hidden_dim * 2
 
         # ── Gradient Memory ──────────────────────────────────
-        gradient_memory_gb = (total_params * bytes_per_param * 0.5) / (1024**3)
+        # BF16/mixed-precision training keeps full 2 B/p BF16 gradients (never halved 0.5x).
+        grad_bpp = 0.5 if use_fp4 else 2.0
+        gradient_memory_gb = (total_params * grad_bpp) / (1024**3)
 
         # ── Target Safety Threshold ──────────────────────────
         cuda_context_gb = 0.5  # PyTorch CUDA context + cuBLAS workspace
@@ -303,12 +305,20 @@ class MemoryPlanner:
                 target_vram_gb=vram_gb,
                 available_vram_gb=vram_gb,
             )
+            train_est_low_rank = MemoryPlanner.estimate_vram(
+                {**spec.to_dict(), "galore_rank": 16, "use_fp8": True},
+                target_vram_gb=vram_gb,
+                available_vram_gb=vram_gb,
+            )
             fp8_train_static_gb = round(train_est_fp8.total_vram_gb + (total_params * 0.5) / (1024**3), 3)
-            safe_train_vram_gb = vram_gb * 0.85
+            # Reserve 20% VRAM headroom for multi-exit KL logits, activations, and CUDA allocator fragments.
+            safe_train_vram_gb = vram_gb * 0.80
             if train_est.total_vram_gb <= safe_train_vram_gb:
                 train_mode = "resident_bf16_train"
             elif fp8_train_static_gb <= safe_train_vram_gb:
                 train_mode = "resident_fp8_train (--use_fp8)"
+            elif train_est_low_rank.total_vram_gb <= safe_train_vram_gb:
+                train_mode = "layer_streaming_or_low_rank_train (--streaming or --rank 16 --use_fp8)"
             elif bf16_gb <= ram_gb * 0.65:
                 train_mode = "layer_streaming_train (--streaming --use_fp8)"
             else:

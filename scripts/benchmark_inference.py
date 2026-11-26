@@ -22,11 +22,12 @@ def _depth(value: str) -> int | None:
 def benchmark_cli(args: argparse.Namespace) -> dict[str, object]:
     import torch
 
-    from lucid_machines.inference import generate_response, load_checkpoint_model
+    from lucid_machines.inference import generate_response, load_checkpoint_model, resolve_default_checkpoint
 
+    ckpt_path = resolve_default_checkpoint(getattr(args, "checkpoint", None))
     load_started = time.perf_counter()
     model, tokenizer, checkpoint, device, pad_id, eos_id = load_checkpoint_model(
-        args.checkpoint,
+        ckpt_path,
         args.tokenizer,
         device=args.device,
     )
@@ -61,7 +62,7 @@ def benchmark_cli(args: argparse.Namespace) -> dict[str, object]:
     )
     return {
         "mode": "cli",
-        "checkpoint": str(Path(args.checkpoint).resolve()),
+        "checkpoint": str(ckpt_path.resolve()),
         "device": str(device),
         "model_load_seconds": round(load_seconds, 3),
         "warmup": {
@@ -71,6 +72,86 @@ def benchmark_cli(args: argparse.Namespace) -> dict[str, object]:
         },
         **result,
         "cuda_allocated_gb": round(torch.cuda.memory_allocated(device) / 1024**3, 3) if device.type == "cuda" else 0.0,
+    }
+
+
+def benchmark_mqar(args: argparse.Namespace) -> dict[str, object]:
+    """Run Multi-Query Associative Recall (MQAR) kernel scaling + optional real checkpoint recall evaluation."""
+    import torch
+
+    from lucid_machines.inference import load_checkpoint_model, resolve_default_checkpoint
+    from lucid_machines.trainer.evaluation import evaluate_mqar
+    from scripts.benchmark_associative_recall import evaluate_associative_recall
+
+    dev_str = getattr(args, "device", None) or ("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = torch.device(dev_str)
+    dtype = torch.bfloat16 if (device.type == "cuda" and torch.cuda.is_bf16_supported()) else torch.float32
+    quick = bool(getattr(args, "quick", False))
+    raw_seq_lens = getattr(args, "seq_lens", None)
+
+    if raw_seq_lens:
+        seq_configs = [(int(s.strip()), max(4, int(s.strip()) // 32)) for s in str(raw_seq_lens).split(",") if s.strip()]
+    elif quick:
+        seq_configs = [(128, 4), (256, 8)] if device.type == "cpu" else [(256, 8), (512, 16)]
+    elif device.type == "cpu":
+        seq_configs = [(128, 4), (256, 8)]
+    else:
+        seq_configs = [(256, 8), (512, 16), (1024, 32)]
+
+    dim = 128 if quick else 256
+    heads = 4
+    kernel_results: list[dict[str, object]] = []
+    for seq_len, num_pairs in seq_configs:
+        for m_type in ("softmax", "gla", "gated_deltanet"):
+            res = evaluate_associative_recall(
+                model_type=m_type,
+                dim=dim,
+                heads=heads,
+                seq_len=seq_len,
+                num_kv_pairs=num_pairs,
+                batch_size=4 if quick else 8,
+                device=device,
+                dtype=dtype,
+            )
+            kernel_results.append(res)
+
+    checkpoint_eval: dict[str, object] | None = None
+    explicit_ckpt = getattr(args, "checkpoint", None)
+    try:
+        ckpt_path = resolve_default_checkpoint(explicit_ckpt)
+    except FileNotFoundError:
+        if explicit_ckpt:
+            raise
+        ckpt_path = None
+
+    if ckpt_path is not None:
+        tok_path = getattr(args, "tokenizer", "triune_tokenizer.json")
+        if Path(tok_path).is_file():
+            model, tokenizer, _, loaded_dev, _, _ = load_checkpoint_model(ckpt_path, tok_path, device=device)
+            depth_str = str(getattr(args, "depth", "auto") or "auto")
+            force_depth = _depth(depth_str) if depth_str in ("auto", "reflex", "limbic", "cortex") else None
+            mqar_metrics = evaluate_mqar(
+                model,
+                tokenizer,
+                device=loaded_dev,
+                force_depth=force_depth,
+                num_trials=4 if quick else 12,
+            )
+            checkpoint_eval = {
+                "checkpoint": str(ckpt_path),
+                "device": str(loaded_dev),
+                "depth": depth_str,
+                **mqar_metrics,
+            }
+
+    return {
+        "status": "ok",
+        "suite": "mqar",
+        "device": str(device),
+        "dtype": str(dtype),
+        "quick": quick,
+        "kernel_results": kernel_results,
+        "checkpoint_eval": checkpoint_eval,
     }
 
 
@@ -169,7 +250,11 @@ def benchmark_studio(args: argparse.Namespace) -> dict[str, object]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("cli", "studio"), required=True)
-    parser.add_argument("--checkpoint", required=True, help="Checkpoint file to benchmark")
+    parser.add_argument(
+        "--checkpoint",
+        default=None,
+        help="Checkpoint file to benchmark (auto-resolves active/latest when omitted)",
+    )
     parser.add_argument("--tokenizer", default="triune_tokenizer.json")
     parser.add_argument("--prompt", required=True)
     parser.add_argument("--max-tokens", type=int, default=128)
@@ -187,7 +272,14 @@ def main() -> None:
         parser.error("--warmup-tokens must be between 1 and 32")
     if args.mode == "studio" and args.device is not None:
         parser.error("--device applies only to --mode cli; Studio reports its actual runtime device")
-    result = benchmark_cli(args) if args.mode == "cli" else benchmark_studio(args)
+    from lucid_machines.cli import resolve_default_checkpoint
+
+    try:
+        args.checkpoint = str(resolve_default_checkpoint(args.checkpoint))
+        result = benchmark_cli(args) if args.mode == "cli" else benchmark_studio(args)
+    except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
+        print(json.dumps({"ok": False, "error": str(exc)}), flush=True)
+        raise SystemExit(1) from exc
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

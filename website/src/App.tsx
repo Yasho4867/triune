@@ -4,6 +4,78 @@ import { SurrealStudy } from "./components/SurrealStudy";
 
 const repository = "https://github.com/lucid-machines/triune";
 const releaseTag = `${repository}/releases/tag/v1.0.0`;
+const releaseDownloadBase = `${repository}/releases/download/v1.0.0`;
+
+type PlatformId = "windows" | "macos" | "linux";
+
+interface ReleaseArtifact {
+  filename: string;
+  sha256: string;
+  label: string;
+  os: PlatformId | "all";
+}
+
+const releaseArtifacts: ReleaseArtifact[] = [
+  {
+    filename: "PolysomStudioSetup.exe",
+    sha256: "677c430b8ebbe23cfb6c43876434b6247e47860c573a73e6d8a8dd5dd3705158",
+    label: "Windows Installer (.exe)",
+    os: "windows",
+  },
+  {
+    filename: "PolysomStudio-1.0.0-win-x64.zip",
+    sha256: "9af82978536e2cebcdfb0d7ab025c139377cb030a7e12eece350bcc8e31e7e42",
+    label: "Windows Portable (.zip)",
+    os: "windows",
+  },
+  {
+    filename: "lucid_machines-1.0.0-py3-none-any.whl",
+    sha256: "577f19bd71de655c7b6ef441ba4f73c7a0954b6826b47b4df3fc6637a5fe5c49",
+    label: "Python Wheel (.whl)",
+    os: "all",
+  },
+  {
+    filename: "lucid_machines-1.0.0.tar.gz",
+    sha256: "9f6c9c1e011a4bdb854eb2112c2f66c53739b526fb4858d753521ac57d9b6c6f",
+    label: "Source Distribution (.tar.gz)",
+    os: "all",
+  },
+];
+
+function detectClientOs(): PlatformId {
+  if (typeof navigator === "undefined") return "linux";
+  const ua = `${navigator.userAgent || ""} ${navigator.platform || ""}`.toLowerCase();
+  if (ua.includes("win")) return "windows";
+  if (ua.includes("mac") || ua.includes("darwin")) return "macos";
+  return "linux";
+}
+
+const researchPapers = [
+  {
+    id: "centroidsteer",
+    number: "Paper 01",
+    title:
+      "CentroidSteer: Activation-Guided Low-Rank Subspace Optimization on the Stiefel Manifold for Sparse Mixture-of-Experts",
+    summary:
+      "Formalizes orthogonal direct-sum gradient steering, Grassmann parallel transport, and sub-byte MoE optimizer state across 5-seed FineWeb-Edu validation.",
+    pdfHref: "/papers/centroidsteer.pdf",
+    sourceHref: `${repository}/tree/main/papers/paper1_centroidsteer`,
+    contact: "founder@lucidmachines.co",
+    bibtex: `@misc{bhardwaj2026centroidsteer,\n  title={CentroidSteer: Activation-Guided Low-Rank Subspace Optimization on the Stiefel Manifold for Sparse Mixture-of-Experts},\n  author={Bhardwaj, Yash},\n  note={Lucid Machines Preprint (CC BY 4.0)},\n  year={2026}\n}`,
+  },
+  {
+    id: "triune",
+    number: "Paper 02",
+    title:
+      "Triune: A Memory-Virtualizing and Constant-State Transformer Architecture for Long-Context Autoregressive Models",
+    summary:
+      "Introduces hierarchical Reflex-Limbic-Cortex dynamic exits, Vectorized Gated Linear Attention with O(1) decode state, and activation-checkpointed Layer Streaming.",
+    pdfHref: "/papers/triune_architecture.pdf",
+    sourceHref: `${repository}/tree/main/papers/paper2_triune_systems`,
+    contact: "founder@lucidmachines.co",
+    bibtex: `@misc{bhardwaj2026triune,\n  title={Triune: A Memory-Virtualizing and Constant-State Transformer Architecture for Long-Context Autoregressive Models},\n  author={Bhardwaj, Yash},\n  note={Lucid Machines Preprint (CC BY 4.0)},\n  year={2026}\n}`,
+  },
+];
 
 const systems = [
   {
@@ -130,6 +202,7 @@ export default function App() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [activeSection, setActiveSection] = useState("");
   const [activeSystem, setActiveSystem] = useState(0);
+  const [selectedOs, setSelectedOs] = useState<PlatformId>(() => detectClientOs());
   const [activeProgram, setActiveProgram] = useState(0);
   const [refracted, setRefracted] = useState(false);
   const [headerScrolled, setHeaderScrolled] = useState(false);
@@ -517,10 +590,169 @@ export default function App() {
             ))}
           </div>
           <div className="systems-footnote">
-            <span>Lucid Machines v1.0.0 — built in the open. Designed to be inspected.</span>
+            <span>
+              Lucid Machines v1.0.0 — Triune, CentroidSteer, Polysom Studio &amp; Polysom KCX (kcx).
+            </span>
             <a href={releaseTag} target="_blank" rel="noreferrer">
               Download v1.0.0 release <Arrow />
             </a>
+          </div>
+
+          <div className="release-distro-bar" id="downloads" aria-labelledby="downloads-title">
+            <div className="release-distro-head">
+              <div>
+                <p className="eyebrow">Distribution &amp; Verification · v1.0.0</p>
+                <h3 id="downloads-title">
+                  Polysom Studio &amp; <code>kcx</code> CLI
+                </h3>
+              </div>
+              <div className="os-switcher" role="group" aria-label="Target operating system">
+                {(["windows", "macos", "linux"] as const).map((osId) => (
+                  <button
+                    key={osId}
+                    type="button"
+                    aria-pressed={selectedOs === osId}
+                    className={`os-switch-btn${selectedOs === osId ? " is-active" : ""}`}
+                    onClick={() => setSelectedOs(osId)}
+                  >
+                    {osId === "windows" ? "Windows" : osId === "macos" ? "macOS" : "Linux"}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {selectedOs === "windows" && (
+              <div className="release-os-panel">
+                <div className="release-primary-actions">
+                  <a
+                    className="release-cta-link"
+                    href={`${releaseDownloadBase}/PolysomStudio-1.0.0-win-x64.zip`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    PolysomStudio-1.0.0-win-x64.zip <Arrow />
+                  </a>
+                  <a
+                    className="release-cta-link secondary"
+                    href={`${releaseDownloadBase}/PolysomStudioSetup.exe`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    PolysomStudioSetup.exe <Arrow />
+                  </a>
+                </div>
+                <p className="release-smartscreen-note">
+                  Windows SmartScreen notice: Unsigned community builds may show &ldquo;Windows
+                  protected your PC&rdquo; &mdash; select{" "}
+                  <strong>More info &rarr; Run anyway</strong> after verifying the SHA-256 digest
+                  below against{" "}
+                  <a
+                    href={`${releaseDownloadBase}/SHA256SUMS.txt`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    SHA256SUMS.txt
+                  </a>
+                  .
+                </p>
+                <pre className="release-cmd-block">
+                  <code>
+                    {`Get-FileHash PolysomStudio-1.0.0-win-x64.zip -Algorithm SHA256\npip install lucid-machines && kcx studio`}
+                  </code>
+                </pre>
+              </div>
+            )}
+
+            {selectedOs === "macos" && (
+              <div className="release-os-panel">
+                <div className="release-primary-actions">
+                  <a
+                    className="release-cta-link"
+                    href={`${repository}/blob/main/studio/installer/install_studio.sh`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    install_studio.sh (macOS Bootstrap) <Arrow />
+                  </a>
+                  <a
+                    className="release-cta-link secondary"
+                    href={`${releaseDownloadBase}/lucid_machines-1.0.0-py3-none-any.whl`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    lucid_machines-1.0.0-py3-none-any.whl <Arrow />
+                  </a>
+                </div>
+                <p className="release-smartscreen-note">
+                  Build a standalone macOS <code>PolysomStudio.app</code> bundle with{" "}
+                  <code>kcx build-native</code>, or launch directly after installing. Verify
+                  downloads against{" "}
+                  <a
+                    href={`${releaseDownloadBase}/SHA256SUMS.txt`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    SHA256SUMS.txt
+                  </a>{" "}
+                  (SmartScreen only applies on Windows).
+                </p>
+                <pre className="release-cmd-block">
+                  <code>
+                    {`shasum -a 256 lucid_machines-1.0.0-py3-none-any.whl\npip install lucid-machines && kcx studio`}
+                  </code>
+                </pre>
+              </div>
+            )}
+
+            {selectedOs === "linux" && (
+              <div className="release-os-panel">
+                <div className="release-primary-actions">
+                  <a
+                    className="release-cta-link"
+                    href={`${repository}/blob/main/studio/installer/install_studio.sh`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    install_studio.sh (Linux / CUDA) <Arrow />
+                  </a>
+                  <a
+                    className="release-cta-link secondary"
+                    href={`${releaseDownloadBase}/lucid_machines-1.0.0-py3-none-any.whl`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    lucid_machines-1.0.0-py3-none-any.whl <Arrow />
+                  </a>
+                </div>
+                <p className="release-smartscreen-note">
+                  Generate a portable Linux <code>AppDir</code> with <code>kcx build-native</code>{" "}
+                  or install the Python package directly. Verify integrity with{" "}
+                  <code>sha256sum -c SHA256SUMS.txt</code> (Windows builds additionally require
+                  clicking past SmartScreen).
+                </p>
+                <pre className="release-cmd-block">
+                  <code>
+                    {`sha256sum -c SHA256SUMS.txt\npip install lucid-machines && kcx studio`}
+                  </code>
+                </pre>
+              </div>
+            )}
+
+            <div className="release-checksums-grid">
+              {releaseArtifacts.map((art) => (
+                <a
+                  key={art.filename}
+                  className="release-checksum-item"
+                  href={`${releaseDownloadBase}/${art.filename}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <span className="checksum-name">{art.filename}</span>
+                  <span className="checksum-meta">{art.label}</span>
+                  <code className="checksum-hash">{art.sha256}</code>
+                </a>
+              ))}
+            </div>
           </div>
         </section>
 
@@ -628,6 +860,42 @@ export default function App() {
               ))}
             </div>
           </div>
+
+          <div className="paper-cards-grid">
+            {researchPapers.map((paper) => (
+              <article key={paper.id} className="paper-card">
+                <div className="paper-card-top">
+                  <span className="eyebrow">{paper.number}</span>
+                  <a href={`mailto:${paper.contact}`} className="paper-contact-link">
+                    {paper.contact}
+                  </a>
+                </div>
+                <h3>{paper.title}</h3>
+                <p>{paper.summary}</p>
+                <div className="paper-card-links">
+                  <a
+                    className="release-cta-link"
+                    href={paper.pdfHref}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Read PDF <Arrow />
+                  </a>
+                  <a
+                    className="inline-link"
+                    href={paper.sourceHref}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    LaTeX &amp; benchmarks <Arrow />
+                  </a>
+                </div>
+                <pre className="bibtex-block">
+                  <code>{paper.bibtex}</code>
+                </pre>
+              </article>
+            ))}
+          </div>
         </section>
 
         <section id="company" className="company-section section-space page-gutter">
@@ -658,6 +926,11 @@ export default function App() {
               <a href={repository} className="inline-link" target="_blank" rel="noreferrer">
                 Get to know our work <Arrow />
               </a>
+              <div className="company-contact-row">
+                <a href="mailto:contact@lucidmachines.co">contact@lucidmachines.co</a>
+                <span>&middot;</span>
+                <a href="mailto:founder@lucidmachines.co">founder@lucidmachines.co</a>
+              </div>
             </div>
           </div>
           <div className="company-principles">
@@ -710,9 +983,12 @@ export default function App() {
           <Symbol />
         </div>
         <div className="footer-bottom">
-          <span>© {new Date().getFullYear()} Lucid Machines</span>
-          <span>Independent artificial intelligence research</span>
-          <span>Clarity, by design.</span>
+          <span>&copy; {new Date().getFullYear()} Lucid Machines</span>
+          <span>
+            <a href="mailto:contact@lucidmachines.co">contact@lucidmachines.co</a> &middot;{" "}
+            <a href="mailto:founder@lucidmachines.co">founder@lucidmachines.co</a>
+          </span>
+          <span>Independent artificial intelligence research &middot; Clarity, by design.</span>
         </div>
       </footer>
 
@@ -764,7 +1040,12 @@ export default function App() {
             Architecture details, evaluation results, and availability will be shared as the
             research progresses.
           </p>
-          <a className="primary-button" href={`${repository}/tree/main/cloud`} target="_blank" rel="noreferrer">
+          <a
+            className="primary-button"
+            href={`${repository}/tree/main/cloud`}
+            target="_blank"
+            rel="noreferrer"
+          >
             Explore Junkie configs & Colab kit <Arrow />
           </a>
         </div>

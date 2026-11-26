@@ -1,6 +1,6 @@
 # Lucid Machines (`v1.0.0`) — Triune Architecture, Junkie & Polysom Studio
 
-**Website:** [https://lucidmachines.co](https://lucidmachines.co) · **GitHub:** [https://github.com/lucid-machines/triune](https://github.com/lucid-machines/triune)
+**Website:** [https://lucidmachines.co](https://lucidmachines.co) · **GitHub:** [https://github.com/lucid-machines/triune](https://github.com/lucid-machines/triune) · **Contact:** [contact@lucidmachines.co](mailto:contact@lucidmachines.co)
 
 **Lucid Machines** (`lucid-machines` / `lucid_machines`) is a modular, hardware-aware deep learning ecosystem built around **the Triune architecture by Lucid Machines** (`TriuneTransformer` / `TriuneModel` / `TriuneConfig` 3-tier multi-exit Mixture-of-Experts architecture, plus `UniversalTransformer`), **Polysom Studio v1.0.0** (a self-contained native desktop workbench), and **Junkie** (`models/configs/junkie.json`, `junkie-7b.json`, `junkie-3b.json`, `junkie-1b.json`, `junkie-mini.json`) — Lucid Machines' inaugural flagship model configurations to be trained on the Triune architecture. All existing checkpoints (`checkpoints/*.pt`), datasets (`data/*.jsonl`), exports (`exports/*`), papers (`papers/*`), `triune-*` architecture templates (`models/configs/triune-*.json`), and `triune_tokenizer.json` are preserved natively.
 
@@ -49,7 +49,6 @@ LucidMachines/
 │   ├── execution/ & plugins/   # 40-Node Typed DAG Engine & Ed25519 Cryptographic Plugin Registry
 │   ├── api/                    # Hardened FastAPI server, OpenAI-compatible REST API, WebSocket telemetry
 │   └── cli.py                  # Unified CLI (`kcx` primary; `polysom` / `lucid-machines` compat aliases)
-├── triune/                     # Backward-compatibility Python shim delegating to lucid_machines
 ├── csrc/                       # Native C/AVX2/OpenMP & CUDA Engine (lucid_machines_core.dll / liblucid_machines_core.so)
 ├── studio/                     # Polysom Studio Frontend (studio/src/), .NET 10 WPF Host (studio/windows/) & Installers
 ├── models/                     # Triune architecture size templates (`models/configs/triune-*.json`) & `junkie.json` flagship model target

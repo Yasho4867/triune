@@ -383,10 +383,14 @@ def test_plan_memory_train_modes_and_installer_no_personal_wsl_path() -> None:
     assert "resident_bf16" not in est_8gb["recommended_train_mode"]
 
     est_12gb = MemoryPlanner.estimate_hf_model("junkie-3b", available_vram_gb=12.0)
-    assert est_12gb["recommended_train_mode"] == "resident_fp8_train (--use_fp8)"
+    assert "streaming" in est_12gb["recommended_train_mode"]
 
     est_24gb = MemoryPlanner.estimate_hf_model("junkie-3b", available_vram_gb=24.0)
-    assert est_24gb["recommended_train_mode"] == "resident_bf16_train"
+    assert est_24gb["recommended_train_mode"] != "resident_bf16_train"
+    assert "streaming" in est_24gb["recommended_train_mode"] or "rank" in est_24gb["recommended_train_mode"]
+
+    est_80gb = MemoryPlanner.estimate_hf_model("junkie-3b", available_vram_gb=80.0)
+    assert est_80gb["recommended_train_mode"] == "resident_bf16_train"
 
     code_pm8, out_pm8 = _run_cli_inproc(["plan-memory", "--model", "junkie-3b", "--vram-gb", "8"], prog="kcx")
     assert code_pm8 == 0

@@ -255,7 +255,36 @@ def _open_native_folder_dialog(initial_dir: str) -> Optional[str]:
         return None
 
 
-def _run_git_info(root: Path, target_rel: Optional[str] = None) -> dict[str, Any]:
+def _fast_git_head_info(root: Path) -> dict[str, Any]:
+    """Read .git/HEAD without spawning subprocesses for non-blocking workspace state checks."""
+    try:
+        git_entry = root / ".git"
+        head_file: Optional[Path] = None
+        if git_entry.is_dir():
+            head_file = git_entry / "HEAD"
+        elif git_entry.is_file():
+            txt = git_entry.read_text(encoding="utf-8", errors="replace").strip()
+            if txt.startswith("gitdir:"):
+                raw_dir = txt[len("gitdir:") :].strip()
+                git_dir = Path(raw_dir)
+                if not git_dir.is_absolute():
+                    git_dir = (root / git_dir).resolve()
+                head_file = git_dir / "HEAD"
+        if head_file is None or not head_file.is_file():
+            return {"is_git": False, "branch": ""}
+        head_txt = head_file.read_text(encoding="utf-8", errors="replace").strip()
+        branch = ""
+        if head_txt.startswith("ref:"):
+            ref = head_txt[len("ref:") :].strip()
+            branch = ref[len("refs/heads/") :] if ref.startswith("refs/heads/") else ref.rsplit("/", 1)[-1]
+        elif head_txt:
+            branch = head_txt[:8]
+        return {"is_git": True, "branch": branch}
+    except Exception:
+        return {"is_git": False, "branch": ""}
+
+
+def _run_git_info(root: Path, target_rel: Optional[str] = None, *, include_diff: bool = True) -> dict[str, Any]:
     """Collect git repository status safely with shell=False."""
     try:
         inside = subprocess.run(
@@ -307,18 +336,20 @@ def _run_git_info(root: Path, target_rel: Optional[str] = None) -> dict[str, Any
                 if len(line) >= 4:
                     entries.append({"status": line[:2].strip() or line[:2], "path": line[3:].strip()})
 
-        diff_cmd = ["git", "diff"]
-        if target_rel:
-            diff_cmd.extend(["--", target_rel])
-        diff_proc = subprocess.run(
-            diff_cmd,
-            shell=False,
-            cwd=str(root),
-            capture_output=True,
-            text=True,
-            timeout=8,
-        )
-        diff_txt = (diff_proc.stdout or "")[:_MAX_TERMINAL_OUTPUT_BYTES]
+        diff_txt = ""
+        if include_diff:
+            diff_cmd = ["git", "diff"]
+            if target_rel:
+                diff_cmd.extend(["--", target_rel])
+            diff_proc = subprocess.run(
+                diff_cmd,
+                shell=False,
+                cwd=str(root),
+                capture_output=True,
+                text=True,
+                timeout=8,
+            )
+            diff_txt = (diff_proc.stdout or "")[:_MAX_TERMINAL_OUTPUT_BYTES]
         return {
             "is_git": True,
             "branch": branch,
@@ -395,7 +426,7 @@ class WorkspaceManager:
                 self._harness.rebind_workspace(resolved)
             recent_copy = list(self._recent)
 
-        git_info = _run_git_info(resolved)
+        git_info = _run_git_info(resolved, include_diff=False)
         return {
             "ok": True,
             "root": str(resolved),
@@ -405,15 +436,26 @@ class WorkspaceManager:
             "recent": recent_copy,
         }
 
-    def state(self) -> dict[str, Any]:
+    def state(self, *, include_git: bool = False) -> dict[str, Any]:
         root = self.root
-        git_info = _run_git_info(root)
+        if include_git:
+            git_info = _run_git_info(root, include_diff=False)
+            return {
+                "root": str(root),
+                "recent": self.recent,
+                "branch": git_info["branch"],
+                "dirty_count": git_info["dirty_count"],
+                "is_git": git_info["is_git"],
+                "git_deferred": False,
+            }
+        head_info = _fast_git_head_info(root)
         return {
             "root": str(root),
             "recent": self.recent,
-            "branch": git_info["branch"],
-            "dirty_count": git_info["dirty_count"],
-            "is_git": git_info["is_git"],
+            "branch": head_info["branch"],
+            "dirty_count": 0,
+            "is_git": head_info["is_git"],
+            "git_deferred": True,
         }
 
     def resolve_confined(self, raw_path: str, *, allow_root: bool = False) -> Path:
@@ -500,8 +542,10 @@ if HAS_FASTAPI:
         return JSONResponse(status_code=status_code, content={"status": "error", "detail": detail})
 
     @workspace_router.get("/v1/workspace/state")
-    async def get_workspace_state() -> Dict[str, Any]:
-        return workspace_manager.state()
+    async def get_workspace_state(include_git: bool = False) -> Dict[str, Any]:
+        if include_git:
+            return await asyncio.to_thread(workspace_manager.state, include_git=True)
+        return workspace_manager.state(include_git=False)
 
     @workspace_router.post("/v1/workspace/open")
     async def open_workspace_endpoint(req: WorkspaceOpenRequest) -> Any:
@@ -589,7 +633,7 @@ if HAS_FASTAPI:
         if not target.is_dir():
             return _error_response(400, f"Path is not a directory: {path}")
 
-        entries = _build_tree_entries(root_resolved, target, depth)
+        entries = await asyncio.to_thread(_build_tree_entries, root_resolved, target, depth)
         return {"root": str(root_resolved), "path": str(target), "entries": entries}
 
     @workspace_router.get("/v1/workspace/file")
@@ -799,7 +843,7 @@ if HAS_FASTAPI:
                 return _error_response(403, str(exc))
             if target != root_resolved:
                 rel_target = str(target.relative_to(root_resolved)).replace("\\", "/")
-        return _run_git_info(root_resolved, target_rel=rel_target)
+        return await asyncio.to_thread(_run_git_info, root_resolved, target_rel=rel_target)
 
     @workspace_router.post("/v1/workspace/terminal/run")
     async def run_workspace_terminal(req: WorkspaceTerminalRunRequest) -> Any:
@@ -856,36 +900,18 @@ if HAS_FASTAPI:
             }
 
     def _resolve_loop_backend(req_model: Optional[str]) -> tuple[Optional[str], Any]:
-        if req_model:
-            return req_model, None
         try:
-            from .routes import pytorch_state
+            from .routes import resolve_agent_backend
 
-            if getattr(pytorch_state, "weights_loaded", False):
-                if getattr(pytorch_state, "active_runtime", "pytorch") == "ollama" and pytorch_state.ollama_model_tag:
-                    return f"ollama:{pytorch_state.ollama_model_tag}", None
-
-                def _local_pt_completion(messages, **_kwargs):
-                    prompt_txt = "\n\n".join(f"{m['role']}: {m['content']}" for m in messages[-6:])
-                    with pytorch_state.worker_lock:
-                        res = pytorch_state.generate_text(
-                            prompt_txt,
-                            max_new_tokens=256,
-                            temperature=float(_kwargs.get("temperature", 0.35)),
-                            prompt_is_formatted=False,
-                        )
-                    return {"content": res["text"], "tool_calls": []}
-
-                return pytorch_state.active_model_id, _local_pt_completion
+            return resolve_agent_backend(req_model)
         except Exception:
-            pass
-        return None, None
+            return req_model, None
 
     @workspace_router.post("/v1/agents/loop/stream")
     async def stream_agent_loop(req: AgentLoopStreamRequest) -> StreamingResponse:
         run_id = f"loop-{uuid.uuid4().hex[:10]}"
         cancel_ev = workspace_manager.loop_manager.register_run(run_id, req.mode, req.goal)
-        chosen_model, local_completion = _resolve_loop_backend(req.model)
+        chosen_model, local_completion = await asyncio.to_thread(_resolve_loop_backend, req.model)
         harness = AgentHarness(
             workspace=workspace_manager.root,
             model=chosen_model,

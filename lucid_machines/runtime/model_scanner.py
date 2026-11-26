@@ -286,25 +286,41 @@ def _build_hf_scan_entry(
     }
 
 
-def _collect_wsl_subpaths(rel_subpath: str) -> list[Path]:
-    out: list[Path] = []
+def _collect_wsl_user_homes() -> list[Path]:
+    """Enumerate WSL user home directories at most once per scan."""
+    homes: list[Path] = []
     if os.name != "nt":
-        return out
+        return homes
     wsl_root = Path("\\\\wsl.localhost")
     if not wsl_root.exists():
-        return out
+        return homes
     try:
         for distro in wsl_root.iterdir():
             home_base = distro / "home"
             if not home_base.is_dir():
                 continue
             for user_dir in home_base.iterdir():
-                cand = user_dir / rel_subpath
-                if cand.is_dir():
-                    out.append(cand)
+                if user_dir.is_dir():
+                    homes.append(user_dir)
     except OSError:
         pass
+    return homes
+
+
+def _resolve_wsl_subpaths(wsl_homes: list[Path], rel_subpath: str) -> list[Path]:
+    out: list[Path] = []
+    for user_dir in wsl_homes:
+        try:
+            cand = user_dir / rel_subpath
+            if cand.is_dir():
+                out.append(cand)
+        except OSError:
+            continue
     return out
+
+
+def _collect_wsl_subpaths(rel_subpath: str) -> list[Path]:
+    return _resolve_wsl_subpaths(_collect_wsl_user_homes(), rel_subpath)
 
 
 def _infer_model_family_source(name: str, default_source: str) -> str:
@@ -492,13 +508,15 @@ def scan_pc_models(
     include_wsl: bool = True,
     max_depth: int = 4,
     installed_modules: Optional[list[dict[str, Any]]] = None,
+    include_pc_scan: bool = True,
 ) -> dict[str, Any]:
     """Scan local checkpoints, Ollama, Hugging Face, vLLM, Hermes, LM Studio, and custom paths."""
     t0 = time.perf_counter()
     results: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
     scanned_roots: list[str] = []
-    running_ollama_tags = query_ollama_running_tags()
+    running_ollama_tags = query_ollama_running_tags() if include_pc_scan else set()
+    wsl_homes = _collect_wsl_user_homes() if (include_pc_scan and include_wsl) else []
 
     def _add(entry: dict[str, Any]) -> None:
         eid = str(entry.get("id") or "")
@@ -610,283 +628,221 @@ def scan_pc_models(
                 continue
 
     # 2. Ollama local manifests + GGUF binary header inspection
-    ollama_roots: list[Path] = []
-    if os.environ.get("OLLAMA_MODELS"):
-        ollama_roots.append(Path(os.environ["OLLAMA_MODELS"]))
-    ollama_roots.append(Path.home() / ".ollama" / "models")
-    if include_wsl:
-        ollama_roots.extend(_collect_wsl_subpaths(".ollama/models"))
+    if include_pc_scan:
+        ollama_roots: list[Path] = []
+        if os.environ.get("OLLAMA_MODELS"):
+            ollama_roots.append(Path(os.environ["OLLAMA_MODELS"]))
+        ollama_roots.append(Path.home() / ".ollama" / "models")
+        if include_wsl:
+            ollama_roots.extend(_resolve_wsl_subpaths(wsl_homes, ".ollama/models"))
 
-    seen_ollama_roots: set[str] = set()
-    for ol_root in ollama_roots:
-        r_str = str(ol_root)
-        if not ol_root.is_dir() or r_str in seen_ollama_roots:
-            continue
-        seen_ollama_roots.add(r_str)
-        scanned_roots.append(r_str)
-        blobs_dir = ol_root / "blobs"
-        for m_sub in ("manifests", "manifests-v2"):
-            m_dir = ol_root / m_sub
-            if not m_dir.is_dir():
+        seen_ollama_roots: set[str] = set()
+        for ol_root in ollama_roots:
+            r_str = str(ol_root)
+            if not ol_root.is_dir() or r_str in seen_ollama_roots:
                 continue
-            for mf in sorted(m_dir.rglob("*")):
-                if not mf.is_file():
+            seen_ollama_roots.add(r_str)
+            scanned_roots.append(r_str)
+            blobs_dir = ol_root / "blobs"
+            for m_sub in ("manifests", "manifests-v2"):
+                m_dir = ol_root / m_sub
+                if not m_dir.is_dir():
                     continue
-                try:
-                    manifest = json.loads(mf.read_text(encoding="utf-8"))
-                    layers_list = manifest.get("layers")
-                    if not isinstance(layers_list, list) or not layers_list:
+                for mf in sorted(m_dir.rglob("*")):
+                    if not mf.is_file():
                         continue
-                    rel_parts = mf.relative_to(m_dir).parts
-                    # Typical layout: registry.ollama.ai/library/<model>/<tag>
-                    if len(rel_parts) >= 3 and rel_parts[1] == "library":
-                        display_name = f"{rel_parts[2]}:{rel_parts[-1]}"
-                    elif len(rel_parts) >= 2:
-                        display_name = f"{'/'.join(rel_parts[1:-1])}:{rel_parts[-1]}"
-                    else:
-                        display_name = mf.name
+                    try:
+                        manifest = json.loads(mf.read_text(encoding="utf-8"))
+                        layers_list = manifest.get("layers")
+                        if not isinstance(layers_list, list) or not layers_list:
+                            continue
+                        rel_parts = mf.relative_to(m_dir).parts
+                        # Typical layout: registry.ollama.ai/library/<model>/<tag>
+                        if len(rel_parts) >= 3 and rel_parts[1] == "library":
+                            display_name = f"{rel_parts[2]}:{rel_parts[-1]}"
+                        elif len(rel_parts) >= 2:
+                            display_name = f"{'/'.join(rel_parts[1:-1])}:{rel_parts[-1]}"
+                        else:
+                            display_name = mf.name
 
-                    model_layer = next(
-                        (l for l in layers_list if str(l.get("mediaType", "")).endswith(".model")),
-                        None,
-                    )
-                    if model_layer is None:
+                        model_layer = next(
+                            (l for l in layers_list if str(l.get("mediaType", "")).endswith(".model")),
+                            None,
+                        )
+                        if model_layer is None:
+                            continue
+                        blob_name = str(model_layer.get("digest", "")).replace(":", "-")
+                        blob_path = blobs_dir / blob_name
+                        total_bytes = sum(int(l.get("size", 0) or 0) for l in layers_list)
+                        sz_str = _format_size(total_bytes)
+
+                        cfg_meta_ol = {}
+                        cfg_digest = (manifest.get("config") or {}).get("digest")
+                        if isinstance(cfg_digest, str):
+                            cfg_blob = blobs_dir / cfg_digest.replace(":", "-")
+                            if cfg_blob.is_file():
+                                try:
+                                    cfg_meta_ol = json.loads(cfg_blob.read_text(encoding="utf-8"))
+                                except Exception:
+                                    pass
+
+                        gguf_meta = parse_gguf_header(blob_path) if blob_path.is_file() else None
+                        n_l = (gguf_meta or {}).get("num_layers")
+                        h_d = (gguf_meta or {}).get("hidden_dim")
+                        quant = (gguf_meta or {}).get("quantization") or cfg_meta_ol.get("file_type") or "GGUF"
+                        spec = f"{n_l}L / {h_d}D" if (n_l and h_d) else (cfg_meta_ol.get("model_type") or "GGUF")
+                        _add(
+                            {
+                                "id": f"ollama:{display_name}",
+                                "name": display_name,
+                                "path": str(blob_path).replace("\\", "/"),
+                                "source": _infer_model_family_source(display_name, "ollama"),
+                                "object": "ollama",
+                                "kind": "ollama",
+                                "num_layers": n_l,
+                                "hidden_dim": h_d,
+                                "num_heads": (gguf_meta or {}).get("num_heads"),
+                                "ffn_dim": (gguf_meta or {}).get("ffn_dim"),
+                                "vocab_size": (gguf_meta or {}).get("vocab_size"),
+                                "quantization": quant,
+                                "size_formatted": sz_str,
+                                "has_weights": blob_path.is_file(),
+                                "can_load_direct": False,
+                                "ollama_running": _is_tag_live_in_ollama(display_name, running_ollama_tags),
+                                "can_transmute": True,
+                                "description": f"Ollama: {display_name} ({spec}, {quant}, {sz_str})",
+                            }
+                        )
+                    except Exception:
                         continue
-                    blob_name = str(model_layer.get("digest", "")).replace(":", "-")
-                    blob_path = blobs_dir / blob_name
-                    total_bytes = sum(int(l.get("size", 0) or 0) for l in layers_list)
-                    sz_str = _format_size(total_bytes)
 
-                    cfg_meta_ol = {}
-                    cfg_digest = (manifest.get("config") or {}).get("digest")
-                    if isinstance(cfg_digest, str):
-                        cfg_blob = blobs_dir / cfg_digest.replace(":", "-")
-                        if cfg_blob.is_file():
-                            try:
-                                cfg_meta_ol = json.loads(cfg_blob.read_text(encoding="utf-8"))
-                            except Exception:
-                                pass
+        # 3. Hugging Face Hub Cache snapshots (plus Hermes/Nous cached repos)
+        hf_hub_dirs: list[Path] = []
+        if os.environ.get("HF_HUB_CACHE"):
+            hf_hub_dirs.append(Path(os.environ["HF_HUB_CACHE"]))
+        elif os.environ.get("HF_HOME"):
+            hf_hub_dirs.append(Path(os.environ["HF_HOME"]) / "hub")
+        else:
+            hf_hub_dirs.append(Path.home() / ".cache" / "huggingface" / "hub")
+        if include_wsl:
+            hf_hub_dirs.extend(_resolve_wsl_subpaths(wsl_homes, ".cache/huggingface/hub"))
 
-                    gguf_meta = parse_gguf_header(blob_path) if blob_path.is_file() else None
-                    n_l = (gguf_meta or {}).get("num_layers")
-                    h_d = (gguf_meta or {}).get("hidden_dim")
-                    quant = (gguf_meta or {}).get("quantization") or cfg_meta_ol.get("file_type") or "GGUF"
-                    spec = f"{n_l}L / {h_d}D" if (n_l and h_d) else (cfg_meta_ol.get("model_type") or "GGUF")
-                    _add(
-                        {
-                            "id": f"ollama:{display_name}",
-                            "name": display_name,
-                            "path": str(blob_path).replace("\\", "/"),
-                            "source": _infer_model_family_source(display_name, "ollama"),
-                            "object": "ollama",
-                            "kind": "ollama",
-                            "num_layers": n_l,
-                            "hidden_dim": h_d,
-                            "num_heads": (gguf_meta or {}).get("num_heads"),
-                            "ffn_dim": (gguf_meta or {}).get("ffn_dim"),
-                            "vocab_size": (gguf_meta or {}).get("vocab_size"),
-                            "quantization": quant,
-                            "size_formatted": sz_str,
-                            "has_weights": blob_path.is_file(),
-                            "can_load_direct": False,
-                            "ollama_running": _is_tag_live_in_ollama(display_name, running_ollama_tags),
-                            "can_transmute": True,
-                            "description": f"Ollama: {display_name} ({spec}, {quant}, {sz_str})",
-                        }
-                    )
-                except Exception:
-                    continue
-
-    # 3. Hugging Face Hub Cache snapshots (plus Hermes/Nous cached repos)
-    hf_hub_dirs: list[Path] = []
-    if os.environ.get("HF_HUB_CACHE"):
-        hf_hub_dirs.append(Path(os.environ["HF_HUB_CACHE"]))
-    elif os.environ.get("HF_HOME"):
-        hf_hub_dirs.append(Path(os.environ["HF_HOME"]) / "hub")
-    else:
-        hf_hub_dirs.append(Path.home() / ".cache" / "huggingface" / "hub")
-    if include_wsl:
-        hf_hub_dirs.extend(_collect_wsl_subpaths(".cache/huggingface/hub"))
-
-    seen_hf_roots: set[str] = set()
-    for hub_dir in hf_hub_dirs:
-        if not hub_dir.is_dir() or str(hub_dir) in seen_hf_roots:
-            continue
-        seen_hf_roots.add(str(hub_dir))
-        scanned_roots.append(str(hub_dir))
-        try:
-            model_dirs = sorted(hub_dir.glob("models--*"))
-        except OSError:
-            continue
-        for mdir in model_dirs:
-            snaps_dir = mdir / "snapshots"
-            if not snaps_dir.is_dir():
+        seen_hf_roots: set[str] = set()
+        for hub_dir in hf_hub_dirs:
+            if not hub_dir.is_dir() or str(hub_dir) in seen_hf_roots:
                 continue
-            repo_id = mdir.name.removeprefix("models--").replace("--", "/", 1)
+            seen_hf_roots.add(str(hub_dir))
+            scanned_roots.append(str(hub_dir))
             try:
-                snaps = sorted(
-                    (s for s in snaps_dir.iterdir() if s.is_dir()), key=lambda x: x.stat().st_mtime, reverse=True
-                )
+                model_dirs = sorted(hub_dir.glob("models--*"))
             except OSError:
                 continue
-            for snap in snaps:
-                cfg_meta = _parse_hf_config_dir(snap)
+            for mdir in model_dirs:
+                snaps_dir = mdir / "snapshots"
+                if not snaps_dir.is_dir():
+                    continue
+                repo_id = mdir.name.removeprefix("models--").replace("--", "/", 1)
+                try:
+                    snaps = sorted(
+                        (s for s in snaps_dir.iterdir() if s.is_dir()), key=lambda x: x.stat().st_mtime, reverse=True
+                    )
+                except OSError:
+                    continue
+                for snap in snaps:
+                    cfg_meta = _parse_hf_config_dir(snap)
+                    if cfg_meta is None:
+                        continue
+                    sz_bytes = cfg_meta.get("size_bytes", 0)
+                    w_tag = _format_size(sz_bytes) if cfg_meta["has_weights"] else "config cached"
+                    src = _infer_model_family_source(repo_id, "huggingface")
+                    _add(
+                        _build_hf_scan_entry(
+                            repo_id,
+                            repo_id,
+                            str(snap).replace("\\", "/"),
+                            source=src,
+                            kind="hf_cache",
+                            prefix="Hermes" if src == "hermes" else "HF Cache",
+                            cfg_meta=cfg_meta,
+                            spec_fallback="cached config",
+                            status_suffix=w_tag,
+                        )
+                    )
+                    break
+
+        # 4. vLLM cache / local vLLM serving model folders
+        vllm_dirs: list[Path] = []
+        if os.environ.get("VLLM_CACHE_ROOT"):
+            vllm_dirs.append(Path(os.environ["VLLM_CACHE_ROOT"]))
+        vllm_dirs.extend([Path.home() / ".cache" / "vllm", Path.home() / ".config" / "vllm"])
+        if include_wsl:
+            vllm_dirs.extend(_resolve_wsl_subpaths(wsl_homes, ".cache/vllm"))
+        for v_root in vllm_dirs:
+            if not v_root.is_dir():
+                continue
+            scanned_roots.append(str(v_root))
+            for cfg_file in v_root.rglob("config.json"):
+                mdir = cfg_file.parent
+                cfg_meta = _parse_hf_config_dir(mdir)
                 if cfg_meta is None:
                     continue
-                sz_bytes = cfg_meta.get("size_bytes", 0)
-                w_tag = _format_size(sz_bytes) if cfg_meta["has_weights"] else "config cached"
-                src = _infer_model_family_source(repo_id, "huggingface")
+                rel = str(mdir).replace("\\", "/")
                 _add(
                     _build_hf_scan_entry(
-                        repo_id,
-                        repo_id,
-                        str(snap).replace("\\", "/"),
-                        source=src,
-                        kind="hf_cache",
-                        prefix="Hermes" if src == "hermes" else "HF Cache",
+                        rel,
+                        mdir.name,
+                        rel,
+                        source="vllm",
+                        kind="vllm",
+                        prefix="vLLM",
                         cfg_meta=cfg_meta,
-                        spec_fallback="cached config",
-                        status_suffix=w_tag,
+                        spec_fallback="vLLM Model",
                     )
                 )
-                break
 
-    # 4. vLLM cache / local vLLM serving model folders
-    vllm_dirs: list[Path] = []
-    if os.environ.get("VLLM_CACHE_ROOT"):
-        vllm_dirs.append(Path(os.environ["VLLM_CACHE_ROOT"]))
-    vllm_dirs.extend([Path.home() / ".cache" / "vllm", Path.home() / ".config" / "vllm"])
-    if include_wsl:
-        vllm_dirs.extend(_collect_wsl_subpaths(".cache/vllm"))
-    for v_root in vllm_dirs:
-        if not v_root.is_dir():
-            continue
-        scanned_roots.append(str(v_root))
-        for cfg_file in v_root.rglob("config.json"):
-            mdir = cfg_file.parent
-            cfg_meta = _parse_hf_config_dir(mdir)
-            if cfg_meta is None:
+        # 5. Hermes / Nous Research local directories & configs
+        hermes_dirs: list[Path] = []
+        if os.environ.get("HERMES_HOME"):
+            hermes_dirs.append(Path(os.environ["HERMES_HOME"]))
+        hermes_dirs.extend([Path.home() / ".hermes", Path.home() / ".cache" / "hermes"])
+        if include_wsl:
+            hermes_dirs.extend(_resolve_wsl_subpaths(wsl_homes, ".hermes"))
+            hermes_dirs.extend(_resolve_wsl_subpaths(wsl_homes, ".cache/hermes"))
+        for h_root in hermes_dirs:
+            if not h_root.is_dir():
                 continue
-            rel = str(mdir).replace("\\", "/")
-            _add(
-                _build_hf_scan_entry(
-                    rel,
-                    mdir.name,
-                    rel,
-                    source="vllm",
-                    kind="vllm",
-                    prefix="vLLM",
-                    cfg_meta=cfg_meta,
-                    spec_fallback="vLLM Model",
-                )
-            )
-
-    # 5. Hermes / Nous Research local directories & configs
-    hermes_dirs: list[Path] = []
-    if os.environ.get("HERMES_HOME"):
-        hermes_dirs.append(Path(os.environ["HERMES_HOME"]))
-    hermes_dirs.extend([Path.home() / ".hermes", Path.home() / ".cache" / "hermes"])
-    if include_wsl:
-        hermes_dirs.extend(_collect_wsl_subpaths(".hermes"))
-        hermes_dirs.extend(_collect_wsl_subpaths(".cache/hermes"))
-    for h_root in hermes_dirs:
-        if not h_root.is_dir():
-            continue
-        scanned_roots.append(str(h_root))
-        for cfg_file in h_root.rglob("config.json"):
-            mdir = cfg_file.parent
-            cfg_meta = _parse_hf_config_dir(mdir)
-            if cfg_meta is None:
-                continue
-            rel = str(mdir).replace("\\", "/")
-            _add(
-                _build_hf_scan_entry(
-                    rel,
-                    mdir.name,
-                    rel,
-                    source="hermes",
-                    kind="hermes",
-                    prefix="Hermes",
-                    cfg_meta=cfg_meta,
-                    spec_fallback="Hermes Model",
-                )
-            )
-        for gguf_f in h_root.rglob("*.gguf"):
-            rel = str(gguf_f).replace("\\", "/")
-            sz = _format_size(gguf_f.stat().st_size)
-            meta = parse_gguf_header(gguf_f) or {}
-            n_l, h_d = meta.get("num_layers"), meta.get("hidden_dim")
-            spec = f"{n_l}L / {h_d}D" if (n_l and h_d) else "GGUF"
-            _add(
-                {
-                    "id": rel,
-                    "name": gguf_f.name,
-                    "path": rel,
-                    "source": "hermes",
-                    "object": "hermes",
-                    "kind": "gguf",
-                    "num_layers": n_l,
-                    "hidden_dim": h_d,
-                    "num_heads": meta.get("num_heads"),
-                    "ffn_dim": meta.get("ffn_dim"),
-                    "vocab_size": meta.get("vocab_size"),
-                    "quantization": meta.get("quantization", "GGUF"),
-                    "size_formatted": sz,
-                    "has_weights": True,
-                    "can_load_direct": False,
-                    "can_transmute": True,
-                    "description": f"Hermes GGUF: {gguf_f.name} ({spec}, {sz})",
-                }
-            )
-        for ref in _read_hermes_config_refs(h_root):
-            ref_p = Path(ref)
-            if ref_p.is_file() and ref_p.suffix.lower() == ".gguf":
-                meta = parse_gguf_header(ref_p) or {}
-                sz = _format_size(ref_p.stat().st_size)
+            scanned_roots.append(str(h_root))
+            for cfg_file in h_root.rglob("config.json"):
+                mdir = cfg_file.parent
+                cfg_meta = _parse_hf_config_dir(mdir)
+                if cfg_meta is None:
+                    continue
+                rel = str(mdir).replace("\\", "/")
                 _add(
-                    {
-                        "id": str(ref_p).replace("\\", "/"),
-                        "name": ref_p.name,
-                        "path": str(ref_p).replace("\\", "/"),
-                        "source": "hermes",
-                        "object": "hermes",
-                        "kind": "gguf",
-                        "num_layers": meta.get("num_layers"),
-                        "hidden_dim": meta.get("hidden_dim"),
-                        "size_formatted": sz,
-                        "has_weights": True,
-                        "can_load_direct": False,
-                        "can_transmute": True,
-                        "description": f"Hermes Config Model: {ref_p.name} ({sz})",
-                    }
+                    _build_hf_scan_entry(
+                        rel,
+                        mdir.name,
+                        rel,
+                        source="hermes",
+                        kind="hermes",
+                        prefix="Hermes",
+                        cfg_meta=cfg_meta,
+                        spec_fallback="Hermes Model",
+                    )
                 )
-
-    # 6. LM Studio local model directories & standalone GGUFs
-    lms_dirs: list[Path] = [
-        Path.home() / ".lmstudio" / "models",
-        Path.home() / ".cache" / "lm-studio" / "models",
-    ]
-    if include_wsl:
-        lms_dirs.extend(_collect_wsl_subpaths(".lmstudio/models"))
-        lms_dirs.extend(_collect_wsl_subpaths(".cache/lm-studio/models"))
-    for lm_root in lms_dirs:
-        if not lm_root.is_dir():
-            continue
-        scanned_roots.append(str(lm_root))
-        for item in lm_root.rglob("*.gguf"):
-            try:
-                rel = str(item).replace("\\", "/")
-                sz = _format_size(item.stat().st_size)
-                meta = parse_gguf_header(item) or {}
+            for gguf_f in h_root.rglob("*.gguf"):
+                rel = str(gguf_f).replace("\\", "/")
+                sz = _format_size(gguf_f.stat().st_size)
+                meta = parse_gguf_header(gguf_f) or {}
                 n_l, h_d = meta.get("num_layers"), meta.get("hidden_dim")
                 spec = f"{n_l}L / {h_d}D" if (n_l and h_d) else "GGUF"
                 _add(
                     {
                         "id": rel,
-                        "name": item.name,
+                        "name": gguf_f.name,
                         "path": rel,
-                        "source": "lmstudio",
-                        "object": "lmstudio",
+                        "source": "hermes",
+                        "object": "hermes",
                         "kind": "gguf",
                         "num_layers": n_l,
                         "hidden_dim": h_d,
@@ -898,30 +854,93 @@ def scan_pc_models(
                         "has_weights": True,
                         "can_load_direct": False,
                         "can_transmute": True,
-                        "description": f"LM Studio: {item.name} ({spec}, {sz})",
+                        "description": f"Hermes GGUF: {gguf_f.name} ({spec}, {sz})",
                     }
                 )
-            except OSError:
+            for ref in _read_hermes_config_refs(h_root):
+                ref_p = Path(ref)
+                if ref_p.is_file() and ref_p.suffix.lower() == ".gguf":
+                    meta = parse_gguf_header(ref_p) or {}
+                    sz = _format_size(ref_p.stat().st_size)
+                    _add(
+                        {
+                            "id": str(ref_p).replace("\\", "/"),
+                            "name": ref_p.name,
+                            "path": str(ref_p).replace("\\", "/"),
+                            "source": "hermes",
+                            "object": "hermes",
+                            "kind": "gguf",
+                            "num_layers": meta.get("num_layers"),
+                            "hidden_dim": meta.get("hidden_dim"),
+                            "size_formatted": sz,
+                            "has_weights": True,
+                            "can_load_direct": False,
+                            "can_transmute": True,
+                            "description": f"Hermes Config Model: {ref_p.name} ({sz})",
+                        }
+                    )
+
+        # 6. LM Studio local model directories & standalone GGUFs
+        lms_dirs: list[Path] = [
+            Path.home() / ".lmstudio" / "models",
+            Path.home() / ".cache" / "lm-studio" / "models",
+        ]
+        if include_wsl:
+            lms_dirs.extend(_resolve_wsl_subpaths(wsl_homes, ".lmstudio/models"))
+            lms_dirs.extend(_resolve_wsl_subpaths(wsl_homes, ".cache/lm-studio/models"))
+        for lm_root in lms_dirs:
+            if not lm_root.is_dir():
                 continue
-        for cfg_f in lm_root.rglob("config.json"):
-            mdir = cfg_f.parent
-            cfg_meta = _parse_hf_config_dir(mdir)
-            if cfg_meta is None:
-                continue
-            rel = str(mdir).replace("\\", "/")
-            _add(
-                _build_hf_scan_entry(
-                    rel,
-                    mdir.name,
-                    rel,
-                    source="lmstudio",
-                    obj="lmstudio",
-                    kind="hf_local",
-                    prefix="LM Studio HF",
-                    cfg_meta=cfg_meta,
-                    spec_fallback="HF Model",
+            scanned_roots.append(str(lm_root))
+            for item in lm_root.rglob("*.gguf"):
+                try:
+                    rel = str(item).replace("\\", "/")
+                    sz = _format_size(item.stat().st_size)
+                    meta = parse_gguf_header(item) or {}
+                    n_l, h_d = meta.get("num_layers"), meta.get("hidden_dim")
+                    spec = f"{n_l}L / {h_d}D" if (n_l and h_d) else "GGUF"
+                    _add(
+                        {
+                            "id": rel,
+                            "name": item.name,
+                            "path": rel,
+                            "source": "lmstudio",
+                            "object": "lmstudio",
+                            "kind": "gguf",
+                            "num_layers": n_l,
+                            "hidden_dim": h_d,
+                            "num_heads": meta.get("num_heads"),
+                            "ffn_dim": meta.get("ffn_dim"),
+                            "vocab_size": meta.get("vocab_size"),
+                            "quantization": meta.get("quantization", "GGUF"),
+                            "size_formatted": sz,
+                            "has_weights": True,
+                            "can_load_direct": False,
+                            "can_transmute": True,
+                            "description": f"LM Studio: {item.name} ({spec}, {sz})",
+                        }
+                    )
+                except OSError:
+                    continue
+            for cfg_f in lm_root.rglob("config.json"):
+                mdir = cfg_f.parent
+                cfg_meta = _parse_hf_config_dir(mdir)
+                if cfg_meta is None:
+                    continue
+                rel = str(mdir).replace("\\", "/")
+                _add(
+                    _build_hf_scan_entry(
+                        rel,
+                        mdir.name,
+                        rel,
+                        source="lmstudio",
+                        obj="lmstudio",
+                        kind="hf_local",
+                        prefix="LM Studio HF",
+                        cfg_meta=cfg_meta,
+                        spec_fallback="HF Model",
+                    )
                 )
-            )
 
     # 7. Installed / Cloned module repositories with model weights
     if installed_modules:

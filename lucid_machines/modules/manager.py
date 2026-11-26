@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import ast
 import base64
+import contextlib
 import hashlib
+import importlib
 import importlib.util
 import json
 import keyword
@@ -15,6 +17,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import types
 import urllib.parse
 import urllib.request
 import zipfile
@@ -22,6 +26,69 @@ from pathlib import Path
 from typing import Any, List, Optional
 
 from .github_client import RepoSearchClient
+
+_PLUGIN_IMPORT_LOCK = threading.RLock()
+
+
+class _TriuneAliasLoader:
+    """Non-mutating loader that aliases `triune*` imports to `lucid_machines*`."""
+
+    def __init__(self, target_name: str) -> None:
+        self.target_name = target_name
+
+    def create_module(self, spec: importlib.machinery.ModuleSpec) -> types.ModuleType:
+        return types.ModuleType(spec.name)
+
+    def exec_module(self, module: types.ModuleType) -> None:
+        target_mod = importlib.import_module(self.target_name)
+        sys.modules[module.__name__] = target_mod
+
+
+class _TriuneAliasFinder:
+    """Thread-scoped MetaPathFinder mapping `triune` -> `lucid_machines` inside plugin discovery."""
+
+    def __init__(self, owner_tid: int) -> None:
+        self._owner_tid = owner_tid
+
+    def find_spec(self, fullname: str, path: Any = None, target: Any = None) -> Any:
+        if threading.get_ident() != self._owner_tid:
+            return None
+        if fullname != "triune" and not fullname.startswith("triune."):
+            return None
+        mapped = "lucid_machines" + fullname[len("triune") :]
+        target_spec = importlib.util.find_spec(mapped)
+        if target_spec is None:
+            return None
+        is_pkg = target_spec.submodule_search_locations is not None
+        return importlib.util.spec_from_loader(
+            fullname,
+            _TriuneAliasLoader(mapped),
+            is_package=is_pkg,
+        )
+
+
+@contextlib.contextmanager
+def _scoped_triune_import_alias():
+    """Temporarily resolve `triune*` imports to `lucid_machines*` for legacy plugins without global leakage."""
+    with _PLUGIN_IMPORT_LOCK:
+        snapshot = {
+            k: sys.modules[k]
+            for k in list(sys.modules)
+            if k == "triune" or k.startswith("triune.")
+        }
+        finder = _TriuneAliasFinder(threading.get_ident())
+        sys.meta_path.insert(0, finder)
+        try:
+            yield
+        finally:
+            try:
+                while finder in sys.meta_path:
+                    sys.meta_path.remove(finder)
+            finally:
+                for k in [key for key in list(sys.modules) if key == "triune" or key.startswith("triune.")]:
+                    sys.modules.pop(k, None)
+                sys.modules.update(snapshot)
+                importlib.invalidate_caches()
 
 _SAFE_PACKAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-\[\]>=<,!~]*$")
 _SAFE_BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-/]*$")
@@ -577,7 +644,7 @@ class ModuleManager:
             {
                 "id": "custom-loss-nodes",
                 "name": "Extended Router & Custom Loss Layer Nodes",
-                "author": "Triune Research",
+                "author": "LucidMachines Research",
                 "type": "plugin",
                 "version": "1.2.0",
                 "description": "Custom DAG visual nodes including Focal Cross-Entropy Loss, Centroid Balance Loss, and Gumbel Temperature Annealer.",
@@ -1086,8 +1153,13 @@ class ModuleManager:
         try:
             from lucid_machines.plugins.registry import global_registry
 
+            try:
+                resolved_folder_str = str(folder.resolve())
+            except (OSError, RuntimeError):
+                resolved_folder_str = str(folder)
+            folder_candidates = {str(folder), resolved_folder_str}
             for n_name, meta in global_registry._nodes.items():
-                if meta.get("module_source") == str(folder):
+                if meta.get("module_source") in folder_candidates:
                     registered_nodes.append(n_name)
         except Exception:
             pass
@@ -1324,11 +1396,25 @@ class ModuleManager:
             try:
                 from lucid_machines.plugins.registry import global_registry
 
+                try:
+                    resolved_target_folder = target_folder.resolve()
+                except (OSError, RuntimeError):
+                    resolved_target_folder = target_folder
+                target_strs = {str(target_folder), str(resolved_target_folder)}
                 for node_name, metadata in list(global_registry._nodes.items()):
-                    if metadata.get("module_source") == str(target_folder):
+                    if metadata.get("module_source") in target_strs:
                         del global_registry._nodes[node_name]
-                for py_file in target_folder.rglob("*.py"):
-                    sys.modules.pop(f"triune_plugin_{py_file.stem}", None)
+                for mod_key, mod_obj in list(sys.modules.items()):
+                    mod_file = getattr(mod_obj, "__file__", None)
+                    is_in_target = False
+                    if mod_file:
+                        try:
+                            resolved_mf = Path(mod_file).resolve()
+                            is_in_target = resolved_target_folder in resolved_mf.parents
+                        except (OSError, RuntimeError, TypeError):
+                            is_in_target = False
+                    if mod_key.startswith(("triune_plugin_", "lucid_plugin_")) or is_in_target:
+                        sys.modules.pop(mod_key, None)
             except Exception:
                 pass
             inspection = self.inspect_directory(target_folder)
@@ -1379,7 +1465,9 @@ class ModuleManager:
             (pkg_root / "modules" / "curated").resolve(),
         )
         is_internal = any(resolved_module_dir == root or root in resolved_module_dir.parents for root in internal_roots)
-        manifest_file = module_dir / "triune_plugin.json"
+        manifest_file = module_dir / "lucid_machines_plugin.json"
+        if not manifest_file.is_file():
+            manifest_file = module_dir / "triune_plugin.json"
         candidate_files: List[Path] = []
         strict_ast = not is_internal and not trusted
         if strict_ast:
@@ -1426,18 +1514,26 @@ class ModuleManager:
             if not _is_safe_plugin_ast(py_file, strict_untrusted=strict_ast):
                 continue
 
-            module_name = f"triune_plugin_{py_file.stem}"
+            path_hash = hashlib.sha256(str(py_file).encode("utf-8")).hexdigest()[:8]
+            module_name = f"lucid_plugin_{py_file.stem}_{path_hash}"
             try:
                 spec = importlib.util.spec_from_file_location(module_name, py_file)
                 if spec and spec.loader:
                     mod = importlib.util.module_from_spec(spec)
                     sys.modules[module_name] = mod
-                    spec.loader.exec_module(mod)
+                    try:
+                        with _scoped_triune_import_alias():
+                            spec.loader.exec_module(mod)
+                    except Exception:
+                        sys.modules.pop(module_name, None)
+                        raise
 
-                    # Look for items with _triune_node_schema or registered classes
+                    # Look for items with _lucid_machines_node_schema or _triune_node_schema
                     for attr_name in dir(mod):
                         obj = getattr(mod, attr_name)
-                        schema = getattr(obj, "_triune_node_schema", None)
+                        schema = getattr(obj, "_lucid_machines_node_schema", None) or getattr(
+                            obj, "_triune_node_schema", None
+                        )
                         if schema and isinstance(schema, dict) and "name" in schema:
                             raw_node_name = schema["name"]
                             core_names = (
@@ -1452,7 +1548,7 @@ class ModuleManager:
                                 node_name = raw_node_name
                             schema_copy = dict(schema)
                             schema_copy["name"] = node_name
-                            schema_copy["module_source"] = str(module_dir)
+                            schema_copy["module_source"] = str(resolved_module_dir)
                             global_registry._nodes[node_name] = schema_copy
                             discovered.append(node_name)
             except Exception as e:
@@ -1460,11 +1556,59 @@ class ModuleManager:
 
         return discovered
 
+    @staticmethod
+    def _copy_curated_dir_if_changed(src_dir: Path, dest_dir: Path) -> None:
+        """Refresh curated builtin files into dest_dir when missing or outdated, skipping __pycache__."""
+        for item in src_dir.iterdir():
+            if item.name == "__pycache__" or item.suffix == ".pyc":
+                continue
+            dest = dest_dir / item.name
+            if item.is_dir():
+                dest.mkdir(parents=True, exist_ok=True)
+                ModuleManager._copy_curated_dir_if_changed(item, dest)
+            elif item.is_file():
+                try:
+                    if not dest.is_file() or dest.read_bytes() != item.read_bytes():
+                        shutil.copy2(item, dest)
+                except OSError:
+                    pass
+
+    def update_module_registered_nodes(self, module_id: str, registered_nodes: list[str]) -> None:
+        """Persist updated registered_nodes for an existing installed module record."""
+        if not self.installed_file.exists():
+            return
+        try:
+            with open(self.installed_file, "r", encoding="utf-8") as f:
+                raw_modules = json.load(f)
+            if not isinstance(raw_modules, list):
+                return
+            changed = False
+            nodes_list = list(registered_nodes)
+            for rec in raw_modules:
+                if isinstance(rec, dict) and rec.get("id") == module_id:
+                    if rec.get("registered_nodes") != nodes_list:
+                        rec["registered_nodes"] = nodes_list
+                        changed = True
+            if changed:
+                self._save_installed_modules(raw_modules)
+        except Exception:
+            pass
+
     def _auto_register_installed_nodes(self) -> None:
-        """Scan all installed modules and register their nodes on startup."""
+        """Scan all installed modules, refresh builtin:// curated copies, and persist registered nodes."""
+        curated_map = {item["id"]: item for item in self.registry if isinstance(item, dict) and item.get("id")}
+        legacy_author_map = {
+            "Triune Research": "LucidMachines Research",
+            "Triune AI Community": "LucidMachines Community",
+            "HuggingFaceFW / Triune": "HuggingFaceFW / LucidMachines",
+        }
+        discovered_by_id: dict[str, list[str]] = {}
+        curated_ids_seen: set[str] = set()
+
         for m in self.get_installed_modules():
             path_str = m.get("installed_at")
-            expected_path = self._module_path(m.get("id", ""))
+            mod_id = str(m.get("id", ""))
+            expected_path = self._module_path(mod_id)
             if not path_str or expected_path is None:
                 continue
             try:
@@ -1474,8 +1618,58 @@ class ModuleManager:
                 continue
             # Trust explicit curated provenance, never a user-controlled module
             # ID or installed_at path; remote clones remain dormant on startup.
-            if str(m.get("download_url", "")).startswith("builtin://"):
-                self.discover_and_register_nodes(expected_path, trusted=True)
+            download_url = str(m.get("download_url", ""))
+            if download_url.startswith("builtin://"):
+                curated_ids_seen.add(mod_id)
+                curated_id = download_url[len("builtin://") :].strip()
+                if _SAFE_MODULE_ID_RE.fullmatch(curated_id):
+                    src_curated = Path(__file__).parent / "curated" / curated_id
+                    if not src_curated.is_dir():
+                        src_curated = Path(__file__).parent / "curated" / curated_id.replace("-", "_")
+                    if src_curated.is_dir():
+                        self._copy_curated_dir_if_changed(src_curated, expected_path)
+                nodes = self.discover_and_register_nodes(expected_path, trusted=True)
+                discovered_by_id[mod_id] = list(nodes)
+
+        if curated_ids_seen and self.installed_file.exists():
+            try:
+                with open(self.installed_file, "r", encoding="utf-8") as f:
+                    raw_modules = json.load(f)
+                if isinstance(raw_modules, list):
+                    changed = False
+                    for rec in raw_modules:
+                        if not isinstance(rec, dict):
+                            continue
+                        rec_id = str(rec.get("id", ""))
+                        if rec_id not in curated_ids_seen:
+                            continue
+                        if not str(rec.get("download_url", "")).startswith("builtin://"):
+                            continue
+                        expected_path = self._module_path(rec_id)
+                        path_str = rec.get("installed_at")
+                        if expected_path is None or not path_str:
+                            continue
+                        try:
+                            if Path(path_str).resolve() != expected_path:
+                                continue
+                        except OSError:
+                            continue
+                        if rec_id in curated_map:
+                            cur = curated_map[rec_id]
+                            for key in ("author", "repo_url", "name", "description", "tags"):
+                                if key in cur and rec.get(key) != cur[key]:
+                                    rec[key] = cur[key]
+                                    changed = True
+                        elif rec.get("author") in legacy_author_map:
+                            rec["author"] = legacy_author_map[rec["author"]]
+                            changed = True
+                        if rec_id in discovered_by_id and rec.get("registered_nodes") != discovered_by_id[rec_id]:
+                            rec["registered_nodes"] = discovered_by_id[rec_id]
+                            changed = True
+                    if changed:
+                        self._save_installed_modules(raw_modules)
+            except Exception:
+                pass
 
     def scan_workspace_plugins(
         self, workspace_dir: str | Path | None = None, *, trusted: bool = False
@@ -1680,9 +1874,16 @@ class {clean_name}:
 
             if src_curated.exists():
                 for item in src_curated.iterdir():
+                    if item.name == "__pycache__" or item.suffix == ".pyc":
+                        continue
                     dest = target_folder / item.name
                     if item.is_dir():
-                        shutil.copytree(item, dest, dirs_exist_ok=True)
+                        shutil.copytree(
+                            item,
+                            dest,
+                            dirs_exist_ok=True,
+                            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+                        )
                     else:
                         shutil.copy2(item, dest)
             elif curated_id == "fineweb-sample-10k":
@@ -1801,7 +2002,12 @@ class {clean_name}:
         try:
             from lucid_machines.plugins.registry import global_registry
 
-            to_del = [k for k, v in global_registry._nodes.items() if v.get("module_source") == str(target_folder)]
+            try:
+                resolved_target_folder = target_folder.resolve()
+            except (OSError, RuntimeError):
+                resolved_target_folder = target_folder
+            target_strs = {str(target_folder), str(resolved_target_folder)}
+            to_del = [k for k, v in global_registry._nodes.items() if v.get("module_source") in target_strs]
             for k in to_del:
                 del global_registry._nodes[k]
         except Exception:

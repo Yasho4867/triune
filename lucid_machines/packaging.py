@@ -1,9 +1,10 @@
 """Cross-Platform Native Application & Installer Builder for Polysom Studio (Lucid Machines).
 
 Builds native desktop executables and application bundles across:
-- Windows: Native .NET WPF WebView2 executables (PolysomStudio.exe & PolysomStudioSetup.exe)
-- Linux: Native AppDir / ELF launcher bundle (PolysomStudio.AppDir + .desktop + AppImage support)
-- macOS: Native macOS Application Bundle (Polysom Studio.app + Info.plist + Mach-O launcher)
+- Windows: Native .NET WPF WebView2 structured app/ bundle (PolysomStudio.exe & PolysomStudioSetup.exe)
+- Linux: Portable AppDir / ELF launcher bundle (PolysomStudio.AppDir + .desktop + AppImage support)
+- macOS: Portable macOS Application Bundle (Polysom Studio.app + Info.plist + bundled runtime)
+Support: contact@lucidmachines.co | https://lucidmachines.co
 """
 
 from __future__ import annotations
@@ -36,141 +37,221 @@ def _make_executable(path: Path) -> None:
         pass
 
 
+def _bundle_workspace_runtime(bundle_root: Path, workspace: Path) -> None:
+    """Copy portable Python/Studio runtime payload into bundle_root without build artifacts or venvs."""
+    bundle_root.mkdir(parents=True, exist_ok=True)
+    ignore_patterns = shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo", "studio_env", ".venv", ".git")
+
+    for dir_rel in ("lucid_machines", "studio/src", "studio/installer", "models", "docs"):
+        src_dir = workspace / dir_rel
+        dst_dir = bundle_root / dir_rel
+        if src_dir.is_dir():
+            if dst_dir.exists():
+                shutil.rmtree(dst_dir)
+            shutil.copytree(src_dir, dst_dir, ignore=ignore_patterns)
+
+    for file_rel in (
+        "pyproject.toml",
+        "README.md",
+        "requirements.txt",
+        "scripts/launch_studio.py",
+        "scripts/benchmark_inference.py",
+    ):
+        src_file = workspace / file_rel
+        if src_file.is_file():
+            dst_file = bundle_root / file_rel
+            dst_file.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src_file, dst_file)
+
+
 def build_windows_native(workspace: Path = WORKSPACE_ROOT) -> Dict[str, Any]:
-    """Compile and publish PolysomStudio.exe and PolysomStudioSetup.exe on Windows."""
+    """Compile and publish structured studio/publish/app/ bundle on Windows."""
     app_proj = workspace / "studio" / "windows" / "PolysomStudio.Windows" / "PolysomStudio.Windows.csproj"
     setup_proj = workspace / "studio" / "windows" / "PolysomStudio.Installer" / "PolysomStudio.Installer.csproj"
-    publish_dir = workspace / "studio" / "windows" / "publish"
+    publish_dir = workspace / "studio" / "publish" / "app"
+    if publish_dir.exists():
+        shutil.rmtree(publish_dir)
     publish_dir.mkdir(parents=True, exist_ok=True)
 
     if not shutil.which("dotnet"):
         raise RuntimeError("The .NET SDK ('dotnet') is required to build Windows native executables.")
 
-    print("[Native Build - Windows] Building Polysom Studio (Release)...")
-    subprocess.run(["dotnet", "build", str(app_proj), "-c", "Release"], check=True)
+    print("[Native Build - Windows] Publishing Polysom Studio (structured app/)...")
     subprocess.run(
-        ["dotnet", "publish", str(app_proj), "-c", "Release", "-o", str(publish_dir), "--no-restore"], check=True
+        [
+            "dotnet",
+            "publish",
+            str(app_proj),
+            "-c",
+            "Release",
+            "-r",
+            "win-x64",
+            "--self-contained",
+            "true",
+            "-p:PublishSingleFile=false",
+            "-o",
+            str(publish_dir),
+        ],
+        check=True,
     )
 
-    print("[Native Build - Windows] Building Polysom Studio Setup (Release)...")
-    subprocess.run(["dotnet", "build", str(setup_proj), "-c", "Release"], check=True)
+    print("[Native Build - Windows] Publishing Polysom Studio Setup (structured app/)...")
     subprocess.run(
-        ["dotnet", "publish", str(setup_proj), "-c", "Release", "-o", str(publish_dir), "--no-restore"], check=True
+        [
+            "dotnet",
+            "publish",
+            str(setup_proj),
+            "-c",
+            "Release",
+            "-r",
+            "win-x64",
+            "--self-contained",
+            "true",
+            "-p:PublishSingleFile=false",
+            "-o",
+            str(publish_dir),
+        ],
+        check=True,
     )
 
     app_exe = publish_dir / "PolysomStudio.exe"
     setup_exe = publish_dir / "PolysomStudioSetup.exe"
 
-    # Place root-level native executables for immediate 1-click access
-    root_app_exe = workspace / "PolysomStudio.exe"
-    root_setup_exe = workspace / "PolysomStudioSetup.exe"
-    if app_exe.is_file():
-        try:
-            shutil.copy2(app_exe, root_app_exe)
-        except OSError:
-            pass
-    if setup_exe.is_file():
-        try:
-            shutil.copy2(setup_exe, root_setup_exe)
-        except OSError:
-            pass
-
     return {
         "platform": "windows",
+        "app_dir": str(publish_dir),
         "app_executable": str(app_exe),
         "installer_executable": str(setup_exe),
-        "root_app_executable": str(root_app_exe),
-        "root_installer_executable": str(root_setup_exe),
     }
 
 
 def build_linux_native(workspace: Path = WORKSPACE_ROOT) -> Dict[str, Any]:
-    """Generate a native Linux AppDir & ELF/POSIX desktop bundle."""
+    """Generate a portable native Linux AppDir & ELF/POSIX desktop bundle."""
     dist_linux = workspace / "dist" / "linux"
     appdir = dist_linux / "PolysomStudio.AppDir"
     usr_bin = appdir / "usr" / "bin"
+    usr_share_app = appdir / "usr" / "share" / "polysom-studio"
     usr_apps = appdir / "usr" / "share" / "applications"
     usr_icons = appdir / "usr" / "share" / "icons" / "hicolor" / "scalable" / "apps"
 
-    for d in (usr_bin, usr_apps, usr_icons):
+    for d in (usr_bin, usr_share_app, usr_apps, usr_icons):
         d.mkdir(parents=True, exist_ok=True)
+
+    _bundle_workspace_runtime(usr_share_app, workspace)
 
     # Write vector icon
     icon_path = appdir / "polysom-studio.svg"
-    icon_path.write_text(POLYSOM_SVG_ICON, encoding="utf-8")
-    (usr_icons / "polysom-studio.svg").write_text(POLYSOM_SVG_ICON, encoding="utf-8")
+    icon_path.write_text(POLYSOM_SVG_ICON, encoding="utf-8", newline="\n")
+    (usr_icons / "polysom-studio.svg").write_text(POLYSOM_SVG_ICON, encoding="utf-8", newline="\n")
 
-    # Write AppRun and usr/bin launchers
-    apprun_script = f"""#!/usr/bin/env bash
+    # Write portable AppRun and usr/bin launchers (zero hardcoded build paths)
+    apprun_script = """#!/usr/bin/env bash
 set -e
-WORKSPACE="{workspace.as_posix()}"
-if [ ! -d "$WORKSPACE" ]; then
-    WORKSPACE="$(cd "$(dirname "$0")/../.." && pwd)"
+SELF_PATH="$(readlink -f "$0" 2>/dev/null || printf "%s" "$0")"
+APPDIR="${APPDIR:-$(cd "$(dirname "$SELF_PATH")" && pwd)}"
+exec "$APPDIR/usr/bin/polysom-studio" "$@"
+"""
+    bin_studio_script = """#!/usr/bin/env bash
+set -e
+SELF_PATH="$(readlink -f "$0" 2>/dev/null || printf "%s" "$0")"
+SELF_DIR="$(cd "$(dirname "$SELF_PATH")" && pwd)"
+APPDIR="${APPDIR:-$(cd "$SELF_DIR/../.." && pwd)}"
+BUNDLE_ROOT="$APPDIR/usr/share/polysom-studio"
+if [ ! -d "$BUNDLE_ROOT/lucid_machines" ] && [ -n "${POLYSOM_WORKSPACE:-}" ] && [ -d "$POLYSOM_WORKSPACE/lucid_machines" ]; then
+    BUNDLE_ROOT="$POLYSOM_WORKSPACE"
 fi
-cd "$WORKSPACE"
-if [ -x "$WORKSPACE/studio/studio_env/bin/python" ]; then
-    exec "$WORKSPACE/studio/studio_env/bin/python" "$WORKSPACE/scripts/launch_studio.py" "$@"
-elif [ -x "$WORKSPACE/.venv/bin/python" ]; then
-    exec "$WORKSPACE/.venv/bin/python" "$WORKSPACE/scripts/launch_studio.py" "$@"
+export PYTHONUTF8=1
+export PYTHONPATH="$BUNDLE_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+cd "$BUNDLE_ROOT"
+if [ -x "$BUNDLE_ROOT/studio/studio_env/bin/python" ]; then
+    exec "$BUNDLE_ROOT/studio/studio_env/bin/python" "$BUNDLE_ROOT/scripts/launch_studio.py" "$@"
+elif [ -x "$BUNDLE_ROOT/.venv/bin/python" ]; then
+    exec "$BUNDLE_ROOT/.venv/bin/python" "$BUNDLE_ROOT/scripts/launch_studio.py" "$@"
 else
-    exec python3 "$WORKSPACE/scripts/launch_studio.py" "$@"
+    exec python3 "$BUNDLE_ROOT/scripts/launch_studio.py" "$@"
 fi
 """
-    setup_script = f"""#!/usr/bin/env bash
+    setup_script = """#!/usr/bin/env bash
 set -e
-WORKSPACE="{workspace.as_posix()}"
-if [ ! -d "$WORKSPACE" ]; then
-    WORKSPACE="$(cd "$(dirname "$0")/../.." && pwd)"
+SELF_PATH="$(readlink -f "$0" 2>/dev/null || printf "%s" "$0")"
+SELF_DIR="$(cd "$(dirname "$SELF_PATH")" && pwd)"
+APPDIR="${APPDIR:-$(cd "$SELF_DIR/../.." && pwd)}"
+BUNDLE_ROOT="$APPDIR/usr/share/polysom-studio"
+if [ ! -d "$BUNDLE_ROOT/lucid_machines" ] && [ -n "${POLYSOM_WORKSPACE:-}" ] && [ -d "$POLYSOM_WORKSPACE/lucid_machines" ]; then
+    BUNDLE_ROOT="$POLYSOM_WORKSPACE"
 fi
-cd "$WORKSPACE"
-exec python3 "$WORKSPACE/studio/installer/installer.py" "$@"
+export PYTHONUTF8=1
+export PYTHONPATH="$BUNDLE_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+cd "$BUNDLE_ROOT"
+if [ -x "$BUNDLE_ROOT/studio/studio_env/bin/python" ]; then
+    exec "$BUNDLE_ROOT/studio/studio_env/bin/python" "$BUNDLE_ROOT/studio/installer/installer.py" "$@"
+elif [ -x "$BUNDLE_ROOT/.venv/bin/python" ]; then
+    exec "$BUNDLE_ROOT/.venv/bin/python" "$BUNDLE_ROOT/studio/installer/installer.py" "$@"
+else
+    exec python3 "$BUNDLE_ROOT/studio/installer/installer.py" "$@"
+fi
 """
     apprun_path = appdir / "AppRun"
-    apprun_path.write_text(apprun_script, encoding="utf-8")
+    apprun_path.write_text(apprun_script, encoding="utf-8", newline="\n")
     _make_executable(apprun_path)
 
     bin_studio = usr_bin / "polysom-studio"
-    bin_studio.write_text(apprun_script, encoding="utf-8")
+    bin_studio.write_text(bin_studio_script, encoding="utf-8", newline="\n")
     _make_executable(bin_studio)
 
     bin_setup = usr_bin / "polysom-studio-setup"
-    bin_setup.write_text(setup_script, encoding="utf-8")
+    bin_setup.write_text(setup_script, encoding="utf-8", newline="\n")
     _make_executable(bin_setup)
 
-    # If running on Linux with gcc/cc, compile a native ELF binary for AppRun
+    # If running on Linux with gcc/cc, compile a portable native ELF binary
     if sys.platform.startswith("linux") and (shutil.which("gcc") or shutil.which("cc")):
         compiler = shutil.which("gcc") or shutil.which("cc")
         c_src = dist_linux / "launcher.c"
-        c_code = f"""#include <stdlib.h>
+        c_code = """#include <libgen.h>
+#include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <unistd.h>
-int main(int argc, char *argv[]) {{
+
+int main(int argc, char *argv[]) {
+    char exe_path[PATH_MAX];
+    char target[PATH_MAX];
+    ssize_t len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
+    if (len <= 0) {
+        return 1;
+    }
+    exe_path[len] = '\\0';
+    char *dir = dirname(exe_path);
+    if (snprintf(target, sizeof(target), "%s/polysom-studio", dir) >= (int)sizeof(target)) {
+        return 1;
+    }
     setenv("PYTHONUTF8", "1", 1);
-    execv("{bin_studio.as_posix()}", argv);
+    execv(target, argv);
     return 1;
-}}
+}
 """
         try:
-            c_src.write_text(c_code, encoding="utf-8")
+            c_src.write_text(c_code, encoding="utf-8", newline="\n")
             subprocess.run([compiler, "-O2", str(c_src), "-o", str(usr_bin / "PolysomStudio")], check=True)
             c_src.unlink(missing_ok=True)
         except Exception:
             pass
 
-    desktop_content = f"""[Desktop Entry]
+    desktop_content = """[Desktop Entry]
 Type=Application
 Name=Polysom Studio
 GenericName=Lucid Machines AI Engine & Research IDE
 Comment=Polysom Studio — Triune Mixture-of-Experts AI Engine & Visual Research IDE by Lucid Machines
-Exec={bin_studio.as_posix()}
+Exec=polysom-studio
 Icon=polysom-studio
 Terminal=false
 Categories=Development;Science;ArtificialIntelligence;
 StartupWMClass=PolysomStudio
 """
     desktop_path = appdir / "polysom-studio.desktop"
-    desktop_path.write_text(desktop_content, encoding="utf-8")
+    desktop_path.write_text(desktop_content, encoding="utf-8", newline="\n")
     _make_executable(desktop_path)
-    (usr_apps / "polysom-studio.desktop").write_text(desktop_content, encoding="utf-8")
+    (usr_apps / "polysom-studio.desktop").write_text(desktop_content, encoding="utf-8", newline="\n")
 
     appimage_out = None
     if sys.platform.startswith("linux") and shutil.which("appimagetool"):
@@ -181,10 +262,11 @@ StartupWMClass=PolysomStudio
         except Exception:
             pass
 
-    print(f"[Native Build - Linux] Created Linux AppDir bundle at: {appdir}")
+    print(f"[Native Build - Linux] Created portable Linux AppDir bundle at: {appdir}")
     return {
         "platform": "linux",
         "appdir": str(appdir),
+        "bundle_root": str(usr_share_app),
         "launcher": str(bin_studio),
         "installer": str(bin_setup),
         "desktop_entry": str(desktop_path),
@@ -193,15 +275,18 @@ StartupWMClass=PolysomStudio
 
 
 def build_macos_native(workspace: Path = WORKSPACE_ROOT) -> Dict[str, Any]:
-    """Generate a native macOS Application Bundle (Polysom Studio.app)."""
+    """Generate a portable native macOS Application Bundle (Polysom Studio.app)."""
     dist_macos = workspace / "dist" / "macos"
     app_bundle = dist_macos / "Polysom Studio.app"
     contents = app_bundle / "Contents"
     macos_dir = contents / "MacOS"
     resources_dir = contents / "Resources"
+    bundle_app_dir = resources_dir / "app"
 
-    for d in (macos_dir, resources_dir):
+    for d in (macos_dir, resources_dir, bundle_app_dir):
         d.mkdir(parents=True, exist_ok=True)
+
+    _bundle_workspace_runtime(bundle_app_dir, workspace)
 
     plist_content = """<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -213,6 +298,8 @@ def build_macos_native(workspace: Path = WORKSPACE_ROOT) -> Dict[str, Any]:
     <string>Polysom Studio</string>
     <key>CFBundleExecutable</key>
     <string>PolysomStudio</string>
+    <key>CFBundleIconFile</key>
+    <string>polysom-studio.svg</string>
     <key>CFBundleIdentifier</key>
     <string>dev.lucidmachines.polysom</string>
     <key>CFBundleInfoDictionaryVersion</key>
@@ -232,47 +319,59 @@ def build_macos_native(workspace: Path = WORKSPACE_ROOT) -> Dict[str, Any]:
 </dict>
 </plist>
 """
-    (contents / "Info.plist").write_text(plist_content, encoding="utf-8")
-    (resources_dir / "polysom-studio.svg").write_text(POLYSOM_SVG_ICON, encoding="utf-8")
+    (contents / "Info.plist").write_text(plist_content, encoding="utf-8", newline="\n")
+    (resources_dir / "polysom-studio.svg").write_text(POLYSOM_SVG_ICON, encoding="utf-8", newline="\n")
 
-    macos_launcher = f"""#!/usr/bin/env bash
+    resolve_bundle_preamble = """#!/usr/bin/env bash
 set -e
-WORKSPACE="{workspace.as_posix()}"
-if [ ! -d "$WORKSPACE" ]; then
-    WORKSPACE="$(cd "$(dirname "$0")/../../../.." && pwd)"
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+    DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    case "$SOURCE" in
+        /*) ;;
+        *) SOURCE="$DIR/$SOURCE" ;;
+    esac
+done
+MACOS_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+CONTENTS_DIR="$(cd -P "$MACOS_DIR/.." && pwd)"
+BUNDLE_ROOT="$CONTENTS_DIR/Resources/app"
+if [ ! -d "$BUNDLE_ROOT/lucid_machines" ] && [ -n "${POLYSOM_WORKSPACE:-}" ] && [ -d "$POLYSOM_WORKSPACE/lucid_machines" ]; then
+    BUNDLE_ROOT="$POLYSOM_WORKSPACE"
 fi
-cd "$WORKSPACE"
 export PYTHONUTF8=1
-if [ -x "$WORKSPACE/studio/studio_env/bin/python" ]; then
-    exec "$WORKSPACE/studio/studio_env/bin/python" "$WORKSPACE/scripts/launch_studio.py" "$@"
-elif [ -x "$WORKSPACE/.venv/bin/python" ]; then
-    exec "$WORKSPACE/.venv/bin/python" "$WORKSPACE/scripts/launch_studio.py" "$@"
+export PYTHONPATH="$BUNDLE_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+cd "$BUNDLE_ROOT"
+"""
+    macos_launcher = resolve_bundle_preamble + """if [ -x "$BUNDLE_ROOT/studio/studio_env/bin/python" ]; then
+    exec "$BUNDLE_ROOT/studio/studio_env/bin/python" "$BUNDLE_ROOT/scripts/launch_studio.py" "$@"
+elif [ -x "$BUNDLE_ROOT/.venv/bin/python" ]; then
+    exec "$BUNDLE_ROOT/.venv/bin/python" "$BUNDLE_ROOT/scripts/launch_studio.py" "$@"
 else
-    exec python3 "$WORKSPACE/scripts/launch_studio.py" "$@"
+    exec python3 "$BUNDLE_ROOT/scripts/launch_studio.py" "$@"
 fi
 """
-    macos_setup = f"""#!/usr/bin/env bash
-set -e
-WORKSPACE="{workspace.as_posix()}"
-if [ ! -d "$WORKSPACE" ]; then
-    WORKSPACE="$(cd "$(dirname "$0")/../../../.." && pwd)"
+    macos_setup = resolve_bundle_preamble + """if [ -x "$BUNDLE_ROOT/studio/studio_env/bin/python" ]; then
+    exec "$BUNDLE_ROOT/studio/studio_env/bin/python" "$BUNDLE_ROOT/studio/installer/installer.py" "$@"
+elif [ -x "$BUNDLE_ROOT/.venv/bin/python" ]; then
+    exec "$BUNDLE_ROOT/.venv/bin/python" "$BUNDLE_ROOT/studio/installer/installer.py" "$@"
+else
+    exec python3 "$BUNDLE_ROOT/studio/installer/installer.py" "$@"
 fi
-cd "$WORKSPACE"
-export PYTHONUTF8=1
-exec python3 "$WORKSPACE/studio/installer/installer.py" "$@"
 """
     exec_path = macos_dir / "PolysomStudio"
-    exec_path.write_text(macos_launcher, encoding="utf-8")
+    exec_path.write_text(macos_launcher, encoding="utf-8", newline="\n")
     _make_executable(exec_path)
 
     setup_path = macos_dir / "PolysomStudioSetup"
-    setup_path.write_text(macos_setup, encoding="utf-8")
+    setup_path.write_text(macos_setup, encoding="utf-8", newline="\n")
     _make_executable(setup_path)
 
-    print(f"[Native Build - macOS] Created macOS Application Bundle at: {app_bundle}")
+    print(f"[Native Build - macOS] Created portable macOS Application Bundle at: {app_bundle}")
     return {
         "platform": "macos",
         "app_bundle": str(app_bundle),
+        "bundle_root": str(bundle_app_dir),
         "executable": str(exec_path),
         "installer": str(setup_path),
     }

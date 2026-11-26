@@ -1,0 +1,319 @@
+name: Lucid Machines Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build and checksum all artifacts without publishing a GitHub Release'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify-version:
+    name: Verify Release Version Consistency
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      tag: ${{ steps.ver.outputs.tag }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Validate version alignment across repo manifests
+        id: ver
+        run: |
+          python - <<'PY'
+          import json, os, re, xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          pyproject_txt = Path("pyproject.toml").read_text(encoding="utf-8")
+          pkg_ver = re.search(r'^version\s*=\s*"([^"]+)"', pyproject_txt, re.M).group(1)
+
+          init_txt = Path("lucid_machines/__init__.py").read_text(encoding="utf-8")
+          init_ver = re.search(r'^__version__\s*=\s*"([^"]+)"', init_txt, re.M).group(1)
+          assert init_ver == pkg_ver, f"lucid_machines/__init__.py ({init_ver}) != pyproject.toml ({pkg_ver})"
+
+          for csproj in (
+              "studio/windows/PolysomStudio.Windows/PolysomStudio.Windows.csproj",
+              "studio/windows/PolysomStudio.Installer/PolysomStudio.Installer.csproj",
+          ):
+              root = ET.fromstring(Path(csproj).read_text(encoding="utf-8"))
+              cs_ver = root.findtext(".//Version")
+              assert cs_ver == pkg_ver, f"{csproj} Version ({cs_ver}) != pyproject.toml ({pkg_ver})"
+
+          web_ver = json.loads(Path("website/package.json").read_text(encoding="utf-8"))["version"]
+          assert web_ver == pkg_ver, f"website/package.json ({web_ver}) != pyproject.toml ({pkg_ver})"
+
+          ref_type = os.environ.get("GITHUB_REF_TYPE", "")
+          ref_name = os.environ.get("GITHUB_REF_NAME", "")
+          if ref_type == "tag":
+              tag_ver = ref_name.lstrip("v")
+              assert tag_ver == pkg_ver, f"Git tag ({ref_name}) != pyproject.toml ({pkg_ver})"
+              tag = ref_name
+          else:
+              tag = f"v{pkg_ver}"
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"version={pkg_ver}\n")
+              fh.write(f"tag={tag}\n")
+          print(f"Verified version consistency: {pkg_ver} (tag: {tag})")
+          PY
+
+  build-python:
+    name: Build Python Wheel & Sdist
+    needs: verify-version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install build twine
+
+      - name: Build Native Linux C ABI Engine
+        run: |
+          python csrc/build_native.py
+          test -f lucid_machines/ops/liblucid_machines_core.so
+
+      - name: Build wheel and sdist
+        run: |
+          python -m build --sdist --wheel
+          twine check dist/*.whl dist/*.tar.gz
+
+      - name: Smoke test installed wheel CLI entrypoints
+        run: |
+          python -m venv "$RUNNER_TEMP/smoke-venv"
+          "$RUNNER_TEMP/smoke-venv/bin/pip" install --no-deps dist/*.whl
+          "$RUNNER_TEMP/smoke-venv/bin/kcx" --help
+          "$RUNNER_TEMP/smoke-venv/bin/polysom" --help
+          "$RUNNER_TEMP/smoke-venv/bin/lucid-machines" --help
+
+      - name: Upload Python artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-python
+          path: |
+            dist/lucid_machines-*.whl
+            dist/lucid_machines-*.tar.gz
+
+  build-windows:
+    name: Build Windows Studio & Installer Bundle
+    needs: verify-version
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install Studio runtime deps for --verify
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e .[studio]
+
+      - name: Build Native Windows C ABI Engine
+        shell: pwsh
+        run: python csrc/build_native.py
+
+      - name: Publish, Sign (if configured) & Zip Windows Bundle
+        shell: pwsh
+        env:
+          SIGNTOOL_CERT_BASE64: ${{ secrets.SIGNTOOL_CERT_BASE64 }}
+          SIGNTOOL_CERT_PASSWORD: ${{ secrets.SIGNTOOL_CERT_PASSWORD }}
+          SIGNTOOL_CERT_THUMBPRINT: ${{ secrets.SIGNTOOL_CERT_THUMBPRINT }}
+          SIGNTOOL_TIMESTAMP_URL: ${{ secrets.SIGNTOOL_TIMESTAMP_URL }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          TRUSTED_SIGNING_ENDPOINT: ${{ secrets.TRUSTED_SIGNING_ENDPOINT }}
+          TRUSTED_SIGNING_ACCOUNT: ${{ secrets.TRUSTED_SIGNING_ACCOUNT }}
+          TRUSTED_SIGNING_PROFILE: ${{ secrets.TRUSTED_SIGNING_PROFILE }}
+          AZURE_TRUSTED_SIGNING_DLIB: ${{ secrets.AZURE_TRUSTED_SIGNING_DLIB }}
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/publish_studio_windows.ps1 -VersionOverride "${{ needs.verify-version.outputs.version }}"
+
+      - name: Headless Smoke & Setup Verification
+        shell: pwsh
+        run: |
+          foreach ($exe in @(
+            "studio\publish\app\PolysomStudio.exe",
+            "studio\publish\app\PolysomStudioSetup.exe",
+            "studio\publish\PolysomStudioSetup.exe"
+          )) {
+            $smoke = Start-Process -FilePath (Resolve-Path $exe) -ArgumentList "--smoke-test" -Wait -PassThru
+            if ($smoke.ExitCode -ne 0) { throw "$exe --smoke-test failed: $($smoke.ExitCode)" }
+          }
+          $proc = Start-Process -FilePath (Resolve-Path "studio\publish\PolysomStudioSetup.exe") -ArgumentList "--verify" -Wait -PassThru
+          if ($proc.ExitCode -ne 0) { throw "PolysomStudioSetup.exe --verify failed: $($proc.ExitCode)" }
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          path: |
+            dist/PolysomStudio-*.zip
+            dist/PolysomStudioSetup.exe
+
+  build-posix-bundles:
+    name: Build ${{ matrix.label }} Bundle
+    needs: verify-version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            label: Linux AppDir
+            archive_name: PolysomStudio-${{ needs.verify-version.outputs.version }}-linux-x86_64.tar.gz
+            bundle_dir: dist/linux
+            bundle_item: PolysomStudio.AppDir
+          - os: macos-latest
+            platform: macos
+            label: macOS App Bundle
+            archive_name: PolysomStudio-${{ needs.verify-version.outputs.version }}-macos-arm64.tar.gz
+            bundle_dir: dist/macos
+            bundle_item: "Polysom Studio.app"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install minimal CLI packaging deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install --no-deps -e .
+
+      - name: Build Native POSIX C ABI Engine
+        run: python csrc/build_native.py
+
+      - name: Build ${{ matrix.label }} via kcx build-native
+        run: |
+          kcx build-native --platform ${{ matrix.platform }}
+          mkdir -p dist/out
+          tar -C "${{ matrix.bundle_dir }}" -czf "dist/out/${{ matrix.archive_name }}" "${{ matrix.bundle_item }}"
+
+      - name: Upload ${{ matrix.label }} artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.platform }}
+          path: dist/out/*.tar.gz
+
+  build-papers:
+    name: Build Research Papers PDFs
+    needs: verify-version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Tectonic
+        uses: taiki-e/install-action@v2
+        with:
+          tool: tectonic
+
+      - name: Cache Tectonic TeX Live bundle
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/Tectonic
+          key: ${{ runner.os }}-tectonic-${{ hashFiles('papers/*/main.tex') }}
+          restore-keys: |
+            ${{ runner.os }}-tectonic-
+
+      - name: Compile papers
+        run: |
+          python papers/scripts/build_papers.py
+          test -s papers/paper1_centroidsteer/centroidsteer.pdf
+          test -s papers/paper2_triune_systems/triune_architecture.pdf
+          rm -f papers/*/*.aux papers/*/*.out
+
+      - name: Upload paper PDFs
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-papers
+          path: |
+            papers/paper1_centroidsteer/centroidsteer.pdf
+            papers/paper2_triune_systems/triune_architecture.pdf
+
+  publish-release:
+    name: Checksums & Draft GitHub Release
+    needs: [verify-version, build-python, build-windows, build-posix-bundles, build-papers]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate standalone .sha256 files and SHA256SUMS.txt
+        run: |
+          cd release-assets
+          rm -f SHA256SUMS.txt *.sha256
+          LC_ALL=C ls -1 | sort | while IFS= read -r f; do
+            [ -f "$f" ] || continue
+            sha256sum "$f" > "${f}.sha256"
+            sha256sum "$f" >> SHA256SUMS.txt
+          done
+          sha256sum -c SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create Draft GitHub Release (tag pushes only)
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.verify-version.outputs.tag }}
+          name: "Lucid Machines ${{ needs.verify-version.outputs.tag }}"
+          draft: true
+          generate_release_notes: true
+          body: |
+            ### Verification & Support
+            - Verify all release downloads against `SHA256SUMS.txt` (`sha256sum -c SHA256SUMS.txt` on Linux/macOS/WSL, or `Get-FileHash <artifact> -Algorithm SHA256` on Windows PowerShell).
+            - Support & release inquiries: `contact@lucidmachines.co` | https://lucidmachines.co
+          files: release-assets/*
