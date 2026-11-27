@@ -321,7 +321,7 @@ class WeightedMultiStreamDataset(IterableDataset):
 
 
 class LocalMemmapTokenDataset(IterableDataset):
-    """Zero-stall local uint16 token memmap dataset with deterministic holdout/train splitting."""
+    """Zero-stall local uint16 token memmap dataset (single file or auto-discovering shard directory)."""
 
     def __init__(
         self,
@@ -333,19 +333,28 @@ class LocalMemmapTokenDataset(IterableDataset):
         seed: int = 42,
     ) -> None:
         self.bin_path = Path(bin_path)
-        if not self.bin_path.is_file():
-            raise FileNotFoundError(f"Local memmap token file not found: {self.bin_path}")
         self.seq_len = int(seq_len)
         self.is_holdout = bool(is_holdout)
         self.eval_tokens = max(0, int(eval_tokens))
         self.seed = int(seed)
-        self.n_tokens = int(os.path.getsize(self.bin_path)) // 2
+        self.is_dir_mode = self.bin_path.is_dir()
+
+        if not self.is_dir_mode and not self.bin_path.is_file():
+            raise FileNotFoundError(f"Local memmap token file or shard directory not found: {self.bin_path}")
+
+        shards = self._list_shards()
+        if not shards:
+            raise ValueError(f"No valid uint16 .bin shards found in {self.bin_path} for seq_len={self.seq_len}")
+        self.shard0_path = shards[0]
+        self.n_tokens = int(os.path.getsize(self.shard0_path)) // 2
         if self.n_tokens < self.seq_len + 1:
             raise ValueError(
-                f"Local memmap file {self.bin_path} has {self.n_tokens} tokens, smaller than seq_len + 1 ({self.seq_len + 1})"
+                f"Local memmap shard {self.shard0_path} has {self.n_tokens} tokens, smaller than seq_len + 1 ({self.seq_len + 1})"
             )
 
-        holdout_span = min(self.n_tokens, max(self.seq_len + 1, self.eval_tokens)) if self.eval_tokens > 0 else (self.seq_len + 1)
+        holdout_span = (
+            min(self.n_tokens, max(self.seq_len + 1, self.eval_tokens)) if self.eval_tokens > 0 else (self.seq_len + 1)
+        )
         if self.is_holdout:
             self.slice_start = 0
             self.slice_end = holdout_span
@@ -361,17 +370,31 @@ class LocalMemmapTokenDataset(IterableDataset):
                 f"Local memmap slice [{self.slice_start}, {self.slice_end}) has insufficient tokens for seq_len={self.seq_len}"
             )
 
+    def _list_shards(self) -> list[Path]:
+        if self.is_dir_mode:
+            min_bytes = (self.seq_len + 1) * 2
+            return sorted(p for p in self.bin_path.glob("*.bin") if p.is_file() and p.stat().st_size >= min_bytes)
+        return [self.bin_path]
+
+    def _shard_slice(self, shard_path: Path) -> tuple[int, int, int]:
+        n_tok = int(os.path.getsize(shard_path)) // 2
+        if shard_path == self.shard0_path:
+            start = self.slice_start
+        else:
+            start = 0
+        num_win = max(0, (n_tok - start - 1) // self.seq_len)
+        return start, n_tok, num_win
+
     def __iter__(self) -> Iterator[tuple[torch.Tensor, torch.Tensor]]:
         worker_info = torch.utils.data.get_worker_info()
         worker_id = worker_info.id if worker_info is not None else 0
         num_workers = worker_info.num_workers if worker_info is not None else 1
 
-        tokens = np.memmap(self.bin_path, dtype=np.uint16, mode="r")
-        window_ids = list(range(worker_id, self.num_windows, num_workers))
-        if not window_ids:
-            window_ids = list(range(self.num_windows))
-
         if self.is_holdout:
+            tokens = np.memmap(self.shard0_path, dtype=np.uint16, mode="r")
+            window_ids = list(range(worker_id, self.num_windows, num_workers))
+            if not window_ids:
+                window_ids = list(range(self.num_windows))
             for w_idx in window_ids:
                 pos = self.slice_start + w_idx * self.seq_len
                 chunk = np.asarray(tokens[pos : pos + self.seq_len + 1], dtype=np.int64)
@@ -380,14 +403,50 @@ class LocalMemmapTokenDataset(IterableDataset):
 
         epoch = 0
         while True:
-            rng = random.Random(self.seed + epoch * 7919 + worker_id * 1009)
-            epoch_windows = list(window_ids)
-            rng.shuffle(epoch_windows)
-            for w_idx in epoch_windows:
-                pos = self.slice_start + w_idx * self.seq_len
-                chunk = np.asarray(tokens[pos : pos + self.seq_len + 1], dtype=np.int64)
-                yield torch.from_numpy(chunk[:-1].copy()), torch.from_numpy(chunk[1:].copy())
+            shards = self._list_shards()
+            rng_epoch = random.Random(self.seed + epoch * 7919 + worker_id * 1009)
+            if epoch == 0:
+                queued = list(shards)
+                visited: set[str] = set()
+            else:
+                queued = list(shards)
+                rng_epoch.shuffle(queued)
+                visited = {s.name for s in queued}
+
+            shard_ord = 0
+            while queued:
+                shard_path = queued.pop(0)
+                visited.add(shard_path.name)
+                start, _, num_win = self._shard_slice(shard_path)
+                if num_win <= 0:
+                    continue
+                window_ids = list(range(worker_id, num_win, num_workers))
+                if not window_ids:
+                    window_ids = list(range(num_win))
+                rng_shard = random.Random(self.seed + epoch * 7919 + shard_ord * 131 + worker_id * 1009)
+                rng_shard.shuffle(window_ids)
+                tokens = np.memmap(shard_path, dtype=np.uint16, mode="r")
+                for w_idx in window_ids:
+                    pos = start + w_idx * self.seq_len
+                    chunk = np.asarray(tokens[pos : pos + self.seq_len + 1], dtype=np.int64)
+                    yield torch.from_numpy(chunk[:-1].copy()), torch.from_numpy(chunk[1:].copy())
+                shard_ord += 1
+                if epoch == 0 and self.is_dir_mode:
+                    for cand in self._list_shards():
+                        if cand.name not in visited and cand not in queued:
+                            queued.append(cand)
             epoch += 1
+
+
+def _is_valid_memmap_target(path_str: str | None) -> bool:
+    if not path_str:
+        return False
+    p = Path(path_str)
+    if p.is_file():
+        return True
+    if p.is_dir():
+        return any(f.is_file() for f in p.glob("*.bin"))
+    return False
 
 
 def build_dataloader(tokenizer, config: dict, sep_token_id: int, *, is_holdout: bool) -> DataLoader:
@@ -395,10 +454,10 @@ def build_dataloader(tokenizer, config: dict, sep_token_id: int, *, is_holdout: 
     local_bin = config.get("local_tokens_bin")
     if not local_bin:
         ds_name = str(config.get("dataset_name", "") or "")
-        if ds_name.endswith(".bin") and os.path.isfile(ds_name):
+        if _is_valid_memmap_target(ds_name):
             local_bin = ds_name
 
-    if local_bin and os.path.isfile(str(local_bin)):
+    if _is_valid_memmap_target(str(local_bin) if local_bin else None):
         dataset: IterableDataset = LocalMemmapTokenDataset(
             str(local_bin),
             seq_len=config["seq_len"],

@@ -786,10 +786,19 @@ def main(argv: list[str] | None = None) -> dict:
         elif requested_steer_mode == "nosteer" and hasattr(optimizer, "steer_scale"):
             optimizer.steer_scale = 0.0
         local_bin_cfg = config.get("local_tokens_bin")
-        if local_bin_cfg and Path(str(local_bin_cfg)).is_file():
-            n_local_toks = Path(str(local_bin_cfg)).stat().st_size // 2
+        local_bin_p = Path(str(local_bin_cfg)) if local_bin_cfg else None
+        if local_bin_p is not None and local_bin_p.is_dir():
+            shards = sorted(f for f in local_bin_p.glob("*.bin") if f.is_file())
+            n_local_toks = sum(f.stat().st_size // 2 for f in shards)
             print(
-                f"📦 Using pre-tokenized local memmap dataset: {local_bin_cfg} ({n_local_toks / 1e6:.1f}M tokens)",
+                f"📦 Using sharded local memmap dataset: {local_bin_p} "
+                f"({len(shards)} shard(s), {n_local_toks / 1e6:.1f}M tokens ready, live auto-discovery enabled)",
+                flush=True,
+            )
+        elif local_bin_p is not None and local_bin_p.is_file():
+            n_local_toks = local_bin_p.stat().st_size // 2
+            print(
+                f"📦 Using pre-tokenized local memmap dataset: {local_bin_p} ({n_local_toks / 1e6:.1f}M tokens)",
                 flush=True,
             )
         else:
