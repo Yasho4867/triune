@@ -5,7 +5,9 @@ from __future__ import annotations
 import os
 import random
 from collections.abc import Iterator
+from pathlib import Path
 
+import numpy as np
 import torch
 from datasets import DownloadConfig, load_dataset
 from torch.utils.data import DataLoader, IterableDataset
@@ -318,12 +320,103 @@ class WeightedMultiStreamDataset(IterableDataset):
                 active.pop(idx)
 
 
+class LocalMemmapTokenDataset(IterableDataset):
+    """Zero-stall local uint16 token memmap dataset with deterministic holdout/train splitting."""
+
+    def __init__(
+        self,
+        bin_path: str | Path,
+        *,
+        seq_len: int,
+        is_holdout: bool = False,
+        eval_tokens: int = 0,
+        seed: int = 42,
+    ) -> None:
+        self.bin_path = Path(bin_path)
+        if not self.bin_path.is_file():
+            raise FileNotFoundError(f"Local memmap token file not found: {self.bin_path}")
+        self.seq_len = int(seq_len)
+        self.is_holdout = bool(is_holdout)
+        self.eval_tokens = max(0, int(eval_tokens))
+        self.seed = int(seed)
+        self.n_tokens = int(os.path.getsize(self.bin_path)) // 2
+        if self.n_tokens < self.seq_len + 1:
+            raise ValueError(
+                f"Local memmap file {self.bin_path} has {self.n_tokens} tokens, smaller than seq_len + 1 ({self.seq_len + 1})"
+            )
+
+        holdout_span = min(self.n_tokens, max(self.seq_len + 1, self.eval_tokens)) if self.eval_tokens > 0 else (self.seq_len + 1)
+        if self.is_holdout:
+            self.slice_start = 0
+            self.slice_end = holdout_span
+        else:
+            if self.n_tokens < 2 * (self.seq_len + 1):
+                self.slice_start = 0
+            else:
+                self.slice_start = min(self.eval_tokens, max(0, self.n_tokens - (self.seq_len + 1)))
+            self.slice_end = self.n_tokens
+        self.num_windows = max(0, (self.slice_end - self.slice_start - 1) // self.seq_len)
+        if self.num_windows == 0:
+            raise ValueError(
+                f"Local memmap slice [{self.slice_start}, {self.slice_end}) has insufficient tokens for seq_len={self.seq_len}"
+            )
+
+    def __iter__(self) -> Iterator[tuple[torch.Tensor, torch.Tensor]]:
+        worker_info = torch.utils.data.get_worker_info()
+        worker_id = worker_info.id if worker_info is not None else 0
+        num_workers = worker_info.num_workers if worker_info is not None else 1
+
+        tokens = np.memmap(self.bin_path, dtype=np.uint16, mode="r")
+        window_ids = list(range(worker_id, self.num_windows, num_workers))
+        if not window_ids:
+            window_ids = list(range(self.num_windows))
+
+        if self.is_holdout:
+            for w_idx in window_ids:
+                pos = self.slice_start + w_idx * self.seq_len
+                chunk = np.asarray(tokens[pos : pos + self.seq_len + 1], dtype=np.int64)
+                yield torch.from_numpy(chunk[:-1].copy()), torch.from_numpy(chunk[1:].copy())
+            return
+
+        epoch = 0
+        while True:
+            rng = random.Random(self.seed + epoch * 7919 + worker_id * 1009)
+            epoch_windows = list(window_ids)
+            rng.shuffle(epoch_windows)
+            for w_idx in epoch_windows:
+                pos = self.slice_start + w_idx * self.seq_len
+                chunk = np.asarray(tokens[pos : pos + self.seq_len + 1], dtype=np.int64)
+                yield torch.from_numpy(chunk[:-1].copy()), torch.from_numpy(chunk[1:].copy())
+            epoch += 1
+
+
 def build_dataloader(tokenizer, config: dict, sep_token_id: int, *, is_holdout: bool) -> DataLoader:
     eval_tokens = config["eval_batches"] * config["batch_size"] * config["seq_len"]
+    local_bin = config.get("local_tokens_bin")
+    if not local_bin:
+        ds_name = str(config.get("dataset_name", "") or "")
+        if ds_name.endswith(".bin") and os.path.isfile(ds_name):
+            local_bin = ds_name
+
+    if local_bin and os.path.isfile(str(local_bin)):
+        dataset: IterableDataset = LocalMemmapTokenDataset(
+            str(local_bin),
+            seq_len=config["seq_len"],
+            is_holdout=is_holdout,
+            eval_tokens=eval_tokens,
+        )
+        return DataLoader(
+            dataset,
+            batch_size=config["batch_size"],
+            num_workers=config["num_workers"],
+            pin_memory=torch.cuda.is_available(),
+            drop_last=True,
+        )
+
     mix_spec = None if is_holdout else config.get("dataset_mix")
     if mix_spec:
         streams = parse_dataset_mix(str(mix_spec))
-        dataset: IterableDataset = WeightedMultiStreamDataset(
+        dataset = WeightedMultiStreamDataset(
             tokenizer,
             streams=streams,
             seq_len=config["seq_len"],

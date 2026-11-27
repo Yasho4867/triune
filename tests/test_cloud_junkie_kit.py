@@ -312,13 +312,15 @@ def test_cloud_artifacts_structure_and_hygiene() -> None:
     assert sh_path.is_file()
     assert readme_path.is_file()
 
-    # 1. Colab notebook: valid nbformat 4 JSON with 10 cells covering all Junkie configs, 3B->7B DUS expander & GRPO harness
+    # 1. Colab notebook: valid nbformat 4 JSON with 11 cells covering local memmap downloader, all Junkie configs, 3B->7B DUS expander & GRPO harness
     nb = json.loads(nb_path.read_text(encoding="utf-8"))
     assert nb["nbformat"] == 4
-    assert len(nb["cells"]) == 10
+    assert len(nb["cells"]) == 11
     joined_cells = "\n".join("".join(c["source"]) for c in nb["cells"])
     assert "google.colab" in joined_cells
     assert "drive.mount" in joined_cells
+    assert "prepare_local_dataset.py" in joined_cells
+    assert "--local_tokens_bin" in joined_cells
     assert "validate_centroid_steer_upgrade.py" in joined_cells
     assert "expand_depth.py" in joined_cells
     assert "train_grpo_harness.py" in joined_cells
