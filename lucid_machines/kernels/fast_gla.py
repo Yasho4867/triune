@@ -37,31 +37,31 @@ if HAS_TRITON:
         INIT_STATE,
         S_OUT,
         FINAL_STATE,
-        M,
         N,
-        stride_kv_m,
-        stride_kv_n,
-        stride_dec_m,
-        stride_dec_n,
-        stride_s_m,
-        stride_s_n,
-        stride_init_m,
-        stride_fin_m,
+        DK,
+        KD,
         BLOCK_M: tl.constexpr,
     ):
-        pid = tl.program_id(0)
-        offs_m = pid * BLOCK_M + tl.arange(0, BLOCK_M)
-        mask_m = offs_m < M
+        bh = tl.program_id(0)
+        blk = tl.program_id(1)
+        offs = blk * BLOCK_M + tl.arange(0, BLOCK_M)
+        mask = offs < KD
+        dv = KD // DK
+        k_idx = offs // dv
 
-        s = tl.load(INIT_STATE + offs_m * stride_init_m, mask=mask_m, other=0.0).to(tl.float32)
+        kv_base = KV + bh * N * KD + offs
+        dec_base = DECAY + bh * N * DK + k_idx
+        s_out_base = S_OUT + bh * N * KD + offs
+
+        s = tl.load(INIT_STATE + bh * KD + offs, mask=mask, other=0.0).to(tl.float32)
 
         for i in range(N):
-            tl.store(S_OUT + offs_m * stride_s_m + i * stride_s_n, s, mask=mask_m)
-            d = tl.load(DECAY + offs_m * stride_dec_m + i * stride_dec_n, mask=mask_m, other=1.0).to(tl.float32)
-            x = tl.load(KV + offs_m * stride_kv_m + i * stride_kv_n, mask=mask_m, other=0.0).to(tl.float32)
+            tl.store(s_out_base + i * KD, s.to(S_OUT.dtype.element_ty), mask=mask)
+            d = tl.load(dec_base + i * DK, mask=mask, other=1.0).to(tl.float32)
+            x = tl.load(kv_base + i * KD, mask=mask, other=0.0).to(tl.float32)
             s = s * d + x
 
-        tl.store(FINAL_STATE + offs_m * stride_fin_m, s, mask=mask_m)
+        tl.store(FINAL_STATE + bh * KD + offs, s.to(FINAL_STATE.dtype.element_ty), mask=mask)
 
     @triton.jit
     def _recurrent_scan_bwd(
@@ -72,135 +72,108 @@ if HAS_TRITON:
         D_KV,
         D_DECAY,
         D_INIT,
-        M,
         N,
-        stride_ds_m,
-        stride_ds_n,
-        stride_df_m,
-        stride_dec_m,
-        stride_dec_n,
-        stride_s_m,
-        stride_s_n,
-        stride_dkv_m,
-        stride_dkv_n,
-        stride_ddec_m,
-        stride_ddec_n,
-        stride_di_m,
+        DK,
+        KD,
         BLOCK_M: tl.constexpr,
     ):
-        pid = tl.program_id(0)
-        offs_m = pid * BLOCK_M + tl.arange(0, BLOCK_M)
-        mask_m = offs_m < M
+        bh = tl.program_id(0)
+        blk = tl.program_id(1)
+        offs = blk * BLOCK_M + tl.arange(0, BLOCK_M)
+        mask = offs < KD
+        dv = KD // DK
+        k_idx = offs // dv
 
-        d_s = tl.load(D_FINAL + offs_m * stride_df_m, mask=mask_m, other=0.0).to(tl.float32)
+        ds_base = D_S_OUT + bh * N * KD + offs
+        dec_base = DECAY + bh * N * DK + k_idx
+        s_out_base = S_OUT + bh * N * KD + offs
+        dkv_base = D_KV + bh * N * KD + offs
+        ddec_base = D_DECAY + bh * N * KD + offs
+
+        d_s = tl.load(D_FINAL + bh * KD + offs, mask=mask, other=0.0).to(tl.float32)
 
         for i in range(N - 1, -1, -1):
-            d = tl.load(DECAY + offs_m * stride_dec_m + i * stride_dec_n, mask=mask_m, other=1.0).to(tl.float32)
-            s_prev = tl.load(S_OUT + offs_m * stride_s_m + i * stride_s_n, mask=mask_m, other=0.0).to(tl.float32)
-            d_out_val = tl.load(D_S_OUT + offs_m * stride_ds_m + i * stride_ds_n, mask=mask_m, other=0.0).to(tl.float32)
+            d = tl.load(dec_base + i * DK, mask=mask, other=1.0).to(tl.float32)
+            s_prev = tl.load(s_out_base + i * KD, mask=mask, other=0.0).to(tl.float32)
+            d_out_val = tl.load(ds_base + i * KD, mask=mask, other=0.0).to(tl.float32)
 
-            tl.store(D_KV + offs_m * stride_dkv_m + i * stride_dkv_n, d_s, mask=mask_m)
-            tl.store(D_DECAY + offs_m * stride_ddec_m + i * stride_ddec_n, d_s * s_prev, mask=mask_m)
+            tl.store(dkv_base + i * KD, d_s.to(D_KV.dtype.element_ty), mask=mask)
+            tl.store(ddec_base + i * KD, d_s * s_prev, mask=mask)
 
             d_s = d_out_val + d_s * d
 
-        tl.store(D_INIT + offs_m * stride_di_m, d_s, mask=mask_m)
+        tl.store(D_INIT + bh * KD + offs, d_s.to(D_INIT.dtype.element_ty), mask=mask)
 
     class FusedRecurrentScan(torch.autograd.Function):
         @staticmethod
         def forward(ctx, kv: torch.Tensor, decay_k: torch.Tensor, init_state: torch.Tensor):
             B, H, N, Dk, Dv = kv.shape
-            M = B * H * Dk * Dv
-            decay = decay_k.expand(B, H, N, Dk, Dv).contiguous()
+            KD = Dk * Dv
+            kv_c = kv if kv.is_contiguous() else kv.contiguous()
+            dec_c = decay_k if decay_k.is_contiguous() else decay_k.contiguous()
+            init_c = init_state if init_state.is_contiguous() else init_state.contiguous()
 
-            kv_flat = kv.permute(0, 1, 3, 4, 2).reshape(M, N).contiguous()
-            decay_flat = decay.permute(0, 1, 3, 4, 2).reshape(M, N).contiguous()
-            init_flat = init_state.reshape(M).contiguous()
+            s_out = torch.empty(B, H, N, Dk, Dv, device=kv.device, dtype=kv.dtype)
+            final_state = torch.empty(B, H, Dk, Dv, device=kv.device, dtype=kv.dtype)
 
-            s_out = torch.empty(M, N, device=kv.device, dtype=torch.float32)
-            final_state = torch.empty(M, device=kv.device, dtype=torch.float32)
-
-            BLOCK_M = 128
-            grid = ((M + BLOCK_M - 1) // BLOCK_M,)
+            BLOCK_M = 256 if KD >= 256 else 128
+            grid = (B * H, triton.cdiv(KD, BLOCK_M))
             _recurrent_scan_fwd[grid](
-                kv_flat,
-                decay_flat,
-                init_flat,
+                kv_c,
+                dec_c,
+                init_c,
                 s_out,
                 final_state,
-                M,
                 N,
-                kv_flat.stride(0),
-                kv_flat.stride(1),
-                decay_flat.stride(0),
-                decay_flat.stride(1),
-                s_out.stride(0),
-                s_out.stride(1),
-                init_flat.stride(0),
-                final_state.stride(0),
+                Dk,
+                KD,
                 BLOCK_M=BLOCK_M,
             )
-            ctx.save_for_backward(decay_flat, s_out)
-            ctx.shapes = (B, H, N, Dk, Dv, M)
+            ctx.save_for_backward(dec_c, s_out)
+            ctx.shapes = (B, H, N, Dk, Dv, KD)
             ctx.kv_dtype = kv.dtype
-
-            s_out_5d = s_out.reshape(B, H, Dk, Dv, N).permute(0, 1, 4, 2, 3).to(dtype=kv.dtype)
-            final_state_4d = final_state.reshape(B, H, Dk, Dv).to(dtype=kv.dtype)
-            return s_out_5d, final_state_4d
+            ctx.decay_dtype = decay_k.dtype
+            ctx.init_dtype = init_state.dtype
+            return s_out, final_state
 
         @staticmethod
         def backward(ctx, d_s_out: torch.Tensor | None, d_final_state: torch.Tensor | None):
-            decay_flat, s_out = ctx.saved_tensors
-            B, H, N, Dk, Dv, M = ctx.shapes
-            device = decay_flat.device
+            dec_c, s_out = ctx.saved_tensors
+            B, H, N, Dk, Dv, KD = ctx.shapes
+            device = dec_c.device
 
             if d_s_out is not None:
-                d_s_flat = d_s_out.permute(0, 1, 3, 4, 2).reshape(M, N).contiguous().float()
+                d_s_c = d_s_out if d_s_out.is_contiguous() else d_s_out.contiguous()
             else:
-                d_s_flat = torch.zeros(M, N, device=device, dtype=torch.float32)
+                d_s_c = torch.zeros(B, H, N, Dk, Dv, device=device, dtype=ctx.kv_dtype)
 
             if d_final_state is not None:
-                d_fin_flat = d_final_state.reshape(M).contiguous().float()
+                d_fin_c = d_final_state if d_final_state.is_contiguous() else d_final_state.contiguous()
             else:
-                d_fin_flat = torch.zeros(M, device=device, dtype=torch.float32)
+                d_fin_c = torch.zeros(B, H, Dk, Dv, device=device, dtype=ctx.init_dtype)
 
-            d_kv = torch.empty(M, N, device=device, dtype=torch.float32)
-            d_decay = torch.empty(M, N, device=device, dtype=torch.float32)
-            d_init = torch.empty(M, device=device, dtype=torch.float32)
+            d_kv = torch.empty(B, H, N, Dk, Dv, device=device, dtype=ctx.kv_dtype)
+            d_decay_full = torch.empty(B, H, N, Dk, Dv, device=device, dtype=torch.float32)
+            d_init = torch.empty(B, H, Dk, Dv, device=device, dtype=ctx.init_dtype)
 
-            BLOCK_M = 128
-            grid = ((M + BLOCK_M - 1) // BLOCK_M,)
+            BLOCK_M = 256 if KD >= 256 else 128
+            grid = (B * H, triton.cdiv(KD, BLOCK_M))
             _recurrent_scan_bwd[grid](
-                d_s_flat,
-                d_fin_flat,
-                decay_flat,
+                d_s_c,
+                d_fin_c,
+                dec_c,
                 s_out,
                 d_kv,
-                d_decay,
+                d_decay_full,
                 d_init,
-                M,
                 N,
-                d_s_flat.stride(0),
-                d_s_flat.stride(1),
-                d_fin_flat.stride(0),
-                decay_flat.stride(0),
-                decay_flat.stride(1),
-                s_out.stride(0),
-                s_out.stride(1),
-                d_kv.stride(0),
-                d_kv.stride(1),
-                d_decay.stride(0),
-                d_decay.stride(1),
-                d_init.stride(0),
+                Dk,
+                KD,
                 BLOCK_M=BLOCK_M,
             )
 
-            d_kv_5d = d_kv.reshape(B, H, Dk, Dv, N).permute(0, 1, 4, 2, 3).to(dtype=ctx.kv_dtype)
-            d_decay_5d = (
-                d_decay.reshape(B, H, Dk, Dv, N).permute(0, 1, 4, 2, 3).sum(dim=-1, keepdim=True).to(dtype=ctx.kv_dtype)
-            )
-            d_init_4d = d_init.reshape(B, H, Dk, Dv).to(dtype=ctx.kv_dtype)
-            return d_kv_5d, d_decay_5d, d_init_4d
+            d_decay = d_decay_full.sum(dim=-1, keepdim=True).to(dtype=ctx.decay_dtype)
+            return d_kv, d_decay, d_init
 
     @triton.jit
     def _chunk_gla_tc_fwd_kernel(
@@ -595,19 +568,22 @@ def _run_gla_chunks(
     # for extreme synthetic decays (e.g. g=-20.0 per step), falls back to single-chunk pairwise delta_g.
     is_capturing = device.type == "cuda" and torch.cuda.is_current_stream_capturing()
     is_compiling = hasattr(torch, "compiler") and torch.compiler.is_compiling()
+    span_limit = 20.0 if dtype == torch.float16 else 140.0
+    exp_clip = 10.0 if dtype == torch.float16 else 75.0
     if is_compiling:
         use_factored_intra = dtype != torch.float64
     else:
         chunk_span = g_cumsum[:, :, :, :1, :] - g_cumsum[:, :, :, -1:, :]
-        use_factored_intra = (not is_capturing) and (dtype != torch.float64) and bool((chunk_span.max() < 55.0).item())
+        use_factored_intra = (not is_capturing) and (dtype != torch.float64) and bool((chunk_span.max() < span_limit).item())
 
     if use_factored_intra:
-        g_mid = 0.5 * (g_cumsum.float()[:, :, :, :1, :] + g_cumsum.float()[:, :, :, -1:, :])
-        q_intra = q_c.float() * torch.exp(g_cumsum.float() - g_mid)
-        k_intra = k_c.float() * torch.exp(g_mid - g_cumsum.float())
-        if num_chunks > 4:
+        g_f = g_cumsum.float()
+        g_mid = 0.5 * (g_f[:, :, :, :1, :] + g_f[:, :, :, -1:, :])
+        q_intra = (q_c.float() * torch.exp((g_f - g_mid).clamp(-exp_clip, exp_clip))).to(dtype)
+        k_intra = (k_c.float() * torch.exp((g_mid - g_f).clamp(-exp_clip, exp_clip))).to(dtype)
+        if B * H * num_chunks * C * C > 64_000_000:
             out_intra_list = []
-            micro = 4
+            micro = max(1, 64_000_000 // max(1, B * H * C * C))
             for c_start in range(0, num_chunks, micro):
                 c_end = min(c_start + micro, num_chunks)
                 attn_sub = (
@@ -661,7 +637,6 @@ def _run_gla_chunks(
         and FusedRecurrentScan is not None
         and is_turbo_mode_enabled()
         and is_triton_available()
-        and B <= 4
     ):
         kv_all = torch.matmul(k_decayed_all.transpose(-1, -2), v_c)
         S_all, state = FusedRecurrentScan.apply(kv_all, chunk_decay, state)

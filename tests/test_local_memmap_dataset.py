@@ -177,16 +177,31 @@ def test_train_cli_local_tokens_bin_flag_and_colab_cell2b_cell3(tmp_path: Path) 
                 break
             snippet.append(line)
 
-    # Check L4 tier (22.5 GiB): 300,000 steps, rank=32, fp8 preserved from supports_fp8
-    ns_l4 = {"vram_gb": 22.5, "ckpt_3b": tmp_path / "none", "torch": torch, "os": os, "supports_fp8": True}
+    # Check L4 tier (22.5 GiB): 600,000 steps, batch=4, rank=32, fp8 preserved from supports_fp8
+    ns_l4 = {
+        "vram_gb": 22.5,
+        "ckpt_3b": tmp_path / "none",
+        "torch": torch,
+        "os": os,
+        "supports_fp8": True,
+        "depth_mode_val": "cortex",
+    }
     exec("\n".join(snippet), ns_l4)
-    assert ns_l4["steps_val"] == 300000
+    assert ns_l4["steps_val"] == 600000
+    assert ns_l4["batch_val"] == 4
     assert ns_l4["rank_val"] == 32
 
     # Check A100-80GB tier
-    ns_a80 = {"vram_gb": 79.6, "ckpt_3b": tmp_path / "none", "torch": torch, "os": os, "supports_fp8": False}
+    ns_a80 = {
+        "vram_gb": 79.6,
+        "ckpt_3b": tmp_path / "none",
+        "torch": torch,
+        "os": os,
+        "supports_fp8": False,
+        "depth_mode_val": "cortex",
+    }
     exec("\n".join(snippet), ns_a80)
-    assert ns_a80["steps_val"] == 80000
+    assert ns_a80["steps_val"] == 300000
     assert ns_a80["rank_val"] == 64
 
 

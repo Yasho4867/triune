@@ -142,9 +142,9 @@ def test_colab_cell3_a100_40gb_threshold_and_resume_rank(tmp_path: Path) -> None
     ns = {"vram_gb": 39.49, "ckpt_3b": ckpt_dir, "torch": torch, "os": __import__("os"), "supports_fp8": False}
     exec("\n".join(snippet), ns)
     assert ns["batch_val"] == 8
-    assert ns["accum_val"] == 2
+    assert ns["accum_val"] == 4
     assert ns["seq_val"] == 1024
-    assert ns["steps_val"] == 150000
+    assert ns["steps_val"] == 600000
     assert ns["extra_flags"] == "--no-grad_checkpoint"
     assert ns["rank_val"] == 64  # inherited from mocked checkpoint on resume
     assert ns["use_fp8_val"] is True

@@ -64,6 +64,18 @@ def _orthonormalize_subspace_batch(
         return Q.to(dtype=orig_dtype)
 
 
+class _ZeroCopyPackedStack(torch.autograd.Function):
+    """Zero-copy view of a packed [E, d_out, d_in] buffer linked cleanly to individual Parameter grads."""
+
+    @staticmethod
+    def forward(ctx, packed_buf: torch.Tensor, *weights: torch.Tensor) -> torch.Tensor:
+        return packed_buf.view_as(packed_buf)
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor):
+        return (None, *grad_output.unbind(0))
+
+
 @dataclass
 class RoutingResult:
     """Unified routing statistics and assignment tensor container."""
@@ -146,6 +158,55 @@ class MoE_FFN(nn.Module):
         self._skip_subspace_stats: bool = False
         self.register_buffer("_overflow_counter", torch.tensor(0, dtype=torch.long), persistent=False)
         self.register_buffer("_global_step", torch.tensor(0, dtype=torch.long))
+
+    def _get_packed_expert_weights(self, w_list: list[torch.Tensor], cache_attr: str) -> torch.Tensor:
+        """Return a zero-copy [E, d_out, d_in] view backed by unified contiguous expert Parameter storage."""
+        if not w_list:
+            raise ValueError("Expected non-empty expert weight list")
+        w0 = w_list[0]
+        is_compiling = hasattr(torch, "compiler") and torch.compiler.is_compiling()
+        if (
+            is_compiling
+            or w0.is_meta
+            or any(
+                not isinstance(w, torch.Tensor)
+                or type(w) is not nn.Parameter
+                or w.is_meta
+                or w.is_inference()
+                or w.device != w0.device
+                or w.dtype != w0.dtype
+                or w.shape != w0.shape
+                or not w.is_contiguous()
+                or hasattr(w, "_fp8_tensor")
+                or hasattr(w, "packed_weight")
+                for w in w_list
+            )
+        ):
+            return torch.stack(w_list, dim=0)
+
+        num_e = len(w_list)
+        target_shape = (num_e, *w0.shape)
+        buf: torch.Tensor | None = getattr(self, cache_attr, None)
+        step_bytes = w0.numel() * w0.element_size()
+        packed_ok = (
+            buf is not None
+            and buf.shape == target_shape
+            and buf.device == w0.device
+            and buf.dtype == w0.dtype
+            and buf.is_contiguous()
+            and step_bytes > 0
+            and all(w.data_ptr() == buf.data_ptr() + i * step_bytes for i, w in enumerate(w_list))
+        )
+        if not packed_ok:
+            with torch.no_grad():
+                buf = torch.empty(target_shape, device=w0.device, dtype=w0.dtype)
+                for i, w in enumerate(w_list):
+                    buf[i].copy_(w.data)
+                    w.data = buf[i]
+                setattr(self, cache_attr, buf)
+        if torch.is_grad_enabled() and any(w.requires_grad for w in w_list):
+            return _ZeroCopyPackedStack.apply(buf, *w_list)
+        return buf
 
     def _get_oja_probe(self, d_in: int, k_dirs: int, device: torch.device) -> torch.Tensor:
         """Return deterministic orthonormal seed probe [E, d_in, k_dirs] in FP32 without per-step overhead."""
@@ -512,8 +573,10 @@ class MoE_FFN(nn.Module):
             if nograd_stacks is not None:
                 W1_stack, W2_stack, b1_stack, b2_stack = nograd_stacks
             else:
-                W1_stack = torch.stack([_get_submod_weight_bias(e[0])[0] for e in self.experts], dim=0)
-                W2_stack = torch.stack([_get_submod_weight_bias(e[2])[0] for e in self.experts], dim=0)
+                w1_list = [_get_submod_weight_bias(e[0])[0] for e in self.experts]
+                w2_list = [_get_submod_weight_bias(e[2])[0] for e in self.experts]
+                W1_stack = self._get_packed_expert_weights(w1_list, "_w1_packed_storage")
+                W2_stack = self._get_packed_expert_weights(w2_list, "_w2_packed_storage")
                 b1_stack = (
                     torch.stack([_get_submod_weight_bias(e[0])[1] for e in self.experts], dim=0).unsqueeze(1)
                     if all_b1
