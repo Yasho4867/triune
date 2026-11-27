@@ -7,6 +7,20 @@ from lucid_machines.kernels.dispatcher import is_triton_available, is_turbo_mode
 from .config import GLA_HEAD_DIM, ROPE_MAX_SEQ_LEN, USE_ROPE
 from .rotary import RotaryEmbedding
 
+
+class _ZeroCopyPackedCat(torch.autograd.Function):
+    """Zero-copy view of a packed [4*D, D] QKVG buffer linked to individual projection grads."""
+
+    @staticmethod
+    def forward(ctx, packed_buf: torch.Tensor, slice_size: int, *weights: torch.Tensor) -> torch.Tensor:
+        ctx.slice_size = slice_size
+        return packed_buf.view_as(packed_buf)
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor):
+        chunks = grad_output.split(ctx.slice_size, dim=0)
+        return (None, None, *chunks)
+
 if is_triton_available():
     import triton
     import triton.language as tl
@@ -330,6 +344,53 @@ class VectorisedGLA(nn.Module):
         hd3 = 3 * self.hidden_dim
         return self._eval_w_qkvg, self._eval_w_qkvg[:hd3], self._eval_w_qkvg[hd3:]
 
+    def _get_packed_qkvg_weight(self) -> torch.Tensor:
+        """Return a zero-copy [4*D, D] view backed by contiguous storage shared with q/k/v/g_proj weights."""
+        w_list = (self.q_proj.weight, self.k_proj.weight, self.v_proj.weight, self.g_proj.weight)
+        w0 = w_list[0]
+        is_compiling = hasattr(torch, "compiler") and torch.compiler.is_compiling()
+        if (
+            is_compiling
+            or w0.is_meta
+            or any(
+                not isinstance(w, torch.Tensor)
+                or type(w) is not nn.Parameter
+                or w.is_meta
+                or w.is_inference()
+                or w.device != w0.device
+                or w.dtype != w0.dtype
+                or w.shape != w0.shape
+                or not w.is_contiguous()
+                for w in w_list
+            )
+        ):
+            return torch.cat(w_list, dim=0)
+
+        d_out, d_in = w0.shape
+        target_shape = (4 * d_out, d_in)
+        buf: torch.Tensor | None = getattr(self, "_qkvg_packed_storage", None)
+        step_bytes = w0.numel() * w0.element_size()
+        packed_ok = (
+            buf is not None
+            and buf.shape == target_shape
+            and buf.device == w0.device
+            and buf.dtype == w0.dtype
+            and buf.is_contiguous()
+            and step_bytes > 0
+            and all(w.data_ptr() == buf.data_ptr() + i * step_bytes for i, w in enumerate(w_list))
+        )
+        if not packed_ok:
+            with torch.no_grad():
+                buf = torch.empty(target_shape, device=w0.device, dtype=w0.dtype)
+                for i, w in enumerate(w_list):
+                    slice_i = buf[i * d_out : (i + 1) * d_out]
+                    slice_i.copy_(w.data)
+                    w.data = slice_i
+                self._qkvg_packed_storage = buf
+        if torch.is_grad_enabled() and any(w.requires_grad for w in w_list):
+            return _ZeroCopyPackedCat.apply(buf, d_out, *w_list)
+        return buf
+
     @staticmethod
     def _parse_cache(cache):
         initial_state = None
@@ -503,9 +564,7 @@ class VectorisedGLA(nn.Module):
                 w_qkvg, _, _ = self._get_eval_weights()
             else:
                 self._eval_w_qkvg = None
-                w_qkvg = torch.cat(
-                    (self.q_proj.weight, self.k_proj.weight, self.v_proj.weight, self.g_proj.weight), dim=0
-                )
+                w_qkvg = self._get_packed_qkvg_weight()
             qkvg = F.linear(x, w_qkvg)
             hd2 = 2 * self.hidden_dim
             hd3 = 3 * self.hidden_dim

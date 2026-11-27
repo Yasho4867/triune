@@ -18,9 +18,9 @@ from tokenizers import Tokenizer
 from lucid_machines.data.dataset import _extract_sample_text, parse_dataset_mix
 
 DEFAULT_PRESET_TOKENS: dict[str, int] = {
-    "junkie_stage1": 2_500_000_000,
-    "junkie_stage2": 1_000_000_000,
-    "junkie_tool_sft": 250_000_000,
+    "junkie_stage1": 10_000_000_000,
+    "junkie_stage2": 2_000_000_000,
+    "junkie_tool_sft": 500_000_000,
 }
 DEFAULT_SHARD_TOKENS: int = 100_000_000
 
