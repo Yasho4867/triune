@@ -17,6 +17,7 @@ except ImportError:
     AdamW8bit = None
 
 
+from lucid_machines.kernels.fast_bf16_sr import bf16_stochastic_round_update_
 from lucid_machines.ops.centroid_steer import (
     batched_qr,
     polar_stiefel_retraction,
@@ -1633,7 +1634,24 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                 raw_buckets[key] = []
             raw_buckets[key].append(g)
 
-        MAX_BUCKET_ELEMS = 32_000_000
+        if device.type == "cuda":
+            vram_cache = getattr(self, "_cuda_bucket_elem_limit", None)
+            if vram_cache is None:
+                vram_cache = {}
+                self._cuda_bucket_elem_limit = vram_cache
+            dev_idx = device.index or 0
+            MAX_BUCKET_ELEMS = vram_cache.get(dev_idx)
+            if MAX_BUCKET_ELEMS is None:
+                total_gb = torch.cuda.get_device_properties(device).total_memory / (1024**3)
+                if total_gb >= 70.0:
+                    MAX_BUCKET_ELEMS = 192_000_000
+                elif total_gb >= 35.0:
+                    MAX_BUCKET_ELEMS = 96_000_000
+                else:
+                    MAX_BUCKET_ELEMS = 32_000_000
+                vram_cache[dev_idx] = MAX_BUCKET_ELEMS
+        else:
+            MAX_BUCKET_ELEMS = 32_000_000
         shape_buckets = []
         cursor = 0
         for key, full_g_list in raw_buckets.items():
@@ -1685,8 +1703,8 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
 
             # 1. Subspace C_e Refresh & Batched Grassmann/Stiefel Parallel Transport (C_old -> C_new)
             active_s_idx: list[int] = []
+            ref_indices: list[int] = []
             if self.steer_scale > 0:
-                ref_indices: list[int] = []
                 for b_i, g in enumerate(g_list):
                     mod = g.get("module")
                     e_idx = g.get("expert_idx")
@@ -2039,7 +2057,12 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                         st["momentum"] = batch_mom[idx]
                         st["variance"] = batch_var[idx]
 
-            if active_s_idx:
+            need_border_update = (
+                bool(ref_indices)
+                or any_refresh
+                or any(not g_list[b_i].get("_border_ready", False) for b_i in active_s_idx)
+            )
+            if active_s_idx and need_border_update:
                 idx_t = torch.tensor(active_s_idx, device=device, dtype=torch.long)
                 c_0 = C_act[:, :, 0]  # [K_s, d_in]
                 Q_in = (QL_stack[idx_t, :, :r] if centroid_on_ql else QR_stack[idx_t, :, :r]).float()
@@ -2088,6 +2111,8 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                 else:
                     QR_stack[idx_t, :, r] = q_in_f.to(dtype=dtype)
                     QL_stack[idx_t, :, r] = q_out_f.to(dtype=dtype)
+                for b_i in active_s_idx:
+                    g_list[b_i]["_border_ready"] = True
                 del idx_t, Q_in, Q_out, u_in, u_in_norm, q_in_f, v_0, u_out, u_out_norm, q_out_f
 
             QL_act = QL_stack[:, :, :r]
@@ -2190,16 +2215,16 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                 del dw_perp_c, dW_par_act
 
             if dtype == torch.bfloat16:
-                # Exact unbiased BF16 stochastic rounding prevents ULP quantization loss on subspace updates
-                W_stack = torch.stack([g["param"].data for g in g_list], dim=0).float()
-                if expert_wd != 0:
-                    W_stack.mul_(beta_wd)
-                W_stack.add_(Delta_W_perp, alpha=alpha_upd)
-                rand_bits = torch.randint(0, 65536, W_stack.shape, device=device, dtype=torch.int32)
-                w_sr = ((W_stack.view(torch.int32) + rand_bits) & -65536).view(torch.float32).to(dtype=torch.bfloat16)
+                # Exact unbiased BF16 stochastic rounding in-place via fused Triton kernel
+                base_seed = (int(self.step_count) + 1) * 1_000_003
                 for b_idx, g in enumerate(g_list):
-                    g["param"].data.copy_(w_sr[b_idx])
-                del W_stack, rand_bits, w_sr
+                    bf16_stochastic_round_update_(
+                        g["param"].data,
+                        Delta_W_perp[b_idx],
+                        beta_wd,
+                        alpha_upd,
+                        seed=base_seed + (start + b_idx) * 9176,
+                    )
             else:
                 delta_W = Delta_W_perp.to(dtype=dtype)
                 params_b = [g["param"].data for g in g_list]
@@ -2321,6 +2346,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
             g["last_steer_step"] = sd.get("last_steer_step")
             g["steer_applied"] = sd.get("steer_applied", False)
             g["last_energy_ratio"] = sd.get("last_energy_ratio")
+            g["_border_ready"] = False
 
             # Restore complete isometric bases Q_L, Q_R, and direct-sum subspace C_e
             if sd.get("Q_L") is not None:

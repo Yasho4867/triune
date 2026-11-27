@@ -304,6 +304,26 @@ class TrainingEngine:
             step=self.step,
         )
 
+    def _slice_token_budget(self, depth_mode: str) -> int:
+        dev = getattr(self.trainer, "device", None)
+        vram_gb = 0.0
+        if dev is not None and getattr(dev, "type", None) == "cuda" and torch.cuda.is_available():
+            vram_gb = getattr(self, "_cached_vram_gb", None)
+            if vram_gb is None:
+                vram_gb = torch.cuda.get_device_properties(dev).total_memory / (1024**3)
+                self._cached_vram_gb = vram_gb
+        if depth_mode == "cortex":
+            if vram_gb >= 70.0:
+                return 16384
+            if vram_gb >= 35.0:
+                return 8192
+            return 4096
+        if vram_gb >= 70.0:
+            return 8192
+        if vram_gb >= 35.0:
+            return 4096
+        return 2048
+
     def step_once(self, *, advance_step: bool = False) -> dict:
         """Executes a single canonical LucidMachines training step shared across CLI and Studio."""
         self.model.train()
@@ -321,10 +341,10 @@ class TrainingEngine:
             self.trainer.set_optimizer_lr(self.optimizer, lr, expert_lr=scheduled_expert_lr)
         except TypeError:
             self.trainer.set_optimizer_lr(self.optimizer, lr)
-        for module in self.model.modules():
-            if isinstance(module, MoE_FFN):
-                module._global_step = self.step
-                module._step_managed_by_engine = True
+        moe_modules = [module for module in self.model.modules() if isinstance(module, MoE_FFN)]
+        for module in moe_modules:
+            module._global_step = self.step
+            module._step_managed_by_engine = True
 
         streaming_engine = getattr(self.model, "_streaming_engine", None)
         self.optimizer.zero_grad()
@@ -344,200 +364,212 @@ class TrainingEngine:
         balance_coef = float(self.config.get("balance_coef", 0.3))
         ema_decay = float(self.config.get("usage_ema_decay", 0.99))
 
-        for _ in range(grad_accum):
-            x, y = self.trainer.next_batch()
-            if x.device != self.trainer.device:
-                x = x.to(self.trainer.device, non_blocking=True)
-            if y.device != self.trainer.device:
-                y = y.to(self.trainer.device, non_blocking=True)
-            totals["tokens"] += int(x.numel())
-            y_flat = y.reshape(-1)
-            route_logits = torch.zeros((x.size(0), 3), device=self.trainer.device)
+        steer_gap = max(1, int(getattr(self.optimizer, "steer_update_gap", 1) or 1))
+        want_subspace_step = (self.step < 2) or ((self.step + 1) % steer_gap == 0)
 
-            if depth_mode == "cortex":
-                labels = torch.full((x.size(0),), 2, dtype=torch.long, device=self.trainer.device)
-                max_slice = max(1, min(x.size(0), 4096 // max(1, x.size(1))))
-                if x.size(0) > max_slice:
-                    sub_xs = x.split(max_slice)
-                    sub_ys = y.split(max_slice)
-                    num_sub = len(sub_xs)
-                    lm_sum = torch.zeros((), device=self.trainer.device, dtype=torch.float32)
-                    route_chunks = []
-                    for sub_x, sub_y in zip(sub_xs, sub_ys):
-                        sub_y_flat = sub_y.reshape(-1)
-                        with self.trainer.model_autocast():
-                            sub_lm_loss, sub_route_logits = self._forward_lm_loss(
-                                sub_x, sub_y_flat, vocab_size, force_depth=2
-                            )
-                        (sub_lm_loss / (grad_accum * num_sub)).backward()
-                        lm_sum += sub_lm_loss.detach().float()
-                        if sub_route_logits is not None:
-                            route_chunks.append(sub_route_logits.detach())
-                    lm_loss = lm_sum / num_sub
-                    route_logits = (
-                        torch.cat(route_chunks, dim=0)
-                        if route_chunks
-                        else torch.zeros((x.size(0), 3), device=self.trainer.device)
-                    )
-                    router_loss = torch.tensor(0.0, device=self.trainer.device)
-                    z_loss = torch.tensor(0.0, device=self.trainer.device)
-                    balance_loss = torch.tensor(0.0, device=self.trainer.device)
-                    micro_loss = lm_loss
-                else:
-                    with self.trainer.model_autocast():
-                        lm_loss, parsed_route = self._forward_lm_loss(x, y_flat, vocab_size, force_depth=2)
+        try:
+            for micro_idx in range(grad_accum):
+                skip_subspace = not (want_subspace_step and micro_idx == grad_accum - 1)
+                for module in moe_modules:
+                    module._skip_subspace_stats = skip_subspace
+                x, y = self.trainer.next_batch()
+                if x.device != self.trainer.device:
+                    x = x.to(self.trainer.device, non_blocking=True)
+                if y.device != self.trainer.device:
+                    y = y.to(self.trainer.device, non_blocking=True)
+                totals["tokens"] += int(x.numel())
+                y_flat = y.reshape(-1)
+                route_logits = torch.zeros((x.size(0), 3), device=self.trainer.device)
+
+                if depth_mode == "cortex":
+                    labels = torch.full((x.size(0),), 2, dtype=torch.long, device=self.trainer.device)
+                    max_slice = max(1, min(x.size(0), self._slice_token_budget("cortex") // max(1, x.size(1))))
+                    if x.size(0) > max_slice:
+                        sub_xs = x.split(max_slice)
+                        sub_ys = y.split(max_slice)
+                        num_sub = len(sub_xs)
+                        lm_sum = torch.zeros((), device=self.trainer.device, dtype=torch.float32)
+                        route_chunks = []
+                        for sub_x, sub_y in zip(sub_xs, sub_ys):
+                            sub_y_flat = sub_y.reshape(-1)
+                            with self.trainer.model_autocast():
+                                sub_lm_loss, sub_route_logits = self._forward_lm_loss(
+                                    sub_x, sub_y_flat, vocab_size, force_depth=2
+                                )
+                            (sub_lm_loss / (grad_accum * num_sub)).backward()
+                            lm_sum += sub_lm_loss.detach().float()
+                            if sub_route_logits is not None:
+                                route_chunks.append(sub_route_logits.detach())
+                        lm_loss = lm_sum / num_sub
                         route_logits = (
-                            parsed_route
-                            if parsed_route is not None
+                            torch.cat(route_chunks, dim=0)
+                            if route_chunks
                             else torch.zeros((x.size(0), 3), device=self.trainer.device)
                         )
-                    router_loss = torch.tensor(0.0, device=self.trainer.device)
-                    z_loss = torch.tensor(0.0, device=self.trainer.device)
-                    balance_loss = torch.tensor(0.0, device=self.trainer.device)
-                    micro_loss = lm_loss
-                    (micro_loss / grad_accum).backward()
-                usage = torch.tensor([0.0, 0.0, 1.0], device=self.depth_usage_ema.device)
-                self.depth_usage_ema.mul_(ema_decay).add_(usage * (1.0 - ema_decay))
-            elif depth_mode == "joint":
-                max_slice = max(1, min(x.size(0), 2048 // max(1, x.size(1))))
-                if x.size(0) > max_slice:
-                    sub_xs = x.split(max_slice)
-                    sub_ys = y.split(max_slice)
-                    num_sub = len(sub_xs)
-                    component_sums = [
-                        torch.zeros((), device=self.trainer.device, dtype=torch.float32) for _ in range(4)
-                    ]
-                    labels_chunks = []
-                    route_chunks = []
-                    for sub_x, sub_y in zip(sub_xs, sub_ys):
-                        sub_y_flat = sub_y.reshape(-1)
+                        router_loss = torch.tensor(0.0, device=self.trainer.device)
+                        z_loss = torch.tensor(0.0, device=self.trainer.device)
+                        balance_loss = torch.tensor(0.0, device=self.trainer.device)
+                        micro_loss = lm_loss
+                    else:
                         with self.trainer.model_autocast():
-                            reflex_l, limbic_l, cortex_l, route_l = self.model.forward_all_exits(
-                                sub_x, update_stats=True
+                            lm_loss, parsed_route = self._forward_lm_loss(x, y_flat, vocab_size, force_depth=2)
+                            route_logits = (
+                                parsed_route
+                                if parsed_route is not None
+                                else torch.zeros((x.size(0), 3), device=self.trainer.device)
                             )
-                        sub_lbls = self._router_labels_from_logits(reflex_l, limbic_l, cortex_l, sub_x, sub_y)
-                        sub_lm = self._compute_joint_lm_loss(reflex_l, limbic_l, cortex_l, sub_y_flat, vocab_size)
-                        rf = route_l.float()
-                        router_loss_fn = getattr(self.trainer, "router_loss_fn", F.cross_entropy)
-                        sub_r_loss = router_loss_fn(rf, sub_lbls)
-                        sub_z = torch.logsumexp(rf, dim=-1).pow(2).mean()
-                        sub_bal = getattr(self.model, "last_balance_loss", None)
-                        if sub_bal is None:
-                            sub_bal = (torch.softmax(rf, dim=-1).mean(dim=0) - self.target_depth_dist).pow(2).mean()
-                        sub_micro = sub_lm + 0.5 * sub_r_loss + z_loss_coef * sub_z + balance_coef * sub_bal
-                        (sub_micro / (grad_accum * num_sub)).backward()
-                        component_sums[0] += sub_lm.detach().float()
-                        component_sums[1] += sub_r_loss.detach().float()
-                        component_sums[2] += sub_bal.detach().float()
-                        component_sums[3] += sub_z.detach().float()
-                        labels_chunks.append(sub_lbls.detach())
-                        route_chunks.append(route_l.detach())
-                    lm_loss, router_loss, balance_loss, z_loss = (part / num_sub for part in component_sums)
-                    micro_loss = lm_loss + 0.5 * router_loss + z_loss_coef * z_loss + balance_coef * balance_loss
-                    labels = torch.cat(labels_chunks, dim=0)
-                    route_logits = torch.cat(route_chunks, dim=0)
-                else:
-                    with self.trainer.model_autocast():
-                        reflex_logits, limbic_logits, cortex_logits, route_logits = self.model.forward_all_exits(
-                            x, update_stats=True
-                        )
-                    labels = self._router_labels_from_logits(reflex_logits, limbic_logits, cortex_logits, x, y)
-                    lm_loss = self._compute_joint_lm_loss(
-                        reflex_logits, limbic_logits, cortex_logits, y_flat, vocab_size
-                    )
-                    route_f = route_logits.float()
-                    router_loss_fn = getattr(self.trainer, "router_loss_fn", F.cross_entropy)
-                    router_loss = router_loss_fn(route_f, labels)
-                    z_loss = torch.logsumexp(route_f, dim=-1).pow(2).mean()
-                    balance_loss = getattr(self.model, "last_balance_loss", None)
-                    if balance_loss is None:
-                        balance_loss = (
-                            (torch.softmax(route_f, dim=-1).mean(dim=0) - self.target_depth_dist).pow(2).mean()
-                        )
-                    micro_loss = lm_loss + 0.5 * router_loss + z_loss_coef * z_loss + balance_coef * balance_loss
-                    (micro_loss / grad_accum).backward()
-            else:
-                labels = self._router_labels(x, y)
-                chosen_depth = random.choice((0, 1, 2)) if random.random() < exploration_rate else None
-                max_slice = max(1, min(x.size(0), 2048 // max(1, x.size(1))))
-                if x.size(0) > max_slice:
-                    sub_xs = x.split(max_slice)
-                    sub_ys = y.split(max_slice)
-                    sub_lbls = labels.split(max_slice)
-                    num_sub = len(sub_xs)
-                    component_sums = [
-                        torch.zeros((), device=self.trainer.device, dtype=torch.float32) for _ in range(4)
-                    ]
-                    route_chunks = []
-                    for sub_x, sub_y, sub_lbl in zip(sub_xs, sub_ys, sub_lbls):
-                        sub_y_flat = sub_y.reshape(-1)
+                        router_loss = torch.tensor(0.0, device=self.trainer.device)
+                        z_loss = torch.tensor(0.0, device=self.trainer.device)
+                        balance_loss = torch.tensor(0.0, device=self.trainer.device)
+                        micro_loss = lm_loss
+                        (micro_loss / grad_accum).backward()
+                    usage = torch.tensor([0.0, 0.0, 1.0], device=self.depth_usage_ema.device)
+                    self.depth_usage_ema.mul_(ema_decay).add_(usage * (1.0 - ema_decay))
+                elif depth_mode == "joint":
+                    max_slice = max(1, min(x.size(0), self._slice_token_budget(depth_mode) // max(1, x.size(1))))
+                    if x.size(0) > max_slice:
+                        sub_xs = x.split(max_slice)
+                        sub_ys = y.split(max_slice)
+                        num_sub = len(sub_xs)
+                        component_sums = [
+                            torch.zeros((), device=self.trainer.device, dtype=torch.float32) for _ in range(4)
+                        ]
+                        labels_chunks = []
+                        route_chunks = []
+                        for sub_x, sub_y in zip(sub_xs, sub_ys):
+                            sub_y_flat = sub_y.reshape(-1)
+                            with self.trainer.model_autocast():
+                                reflex_l, limbic_l, cortex_l, route_l = self.model.forward_all_exits(
+                                    sub_x, update_stats=True
+                                )
+                            sub_lbls = self._router_labels_from_logits(reflex_l, limbic_l, cortex_l, sub_x, sub_y)
+                            sub_lm = self._compute_joint_lm_loss(reflex_l, limbic_l, cortex_l, sub_y_flat, vocab_size)
+                            rf = route_l.float()
+                            router_loss_fn = getattr(self.trainer, "router_loss_fn", F.cross_entropy)
+                            sub_r_loss = router_loss_fn(rf, sub_lbls)
+                            sub_z = torch.logsumexp(rf, dim=-1).pow(2).mean()
+                            sub_bal = getattr(self.model, "last_balance_loss", None)
+                            if sub_bal is None:
+                                sub_bal = (torch.softmax(rf, dim=-1).mean(dim=0) - self.target_depth_dist).pow(2).mean()
+                            sub_micro = sub_lm + 0.5 * sub_r_loss + z_loss_coef * sub_z + balance_coef * sub_bal
+                            (sub_micro / (grad_accum * num_sub)).backward()
+                            component_sums[0] += sub_lm.detach().float()
+                            component_sums[1] += sub_r_loss.detach().float()
+                            component_sums[2] += sub_bal.detach().float()
+                            component_sums[3] += sub_z.detach().float()
+                            labels_chunks.append(sub_lbls.detach())
+                            route_chunks.append(route_l.detach())
+                        lm_loss, router_loss, balance_loss, z_loss = (part / num_sub for part in component_sums)
+                        micro_loss = lm_loss + 0.5 * router_loss + z_loss_coef * z_loss + balance_coef * balance_loss
+                        labels = torch.cat(labels_chunks, dim=0)
+                        route_logits = torch.cat(route_chunks, dim=0)
+                    else:
                         with self.trainer.model_autocast():
-                            sub_lm_loss, sub_route_logits = self._forward_lm_loss(
-                                sub_x, sub_y_flat, vocab_size, force_depth=chosen_depth
+                            reflex_logits, limbic_logits, cortex_logits, route_logits = self.model.forward_all_exits(
+                                x, update_stats=True
                             )
-                            if sub_route_logits is None:
-                                sub_route_logits = torch.zeros((sub_x.size(0), 3), device=self.trainer.device)
-                        sub_route_f = sub_route_logits.float()
+                        labels = self._router_labels_from_logits(reflex_logits, limbic_logits, cortex_logits, x, y)
+                        lm_loss = self._compute_joint_lm_loss(
+                            reflex_logits, limbic_logits, cortex_logits, y_flat, vocab_size
+                        )
+                        route_f = route_logits.float()
                         router_loss_fn = getattr(self.trainer, "router_loss_fn", F.cross_entropy)
-                        sub_r_loss = router_loss_fn(sub_route_f, sub_lbl)
-                        sub_z = torch.logsumexp(sub_route_f, dim=-1).pow(2).mean()
-                        sub_bal = getattr(self.model, "last_balance_loss", None)
-                        if sub_bal is None:
-                            sub_bal = (
-                                (torch.softmax(sub_route_f, dim=-1).mean(dim=0) - self.target_depth_dist).pow(2).mean()
+                        router_loss = router_loss_fn(route_f, labels)
+                        z_loss = torch.logsumexp(route_f, dim=-1).pow(2).mean()
+                        balance_loss = getattr(self.model, "last_balance_loss", None)
+                        if balance_loss is None:
+                            balance_loss = (
+                                (torch.softmax(route_f, dim=-1).mean(dim=0) - self.target_depth_dist).pow(2).mean()
                             )
-                        sub_micro = sub_lm_loss + 0.5 * sub_r_loss + z_loss_coef * sub_z + balance_coef * sub_bal
-                        (sub_micro / (grad_accum * num_sub)).backward()
-                        component_sums[0] += sub_lm_loss.detach().float()
-                        component_sums[1] += sub_r_loss.detach().float()
-                        component_sums[2] += sub_bal.detach().float()
-                        component_sums[3] += sub_z.detach().float()
-                        route_chunks.append(sub_route_logits.detach())
-                    lm_loss, router_loss, balance_loss, z_loss = (part / num_sub for part in component_sums)
-                    micro_loss = lm_loss + 0.5 * router_loss + z_loss_coef * z_loss + balance_coef * balance_loss
-                    route_logits = torch.cat(route_chunks, dim=0)
+                        micro_loss = lm_loss + 0.5 * router_loss + z_loss_coef * z_loss + balance_coef * balance_loss
+                        (micro_loss / grad_accum).backward()
                 else:
-                    with self.trainer.model_autocast():
-                        lm_loss, route_logits = self._forward_lm_loss(
-                            x, y_flat, vocab_size, force_depth=chosen_depth
-                        )
-                        if route_logits is None:
-                            route_logits = torch.zeros((x.size(0), 3), device=self.trainer.device)
-                        last_choice = getattr(self.model, "last_depth_choice", None)
-                        saved_balance = getattr(self.model, "last_balance_loss", None)
-                        cortex_anchor_loss = None
-                        if (
-                            streaming_engine is None
-                            and chosen_depth is None
-                            and last_choice is not None
-                            and not (last_choice == 2).any()
-                        ):
-                            cortex_anchor_loss, _ = self._forward_lm_loss(
-                                x[:1], y[:1].reshape(-1), vocab_size, force_depth=2
+                    labels = self._router_labels(x, y)
+                    chosen_depth = random.choice((0, 1, 2)) if random.random() < exploration_rate else None
+                    max_slice = max(1, min(x.size(0), self._slice_token_budget(depth_mode) // max(1, x.size(1))))
+                    if x.size(0) > max_slice:
+                        sub_xs = x.split(max_slice)
+                        sub_ys = y.split(max_slice)
+                        sub_lbls = labels.split(max_slice)
+                        num_sub = len(sub_xs)
+                        component_sums = [
+                            torch.zeros((), device=self.trainer.device, dtype=torch.float32) for _ in range(4)
+                        ]
+                        route_chunks = []
+                        for sub_x, sub_y, sub_lbl in zip(sub_xs, sub_ys, sub_lbls):
+                            sub_y_flat = sub_y.reshape(-1)
+                            with self.trainer.model_autocast():
+                                sub_lm_loss, sub_route_logits = self._forward_lm_loss(
+                                    sub_x, sub_y_flat, vocab_size, force_depth=chosen_depth
+                                )
+                                if sub_route_logits is None:
+                                    sub_route_logits = torch.zeros((sub_x.size(0), 3), device=self.trainer.device)
+                            sub_route_f = sub_route_logits.float()
+                            router_loss_fn = getattr(self.trainer, "router_loss_fn", F.cross_entropy)
+                            sub_r_loss = router_loss_fn(sub_route_f, sub_lbl)
+                            sub_z = torch.logsumexp(sub_route_f, dim=-1).pow(2).mean()
+                            sub_bal = getattr(self.model, "last_balance_loss", None)
+                            if sub_bal is None:
+                                sub_bal = (
+                                    (torch.softmax(sub_route_f, dim=-1).mean(dim=0) - self.target_depth_dist)
+                                    .pow(2)
+                                    .mean()
+                                )
+                            sub_micro = sub_lm_loss + 0.5 * sub_r_loss + z_loss_coef * sub_z + balance_coef * sub_bal
+                            (sub_micro / (grad_accum * num_sub)).backward()
+                            component_sums[0] += sub_lm_loss.detach().float()
+                            component_sums[1] += sub_r_loss.detach().float()
+                            component_sums[2] += sub_bal.detach().float()
+                            component_sums[3] += sub_z.detach().float()
+                            route_chunks.append(sub_route_logits.detach())
+                        lm_loss, router_loss, balance_loss, z_loss = (part / num_sub for part in component_sums)
+                        micro_loss = lm_loss + 0.5 * router_loss + z_loss_coef * z_loss + balance_coef * balance_loss
+                        route_logits = torch.cat(route_chunks, dim=0)
+                    else:
+                        with self.trainer.model_autocast():
+                            lm_loss, route_logits = self._forward_lm_loss(
+                                x, y_flat, vocab_size, force_depth=chosen_depth
                             )
-                            self.model.last_route_logits = route_logits
-                            self.model.last_depth_choice = last_choice
-                            self.model.last_balance_loss = saved_balance
-                    route_f = route_logits.float()
-                    if cortex_anchor_loss is not None:
-                        lm_loss = 0.80 * lm_loss + 0.20 * cortex_anchor_loss
-                    router_loss_fn = getattr(self.trainer, "router_loss_fn", F.cross_entropy)
-                    router_loss = router_loss_fn(route_f, labels)
-                    z_loss = torch.logsumexp(route_f, dim=-1).pow(2).mean()
-                    balance_loss = getattr(self.model, "last_balance_loss", None)
-                    if balance_loss is None:
-                        balance_loss = (
-                            (torch.softmax(route_f, dim=-1).mean(dim=0) - self.target_depth_dist).pow(2).mean()
-                        )
-                    micro_loss = lm_loss + 0.5 * router_loss + z_loss_coef * z_loss + balance_coef * balance_loss
-                    (micro_loss / grad_accum).backward()
+                            if route_logits is None:
+                                route_logits = torch.zeros((x.size(0), 3), device=self.trainer.device)
+                            last_choice = getattr(self.model, "last_depth_choice", None)
+                            saved_balance = getattr(self.model, "last_balance_loss", None)
+                            cortex_anchor_loss = None
+                            if (
+                                streaming_engine is None
+                                and chosen_depth is None
+                                and last_choice is not None
+                                and not (last_choice == 2).any()
+                            ):
+                                cortex_anchor_loss, _ = self._forward_lm_loss(
+                                    x[:1], y[:1].reshape(-1), vocab_size, force_depth=2
+                                )
+                                self.model.last_route_logits = route_logits
+                                self.model.last_depth_choice = last_choice
+                                self.model.last_balance_loss = saved_balance
+                        route_f = route_logits.float()
+                        if cortex_anchor_loss is not None:
+                            lm_loss = 0.80 * lm_loss + 0.20 * cortex_anchor_loss
+                        router_loss_fn = getattr(self.trainer, "router_loss_fn", F.cross_entropy)
+                        router_loss = router_loss_fn(route_f, labels)
+                        z_loss = torch.logsumexp(route_f, dim=-1).pow(2).mean()
+                        balance_loss = getattr(self.model, "last_balance_loss", None)
+                        if balance_loss is None:
+                            balance_loss = (
+                                (torch.softmax(route_f, dim=-1).mean(dim=0) - self.target_depth_dist).pow(2).mean()
+                            )
+                        micro_loss = lm_loss + 0.5 * router_loss + z_loss_coef * z_loss + balance_coef * balance_loss
+                        (micro_loss / grad_accum).backward()
 
-            loss_accum[0] += micro_loss.detach()
-            loss_accum[1] += lm_loss.detach()
-            loss_accum[2] += router_loss.detach()
-            loss_accum[3] += balance_loss.detach()
-            loss_accum[4] += z_loss.detach()
-            last_labels, last_route_logits = labels, route_logits.detach()
+                loss_accum[0] += micro_loss.detach()
+                loss_accum[1] += lm_loss.detach()
+                loss_accum[2] += router_loss.detach()
+                loss_accum[3] += balance_loss.detach()
+                loss_accum[4] += z_loss.detach()
+                last_labels, last_route_logits = labels, route_logits.detach()
+        finally:
+            for module in moe_modules:
+                module._skip_subspace_stats = False
 
         if streaming_engine is not None:
             streaming_engine.step_streaming_optimizer(optimizer=self.optimizer, grad_clip=self.config["grad_clip"])
@@ -545,7 +577,6 @@ class TrainingEngine:
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config["grad_clip"])
             self.optimizer.step()
 
-        moe_modules = [module for module in self.model.modules() if isinstance(module, MoE_FFN)]
         if moe_modules:
             overflow_total_t = torch.stack([m._overflow_counter.to(device=self.trainer.device) for m in moe_modules]).sum()
             totals["overflow"] = int(overflow_total_t.item())
