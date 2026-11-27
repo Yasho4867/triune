@@ -122,13 +122,15 @@ def test_engine_gates_subspace_stats_and_restores_flag() -> None:
 def test_colab_cell3_a100_40gb_threshold_and_resume_rank(tmp_path: Path) -> None:
     nb_path = Path(__file__).resolve().parents[1] / "cloud" / "lucid_machines_colab_runner.ipynb"
     nb = json.loads(nb_path.read_text(encoding="utf-8"))
-    cell3_src = "".join(nb["cells"][2]["source"])
+    cell3_src = next(
+        "".join(c["source"]) for c in nb["cells"] if "".join(c["source"]).lstrip().startswith("# Cell 3:")
+    )
     assert "elif vram_gb >= 35.0:" in cell3_src
     assert 'extra_flags = "--no-grad_checkpoint"' in cell3_src
 
     ckpt_dir = tmp_path / "junkie-3b"
     ckpt_dir.mkdir()
-    torch.save({"config": {"galore_rank": 64}}, ckpt_dir / "latest.pt")
+    torch.save({"config": {"galore_rank": 64, "use_fp8": True}}, ckpt_dir / "latest.pt")
 
     # Extract tier-selection & checkpoint-rank logic without executing `!python3` or `%cd`
     snippet = []
@@ -137,10 +139,12 @@ def test_colab_cell3_a100_40gb_threshold_and_resume_rank(tmp_path: Path) -> None
             if line.startswith("fp8_flag ="):
                 break
             snippet.append(line)
-    ns = {"vram_gb": 39.49, "ckpt_3b": ckpt_dir, "torch": torch}
+    ns = {"vram_gb": 39.49, "ckpt_3b": ckpt_dir, "torch": torch, "os": __import__("os"), "supports_fp8": False}
     exec("\n".join(snippet), ns)
     assert ns["batch_val"] == 8
     assert ns["accum_val"] == 2
     assert ns["seq_val"] == 1024
+    assert ns["steps_val"] == 100000
     assert ns["extra_flags"] == "--no-grad_checkpoint"
     assert ns["rank_val"] == 64  # inherited from mocked checkpoint on resume
+    assert ns["use_fp8_val"] is True

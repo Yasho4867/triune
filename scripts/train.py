@@ -231,6 +231,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Weighted curriculum preset (junkie_stage1, junkie_stage2, junkie_tool_sft) or repo:cfg:weight list",
     )
     parser.add_argument(
+        "--local_tokens_bin",
+        "--local-tokens-bin",
+        dest="local_tokens_bin",
+        type=str,
+        default=None,
+        help="Pre-tokenized local uint16 .bin memmap dataset path for zero-stall local training",
+    )
+    parser.add_argument(
         "--lr_schedule",
         "--lr-schedule",
         dest="lr_schedule",
@@ -449,6 +457,7 @@ def main(argv: list[str] | None = None) -> dict:
             "dataset_name",
             "dataset_config",
             "dataset_mix",
+            "local_tokens_bin",
             "lr_schedule",
             "wsd_decay_frac",
             "num_workers",
@@ -776,10 +785,18 @@ def main(argv: list[str] | None = None) -> dict:
             optimizer.steer_mode = "upgraded"
         elif requested_steer_mode == "nosteer" and hasattr(optimizer, "steer_scale"):
             optimizer.steer_scale = 0.0
-        print(
-            f"⏳ Connecting dataset stream: '{config.get('dataset_name')}' ({config.get('dataset_config')})...",
-            flush=True,
-        )
+        local_bin_cfg = config.get("local_tokens_bin")
+        if local_bin_cfg and Path(str(local_bin_cfg)).is_file():
+            n_local_toks = Path(str(local_bin_cfg)).stat().st_size // 2
+            print(
+                f"📦 Using pre-tokenized local memmap dataset: {local_bin_cfg} ({n_local_toks / 1e6:.1f}M tokens)",
+                flush=True,
+            )
+        else:
+            print(
+                f"⏳ Connecting dataset stream: '{config.get('dataset_name')}' ({config.get('dataset_config')})...",
+                flush=True,
+            )
         train_loader = build_dataloader(tokenizer, config, sep_token_id, is_holdout=False)
         eval_loader = build_dataloader(tokenizer, config, sep_token_id, is_holdout=True)
         print("✅ Dataset stream configured.", flush=True)

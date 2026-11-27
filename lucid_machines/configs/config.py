@@ -66,6 +66,7 @@ def default_config() -> dict[str, Any]:
         "dataset_name": "HuggingFaceFW/fineweb-edu",
         "dataset_config": "sample-10BT",
         "dataset_mix": None,
+        "local_tokens_bin": None,
         "lr_schedule": "cosine",
         "wsd_decay_frac": 0.15,
         "num_workers": 0,
