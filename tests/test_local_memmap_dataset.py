@@ -211,7 +211,9 @@ def test_train_cli_local_tokens_bin_flag_and_colab_cell2b_cell3(tmp_path: Path) 
                 break
             snippet.append(line)
 
-    # Check L4 tier (22.5 GiB): 600,000 steps, batch=4, rank=32, fp8 preserved from supports_fp8
+    assert '"20000000000"' in cell2b_src
+
+    # Check L4 tier (22.5 GiB): 650,000 steps, batch=8, accum=8, rank=32, fp8 preserved from supports_fp8
     ns_l4 = {
         "vram_gb": 22.5,
         "ckpt_3b": tmp_path / "none",
@@ -221,8 +223,9 @@ def test_train_cli_local_tokens_bin_flag_and_colab_cell2b_cell3(tmp_path: Path) 
         "depth_mode_val": "cortex",
     }
     exec("\n".join(snippet), ns_l4)
-    assert ns_l4["steps_val"] == 600000
-    assert ns_l4["batch_val"] == 4
+    assert ns_l4["steps_val"] == 650000
+    assert ns_l4["batch_val"] == 8
+    assert ns_l4["accum_val"] == 8
     assert ns_l4["rank_val"] == 32
 
     # Check A100-80GB tier
@@ -235,7 +238,7 @@ def test_train_cli_local_tokens_bin_flag_and_colab_cell2b_cell3(tmp_path: Path) 
         "depth_mode_val": "cortex",
     }
     exec("\n".join(snippet), ns_a80)
-    assert ns_a80["steps_val"] == 300000
+    assert ns_a80["steps_val"] == 325000
     assert ns_a80["rank_val"] == 64
 
 

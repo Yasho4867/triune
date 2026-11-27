@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import warnings
 
 import pytest
 import torch
@@ -282,3 +283,50 @@ def test_batched_bf16_sr_selective_ckpt_and_chunked_joint_kl() -> None:
     eng.config["ce_chunk_size"] = 1024
     loss_full = eng._compute_joint_lm_loss(r_l, l_l, c_l, tgt, 64)
     assert torch.allclose(loss_chunked, loss_full, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+def test_fast_rmsnorm_preserves_bf16_under_autocast():
+    from lucid_machines.kernels.fast_rmsnorm import fast_rmsnorm
+
+    device = torch.device("cuda")
+    x = torch.randn(4, 32, 128, device=device, dtype=torch.bfloat16)
+    w = torch.randn(128, device=device, dtype=torch.bfloat16)
+    with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+        out = fast_rmsnorm(x, w, eps=1e-6)
+    assert out.dtype == torch.bfloat16
+    ref = (x.float() * torch.rsqrt(x.float().pow(2).mean(-1, keepdim=True) + 1e-6)) * w.float()
+    assert torch.allclose(out.float(), ref, atol=1e-2, rtol=1e-2)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available() or not hasattr(torch, "_grouped_mm"), reason="CUDA + _grouped_mm required")
+def test_moe_autocast_calls_grouped_mm_without_stream_warning():
+    from lucid_machines.model.norms import RMSNorm
+
+    device = torch.device("cuda")
+    norm = RMSNorm(64).to(device=device, dtype=torch.bfloat16)
+    moe = MoE_FFN(64, num_experts=4, top_k=1, shared_expert=True).to(device=device, dtype=torch.bfloat16)
+    moe.train()
+
+    orig_gmm = torch._grouped_mm
+    calls = [0]
+
+    def _counting_gmm(*args, **kwargs):
+        calls[0] += 1
+        return orig_gmm(*args, **kwargs)
+
+    torch._grouped_mm = _counting_gmm
+    try:
+        x = torch.randn(2, 16, 64, device=device, dtype=torch.bfloat16, requires_grad=True)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            for _ in range(2):
+                with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+                    out = moe(norm(x), update_stats=True)
+                out.sum().backward()
+    finally:
+        torch._grouped_mm = orig_gmm
+
+    assert calls[0] >= 4
+    stream_warnings = [w for w in caught if "AccumulateGrad" in str(w.message)]
+    assert not stream_warnings

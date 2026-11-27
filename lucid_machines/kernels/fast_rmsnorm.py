@@ -343,7 +343,9 @@ def fast_rmsnorm(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-6) -> to
     """Dispatches to native PyTorch C++ F.rms_norm when available, then Triton or fallback."""
     w = weight.to(x.dtype) if weight.dtype != x.dtype else weight
     if hasattr(torch.nn.functional, "rms_norm"):
-        return torch.nn.functional.rms_norm(x, (x.size(-1),), weight=w, eps=eps)
+        # F.rms_norm computes variance in FP32 internally; disable autocast so BF16 outputs aren't promoted to FP32.
+        with torch.amp.autocast(device_type=x.device.type, enabled=False):
+            return torch.nn.functional.rms_norm(x, (x.size(-1),), weight=w, eps=eps)
     if is_turbo_mode_enabled() and is_triton_available() and x.is_cuda:
         try:
             return _FastRMSNormFunction.apply(x, w, eps)

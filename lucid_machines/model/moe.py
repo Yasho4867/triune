@@ -462,7 +462,8 @@ class MoE_FFN(nn.Module):
             )
         )
 
-        use_shared_stream = bool(x.is_cuda and self.shared_expert and not is_capturing)
+        # During training/grad_accum, keep shared_expert on the default stream to avoid cross-stream AccumulateGrad syncs.
+        use_shared_stream = bool(x.is_cuda and self.shared_expert and not is_capturing and not self.training)
         shared_stream = None
         shared_event = None
         shared_out = None
@@ -660,25 +661,29 @@ class MoE_FFN(nn.Module):
             # Vectorized zero-sync Top-K Capacity Gather + Grouped/Batched GEMM + Scatter:
             # Uses torch._grouped_mm when eligible (zero padding overhead) with automatic packed BMM fallback.
             cap = max(1, min(capacity, N_tok))
-            is_compiling_moe = hasattr(torch, "compiler") and torch.compiler.is_compiling()
+            if (
+                W1_stack.dtype in (torch.bfloat16, torch.float16)
+                and flat_x.dtype != W1_stack.dtype
+                and (torch.is_autocast_enabled(x.device.type) if x.is_cuda else torch.is_autocast_enabled())
+            ):
+                flat_x = flat_x.to(W1_stack.dtype)
             use_grouped_mm = bool(
                 hasattr(torch, "_grouped_mm")
                 and x.is_cuda
-                and x.dtype in (torch.bfloat16, torch.float16)
-                and W1_stack.dtype == x.dtype
-                and W2_stack.dtype == x.dtype
+                and flat_x.dtype in (torch.bfloat16, torch.float16)
+                and W1_stack.dtype == flat_x.dtype
+                and W2_stack.dtype == flat_x.dtype
                 and (D % 16 == 0)
                 and (h_dim % 16 == 0)
                 and no_lora_e0
                 and no_lora_e2
-                and not is_compiling_moe
             )
             overflow_total = torch.zeros((), dtype=torch.long, device=x.device) if need_stats else None
 
             if use_grouped_mm:
                 try:
-                    b1_2d = b1_stack.squeeze(1).to(x.dtype) if b1_stack is not None else None
-                    b2_2d = b2_stack.squeeze(1).to(x.dtype) if b2_stack is not None else None
+                    b1_2d = b1_stack.squeeze(1).to(flat_x.dtype) if b1_stack is not None else None
+                    b2_2d = b2_stack.squeeze(1).to(flat_x.dtype) if b2_stack is not None else None
                     act_fn = self.experts[0][1]
                     for k in range(self.top_k):
                         idx_k = flat_idx[:, k]
