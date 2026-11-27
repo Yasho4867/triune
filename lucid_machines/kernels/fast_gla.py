@@ -594,8 +594,12 @@ def _run_gla_chunks(
     # Tensor Core matmul with chunk min/max midpoint shift in O(C*HD + C^2) memory (128x smaller than 6D);
     # for extreme synthetic decays (e.g. g=-20.0 per step), falls back to single-chunk pairwise delta_g.
     is_capturing = device.type == "cuda" and torch.cuda.is_current_stream_capturing()
-    chunk_span = g_cumsum[:, :, :, :1, :] - g_cumsum[:, :, :, -1:, :]
-    use_factored_intra = (not is_capturing) and (dtype != torch.float64) and bool((chunk_span.max() < 55.0).item())
+    is_compiling = hasattr(torch, "compiler") and torch.compiler.is_compiling()
+    if is_compiling:
+        use_factored_intra = dtype != torch.float64
+    else:
+        chunk_span = g_cumsum[:, :, :, :1, :] - g_cumsum[:, :, :, -1:, :]
+        use_factored_intra = (not is_capturing) and (dtype != torch.float64) and bool((chunk_span.max() < 55.0).item())
 
     if use_factored_intra:
         g_mid = 0.5 * (g_cumsum.float()[:, :, :, :1, :] + g_cumsum.float()[:, :, :, -1:, :])

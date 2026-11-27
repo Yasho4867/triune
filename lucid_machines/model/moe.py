@@ -143,6 +143,7 @@ class MoE_FFN(nn.Module):
         self._recorded_centroids_snapshot: torch.Tensor | None = None
         self._recorded_hidden_snapshot: torch.Tensor | None = None
         self._oja_probe_cache: dict[tuple[int, int, int, str, int | None], torch.Tensor] = {}
+        self._skip_subspace_stats: bool = False
         self.register_buffer("_overflow_counter", torch.tensor(0, dtype=torch.long), persistent=False)
         self.register_buffer("_global_step", torch.tensor(0, dtype=torch.long))
 
@@ -434,6 +435,7 @@ class MoE_FFN(nn.Module):
             capacity = N_tok
         out = torch.zeros_like(flat_x)
         need_stats = bool(self.training and update_stats and not is_checkpoint_recomputing() and not is_capturing)
+        need_subspace = bool(need_stats and not getattr(self, "_skip_subspace_stats", False))
         accepted_counts = torch.zeros(self.num_experts, dtype=torch.long, device=x.device) if need_stats else None
         accepted_mask = torch.zeros((N_tok, self.top_k), dtype=torch.bool, device=x.device) if need_stats else None
         k_dirs = int(getattr(self, "subspace_dirs", CENTROID_SUBSPACE_DIRS))
@@ -443,7 +445,7 @@ class MoE_FFN(nn.Module):
         batch_hid_sum = None
         Q_in_cur = None
         Q_hid_cur = None
-        if need_stats:
+        if need_subspace:
             with torch.no_grad(), torch.amp.autocast(device_type=x.device.type, enabled=False):
                 batch_in_oja = torch.zeros(self.num_experts, D, k_dirs, device=x.device, dtype=torch.float32)
                 batch_hid_oja = torch.zeros(self.num_experts, h_dim, k_dirs, device=x.device, dtype=torch.float32)
@@ -584,7 +586,7 @@ class MoE_FFN(nn.Module):
                         accepted_mask[:, k] = acc_ne.any(dim=0)
 
                 gathered_x = flat_x[top_idx_e]  # [E, cap, D]
-                if need_stats and batch_in_oja is not None:
+                if need_subspace and batch_in_oja is not None:
                     with torch.no_grad(), torch.amp.autocast(device_type=x.device.type, enabled=False):
                         m0 = valid_e.to(dtype=torch.float32)  # [E, cap]
                         x_m = gathered_x.detach().float() * m0.unsqueeze(-1)
@@ -601,7 +603,7 @@ class MoE_FFN(nn.Module):
                 if b1_stack is not None:
                     h_pre = h_pre + b1_stack
                 h = self.experts[0][1](h_pre)
-                if need_stats and batch_hid_oja is not None and batch_hid_sum is not None:
+                if need_subspace and batch_hid_oja is not None and batch_hid_sum is not None:
                     with torch.no_grad(), torch.amp.autocast(device_type=x.device.type, enabled=False):
                         h_cap = (h[:, :cap, :] if pad_m > 0 else h).detach().float()
                         m0 = valid_e.to(dtype=torch.float32)
@@ -653,7 +655,7 @@ class MoE_FFN(nn.Module):
                     orig_tokens = expert_input.size(0)
                     pad = (-orig_tokens) % 16
 
-                    if need_stats and batch_in_oja is not None:
+                    if need_subspace and batch_in_oja is not None:
                         with torch.no_grad(), torch.amp.autocast(device_type=x.device.type, enabled=False):
                             x_m_e = expert_input.detach().float()
                             z_in_e = torch.mm(x_m_e, Q_in_cur[e])
@@ -663,7 +665,7 @@ class MoE_FFN(nn.Module):
                         expert_input = F.pad(expert_input, (0, 0, 0, pad))
 
                     if (
-                        need_stats
+                        need_subspace
                         and batch_hid_oja is not None
                         and batch_hid_sum is not None
                         and len(self.experts[e]) >= 3
@@ -702,6 +704,7 @@ class MoE_FFN(nn.Module):
                 batch_hid_sum=batch_hid_sum,
                 q_in_cur=Q_in_cur,
                 q_hid_cur=Q_hid_cur,
+                update_subspace=need_subspace,
             )
 
         if self.training and not getattr(self, "_step_managed_by_engine", False) and not is_checkpoint_recomputing():
@@ -723,6 +726,7 @@ class MoE_FFN(nn.Module):
         batch_hid_sum: torch.Tensor | None = None,
         q_in_cur: torch.Tensor | None = None,
         q_hid_cur: torch.Tensor | None = None,
+        update_subspace: bool = True,
     ):
         """Update non-gradient routing state and Block-Oja activation subspaces without CPU-GPU syncs."""
         with torch.amp.autocast(device_type=flat_x.device.type, enabled=False):
@@ -734,6 +738,7 @@ class MoE_FFN(nn.Module):
                 batch_hid_sum=batch_hid_sum,
                 q_in_cur=q_in_cur,
                 q_hid_cur=q_hid_cur,
+                update_subspace=update_subspace,
             )
 
     @torch.no_grad()
@@ -746,6 +751,7 @@ class MoE_FFN(nn.Module):
         batch_hid_sum: torch.Tensor | None = None,
         q_in_cur: torch.Tensor | None = None,
         q_hid_cur: torch.Tensor | None = None,
+        update_subspace: bool = True,
     ):
         target = max(1.0, float((flat_x.size(0) * self.top_k) / self.num_experts))
 
@@ -763,6 +769,8 @@ class MoE_FFN(nn.Module):
         self.last_accepted_counts = result.accepted_counts.detach()
         self.last_dropped_counts = result.dropped_counts.detach()
         self.last_target = target
+        if not update_subspace:
+            return
 
         # Vectorized Centroid & Block-Oja Subspace EMA update across all experts simultaneously
         ema_decay = float(getattr(self, "centroid_ema", CENTROID_EMA))
