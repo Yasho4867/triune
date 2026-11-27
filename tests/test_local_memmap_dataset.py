@@ -104,6 +104,40 @@ def test_build_dataloader_dispatches_to_local_memmap(tmp_path: Path) -> None:
     assert ax.shape == (2, 32)
 
 
+def test_build_dataloader_holdout_multiworker_exact_eval_batches(tmp_path: Path):
+    """Regression test for Colab L4 Junkie-3B holdout starvation:
+    eval_batches=5, batch_size=4, seq_len=512, num_workers=2 must yield all 5 batches."""
+    shard_dir = tmp_path / "shards"
+    shard_dir.mkdir()
+    total_tokens = 25000
+    arr = np.arange(total_tokens, dtype=np.uint16)
+    arr.tofile(shard_dir / "shard_0000.bin")
+
+    cfg = {
+        "local_tokens_bin": str(shard_dir),
+        "dataset_name": "unused",
+        "dataset_config": "unused",
+        "seq_len": 512,
+        "batch_size": 4,
+        "eval_batches": 5,
+        "num_workers": 2,
+        "shuffle_buffer": 0,
+    }
+    eval_loader = build_dataloader(None, cfg, sep_token_id=1, is_holdout=True)
+    train_loader = build_dataloader(None, cfg, sep_token_id=1, is_holdout=False)
+
+    eval_batches = list(eval_loader)
+    assert len(eval_batches) == 5
+    for bx, by in eval_batches:
+        assert bx.shape == (4, 512)
+        assert by.shape == (4, 512)
+
+    tx, _ = next(iter(train_loader))
+    assert tx.shape == (4, 512)
+    eval_max = max(int(bx.max().item()) for bx, _ in eval_batches)
+    assert int(tx.min().item()) > eval_max
+
+
 def test_prepare_dataset_mock_streams_cache_and_fallback(tmp_path: Path) -> None:
     out_dir = tmp_path / "data"
     cache_dir = tmp_path / "drive_cache"
