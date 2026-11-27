@@ -197,17 +197,29 @@ class TrainingEngine:
             lm_loss = 0.25 * loss_ref + 0.30 * loss_limb + 0.45 * loss_cort
         exit_distill_coef = float(self.config.get("exit_distill_coef", 0.2))
         if exit_distill_coef > 0.0:
-            p_cort_det = F.softmax(cortex_logits.detach().float().reshape(-1, vocab_size), dim=-1)
-            kl_ref = F.kl_div(
-                F.log_softmax(reflex_logits.float().reshape(-1, vocab_size), dim=-1),
-                p_cort_det,
-                reduction="batchmean",
-            )
-            kl_limb = F.kl_div(
-                F.log_softmax(limbic_logits.float().reshape(-1, vocab_size), dim=-1),
-                p_cort_det,
-                reduction="batchmean",
-            )
+            chunk_sz = max(1, int(self.config.get("ce_chunk_size", 512)))
+            ref_flat = reflex_logits.reshape(-1, vocab_size)
+            limb_flat = limbic_logits.reshape(-1, vocab_size)
+            cort_flat = cortex_logits.detach().reshape(-1, vocab_size)
+            n_tok = ref_flat.size(0)
+            if n_tok <= chunk_sz:
+                p_cort_det = F.softmax(cort_flat.float(), dim=-1)
+                kl_ref = F.kl_div(F.log_softmax(ref_flat.float(), dim=-1), p_cort_det, reduction="batchmean")
+                kl_limb = F.kl_div(F.log_softmax(limb_flat.float(), dim=-1), p_cort_det, reduction="batchmean")
+            else:
+                inv_n = 1.0 / max(1, n_tok)
+                kl_ref = ref_flat.new_zeros((), dtype=torch.float32)
+                kl_limb = ref_flat.new_zeros((), dtype=torch.float32)
+                for i in range(0, n_tok, chunk_sz):
+                    p_sub = F.softmax(cort_flat[i : i + chunk_sz].float(), dim=-1)
+                    kl_ref = kl_ref + F.kl_div(
+                        F.log_softmax(ref_flat[i : i + chunk_sz].float(), dim=-1), p_sub, reduction="sum"
+                    )
+                    kl_limb = kl_limb + F.kl_div(
+                        F.log_softmax(limb_flat[i : i + chunk_sz].float(), dim=-1), p_sub, reduction="sum"
+                    )
+                kl_ref = kl_ref * inv_n
+                kl_limb = kl_limb * inv_n
             lm_loss = lm_loss + exit_distill_coef * (kl_ref + kl_limb)
         return lm_loss
 

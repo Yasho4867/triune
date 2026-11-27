@@ -340,15 +340,8 @@ def _is_ckpt_early_stop(exc: BaseException) -> bool:
 
 
 def fast_rmsnorm(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-    """Dispatches to fused persistent Triton kernel for wide hidden autograd, native PyTorch 2.4+, or fallback."""
+    """Dispatches to native PyTorch C++ F.rms_norm when available, then Triton or fallback."""
     w = weight.to(x.dtype) if weight.dtype != x.dtype else weight
-    needs_grad = torch.is_grad_enabled() and (x.requires_grad or w.requires_grad)
-    if needs_grad and is_turbo_mode_enabled() and is_triton_available() and x.is_cuda and x.size(-1) >= 1024:
-        try:
-            return _FastRMSNormFunction.apply(x, w, eps)
-        except Exception as exc:
-            if _is_ckpt_early_stop(exc):
-                raise
     if hasattr(torch.nn.functional, "rms_norm"):
         return torch.nn.functional.rms_norm(x, (x.size(-1),), weight=w, eps=eps)
     if is_turbo_mode_enabled() and is_triton_available() and x.is_cuda:

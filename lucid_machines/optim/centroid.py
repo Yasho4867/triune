@@ -17,7 +17,7 @@ except ImportError:
     AdamW8bit = None
 
 
-from lucid_machines.kernels.fast_bf16_sr import bf16_stochastic_round_update_
+from lucid_machines.kernels.fast_bf16_sr import bf16_stochastic_round_update_, bf16_stochastic_round_update_batch_
 from lucid_machines.ops.centroid_steer import (
     batched_qr,
     polar_stiefel_retraction,
@@ -1699,7 +1699,8 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
             QR_stack = bbuf["QR_stack"]
 
             G_raw = torch.stack([g["param"].grad.data for g in g_list], dim=0)  # [K, d_out, d_in]
-            G_f32 = G_raw.float()
+            use_bf16_tc = bool(dtype == torch.bfloat16 and device.type == "cuda")
+            G_f32 = None if use_bf16_tc else G_raw.float()
 
             # 1. Subspace C_e Refresh & Batched Grassmann/Stiefel Parallel Transport (C_old -> C_new)
             active_s_idx: list[int] = []
@@ -1867,11 +1868,20 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                 C_act = torch.stack(
                     [g_list[b_i]["C_e"].to(device=device, dtype=torch.float32) for b_i in active_s_idx], dim=0
                 )
-                G_act_f32 = G_f32[active_s_idx]
-                G_c_act = torch.bmm(G_act_f32, C_act)  # [K_s, d_out, k_c]
-                G_par_act = torch.bmm(G_c_act, C_act.transpose(1, 2))  # [K_s, d_out, d_in]
-                G_perp_f32 = G_f32.clone()
-                G_perp_f32[active_s_idx] = G_act_f32 - G_par_act
+                if use_bf16_tc:
+                    C_act_bf = C_act.to(dtype=dtype)
+                    G_act_bf = G_raw[active_s_idx]
+                    G_c_act = torch.bmm(G_act_bf, C_act_bf).float()  # [K_s, d_out, k_c]
+                    G_par_act = torch.bmm(G_c_act.to(dtype=dtype), C_act_bf.transpose(1, 2))  # [K_s, d_out, d_in]
+                    G_raw[active_s_idx] = G_act_bf - G_par_act
+                    del C_act_bf, G_act_bf, G_par_act
+                else:
+                    G_act_f32 = G_f32[active_s_idx]
+                    G_c_act = torch.bmm(G_act_f32, C_act)  # [K_s, d_out, k_c]
+                    G_par_act = torch.bmm(G_c_act, C_act.transpose(1, 2))  # [K_s, d_out, d_in]
+                    G_perp_f32 = G_f32.clone()
+                    G_perp_f32[active_s_idx] = G_act_f32 - G_par_act
+                    del G_act_f32, G_par_act
 
                 # 3. Direct-Sum Preconditioned FP32 AdamW Update (continuous transport_step + refresh-relative steer_step)
                 for b_i in active_s_idx:
@@ -1905,11 +1915,14 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                         st["M_c"] = M_c_s[k_pos].clone()
                         st["V_c"] = V_c_s[k_pos].clone()
                 U_c_s_cache = U_c_s  # [K_s, d_out, k_c]
-                del G_act_f32, G_c_act, G_par_act, M_c_s, V_c_s
-            else:
+                del G_c_act, M_c_s, V_c_s
+            elif not use_bf16_tc:
                 G_perp_f32 = G_f32
 
-            G_stack = (G_perp_f32 if m <= n else G_perp_f32.transpose(1, 2)).to(dtype=dtype)
+            if use_bf16_tc:
+                G_stack = G_raw if m <= n else G_raw.transpose(1, 2)
+            else:
+                G_stack = (G_perp_f32 if m <= n else G_perp_f32.transpose(1, 2)).to(dtype=dtype)
 
             # 4. Orthogonal Complement Rank-r Krylov Core (Q_L, Q_R) on G_perp
             init_flags = [g.get("Q_L") is None for g in g_list]
@@ -2086,7 +2099,13 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                                 break
                 q_in_f = u_in / u_in_norm.clamp_min(1e-12)
 
-                v_0 = torch.bmm(G_f32[idx_t], q_in_f.unsqueeze(-1)).squeeze(-1)
+                G_orig_act_f32 = (
+                    torch.stack([g_list[b_i]["param"].grad.data for b_i in active_s_idx], dim=0).float()
+                    if G_f32 is None
+                    else G_f32[idx_t]
+                )
+                v_0 = torch.bmm(G_orig_act_f32, q_in_f.unsqueeze(-1)).squeeze(-1)
+                del G_orig_act_f32
                 u_out = v_0 - torch.bmm(Q_out, torch.bmm(Q_out.transpose(1, 2), v_0.unsqueeze(-1))).squeeze(-1)
                 u_out = u_out - torch.bmm(Q_out, torch.bmm(Q_out.transpose(1, 2), u_out.unsqueeze(-1))).squeeze(-1)
                 u_out_norm = u_out.norm(dim=1, keepdim=True)
@@ -2138,7 +2157,9 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
             bucket_cache.append(
                 (m, n, r, start, end, g_list, QL_act, QR_act, QL_stack, QR_stack, active_s_idx, C_act, U_c_s_cache)
             )
-            del G_raw, G_f32, G_perp_f32, G_stack, S_bmm
+            del G_raw, G_f32, G_stack, S_bmm
+            if "G_perp_f32" in locals():
+                del G_perp_f32
 
         first_sub = step_list[0]
         if all(s == first_sub for s in step_list):
@@ -2196,44 +2217,69 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
             C_act,
             U_c_s_cache,
         ) in bucket_cache:
-            delta_stack_f32 = batch_delta_R[start:end, :r, :r].float()
-            if m <= n:
-                Delta_W_perp = torch.bmm(torch.bmm(QL_act.float(), delta_stack_f32), QR_act.float().transpose(1, 2))
-            else:
-                Delta_W_perp = torch.bmm(
-                    torch.bmm(QR_act.float(), delta_stack_f32.transpose(1, 2)), QL_act.float().transpose(1, 2)
-                )
-
-            if active_s_idx and C_act is not None and U_c_s_cache is not None:
-                dw_perp_c = torch.bmm(Delta_W_perp[active_s_idx], C_act)
-                dW_par_act = torch.bmm(U_c_s_cache, C_act.transpose(1, 2))
-                Delta_W_perp[active_s_idx] = (
-                    Delta_W_perp[active_s_idx]
-                    - torch.bmm(dw_perp_c, C_act.transpose(1, 2))
-                    + dW_par_act * float(self.steer_scale)
-                )
-                del dw_perp_c, dW_par_act
-
-            if dtype == torch.bfloat16:
-                # Exact unbiased BF16 stochastic rounding in-place via fused Triton kernel
+            if dtype == torch.bfloat16 and device.type == "cuda":
+                delta_stack_bf = batch_delta_R[start:end, :r, :r].to(dtype=dtype)
+                if m <= n:
+                    Delta_W = torch.bmm(torch.bmm(QL_act, delta_stack_bf), QR_act.transpose(1, 2))
+                else:
+                    Delta_W = torch.bmm(torch.bmm(QR_act, delta_stack_bf.transpose(1, 2)), QL_act.transpose(1, 2))
+                if active_s_idx and C_act is not None and U_c_s_cache is not None:
+                    C_act_bf = C_act.to(dtype=dtype)
+                    dw_perp_c = torch.bmm(Delta_W[active_s_idx], C_act_bf)
+                    dW_par_act = torch.bmm(U_c_s_cache.to(dtype=dtype), C_act_bf.transpose(1, 2))
+                    Delta_W[active_s_idx] = (
+                        Delta_W[active_s_idx]
+                        - torch.bmm(dw_perp_c, C_act_bf.transpose(1, 2))
+                        + dW_par_act * float(self.steer_scale)
+                    )
+                    del C_act_bf, dw_perp_c, dW_par_act
                 base_seed = (int(self.step_count) + 1) * 1_000_003
-                for b_idx, g in enumerate(g_list):
-                    bf16_stochastic_round_update_(
-                        g["param"].data,
-                        Delta_W_perp[b_idx],
+                bf16_stochastic_round_update_batch_(
+                    [g["param"].data for g in g_list],
+                    Delta_W,
+                    beta_wd,
+                    alpha_upd,
+                    base_seed=base_seed + start * 9176,
+                )
+                del delta_stack_bf, Delta_W
+            else:
+                delta_stack_f32 = batch_delta_R[start:end, :r, :r].float()
+                if m <= n:
+                    Delta_W_perp = torch.bmm(torch.bmm(QL_act.float(), delta_stack_f32), QR_act.float().transpose(1, 2))
+                else:
+                    Delta_W_perp = torch.bmm(
+                        torch.bmm(QR_act.float(), delta_stack_f32.transpose(1, 2)), QL_act.float().transpose(1, 2)
+                    )
+
+                if active_s_idx and C_act is not None and U_c_s_cache is not None:
+                    dw_perp_c = torch.bmm(Delta_W_perp[active_s_idx], C_act)
+                    dW_par_act = torch.bmm(U_c_s_cache, C_act.transpose(1, 2))
+                    Delta_W_perp[active_s_idx] = (
+                        Delta_W_perp[active_s_idx]
+                        - torch.bmm(dw_perp_c, C_act.transpose(1, 2))
+                        + dW_par_act * float(self.steer_scale)
+                    )
+                    del dw_perp_c, dW_par_act
+
+                if dtype == torch.bfloat16:
+                    # Exact unbiased BF16 stochastic rounding in-place via fused Triton kernel
+                    base_seed = (int(self.step_count) + 1) * 1_000_003
+                    bf16_stochastic_round_update_batch_(
+                        [g["param"].data for g in g_list],
+                        Delta_W_perp,
                         beta_wd,
                         alpha_upd,
-                        seed=base_seed + (start + b_idx) * 9176,
+                        base_seed=base_seed + start * 9176,
                     )
-            else:
-                delta_W = Delta_W_perp.to(dtype=dtype)
-                params_b = [g["param"].data for g in g_list]
-                if expert_wd != 0:
-                    torch._foreach_mul_(params_b, beta_wd)
-                torch._foreach_add_(params_b, list(delta_W.unbind(0)), alpha=alpha_upd)
-                del delta_W
+                else:
+                    delta_W = Delta_W_perp.to(dtype=dtype)
+                    params_b = [g["param"].data for g in g_list]
+                    if expert_wd != 0:
+                        torch._foreach_mul_(params_b, beta_wd)
+                    torch._foreach_add_(params_b, list(delta_W.unbind(0)), alpha=alpha_upd)
+                    del delta_W
 
-            del delta_stack_f32, Delta_W_perp
+                del delta_stack_f32, Delta_W_perp
 
             if N < len(self.layer_groups):
                 for b_idx, g in enumerate(g_list):

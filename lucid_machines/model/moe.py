@@ -76,6 +76,42 @@ class _ZeroCopyPackedStack(torch.autograd.Function):
         return (None, *grad_output.unbind(0))
 
 
+class _GroupedLinearFn(torch.autograd.Function):
+    """Zero-padding grouped GEMM autograd wrapper over torch._grouped_mm."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        x_2d: torch.Tensor,
+        weight_3d: torch.Tensor,
+        offs: torch.Tensor,
+        drop_mask_col: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        x_c = x_2d if x_2d.is_contiguous() else x_2d.contiguous()
+        out = torch._grouped_mm(x_c, weight_3d.transpose(1, 2), offs=offs)
+        if drop_mask_col is not None:
+            out.masked_fill_(drop_mask_col, 0.0)
+        ctx.save_for_backward(x_c, weight_3d, offs, drop_mask_col)
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_out: torch.Tensor):
+        x_c, weight_3d, offs, drop_mask_col = ctx.saved_tensors
+        go = grad_out if grad_out.is_contiguous() else grad_out.contiguous()
+        if drop_mask_col is not None and go is grad_out:
+            go = go.clone()
+        if drop_mask_col is not None:
+            go.masked_fill_(drop_mask_col, 0.0)
+        if ctx.needs_input_grad[0]:
+            gx = torch._grouped_mm(go, weight_3d, offs=offs)
+            if drop_mask_col is not None:
+                gx.masked_fill_(drop_mask_col, 0.0)
+        else:
+            gx = None
+        gw = torch._grouped_mm(go.transpose(0, 1), x_c, offs=offs) if ctx.needs_input_grad[1] else None
+        return gx, gw, None, None
+
+
 @dataclass
 class RoutingResult:
     """Unified routing statistics and assignment tensor container."""
@@ -621,70 +657,161 @@ class MoE_FFN(nn.Module):
                 out = out + (y_all * routing_weights.t().unsqueeze(-1)).sum(dim=0).to(out.dtype)
                 return out.view(B, T, D)
 
-            # Vectorized zero-sync Top-K Capacity Gather + Batched BMM + Scatter:
-            # Eliminates all per-expert mask.nonzero() GPU-to-CPU synchronization stalls.
+            # Vectorized zero-sync Top-K Capacity Gather + Grouped/Batched GEMM + Scatter:
+            # Uses torch._grouped_mm when eligible (zero padding overhead) with automatic packed BMM fallback.
             cap = max(1, min(capacity, N_tok))
-            pad_m = (-cap) % 16
-            tie_break = torch.arange(N_tok, device=x.device, dtype=torch.float32).unsqueeze(1) * 1e-7
+            is_compiling_moe = hasattr(torch, "compiler") and torch.compiler.is_compiling()
+            use_grouped_mm = bool(
+                hasattr(torch, "_grouped_mm")
+                and x.is_cuda
+                and x.dtype in (torch.bfloat16, torch.float16)
+                and W1_stack.dtype == x.dtype
+                and W2_stack.dtype == x.dtype
+                and (D % 16 == 0)
+                and (h_dim % 16 == 0)
+                and no_lora_e0
+                and no_lora_e2
+                and not is_compiling_moe
+            )
             overflow_total = torch.zeros((), dtype=torch.long, device=x.device) if need_stats else None
 
-            for k in range(self.top_k):
-                idx_k = flat_idx[:, k]
-                val_k = flat_vals[:, k]
-                one_hot_k = F.one_hot(idx_k, num_classes=self.num_experts).bool()  # [N_tok, E]
+            if use_grouped_mm:
+                try:
+                    b1_2d = b1_stack.squeeze(1).to(x.dtype) if b1_stack is not None else None
+                    b2_2d = b2_stack.squeeze(1).to(x.dtype) if b2_stack is not None else None
+                    act_fn = self.experts[0][1]
+                    for k in range(self.top_k):
+                        idx_k = flat_idx[:, k]
+                        val_k = flat_vals[:, k]
+                        order_score = torch.argsort(val_k.float(), descending=True, stable=True)
+                        exp_sort = torch.argsort(idx_k[order_score], stable=True)
+                        perm = order_score[exp_sort]
+                        sorted_exp = idx_k[perm]
+                        counts = torch.bincount(sorted_exp, minlength=self.num_experts)
+                        starts = counts.cumsum(0) - counts
+                        pos_in_exp = torch.arange(N_tok, device=x.device) - starts[sorted_exp]
+                        keep = pos_in_exp < cap
+                        keep_sort = (~keep).to(torch.int8).argsort(stable=True)
+                        perm_k = perm[keep_sort]
+                        exp_k = idx_k[perm_k]
+                        kept_mask = keep[keep_sort]
+                        drop_mask_col = (~kept_mask).unsqueeze(1)
+                        kept_counts = counts.clamp(max=cap)
+                        offs = kept_counts.cumsum(0).to(torch.int32)
 
-                scores_ne = torch.where(one_hot_k, val_k.unsqueeze(1).float() + 1.0 - tie_break, float("-inf"))
-                _, top_cap_idx = torch.topk(scores_ne, k=cap, dim=0)  # [cap, E]
-                top_idx_e = top_cap_idx.t().contiguous()  # [E, cap]
-                valid_e = one_hot_k.t().gather(1, top_idx_e)  # [E, cap]
+                        if need_stats:
+                            accepted_counts = accepted_counts + kept_counts
+                            overflow_total = overflow_total + (counts - kept_counts).clamp_min(0).sum()
+                            accepted_mask[perm_k, k] = kept_mask
 
-                if need_stats:
-                    with torch.no_grad():
-                        req_k = one_hot_k.sum(dim=0)
-                        acc_k = valid_e.sum(dim=1)
-                        accepted_counts = accepted_counts + acc_k
-                        overflow_total = overflow_total + (req_k - acc_k).clamp_min(0).sum()
-                        acc_ne = torch.zeros(self.num_experts, N_tok, dtype=torch.bool, device=x.device)
-                        acc_ne.scatter_(1, top_idx_e, valid_e)
-                        accepted_mask[:, k] = acc_ne.any(dim=0)
+                        x_g = flat_x[perm_k]
+                        c_list = None
+                        if need_subspace and batch_in_oja is not None:
+                            with torch.no_grad(), torch.amp.autocast(device_type=x.device.type, enabled=False):
+                                c_list = kept_counts.tolist()
+                                x_f = x_g.detach().float()
+                                pos = 0
+                                for e_i, cnt in enumerate(c_list):
+                                    if cnt > 0:
+                                        x_e = x_f[pos : pos + cnt]
+                                        batch_in_oja[e_i].add_(torch.mm(x_e.t(), torch.mm(x_e, Q_in_cur[e_i])))
+                                        pos += cnt
 
-                gathered_x = flat_x[top_idx_e]  # [E, cap, D]
-                if need_subspace and batch_in_oja is not None:
-                    with torch.no_grad(), torch.amp.autocast(device_type=x.device.type, enabled=False):
-                        m0 = valid_e.to(dtype=torch.float32)  # [E, cap]
-                        x_m = gathered_x.detach().float() * m0.unsqueeze(-1)
-                        z_in = torch.bmm(x_m, Q_in_cur)  # [E, cap, k_dirs]
-                        batch_in_oja.add_(torch.bmm(x_m.transpose(1, 2), z_in))
+                        h_pre = _GroupedLinearFn.apply(x_g, W1_stack, offs, drop_mask_col)
+                        if b1_2d is not None:
+                            h_pre = h_pre + b1_2d[exp_k]
+                        h = act_fn(h_pre)
+                        if need_subspace and batch_hid_oja is not None and batch_hid_sum is not None:
+                            with torch.no_grad(), torch.amp.autocast(device_type=x.device.type, enabled=False):
+                                if c_list is None:
+                                    c_list = kept_counts.tolist()
+                                h_f = h.detach().float()
+                                pos = 0
+                                for e_i, cnt in enumerate(c_list):
+                                    if cnt > 0:
+                                        h_e = h_f[pos : pos + cnt]
+                                        batch_hid_sum[e_i].add_(h_e.sum(dim=0))
+                                        batch_hid_oja[e_i].add_(torch.mm(h_e.t(), torch.mm(h_e, Q_hid_cur[e_i])))
+                                        pos += cnt
 
-                if pad_m > 0:
-                    gathered_x = F.pad(gathered_x, (0, 0, 0, pad_m))
-                h_pre = torch.bmm(gathered_x, W1_stack.transpose(1, 2))
-                if has_lora_e0:
-                    h_pre = h_pre + torch.bmm(
-                        torch.bmm(gathered_x, A1_stack.transpose(1, 2)) * s1, B1_stack.transpose(1, 2)
-                    )
-                if b1_stack is not None:
-                    h_pre = h_pre + b1_stack
-                h = self.experts[0][1](h_pre)
-                if need_subspace and batch_hid_oja is not None and batch_hid_sum is not None:
-                    with torch.no_grad(), torch.amp.autocast(device_type=x.device.type, enabled=False):
-                        h_cap = (h[:, :cap, :] if pad_m > 0 else h).detach().float()
-                        m0 = valid_e.to(dtype=torch.float32)
-                        h_m = h_cap * m0.unsqueeze(-1)
-                        batch_hid_sum.add_(h_m.sum(dim=1))
-                        z_hid = torch.bmm(h_m, Q_hid_cur)  # [E, cap, k_dirs]
-                        batch_hid_oja.add_(torch.bmm(h_m.transpose(1, 2), z_hid))
-                y = torch.bmm(h, W2_stack.transpose(1, 2))
-                if has_lora_e2:
-                    y = y + torch.bmm(torch.bmm(h, A2_stack.transpose(1, 2)) * s2, B2_stack.transpose(1, 2))
-                if b2_stack is not None:
-                    y = y + b2_stack
-                if pad_m > 0:
-                    y = y[:, :cap, :]
+                        y = _GroupedLinearFn.apply(h, W2_stack, offs, drop_mask_col)
+                        if b2_2d is not None:
+                            y = y + b2_2d[exp_k]
 
-                weights_e = (val_k[top_idx_e] * valid_e.to(val_k.dtype)).unsqueeze(-1)
-                weighted_y = (y * weights_e).to(out.dtype)
-                out = out.index_add(0, top_idx_e.reshape(-1), weighted_y.reshape(-1, D))
+                        w_k = torch.where(kept_mask, val_k[perm_k], val_k.new_zeros(()))
+                        weighted_y = (y * w_k.unsqueeze(-1)).to(out.dtype)
+                        out = out.index_add(0, perm_k, weighted_y)
+                except (RuntimeError, NotImplementedError):
+                    use_grouped_mm = False
+                    out = torch.zeros_like(flat_x)
+                    if need_shared_out := (not use_shared_stream and shared_out is not None):
+                        out = out + (self.shared_scale * shared_out).to(out.dtype)
+                    if need_stats:
+                        accepted_counts.zero_()
+                        accepted_mask.zero_()
+                        overflow_total.zero_()
+
+            if not use_grouped_mm:
+                pad_m = (-cap) % 16
+                tie_break = torch.arange(N_tok, device=x.device, dtype=torch.float32).unsqueeze(1) * 1e-7
+
+                for k in range(self.top_k):
+                    idx_k = flat_idx[:, k]
+                    val_k = flat_vals[:, k]
+                    one_hot_k = F.one_hot(idx_k, num_classes=self.num_experts).bool()  # [N_tok, E]
+
+                    scores_ne = torch.where(one_hot_k, val_k.unsqueeze(1).float() + 1.0 - tie_break, float("-inf"))
+                    _, top_cap_idx = torch.topk(scores_ne, k=cap, dim=0)  # [cap, E]
+                    top_idx_e = top_cap_idx.t().contiguous()  # [E, cap]
+                    valid_e = one_hot_k.t().gather(1, top_idx_e)  # [E, cap]
+
+                    if need_stats:
+                        with torch.no_grad():
+                            req_k = one_hot_k.sum(dim=0)
+                            acc_k = valid_e.sum(dim=1)
+                            accepted_counts = accepted_counts + acc_k
+                            overflow_total = overflow_total + (req_k - acc_k).clamp_min(0).sum()
+                            acc_ne = torch.zeros(self.num_experts, N_tok, dtype=torch.bool, device=x.device)
+                            acc_ne.scatter_(1, top_idx_e, valid_e)
+                            accepted_mask[:, k] = acc_ne.any(dim=0)
+
+                    gathered_x = flat_x[top_idx_e]  # [E, cap, D]
+                    if need_subspace and batch_in_oja is not None:
+                        with torch.no_grad(), torch.amp.autocast(device_type=x.device.type, enabled=False):
+                            m0 = valid_e.to(dtype=torch.float32)  # [E, cap]
+                            x_m = gathered_x.detach().float() * m0.unsqueeze(-1)
+                            z_in = torch.bmm(x_m, Q_in_cur)  # [E, cap, k_dirs]
+                            batch_in_oja.add_(torch.bmm(x_m.transpose(1, 2), z_in))
+
+                    if pad_m > 0:
+                        gathered_x = F.pad(gathered_x, (0, 0, 0, pad_m))
+                    h_pre = torch.bmm(gathered_x, W1_stack.transpose(1, 2))
+                    if has_lora_e0:
+                        h_pre = h_pre + torch.bmm(
+                            torch.bmm(gathered_x, A1_stack.transpose(1, 2)) * s1, B1_stack.transpose(1, 2)
+                        )
+                    if b1_stack is not None:
+                        h_pre = h_pre + b1_stack
+                    h = self.experts[0][1](h_pre)
+                    if need_subspace and batch_hid_oja is not None and batch_hid_sum is not None:
+                        with torch.no_grad(), torch.amp.autocast(device_type=x.device.type, enabled=False):
+                            h_cap = (h[:, :cap, :] if pad_m > 0 else h).detach().float()
+                            m0 = valid_e.to(dtype=torch.float32)
+                            h_m = h_cap * m0.unsqueeze(-1)
+                            batch_hid_sum.add_(h_m.sum(dim=1))
+                            z_hid = torch.bmm(h_m, Q_hid_cur)  # [E, cap, k_dirs]
+                            batch_hid_oja.add_(torch.bmm(h_m.transpose(1, 2), z_hid))
+                    y = torch.bmm(h, W2_stack.transpose(1, 2))
+                    if has_lora_e2:
+                        y = y + torch.bmm(torch.bmm(h, A2_stack.transpose(1, 2)) * s2, B2_stack.transpose(1, 2))
+                    if b2_stack is not None:
+                        y = y + b2_stack
+                    if pad_m > 0:
+                        y = y[:, :cap, :]
+
+                    weights_e = (val_k[top_idx_e] * valid_e.to(val_k.dtype)).unsqueeze(-1)
+                    weighted_y = (y * weights_e).to(out.dtype)
+                    out = out.index_add(0, top_idx_e.reshape(-1), weighted_y.reshape(-1, D))
 
             if need_stats and overflow_total is not None:
                 if self._overflow_counter.device != overflow_total.device:
