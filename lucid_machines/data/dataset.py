@@ -450,7 +450,11 @@ def _is_valid_memmap_target(path_str: str | None) -> bool:
 
 
 def build_dataloader(tokenizer, config: dict, sep_token_id: int, *, is_holdout: bool) -> DataLoader:
-    eval_tokens = config["eval_batches"] * config["batch_size"] * config["seq_len"]
+    # Reserve +1 token because LocalMemmapTokenDataset forms (slice - 1) // seq_len
+    # next-token windows, and pin holdout to num_workers=0 so multi-worker sharding
+    # with drop_last=True cannot split the small eval slice into fewer batches.
+    eval_tokens = config["eval_batches"] * config["batch_size"] * config["seq_len"] + 1
+    num_workers = 0 if is_holdout else config["num_workers"]
     local_bin = config.get("local_tokens_bin")
     if not local_bin:
         ds_name = str(config.get("dataset_name", "") or "")
@@ -467,7 +471,7 @@ def build_dataloader(tokenizer, config: dict, sep_token_id: int, *, is_holdout: 
         return DataLoader(
             dataset,
             batch_size=config["batch_size"],
-            num_workers=config["num_workers"],
+            num_workers=num_workers,
             pin_memory=torch.cuda.is_available(),
             drop_last=True,
         )
@@ -497,7 +501,7 @@ def build_dataloader(tokenizer, config: dict, sep_token_id: int, *, is_holdout: 
     return DataLoader(
         dataset,
         batch_size=config["batch_size"],
-        num_workers=config["num_workers"],
+        num_workers=num_workers,
         pin_memory=torch.cuda.is_available(),
         drop_last=True,
     )
