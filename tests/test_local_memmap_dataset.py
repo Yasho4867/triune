@@ -177,14 +177,80 @@ def test_train_cli_local_tokens_bin_flag_and_colab_cell2b_cell3(tmp_path: Path) 
                 break
             snippet.append(line)
 
-    # Check L4 tier (22.5 GiB): 150,000 steps, rank=32, fp8 preserved from supports_fp8
+    # Check L4 tier (22.5 GiB): 300,000 steps, rank=32, fp8 preserved from supports_fp8
     ns_l4 = {"vram_gb": 22.5, "ckpt_3b": tmp_path / "none", "torch": torch, "os": os, "supports_fp8": True}
     exec("\n".join(snippet), ns_l4)
-    assert ns_l4["steps_val"] == 150000
+    assert ns_l4["steps_val"] == 300000
     assert ns_l4["rank_val"] == 32
 
     # Check A100-80GB tier
     ns_a80 = {"vram_gb": 79.6, "ckpt_3b": tmp_path / "none", "torch": torch, "os": os, "supports_fp8": False}
     exec("\n".join(snippet), ns_a80)
-    assert ns_a80["steps_val"] == 60000
+    assert ns_a80["steps_val"] == 80000
     assert ns_a80["rank_val"] == 64
+
+
+def test_sharded_memmap_live_auto_discovery_and_bootstrap_resume(tmp_path: Path) -> None:
+    shard_dir = tmp_path / "data" / "junkie_stage1"
+    shard_dir.mkdir(parents=True)
+    seq_len = 16
+    eval_tokens = 64
+    arr0 = np.arange(320, dtype=np.uint16) + 10
+    (shard_dir / "shard_0000.bin").write_bytes(arr0.tobytes())
+
+    ds = LocalMemmapTokenDataset(shard_dir, seq_len=seq_len, is_holdout=False, eval_tokens=eval_tokens, seed=3)
+    it = iter(ds)
+    # Consume 5 windows from shard_0000, then drop in shard_0001 with distinct token values (>= 10000)
+    for _ in range(5):
+        x, _ = next(it)
+        assert int(x.min().item()) >= 10 + eval_tokens
+        assert int(x.max().item()) < 500
+    arr1 = np.arange(320, dtype=np.uint16) + 10000
+    (shard_dir / "shard_0001.bin").write_bytes(arr1.tobytes())
+
+    saw_shard1 = False
+    for _ in range(ds.num_windows + 25):
+        x, _ = next(it)
+        if int(x.min().item()) >= 10000:
+            saw_shard1 = True
+            break
+    assert saw_shard1, "LocalMemmapTokenDataset must auto-discover newly completed shard_0001.bin live"
+
+    # Also test prepare_dataset sharded bootstrap (1 shard) -> resume remaining shards
+    tok = _WordTokenizer()
+
+    def _factory(repo: str, cfg: str | None):
+        return iter([{"text": f"{repo} token stream document {i}"} for i in range(60)])
+
+    out_dir = tmp_path / "sharded_prep"
+    res1 = prepare_dataset(
+        "junkie_stage1",
+        target_tokens=700,
+        output_dir=out_dir,
+        batch_docs=4,
+        sharded=True,
+        shard_tokens=300,
+        max_new_shards=1,
+        stream_factory=_factory,
+        tokenizer=tok,
+    )
+    assert res1["completed_shards"] == 1
+    assert res1["total_shards"] == 3
+    assert (out_dir / "junkie_stage1" / "shard_0000.bin").is_file()
+    assert not (out_dir / "junkie_stage1" / "shard_0001.bin").exists()
+
+    res2 = prepare_dataset(
+        "junkie_stage1",
+        target_tokens=700,
+        output_dir=out_dir,
+        batch_docs=4,
+        sharded=True,
+        shard_tokens=300,
+        max_new_shards=None,
+        stream_factory=_factory,
+        tokenizer=tok,
+    )
+    assert res2["completed_shards"] == 3
+    assert res2["tokens"] == 700
+    assert (out_dir / "junkie_stage1" / "shard_0002.bin").stat().st_size == 200  # 100 uint16 tokens
+
