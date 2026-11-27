@@ -342,9 +342,13 @@ class TriuneTransformer(nn.Module):
         """Initializes empty recurrent GLA cache states for all layers."""
         return [(None, 0) for _ in range(self.num_layers)]
 
-    def enable_gradient_checkpointing(self):
+    def enable_gradient_checkpointing(self, mode: str = "full"):
+        if mode not in ("full", "moe", "half", "none"):
+            raise ValueError(f"Unknown gradient checkpointing mode={mode!r}; expected 'full', 'moe', 'half', or 'none'")
+        enabled = mode != "none"
         for layer in self.layers:
-            layer._use_gradient_checkpointing = True
+            layer._use_gradient_checkpointing = enabled
+            layer._grad_ckpt_mode = mode
 
     def enable_layer_streaming(
         self,

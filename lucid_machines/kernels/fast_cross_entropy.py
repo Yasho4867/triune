@@ -322,8 +322,6 @@ class _FusedLinearCrossEntropy(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_out):
         grad_h, grad_w, grad_b = ctx.saved_tensors
-        if grad_out.numel() == 1 and bool((grad_out == 1.0).item()):
-            return grad_h, grad_w, grad_b, None, None, None
         scale = grad_out
         return (
             grad_h * scale.to(grad_h.dtype) if grad_h is not None else None,

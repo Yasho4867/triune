@@ -108,6 +108,7 @@ class TransformerBlock(nn.Module):
             self.exit_head = None
         self.use_moe = use_moe
         self._use_gradient_checkpointing = False
+        self._grad_ckpt_mode = "full"
 
     def forward(
         self,
@@ -123,7 +124,15 @@ class TransformerBlock(nn.Module):
         use_token_compaction = (
             active_mask is not None and active_mask.shape == x.shape[:2] and not bool(active_mask.all())
         )
-        if self._use_gradient_checkpointing and self.training and torch.is_grad_enabled() and not use_token_compaction:
+        ckpt_active = self._use_gradient_checkpointing and self.training and torch.is_grad_enabled() and not use_token_compaction
+        ckpt_mode = getattr(self, "_grad_ckpt_mode", "full")
+        if ckpt_active and ckpt_mode == "half" and (self.layer_idx % 2 != 0):
+            ckpt_active = False
+
+        ckpt_attn = ckpt_active and (ckpt_mode != "moe")
+        ckpt_ffn = ckpt_active and (ckpt_mode != "moe" or isinstance(self.ffn, MoE_FFN))
+
+        if ckpt_attn:
             attn_out, new_cache = torch.utils.checkpoint.checkpoint(
                 lambda n: self.attn(n, cache=cache),
                 self.norm1(x),
@@ -131,6 +140,11 @@ class TransformerBlock(nn.Module):
                 context_fn=lambda: (checkpoint_fwd_ctx(), checkpoint_bwd_ctx()),
             )
             x = x + attn_out
+        else:
+            attn_out, new_cache = self.attn(self.norm1(x), cache=cache)
+            x = x + attn_out
+
+        if ckpt_ffn:
             norm2_x = self.norm2(x)
             if isinstance(self.ffn, MoE_FFN):
                 ffn_out = torch.utils.checkpoint.checkpoint(
@@ -147,23 +161,20 @@ class TransformerBlock(nn.Module):
                     context_fn=lambda: (checkpoint_fwd_ctx(), checkpoint_bwd_ctx()),
                 )
             x = x + ffn_out
+        elif use_token_compaction:
+            x_active = x[active_mask]
+            if x_active.numel() > 0:
+                x_norm = self.norm2(x_active.unsqueeze(0))
+                if isinstance(self.ffn, MoE_FFN):
+                    ffn_active = self.ffn(x_norm, update_stats=update_stats).squeeze(0)
+                else:
+                    ffn_active = self.ffn(x_norm).squeeze(0)
+                x = x.clone()
+                x[active_mask] = x_active + ffn_active.to(x.dtype)
+        elif isinstance(self.ffn, MoE_FFN):
+            x = x + self.ffn(self.norm2(x), update_stats=update_stats)
         else:
-            attn_out, new_cache = self.attn(self.norm1(x), cache=cache)
-            x = x + attn_out
-            if use_token_compaction:
-                x_active = x[active_mask]
-                if x_active.numel() > 0:
-                    x_norm = self.norm2(x_active.unsqueeze(0))
-                    if isinstance(self.ffn, MoE_FFN):
-                        ffn_active = self.ffn(x_norm, update_stats=update_stats).squeeze(0)
-                    else:
-                        ffn_active = self.ffn(x_norm).squeeze(0)
-                    x = x.clone()
-                    x[active_mask] = x_active + ffn_active.to(x.dtype)
-            elif isinstance(self.ffn, MoE_FFN):
-                x = x + self.ffn(self.norm2(x), update_stats=update_stats)
-            else:
-                x = x + self.ffn(self.norm2(x))
+            x = x + self.ffn(self.norm2(x))
         if self.exit_head and (return_exit or (exit_decider is not None and exit_decider(x))):
             x_exit = x[:, -1:, :] if exit_last_token_only else x
             exit_logits = self.exit_head(self.exit_norm(x_exit))

@@ -140,8 +140,8 @@ class _FusedGELUFunction(torch.autograd.Function):
 
 
 def fast_gelu(x: torch.Tensor) -> torch.Tensor:
-    """Fast approximate GELU activation with analytical gradient."""
-    return _FusedGELUFunction.apply(x)
+    """Approximate tanh-GELU using PyTorch's native fused CUDA/CPU C++ kernel."""
+    return F.gelu(x, approximate="tanh")
 
 
 class FastSwiGLU(nn.Module):

@@ -546,6 +546,7 @@ def _run_gla_chunks(
     g: torch.Tensor,
     state: torch.Tensor,
     C: int,
+    assume_bounded_decay: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Vectorized chunked GLA over [B, num_chunks * C, H, HD]."""
     B, T_chunk, H, HD = q.shape
@@ -570,7 +571,7 @@ def _run_gla_chunks(
     is_compiling = hasattr(torch, "compiler") and torch.compiler.is_compiling()
     span_limit = 20.0 if dtype == torch.float16 else 140.0
     exp_clip = 10.0 if dtype == torch.float16 else 75.0
-    if is_compiling:
+    if is_compiling or (assume_bounded_decay and not is_capturing):
         use_factored_intra = dtype != torch.float64
     else:
         chunk_span = g_cumsum[:, :, :, :1, :] - g_cumsum[:, :, :, -1:, :]
@@ -676,6 +677,7 @@ def fast_chunk_gla(
     initial_state: torch.Tensor | None = None,
     chunk_size: int = 64,
     out: torch.Tensor | None = None,
+    assume_bounded_decay: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Execute high-efficiency chunked Gated Linear Attention (GLA) with exact mathematical parity.
 
@@ -735,12 +737,14 @@ def fast_chunk_gla(
 
     # Short sequence (1 < T < C): execute as a single chunk of size T (zero Python loop)
     if T < C:
-        return _run_gla_chunks(q, k, v, g, state, T)
+        return _run_gla_chunks(q, k, v, g, state, T, assume_bounded_decay=assume_bounded_decay)
 
     # Chunked parallel path for training and long sequences
     num_chunks = T // C
     T_chunk = num_chunks * C
-    out_chunks, state = _run_gla_chunks(q[:, :T_chunk], k[:, :T_chunk], v[:, :T_chunk], g[:, :T_chunk], state, C)
+    out_chunks, state = _run_gla_chunks(
+        q[:, :T_chunk], k[:, :T_chunk], v[:, :T_chunk], g[:, :T_chunk], state, C, assume_bounded_decay=assume_bounded_decay
+    )
     if T == T_chunk:
         return out_chunks, state
 
@@ -753,7 +757,9 @@ def fast_chunk_gla(
         query = q[:, T_chunk].unsqueeze(-2)
         out_rem = torch.matmul(query, state).squeeze(-2).unsqueeze(1)
     else:
-        out_rem, state = _run_gla_chunks(q[:, T_chunk:], k[:, T_chunk:], v[:, T_chunk:], g[:, T_chunk:], state, T_rem)
+        out_rem, state = _run_gla_chunks(
+            q[:, T_chunk:], k[:, T_chunk:], v[:, T_chunk:], g[:, T_chunk:], state, T_rem, assume_bounded_decay=assume_bounded_decay
+        )
     return torch.cat([out_chunks, out_rem], dim=1), state
 
 

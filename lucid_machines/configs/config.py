@@ -69,6 +69,7 @@ def default_config() -> dict[str, Any]:
         "local_tokens_bin": None,
         "lr_schedule": "cosine",
         "wsd_decay_frac": 0.15,
+        "grad_checkpoint_mode": "full",
         "num_workers": 0,
     }
 

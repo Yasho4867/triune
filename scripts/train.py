@@ -74,6 +74,14 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=True,
     )
+    parser.add_argument(
+        "--grad_checkpoint_mode",
+        "--grad-checkpoint-mode",
+        dest="grad_checkpoint_mode",
+        choices=("full", "moe", "half"),
+        default="full",
+        help="Gradient checkpointing scope when enabled (full, moe, half)",
+    )
     parser.add_argument("--save_every", "--save-every", dest="save_every", type=int)
     parser.add_argument("--log_every", "--log-every", dest="log_every", type=int)
     parser.add_argument("--eval_every", "--eval-every", dest="eval_every", type=int)
@@ -762,9 +770,13 @@ def main(argv: list[str] | None = None) -> dict:
             )
 
         if args.grad_checkpoint is not False:
+            ckpt_mode = getattr(args, "grad_checkpoint_mode", "full") or "full"
             if hasattr(model, "enable_gradient_checkpointing"):
-                model.enable_gradient_checkpointing()
-                print("✅ Selective gradient checkpointing enabled", flush=True)
+                try:
+                    model.enable_gradient_checkpointing(mode=ckpt_mode)
+                except TypeError:
+                    model.enable_gradient_checkpointing()
+                print(f"✅ Selective gradient checkpointing enabled (mode={ckpt_mode})", flush=True)
             elif hasattr(model, "gradient_checkpointing_enable"):
                 model.gradient_checkpointing_enable()
                 print("✅ Selective gradient checkpointing enabled", flush=True)

@@ -191,9 +191,275 @@ if is_triton_available():
             tl.store(s_out_base + idx_i * HD + (HALF_HD + idx_j), s12.to(State_out_ptr.dtype.element_ty))
             tl.store(s_out_base + (HALF_HD + idx_i) * HD + idx_j, s21.to(State_out_ptr.dtype.element_ty))
             tl.store(s_out_base + (HALF_HD + idx_i) * HD + (HALF_HD + idx_j), s22.to(State_out_ptr.dtype.element_ty))
+
+    @triton.jit
+    def _fused_qkvg_prep_fwd_kernel(
+        QKVG_ptr,
+        COS_ptr,
+        SIN_ptr,
+        Q_out_ptr,
+        K_out_ptr,
+        V_out_ptr,
+        G_out_ptr,
+        T,
+        H,
+        USE_ROPE: tl.constexpr,
+        HALF_HD: tl.constexpr,
+    ):
+        """Fuses ELU+1 -> L2Norm -> RoPE on Q,K, passthrough V, and logsigmoid on G for training."""
+        pid = tl.program_id(0)
+        bt = pid // H
+        h = pid % H
+        t = bt % T
+
+        offs = tl.arange(0, HALF_HD)
+        HD = HALF_HD * 2
+        row_q = QKVG_ptr + (bt * 4 * H + h) * HD
+        row_k = row_q + H * HD
+        row_v = row_q + 2 * H * HD
+        row_g = row_q + 3 * H * HD
+        out_off = (bt * H + h) * HD
+
+        q1_r = tl.load(row_q + offs).to(tl.float32)
+        q2_r = tl.load(row_q + HALF_HD + offs).to(tl.float32)
+        q1_a = tl.where(q1_r >= 0.0, q1_r + 1.0, tl.exp(q1_r))
+        q2_a = tl.where(q2_r >= 0.0, q2_r + 1.0, tl.exp(q2_r))
+        q_inv = tl.rsqrt(tl.maximum(tl.sum(q1_a * q1_a + q2_a * q2_a), 1e-12))
+        q1_n = q1_a * q_inv
+        q2_n = q2_a * q_inv
+
+        k1_r = tl.load(row_k + offs).to(tl.float32)
+        k2_r = tl.load(row_k + HALF_HD + offs).to(tl.float32)
+        k1_a = tl.where(k1_r >= 0.0, k1_r + 1.0, tl.exp(k1_r))
+        k2_a = tl.where(k2_r >= 0.0, k2_r + 1.0, tl.exp(k2_r))
+        k_inv = tl.rsqrt(tl.maximum(tl.sum(k1_a * k1_a + k2_a * k2_a), 1e-12))
+        k1_n = k1_a * k_inv
+        k2_n = k2_a * k_inv
+
+        if USE_ROPE:
+            c1 = tl.load(COS_ptr + t * HD + offs).to(tl.float32)
+            c2 = tl.load(COS_ptr + t * HD + HALF_HD + offs).to(tl.float32)
+            s1 = tl.load(SIN_ptr + t * HD + offs).to(tl.float32)
+            s2 = tl.load(SIN_ptr + t * HD + HALF_HD + offs).to(tl.float32)
+            q1_o = q1_n * c1 - q2_n * s1
+            q2_o = q2_n * c2 + q1_n * s2
+            k1_o = k1_n * c1 - k2_n * s1
+            k2_o = k2_n * c2 + k1_n * s2
+        else:
+            q1_o, q2_o = q1_n, q2_n
+            k1_o, k2_o = k1_n, k2_n
+
+        v1 = tl.load(row_v + offs)
+        v2 = tl.load(row_v + HALF_HD + offs)
+
+        g1 = tl.load(row_g + offs).to(tl.float32)
+        g2 = tl.load(row_g + HALF_HD + offs).to(tl.float32)
+        g1_ls = tl.where(g1 >= 0.0, -tl.log(1.0 + tl.exp(-g1)), g1 - tl.log(1.0 + tl.exp(g1)))
+        g2_ls = tl.where(g2 >= 0.0, -tl.log(1.0 + tl.exp(-g2)), g2 - tl.log(1.0 + tl.exp(g2)))
+
+        tl.store(Q_out_ptr + out_off + offs, q1_o.to(Q_out_ptr.dtype.element_ty))
+        tl.store(Q_out_ptr + out_off + HALF_HD + offs, q2_o.to(Q_out_ptr.dtype.element_ty))
+        tl.store(K_out_ptr + out_off + offs, k1_o.to(K_out_ptr.dtype.element_ty))
+        tl.store(K_out_ptr + out_off + HALF_HD + offs, k2_o.to(K_out_ptr.dtype.element_ty))
+        tl.store(V_out_ptr + out_off + offs, v1)
+        tl.store(V_out_ptr + out_off + HALF_HD + offs, v2)
+        tl.store(G_out_ptr + out_off + offs, g1_ls.to(G_out_ptr.dtype.element_ty))
+        tl.store(G_out_ptr + out_off + HALF_HD + offs, g2_ls.to(G_out_ptr.dtype.element_ty))
+
+    @triton.jit
+    def _fused_qkvg_prep_bwd_kernel(
+        QKVG_ptr,
+        COS_ptr,
+        SIN_ptr,
+        DQ_ptr,
+        DK_ptr,
+        DV_ptr,
+        DG_ptr,
+        DQKVG_ptr,
+        T,
+        H,
+        USE_ROPE: tl.constexpr,
+        HALF_HD: tl.constexpr,
+    ):
+        """Analytical fused backward for ELU+1 -> L2Norm -> RoPE (Q,K), V, and logsigmoid (G)."""
+        pid = tl.program_id(0)
+        bt = pid // H
+        h = pid % H
+        t = bt % T
+
+        offs = tl.arange(0, HALF_HD)
+        HD = HALF_HD * 2
+        row_q = QKVG_ptr + (bt * 4 * H + h) * HD
+        row_k = row_q + H * HD
+        row_g = row_q + 3 * H * HD
+        out_off = (bt * H + h) * HD
+
+        dq_row = DQKVG_ptr + (bt * 4 * H + h) * HD
+        dk_row = dq_row + H * HD
+        dv_row = dq_row + 2 * H * HD
+        dg_row = dq_row + 3 * H * HD
+
+        dy_q1 = tl.load(DQ_ptr + out_off + offs).to(tl.float32)
+        dy_q2 = tl.load(DQ_ptr + out_off + HALF_HD + offs).to(tl.float32)
+        dy_k1 = tl.load(DK_ptr + out_off + offs).to(tl.float32)
+        dy_k2 = tl.load(DK_ptr + out_off + HALF_HD + offs).to(tl.float32)
+
+        if USE_ROPE:
+            c1 = tl.load(COS_ptr + t * HD + offs).to(tl.float32)
+            c2 = tl.load(COS_ptr + t * HD + HALF_HD + offs).to(tl.float32)
+            s1 = tl.load(SIN_ptr + t * HD + offs).to(tl.float32)
+            s2 = tl.load(SIN_ptr + t * HD + HALF_HD + offs).to(tl.float32)
+            du_q1 = dy_q1 * c1 + dy_q2 * s2
+            du_q2 = dy_q2 * c2 - dy_q1 * s1
+            du_k1 = dy_k1 * c1 + dy_k2 * s2
+            du_k2 = dy_k2 * c2 - dy_k1 * s1
+        else:
+            du_q1, du_q2 = dy_q1, dy_q2
+            du_k1, du_k2 = dy_k1, dy_k2
+
+        q1_r = tl.load(row_q + offs).to(tl.float32)
+        q2_r = tl.load(row_q + HALF_HD + offs).to(tl.float32)
+        q1_a = tl.where(q1_r >= 0.0, q1_r + 1.0, tl.exp(q1_r))
+        q2_a = tl.where(q2_r >= 0.0, q2_r + 1.0, tl.exp(q2_r))
+        q_nsq = tl.sum(q1_a * q1_a + q2_a * q2_a)
+        q_inv = tl.rsqrt(tl.maximum(q_nsq, 1e-12))
+        q1_u = q1_a * q_inv
+        q2_u = q2_a * q_inv
+        q_dot = tl.sum(q1_u * du_q1 + q2_u * du_q2)
+        q_clamp_scale = tl.where(q_nsq > 1e-12, q_dot, 0.0)
+        dq1_a = q_inv * (du_q1 - q1_u * q_clamp_scale)
+        dq2_a = q_inv * (du_q2 - q2_u * q_clamp_scale)
+        dq1_r = dq1_a * tl.where(q1_r >= 0.0, 1.0, q1_a)
+        dq2_r = dq2_a * tl.where(q2_r >= 0.0, 1.0, q2_a)
+
+        k1_r = tl.load(row_k + offs).to(tl.float32)
+        k2_r = tl.load(row_k + HALF_HD + offs).to(tl.float32)
+        k1_a = tl.where(k1_r >= 0.0, k1_r + 1.0, tl.exp(k1_r))
+        k2_a = tl.where(k2_r >= 0.0, k2_r + 1.0, tl.exp(k2_r))
+        k_nsq = tl.sum(k1_a * k1_a + k2_a * k2_a)
+        k_inv = tl.rsqrt(tl.maximum(k_nsq, 1e-12))
+        k1_u = k1_a * k_inv
+        k2_u = k2_a * k_inv
+        k_dot = tl.sum(k1_u * du_k1 + k2_u * du_k2)
+        k_clamp_scale = tl.where(k_nsq > 1e-12, k_dot, 0.0)
+        dk1_a = k_inv * (du_k1 - k1_u * k_clamp_scale)
+        dk2_a = k_inv * (du_k2 - k2_u * k_clamp_scale)
+        dk1_r = dk1_a * tl.where(k1_r >= 0.0, 1.0, k1_a)
+        dk2_r = dk2_a * tl.where(k2_r >= 0.0, 1.0, k2_a)
+
+        dv1 = tl.load(DV_ptr + out_off + offs)
+        dv2 = tl.load(DV_ptr + out_off + HALF_HD + offs)
+
+        g1_r = tl.load(row_g + offs).to(tl.float32)
+        g2_r = tl.load(row_g + HALF_HD + offs).to(tl.float32)
+        dg1_o = tl.load(DG_ptr + out_off + offs).to(tl.float32)
+        dg2_o = tl.load(DG_ptr + out_off + HALF_HD + offs).to(tl.float32)
+        dg1_r = dg1_o * tl.sigmoid(-g1_r)
+        dg2_r = dg2_o * tl.sigmoid(-g2_r)
+
+        tl.store(dq_row + offs, dq1_r.to(DQKVG_ptr.dtype.element_ty))
+        tl.store(dq_row + HALF_HD + offs, dq2_r.to(DQKVG_ptr.dtype.element_ty))
+        tl.store(dk_row + offs, dk1_r.to(DQKVG_ptr.dtype.element_ty))
+        tl.store(dk_row + HALF_HD + offs, dk2_r.to(DQKVG_ptr.dtype.element_ty))
+        tl.store(dv_row + offs, dv1.to(DQKVG_ptr.dtype.element_ty))
+        tl.store(dv_row + HALF_HD + offs, dv2.to(DQKVG_ptr.dtype.element_ty))
+        tl.store(dg_row + offs, dg1_r.to(DQKVG_ptr.dtype.element_ty))
+        tl.store(dg_row + HALF_HD + offs, dg2_r.to(DQKVG_ptr.dtype.element_ty))
+
+    class _FusedQKVGRoPEPrepFn(torch.autograd.Function):
+        """Fused single-kernel QKV-G prep (ELU+1 + L2Norm + RoPE + logsigmoid) with analytical backward for HD=32/64/128."""
+
+        @staticmethod
+        def forward(
+            ctx,
+            qkvg: torch.Tensor,
+            cos: torch.Tensor,
+            sin: torch.Tensor,
+            heads: int,
+            head_dim: int,
+            use_rope: bool,
+        ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+            B, T, _ = qkvg.shape
+            qkvg_c = qkvg if qkvg.is_contiguous() else qkvg.contiguous()
+            out_shape = (B, T, heads, head_dim)
+            q_out = torch.empty(out_shape, device=qkvg.device, dtype=qkvg.dtype)
+            k_out = torch.empty(out_shape, device=qkvg.device, dtype=qkvg.dtype)
+            v_out = torch.empty(out_shape, device=qkvg.device, dtype=qkvg.dtype)
+            g_out = torch.empty(out_shape, device=qkvg.device, dtype=qkvg.dtype)
+
+            cos_c = cos[:T].contiguous() if use_rope else qkvg_c
+            sin_c = sin[:T].contiguous() if use_rope else qkvg_c
+            _fused_qkvg_prep_fwd_kernel[(B * T * heads,)](
+                qkvg_c,
+                cos_c,
+                sin_c,
+                q_out,
+                k_out,
+                v_out,
+                g_out,
+                T,
+                heads,
+                USE_ROPE=use_rope,
+                HALF_HD=head_dim // 2,
+                num_warps=2 if head_dim <= 64 else 4,
+            )
+            ctx.save_for_backward(qkvg_c, cos_c, sin_c)
+            ctx.meta = (B, T, heads, head_dim, use_rope)
+            return q_out, k_out, v_out, g_out
+
+        @staticmethod
+        def backward(
+            ctx,
+            dq: torch.Tensor | None,
+            dk: torch.Tensor | None,
+            dv: torch.Tensor | None,
+            dg: torch.Tensor | None,
+        ):
+            qkvg_c, cos_c, sin_c = ctx.saved_tensors
+            B, T, heads, head_dim, use_rope = ctx.meta
+            dev, dt = qkvg_c.device, qkvg_c.dtype
+            dq_c = (
+                (dq if dq.is_contiguous() else dq.contiguous())
+                if dq is not None
+                else torch.zeros(B, T, heads, head_dim, device=dev, dtype=dt)
+            )
+            dk_c = (
+                (dk if dk.is_contiguous() else dk.contiguous())
+                if dk is not None
+                else torch.zeros(B, T, heads, head_dim, device=dev, dtype=dt)
+            )
+            dv_c = (
+                (dv if dv.is_contiguous() else dv.contiguous())
+                if dv is not None
+                else torch.zeros(B, T, heads, head_dim, device=dev, dtype=dt)
+            )
+            dg_c = (
+                (dg if dg.is_contiguous() else dg.contiguous())
+                if dg is not None
+                else torch.zeros(B, T, heads, head_dim, device=dev, dtype=dt)
+            )
+
+            dqkvg = torch.empty_like(qkvg_c)
+            _fused_qkvg_prep_bwd_kernel[(B * T * heads,)](
+                qkvg_c,
+                cos_c,
+                sin_c,
+                dq_c,
+                dk_c,
+                dv_c,
+                dg_c,
+                dqkvg,
+                T,
+                heads,
+                USE_ROPE=use_rope,
+                HALF_HD=head_dim // 2,
+                num_warps=2 if head_dim <= 64 else 4,
+            )
+            return dqkvg, None, None, None, None, None
 else:
     _fused_qkv_g_prep_inplace_kernel = None
     _fused_qkvg_decode_step_kernel = None
+    _FusedQKVGRoPEPrepFn = None
 
 try:
     from fla.ops.gla import chunk_gla
@@ -209,7 +475,7 @@ except ImportError:
     fused_recurrent_gla = None
 
 
-def _pytorch_chunk_gla(q, k, v, g, initial_state=None, chunk_size: int = 64):
+def _pytorch_chunk_gla(q, k, v, g, initial_state=None, chunk_size: int = 64, assume_bounded_decay: bool = False):
     """High-performance vectorized Chunked GLA in pure PyTorch with recurrent fallback.
 
     Replaces sequential token-by-token Python loops with batched intra-chunk GEMM
@@ -219,7 +485,15 @@ def _pytorch_chunk_gla(q, k, v, g, initial_state=None, chunk_size: int = 64):
     try:
         from lucid_machines.kernels.fast_gla import fast_chunk_gla
 
-        return fast_chunk_gla(q, k, v, g, initial_state=initial_state, chunk_size=chunk_size)
+        return fast_chunk_gla(
+            q,
+            k,
+            v,
+            g,
+            initial_state=initial_state,
+            chunk_size=chunk_size,
+            assume_bounded_decay=assume_bounded_decay,
+        )
     except Exception:
         pass
 
@@ -559,6 +833,7 @@ class VectorisedGLA(nn.Module):
                     final_ret = cur_state.to(dtype=x.dtype) if cache is not None else None
                     return out_full, self._format_cache(final_ret, cache, cache_format, offset, T)
 
+        is_compiling = hasattr(torch, "compiler") and torch.compiler.is_compiling()
         if can_fuse_qkvg:
             if not self.training and not torch.is_grad_enabled():
                 w_qkvg, _, _ = self._get_eval_weights()
@@ -566,12 +841,34 @@ class VectorisedGLA(nn.Module):
                 self._eval_w_qkvg = None
                 w_qkvg = self._get_packed_qkvg_weight()
             qkvg = F.linear(x, w_qkvg)
-            hd2 = 2 * self.hidden_dim
-            hd3 = 3 * self.hidden_dim
-            qk = qkvg[..., :hd2].reshape(B, T, 2, H, HD)
-            v = qkvg[..., hd2:hd3].reshape(B, T, H, HD)
-            g = F.logsigmoid(qkvg[..., hd3:].reshape(B, T, H, HD))
-            qk = F.normalize(F.elu(qk) + 1.0, p=2.0, dim=-1, eps=1e-6)
+            if (
+                _FusedQKVGRoPEPrepFn is not None
+                and x.is_cuda
+                and is_turbo_mode_enabled()
+                and HD in (32, 64, 128)
+                and x.dtype in (torch.bfloat16, torch.float16, torch.float32)
+                and not is_compiling
+            ):
+                if self.use_rope:
+                    cos_t, sin_t = self.rope(T, x.device, offset=offset)
+                else:
+                    cos_t = sin_t = qkvg
+                q, k, v, g = _FusedQKVGRoPEPrepFn.apply(qkvg, cos_t, sin_t, H, HD, bool(self.use_rope))
+            else:
+                hd2 = 2 * self.hidden_dim
+                hd3 = 3 * self.hidden_dim
+                qk = qkvg[..., :hd2].reshape(B, T, 2, H, HD)
+                v = qkvg[..., hd2:hd3].reshape(B, T, H, HD)
+                g = F.logsigmoid(qkvg[..., hd3:].reshape(B, T, H, HD))
+                qk = F.normalize(F.elu(qk) + 1.0, p=2.0, dim=-1, eps=1e-6)
+                if self.use_rope:
+                    cos, sin = self.rope(T, x.device, offset=offset)
+                    cos_b = cos.to(dtype=qk.dtype, device=qk.device).view(1, T, 1, 1, HD)
+                    sin_b = sin.to(dtype=qk.dtype, device=qk.device).view(1, T, 1, 1, HD)
+                    qk1, qk2 = qk.chunk(2, dim=-1)
+                    qk = (qk * cos_b + torch.cat((-qk2, qk1), dim=-1) * sin_b).to(dtype=v.dtype)
+                q = qk[:, :, 0]
+                k = qk[:, :, 1]
         else:
             q = self.q_proj(x).view(B, T, H, HD)
             k = self.k_proj(x).view(B, T, H, HD)
@@ -579,15 +876,15 @@ class VectorisedGLA(nn.Module):
             g = F.logsigmoid(self.g_proj(x).view(B, T, H, HD))
             qk = F.normalize(F.elu(torch.stack((q, k), dim=2)) + 1.0, p=2.0, dim=-1, eps=1e-6)
 
-        if self.use_rope:
-            cos, sin = self.rope(T, x.device, offset=offset)
-            cos_b = cos.to(dtype=qk.dtype, device=qk.device).view(1, T, 1, 1, HD)
-            sin_b = sin.to(dtype=qk.dtype, device=qk.device).view(1, T, 1, 1, HD)
-            qk1, qk2 = qk.chunk(2, dim=-1)
-            qk = (qk * cos_b + torch.cat((-qk2, qk1), dim=-1) * sin_b).to(dtype=v.dtype)
+            if self.use_rope:
+                cos, sin = self.rope(T, x.device, offset=offset)
+                cos_b = cos.to(dtype=qk.dtype, device=qk.device).view(1, T, 1, 1, HD)
+                sin_b = sin.to(dtype=qk.dtype, device=qk.device).view(1, T, 1, 1, HD)
+                qk1, qk2 = qk.chunk(2, dim=-1)
+                qk = (qk * cos_b + torch.cat((-qk2, qk1), dim=-1) * sin_b).to(dtype=v.dtype)
 
-        q = qk[:, :, 0]
-        k = qk[:, :, 1]
+            q = qk[:, :, 0]
+            k = qk[:, :, 1]
 
         if self.use_delta_rule:
             from lucid_machines.kernels.fast_gla import fast_chunk_gated_deltanet
@@ -624,7 +921,14 @@ class VectorisedGLA(nn.Module):
                 )
             out = out.to(dtype=x.dtype)
         else:
-            out, final_state = _pytorch_chunk_gla(q, k, v, g, initial_state=initial_state)
+            out, final_state = _pytorch_chunk_gla(
+                q,
+                k,
+                v,
+                g,
+                initial_state=initial_state,
+                assume_bounded_decay=bool(can_fuse_qkvg and g.dtype != torch.float16),
+            )
 
         out = out.reshape(B, T, self.hidden_dim).to(dtype=x.dtype)
         new_cache = self._format_cache(final_state, cache, cache_format, offset, T)
