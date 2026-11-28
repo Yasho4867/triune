@@ -127,6 +127,7 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
         steer_mode: str = "upgraded",
         num_steer_dirs: int = getattr(defaults, "CENTROID_SUBSPACE_DIRS", 4),
         use_rms_steer: bool = False,
+        transport_drift_clip: float | None = None,
         *,
         params=None,
     ):
@@ -158,6 +159,13 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
         self.steer_mode = steer_mode
         self.num_steer_dirs = max(1, int(num_steer_dirs))
         self.use_rms_steer = bool(use_rms_steer)
+        self.transport_drift_clip = (
+            float(transport_drift_clip) if transport_drift_clip is not None else None
+        )
+        self._grassmann_drift_sum: float = 0.0
+        self._grassmann_drift_max: float = 0.0
+        self._grassmann_drift_count: int = 0
+        self._grassmann_damped_count: int = 0
         self.expert_lr = expert_lr
         self.initial_expert_lr = expert_lr
         self.expert_betas = expert_betas
@@ -1830,6 +1838,10 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                         T_b = torch.bmm(C_old_b.transpose(1, 2), C_new_b)
                         t_sq_b = T_b * T_b
                         col_e_b = t_sq_b.sum(dim=1, keepdim=True).clamp(0.0, 1.0)
+                        drift_b = (float(k_c) - t_sq_b.sum(dim=(1, 2))).clamp_min(0.0).sqrt()
+                        self._grassmann_drift_sum += float(drift_b.sum().item())
+                        self._grassmann_drift_max = max(self._grassmann_drift_max, float(drift_b.max().item()))
+                        self._grassmann_drift_count += int(drift_b.numel())
                         M_old_b = torch.stack(
                             [g_list[b_i]["state"]["M_c"].to(device=device, dtype=torch.float32) for b_i in transport_idx],
                             dim=0,
@@ -1840,6 +1852,11 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                         )
                         v_mean_b = V_old_b.mean(dim=2, keepdim=True)
                         M_new_b = torch.bmm(M_old_b, T_b)
+                        if self.transport_drift_clip is not None and self.transport_drift_clip > 0.0:
+                            clip_val = float(self.transport_drift_clip)
+                            damp_b = (clip_val / drift_b.clamp_min(1e-12)).clamp(max=1.0).view(-1, 1, 1)
+                            M_new_b = M_new_b * damp_b
+                            self._grassmann_damped_count += int((drift_b > clip_val).sum().item())
                         V_new_b = (torch.bmm(V_old_b, t_sq_b) + v_mean_b * (1.0 - col_e_b)).clamp_min_(0.0)
                         for pos, b_i in enumerate(transport_idx):
                             g = g_list[b_i]
@@ -2589,6 +2606,13 @@ class CentroidSteerOptimizer(torch.optim.Optimizer):
                 "compression_ratio": round(compression_ratio, 2),
             },
             "qr_telemetry": self.get_qr_telemetry(),
+            "grassmann_transport": {
+                "events": int(self._grassmann_drift_count),
+                "drift_mean": round(self._grassmann_drift_sum / max(1, self._grassmann_drift_count), 6),
+                "drift_max": round(self._grassmann_drift_max, 6),
+                "damped_events": int(self._grassmann_damped_count),
+                "drift_clip": self.transport_drift_clip,
+            },
         }
 
 
