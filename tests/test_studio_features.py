@@ -391,8 +391,8 @@ def test_frontend_themes_ps_classes_and_hygiene_invariants():
     for theme_id in ("hypnagogic", "phosphene", "pareidolia", "afterimage", "mirage", "euphoria"):
         assert f"id: '{theme_id}'" in APP_JS
         assert f'data-theme="{theme_id}"' in STYLE_CSS or f"data-theme='{theme_id}'" in STYLE_CSS
-    assert "#faf5ec" in APP_JS and "#faf5ec" in STYLE_CSS
-    assert "#b23808" in APP_JS and "#b23808" in STYLE_CSS
+    assert "#f6efe2" in APP_JS and "#f6efe2" in STYLE_CSS
+    assert "#b53810" in APP_JS and "#b53810" in STYLE_CSS
 
     # All 34 .ps-* classes defined in CSS and wired in app.js
     ps_classes = sorted(set(re.findall(r"\.(ps-[a-z0-9-]+)", STYLE_CSS)))

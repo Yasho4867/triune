@@ -217,9 +217,9 @@ def test_studio_uses_the_shared_clean_visual_system():
     index_html = (studio_src / "index.html").read_text(encoding="utf-8")
     forbidden_ui_pictographs = {0x26A1, 0x1F4E6, 0x1F504, 0x2728, 0x1F680, 0x1F4A1, 0x1F9E0}
     assert not any(ord(char) in forbidden_ui_pictographs for char in app_js)
-    assert "--font-heading: 'Outfit'" in style_css
-    assert "--font-family: 'Inter'" in style_css
-    assert "--font-mono: 'Fira Code'" in style_css
+    assert '--font-heading: "Instrument Serif"' in style_css
+    assert '--font-family: "Manrope"' in style_css
+    assert '--font-mono: "IBM Plex Mono"' in style_css
     assert "Newsreader" not in index_html + style_css + app_js
     assert "linear-gradient(" not in style_css
     assert "radial-gradient(" not in style_css
@@ -405,7 +405,7 @@ def test_neuron_scope_3d_synapse_simulator_integration():
     assert ".neuron-tier-pill" in css_text
     assert ".btn-stimulate-synapse" in css_text
     assert ".neural-console-content-wrap > .neuron-theater-canvas-wrap" in css_text
-    assert "top: 40px;\n  right: 10px;\n  width: max-content;" in css_text
+    assert ".neuron-theater-controls {\n  position: static;\n  width: 100%;" in css_text
 
 
 def test_appearance_themes_and_synchronization_invariants():
@@ -466,7 +466,7 @@ def test_neural_intelligence_console_layout_and_ergonomics():
     assert "neural-console-tabs" in app_js
     assert "3D Synapses" in app_js
     assert "Architecture Transmutation" in app_js
-    assert "Split View" in app_js
+    assert "Split 3D + Transmutation View" in app_js
 
     # 2. Topbar toggle for collapse/expand
     assert "neural-console-toggle-pill" in app_js
