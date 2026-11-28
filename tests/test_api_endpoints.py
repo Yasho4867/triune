@@ -581,6 +581,16 @@ class TestStudioApiEndpoints(unittest.TestCase):
         self.assertIsNone(detach_res.json()["active_adapter"])
 
     def test_dag_compile_precision_adapter_and_token_ids_exclusion(self) -> None:
+        from lucid_machines.api import routes
+
+        ps = routes.pytorch_state
+        prev_model_id = getattr(ps, "active_model_id", "triune-small")
+        prev_precision = getattr(ps, "precision", "bf16")
+        prev_depth = getattr(ps, "depth_mode", "cortex")
+        prev_batch = ps.batch_size
+        prev_seq = ps.seq_len
+        prev_accum = ps.grad_accum_steps
+
         payload = {
             "nodes": [
                 {
@@ -610,16 +620,32 @@ class TestStudioApiEndpoints(unittest.TestCase):
             ],
             "edges": [],
         }
-        res = self.client.post("/v1/dag/compile_to_training", json=payload)
-        self.assertEqual(res.status_code, 200)
-        data = res.json()
-        self.assertEqual(data["status"], "success")
-        applied = data["applied_config"]
-        # Token IDs must NOT be treated as a dataset streamer
-        self.assertNotIn("dataset", applied)
-        self.assertEqual(applied.get("precision"), "fp8")
-        self.assertEqual(applied.get("gpu_layers"), 2)
-        self.assertEqual(applied["active_adapter"]["rank"], 16)
+        try:
+            res = self.client.post("/v1/dag/compile_to_training", json=payload)
+            self.assertEqual(res.status_code, 200)
+            data = res.json()
+            self.assertEqual(data["status"], "success")
+            applied = data["applied_config"]
+            # Token IDs must NOT be treated as a dataset streamer
+            self.assertNotIn("dataset", applied)
+            self.assertEqual(applied.get("precision"), "fp8")
+            self.assertEqual(applied.get("gpu_layers"), 2)
+            self.assertEqual(applied["active_adapter"]["rank"], 16)
+        finally:
+            self.client.post("/v1/finetune/adapter/detach")
+            self.client.post(
+                "/v1/models/preset",
+                json={
+                    "preset_id": prev_model_id
+                    if prev_model_id in ("triune-nano", "triune-small", "triune-base")
+                    else "triune-small",
+                    "batch_size": prev_batch,
+                    "seq_len": prev_seq,
+                    "depth_mode": prev_depth,
+                    "precision": prev_precision,
+                },
+            )
+            ps.grad_accum_steps = prev_accum
 
     def test_byok_wandb_save_and_test(self) -> None:
         import os

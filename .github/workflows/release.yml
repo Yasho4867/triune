@@ -180,7 +180,12 @@ jobs:
             if ($smoke.ExitCode -ne 0) { throw "$exe --smoke-test failed: $($smoke.ExitCode)" }
           }
           $proc = Start-Process -FilePath (Resolve-Path "studio\publish\app\PolysomStudioSetup.exe") -ArgumentList "--verify","--cuda","cpu" -Wait -PassThru
-          if ($proc.ExitCode -ne 0) { throw "app\PolysomStudioSetup.exe --verify failed: $($proc.ExitCode)" }
+          if ($proc.ExitCode -ne 0) {
+            Get-ChildItem "$env:LOCALAPPDATA\Lucid Machines\logs","$env:LOCALAPPDATA\Polysom Studio\logs" -Filter "studio-setup-*.log" -ErrorAction SilentlyContinue |
+              Sort-Object LastWriteTime -Descending | Select-Object -First 1 |
+              ForEach-Object { Write-Host "=== $($_.FullName) ==="; Get-Content $_.FullName }
+            throw "app\PolysomStudioSetup.exe --verify failed: $($proc.ExitCode)"
+          }
 
           $standaloneSetup = Resolve-Path "studio\publish\PolysomStudioSetup.exe"
           if (Get-Command 'iscc.exe' -ErrorAction SilentlyContinue) {
