@@ -398,33 +398,25 @@ public partial class MainWindow : Window
 
     internal static string? TryFindBootstrapPython(string? root)
     {
-        var candidates = new List<string>();
+        var envCandidates = new List<string>();
         if (!string.IsNullOrWhiteSpace(root))
         {
-            candidates.Add(Path.Combine(root, "studio", "studio_env", "Scripts", "python.exe"));
-            candidates.Add(Path.Combine(root, ".venv", "Scripts", "python.exe"));
+            envCandidates.Add(Path.Combine(root, "studio", "studio_env", "Scripts", "python.exe"));
+            envCandidates.Add(Path.Combine(root, ".venv", "Scripts", "python.exe"));
         }
 
-        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
-        var programFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
-
-        foreach (var minor in new[] { "314", "313", "312", "311", "310" })
-        {
-            if (!string.IsNullOrWhiteSpace(localAppData))
-                candidates.Add(Path.Combine(localAppData, "Programs", "Python", $"Python{minor}", "python.exe"));
-            if (!string.IsNullOrWhiteSpace(programFiles))
-                candidates.Add(Path.Combine(programFiles, $"Python{minor}", "python.exe"));
-            if (!string.IsNullOrWhiteSpace(programFilesX86))
-                candidates.Add(Path.Combine(programFilesX86, $"Python{minor}", "python.exe"));
-        }
-
-        candidates.AddRange(EnumerateRegistryPythons());
-
-        foreach (var cand in candidates.Distinct(StringComparer.OrdinalIgnoreCase))
+        foreach (var cand in envCandidates.Distinct(StringComparer.OrdinalIgnoreCase))
         {
             if (IsValidPythonCandidate(cand, isPyLauncher: false))
                 return cand;
+        }
+
+        var pyLocation = Environment.GetEnvironmentVariable("pythonLocation")?.Trim().Trim('"');
+        if (!string.IsNullOrWhiteSpace(pyLocation))
+        {
+            var locCand = Path.Combine(pyLocation, "python.exe");
+            if (IsValidPythonCandidate(locCand, isPyLauncher: false))
+                return locCand;
         }
 
         var pathEntries = Environment.GetEnvironmentVariable("PATH")?.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries) ?? [];
@@ -439,6 +431,29 @@ public partial class MainWindow : Window
                 if (IsValidPythonCandidate(candidate, isPyLauncher: isPy))
                     return candidate;
             }
+        }
+
+        var fallbackCandidates = new List<string>();
+        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+        var programFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+
+        foreach (var minor in new[] { "314", "313", "312", "311", "310" })
+        {
+            if (!string.IsNullOrWhiteSpace(localAppData))
+                fallbackCandidates.Add(Path.Combine(localAppData, "Programs", "Python", $"Python{minor}", "python.exe"));
+            if (!string.IsNullOrWhiteSpace(programFiles))
+                fallbackCandidates.Add(Path.Combine(programFiles, $"Python{minor}", "python.exe"));
+            if (!string.IsNullOrWhiteSpace(programFilesX86))
+                fallbackCandidates.Add(Path.Combine(programFilesX86, $"Python{minor}", "python.exe"));
+        }
+
+        fallbackCandidates.AddRange(EnumerateRegistryPythons());
+
+        foreach (var cand in fallbackCandidates.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (IsValidPythonCandidate(cand, isPyLauncher: false))
+                return cand;
         }
 
         return null;

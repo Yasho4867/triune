@@ -160,6 +160,9 @@ jobs:
 
           $verify = Start-Process -FilePath (Resolve-Path "studio\publish\app\PolysomStudioSetup.exe") -ArgumentList "--verify","--cuda","cpu" -Wait -PassThru
           if ($verify.ExitCode -ne 0) {
+            Get-ChildItem "$env:LOCALAPPDATA\Lucid Machines\logs","$env:LOCALAPPDATA\Polysom Studio\logs" -Filter "studio-setup-*.log" -ErrorAction SilentlyContinue |
+              Sort-Object LastWriteTime -Descending | Select-Object -First 1 |
+              ForEach-Object { Write-Host "=== $($_.FullName) ==="; Get-Content $_.FullName }
             throw "app\PolysomStudioSetup.exe --verify failed with exit code $($verify.ExitCode)"
           }
 
