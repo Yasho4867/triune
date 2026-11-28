@@ -15,7 +15,8 @@ from typing import Any, Dict, List
 
 import pytest
 import yaml
-from pypdf import PdfReader
+
+PdfReader = pytest.importorskip("pypdf").PdfReader
 
 from .helpers import (
     ChromeBrowserController,

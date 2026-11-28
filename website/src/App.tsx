@@ -18,13 +18,13 @@ interface ReleaseArtifact {
 const releaseArtifacts: ReleaseArtifact[] = [
   {
     filename: "PolysomStudioSetup.exe",
-    sha256: "677c430b8ebbe23cfb6c43876434b6247e47860c573a73e6d8a8dd5dd3705158",
+    sha256: "88c82cb448fefc1253165f1245f643b73edb49a5877f0303f616d6523cd28407",
     label: "Windows Installer (.exe)",
     os: "windows",
   },
   {
     filename: "PolysomStudio-1.0.0-win-x64.zip",
-    sha256: "9af82978536e2cebcdfb0d7ab025c139377cb030a7e12eece350bcc8e31e7e42",
+    sha256: "b151ac0ae3d2a7ff24678036086492f2089521e5d10ec55a6dc30ad552f9e2a4",
     label: "Windows Portable (.zip)",
     os: "windows",
   },
