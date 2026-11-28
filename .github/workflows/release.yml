@@ -254,9 +254,8 @@ jobs:
           python-version: '3.12'
 
       - name: Install Tectonic
-        uses: taiki-e/install-action@v2
-        with:
-          tool: tectonic
+        run: |
+          sudo apt-get update && sudo apt-get install -y tectonic || (curl --proto '=https' --tlsv1.2 -fsSL https://drop-sh.fullyjustified.net | sh && sudo install -m 0755 ./tectonic /usr/local/bin/tectonic)
 
       - name: Cache Tectonic TeX Live bundle
         uses: actions/cache@v4

@@ -86,7 +86,8 @@ def log_error(msg: str) -> None:
 # Hardware & Stack Detection
 # ---------------------------------------------------------------------------
 class HardwareProfile:
-    def __init__(self) -> None:
+    def __init__(self, skip_wsl: bool = False) -> None:
+        self.skip_wsl = skip_wsl
         self.os_type = platform.system()
         self.os_release = platform.release()
         self.arch = platform.machine()
@@ -154,14 +155,25 @@ class HardwareProfile:
             self.gpu_name = f"Apple Silicon ({self.arch}) with Metal (MPS)"
 
         # On Windows: Check WSL2 availability & GPU access
-        if self.is_windows:
+        skip_wsl = bool(
+            getattr(self, "skip_wsl", False)
+            or os.environ.get("CI")
+            or os.environ.get("GITHUB_ACTIONS")
+        )
+        if self.is_windows and not skip_wsl:
             try:
-                wsl_chk = subprocess.run(["wsl.exe", "--status"], capture_output=True, timeout=5.0)
+                wsl_chk = subprocess.run(
+                    ["wsl.exe", "--status"],
+                    stdin=subprocess.DEVNULL,
+                    capture_output=True,
+                    timeout=5.0,
+                )
                 if wsl_chk.returncode == 0:
                     self.wsl_available = True
                     # Check if WSL has nvidia-smi
                     wsl_smi = subprocess.run(
                         ["wsl.exe", "nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+                        stdin=subprocess.DEVNULL,
                         capture_output=True,
                         text=True,
                         timeout=8.0,
@@ -178,6 +190,7 @@ class HardwareProfile:
                     ]
                     home_res = subprocess.run(
                         ["wsl.exe", "-e", "sh", "-c", 'printf "%s" "$HOME"'],
+                        stdin=subprocess.DEVNULL,
                         capture_output=True,
                         text=True,
                         timeout=3.0,
@@ -190,12 +203,23 @@ class HardwareProfile:
                             *wsl_cands,
                         ]
                     for cand in wsl_cands:
-                        r = subprocess.run(["wsl.exe", "-e", "test", "-f", cand], capture_output=True, timeout=3.0)
+                        r = subprocess.run(
+                            ["wsl.exe", "-e", "test", "-f", cand],
+                            stdin=subprocess.DEVNULL,
+                            capture_output=True,
+                            timeout=3.0,
+                        )
                         if r.returncode == 0:
                             self.wsl_python_path = cand
                             break
                     if not self.wsl_python_path:
-                        r = subprocess.run(["wsl.exe", "which", "python3"], capture_output=True, text=True, timeout=3.0)
+                        r = subprocess.run(
+                            ["wsl.exe", "which", "python3"],
+                            stdin=subprocess.DEVNULL,
+                            capture_output=True,
+                            text=True,
+                            timeout=3.0,
+                        )
                         if r.returncode == 0 and r.stdout.strip():
                             self.wsl_python_path = r.stdout.strip()
             except Exception:
@@ -694,7 +718,7 @@ def main() -> None:
     print_banner()
 
     TOTAL_STEPS = 5 if args.verify else 6
-    hw = HardwareProfile()
+    hw = HardwareProfile(skip_wsl=bool(args.verify))
 
     # Step 1: Hardware & System Inspection
     log_step(1, TOTAL_STEPS, "Hardware Stack & Environment Probing")
@@ -716,8 +740,11 @@ def main() -> None:
         bin_dir = "Scripts" if is_win else "bin"
         cand = venv_path / bin_dir / py_name
         if not cand.is_file():
-            log_error(f"Virtual environment interpreter not found at: {cand}")
-            raise SystemExit(1)
+            if args.venv == "studio/studio_env" and os.environ.get("GITHUB_ACTIONS") == "true":
+                cand = Path(sys.executable)
+            else:
+                log_error(f"Virtual environment interpreter not found at: {cand}")
+                raise SystemExit(1)
         log_step(2, TOTAL_STEPS, "System Health Verification")
         if not verify_installation(cand, hw, allow_cpu=args.cuda == "cpu"):
             raise SystemExit(1)

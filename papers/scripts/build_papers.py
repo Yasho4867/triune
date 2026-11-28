@@ -20,6 +20,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PAPERS_DIR = REPO_ROOT / "papers"
 WEBSITE_PAPERS_DIR = REPO_ROOT / "website" / "papers"
+WEBSITE_PUBLIC_PAPERS_DIR = REPO_ROOT / "website" / "public" / "papers"
 
 INTERMEDIATE_SUFFIXES = (".aux", ".out", ".bbl", ".blg", ".log", ".xdv")
 
@@ -225,16 +226,19 @@ def compile_paper(
 
 def sync_website(selected_keys: list[str]) -> None:
     WEBSITE_PAPERS_DIR.mkdir(parents=True, exist_ok=True)
+    WEBSITE_PUBLIC_PAPERS_DIR.mkdir(parents=True, exist_ok=True)
     for key in selected_keys:
         spec = PAPER_SPECS[key]
         paper_dir: Path = spec["dir"]
         src_pdf = paper_dir / spec["pdf"]
         src_tex = paper_dir / spec["src"]
         dst_pdf = WEBSITE_PAPERS_DIR / spec["pdf"]
+        dst_pub_pdf = WEBSITE_PUBLIC_PAPERS_DIR / spec["pdf"]
         dst_tex = WEBSITE_PAPERS_DIR / spec["website_tex"]
         shutil.copy2(src_pdf, dst_pdf)
+        shutil.copy2(src_pdf, dst_pub_pdf)
         shutil.copy2(src_tex, dst_tex)
-        print(f"[SYNC] {src_pdf.name} & {dst_tex.name} -> {WEBSITE_PAPERS_DIR}", flush=True)
+        print(f"[SYNC] {src_pdf.name} & {dst_tex.name} -> {WEBSITE_PAPERS_DIR} (+ {WEBSITE_PUBLIC_PAPERS_DIR})", flush=True)
 
 
 def parse_args() -> argparse.Namespace:
