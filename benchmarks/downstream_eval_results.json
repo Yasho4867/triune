@@ -1,0 +1,175 @@
+{
+  "hardware": {
+    "os": "Windows-11-10.0.26300-SP0",
+    "python_version": "3.14.7",
+    "pytorch_version": "2.14.1+cu132",
+    "cuda_available": true,
+    "gpu_name": "NVIDIA GeForce RTX 5070 Laptop GPU",
+    "gpu_count": 1,
+    "total_vram_gb": 7.93,
+    "compute_capability": "12.0",
+    "cuda_version": "13.2",
+    "driver_version": "621.14",
+    "gpu_temp_c": 72.97,
+    "gpu_power_watts": 14.11,
+    "gpu_sm_clock_mhz": 502.0
+  },
+  "checkpoint": "checkpoints/triune_studio_step_36500_rescued.pt",
+  "model_meta": {
+    "checkpoint": "checkpoints/triune_studio_step_36500_rescued.pt",
+    "step": 40555,
+    "tokens_trained": 239357120,
+    "vocab_size": 32000,
+    "hidden_dim": 384,
+    "num_layers": 8,
+    "num_heads": 6,
+    "head_dim": 64,
+    "num_experts": 4,
+    "router_prefix_layers": 1,
+    "reflex_exit_layer": 2,
+    "limbic_exit_layer": 5,
+    "total_params": 90789271,
+    "active_params": 64206871,
+    "precision": "bf16"
+  },
+  "lm_eval": null,
+  "tasks": [
+    "arc_easy",
+    "boolq"
+  ],
+  "modes": {
+    "cortex": {
+      "by_task": {
+        "arc_easy": {
+          "samples": 50,
+          "acc": 0.34,
+          "acc_norm": 0.2
+        },
+        "boolq": {
+          "samples": 50,
+          "acc": 0.2,
+          "acc_norm": 0.78
+        }
+      },
+      "macro_acc": 0.27,
+      "macro_acc_norm": 0.49,
+      "exit_fraction": {
+        "reflex": 0.0,
+        "limbic": 0.0,
+        "cortex": 1.0
+      },
+      "avg_layers": 8.0,
+      "theoretical_flop_savings_pct": 0.0,
+      "mean_effective_tau": 0.2,
+      "mean_reflex_entropy": null,
+      "elapsed_s": 100.124
+    },
+    "limbic": {
+      "by_task": {
+        "arc_easy": {
+          "samples": 50,
+          "acc": 0.3,
+          "acc_norm": 0.24
+        },
+        "boolq": {
+          "samples": 50,
+          "acc": 0.28,
+          "acc_norm": 0.76
+        }
+      },
+      "macro_acc": 0.29,
+      "macro_acc_norm": 0.5,
+      "exit_fraction": {
+        "reflex": 0.0,
+        "limbic": 1.0,
+        "cortex": 0.0
+      },
+      "avg_layers": 6.0,
+      "theoretical_flop_savings_pct": 25.0,
+      "mean_effective_tau": 0.2,
+      "mean_reflex_entropy": null,
+      "elapsed_s": 50.475
+    },
+    "reflex": {
+      "by_task": {
+        "arc_easy": {
+          "samples": 50,
+          "acc": 0.3,
+          "acc_norm": 0.22
+        },
+        "boolq": {
+          "samples": 50,
+          "acc": 0.26,
+          "acc_norm": 0.76
+        }
+      },
+      "macro_acc": 0.28,
+      "macro_acc_norm": 0.49,
+      "exit_fraction": {
+        "reflex": 1.0,
+        "limbic": 0.0,
+        "cortex": 0.0
+      },
+      "avg_layers": 3.0,
+      "theoretical_flop_savings_pct": 62.5,
+      "mean_effective_tau": 0.2,
+      "mean_reflex_entropy": null,
+      "elapsed_s": 20.581
+    },
+    "calm": {
+      "by_task": {
+        "arc_easy": {
+          "samples": 50,
+          "acc": 0.32,
+          "acc_norm": 0.22
+        },
+        "boolq": {
+          "samples": 50,
+          "acc": 0.24,
+          "acc_norm": 0.78
+        }
+      },
+      "macro_acc": 0.28,
+      "macro_acc_norm": 0.5,
+      "exit_fraction": {
+        "reflex": 0.2605,
+        "limbic": 0.0509,
+        "cortex": 0.6886
+      },
+      "avg_layers": 6.596,
+      "theoretical_flop_savings_pct": 17.55,
+      "mean_effective_tau": 0.2,
+      "mean_reflex_entropy": 4.8823,
+      "elapsed_s": 90.118
+    },
+    "calm_entropy_guard": {
+      "by_task": {
+        "arc_easy": {
+          "samples": 50,
+          "acc": 0.34,
+          "acc_norm": 0.16
+        },
+        "boolq": {
+          "samples": 50,
+          "acc": 0.22,
+          "acc_norm": 0.78
+        }
+      },
+      "macro_acc": 0.28,
+      "macro_acc_norm": 0.47,
+      "exit_fraction": {
+        "reflex": 0.1852,
+        "limbic": 0.043,
+        "cortex": 0.7718
+      },
+      "avg_layers": 6.988,
+      "theoretical_flop_savings_pct": 12.65,
+      "mean_effective_tau": 0.2685,
+      "mean_reflex_entropy": 4.8823,
+      "elapsed_s": 85.936
+    }
+  },
+  "calm_tau": 0.2,
+  "calm_entropy_beta": 0.25,
+  "calm_calib_entropy": 3.5
+}

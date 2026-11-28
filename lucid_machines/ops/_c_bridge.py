@@ -184,6 +184,23 @@ def is_native_c_available() -> bool:
     return _load_native_library() is not None
 
 
+def get_current_cuda_stream_ptr(device_id: int = 0) -> int:
+    """Return the raw cudaStream_t integer handle for PyTorch's active stream, or 0 on CPU."""
+    if not torch.cuda.is_available() or not torch.cuda.is_initialized():
+        return 0
+    return int(torch.cuda.current_stream(device_id).cuda_stream)
+
+
+def _sync_pytorch_cuda_stream(device_id: int = 0) -> None:
+    """Synchronize the active PyTorch CUDA stream before crossing into unmanaged C ABI calls."""
+    if (
+        torch.cuda.is_available()
+        and torch.cuda.is_initialized()
+        and not torch.cuda.is_current_stream_capturing()
+    ):
+        torch.cuda.current_stream(device_id).synchronize()
+
+
 def get_native_c_info() -> Dict[str, Any]:
     lib = _load_native_library()
     if lib is None:
@@ -345,6 +362,7 @@ class NativeLucidMachinesEngine:
     ) -> None:
         self._lib = _load_native_library()
         self._handle: Optional[int] = None
+        self._device_id: int = int(device_id)
         if self._lib is not None:
             cfg = LucidMachinesConfigStruct(
                 vocab_size=vocab_size,
@@ -366,16 +384,19 @@ class NativeLucidMachinesEngine:
     def capture_graph(self, batch_size: int = 4, seq_len: int = 256) -> bool:
         if not self.is_ready:
             return False
+        _sync_pytorch_cuda_stream(self._device_id)
         return _SYMS["cuda_graph_capture"](self._handle, int(batch_size), int(seq_len)) == 0
 
     def replay_graph(self) -> bool:
         if not self.is_ready:
             return False
+        _sync_pytorch_cuda_stream(self._device_id)
         return _SYMS["cuda_graph_replay"](self._handle) == 0
 
     def step(self, batch_size: int = 4, seq_len: int = 256) -> Dict[str, Any]:
         if not self.is_ready:
             return {"ok": False}
+        _sync_pytorch_cuda_stream(self._device_id)
         stats = LucidMachinesStepStatsStruct()
         rc = _SYMS["engine_step"](
             self._handle,

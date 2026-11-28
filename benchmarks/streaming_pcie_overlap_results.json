@@ -1,0 +1,75 @@
+{
+  "hardware": {
+    "device_name": "NVIDIA GeForce RTX 5070 Laptop GPU",
+    "total_vram_gb": 7.93,
+    "cuda_version": "13.2",
+    "pytorch_version": "2.14.1+cu132",
+    "python_version": "3.14.7"
+  },
+  "config": {
+    "batch_size": 2,
+    "seq_len": 512,
+    "vocab_size": 4096,
+    "dtype": "bfloat16"
+  },
+  "scales": [
+    {
+      "scale": "102M",
+      "total_params": 101969431,
+      "total_params_m": 101.97,
+      "hidden_dim": 512,
+      "num_layers": 8,
+      "num_experts": 4,
+      "layer_params_mb": 6.51,
+      "single_layer_h2d_ms": 0.32,
+      "num_layers_h2d_unhidden_est_ms": 7.68,
+      "async_prefetch_off": {
+        "median_latency_ms": 811.98,
+        "mean_latency_ms": 743.86,
+        "peak_allocated_mb": 406.5,
+        "peak_reserved_mb": 472.0,
+        "tokens_per_sec": 1261.1,
+        "last_loss": 7.8125
+      },
+      "async_prefetch_on": {
+        "median_latency_ms": 2739.41,
+        "mean_latency_ms": 2756.81,
+        "peak_allocated_mb": 532.54,
+        "peak_reserved_mb": 694.0,
+        "tokens_per_sec": 373.8,
+        "last_loss": 6.8125
+      },
+      "prefetch_saved_ms": -1927.43,
+      "prefetch_speedup": 0.296
+    },
+    {
+      "scale": "271M",
+      "total_params": 270557979,
+      "total_params_m": 270.56,
+      "hidden_dim": 768,
+      "num_layers": 10,
+      "num_experts": 4,
+      "layer_params_mb": 14.64,
+      "single_layer_h2d_ms": 0.63,
+      "num_layers_h2d_unhidden_est_ms": 18.9,
+      "async_prefetch_off": {
+        "median_latency_ms": 6197.4,
+        "mean_latency_ms": 7154.59,
+        "peak_allocated_mb": 1159.05,
+        "peak_reserved_mb": 1288.0,
+        "tokens_per_sec": 165.2,
+        "last_loss": 6.375
+      },
+      "async_prefetch_on": {
+        "median_latency_ms": 6893.8,
+        "mean_latency_ms": 6464.94,
+        "peak_allocated_mb": 1550.3,
+        "peak_reserved_mb": 1992.0,
+        "tokens_per_sec": 148.5,
+        "last_loss": 8.25
+      },
+      "prefetch_saved_ms": -696.4,
+      "prefetch_speedup": 0.899
+    }
+  ]
+}

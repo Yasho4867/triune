@@ -104,6 +104,7 @@ class TriuneTransformer(nn.Module):
         self.last_depth_choice = None
         self.last_balance_loss = None
         self.last_calm_exit_depths = None
+        self._calm_rolling_entropy: float | None = None
         self._composite_id_map: dict[int, int] = {}
         self._base_vocab_size = vocab_size
 
@@ -437,6 +438,10 @@ class TriuneTransformer(nn.Module):
             depth_choice = torch.full((B,), force_depth, device=device, dtype=torch.long)
         return logits, y_route, depth_choice, balance_loss
 
+    def reset_calm_entropy(self) -> None:
+        """Reset online rolling Reflex entropy tracker for CALM recalibration."""
+        self._calm_rolling_entropy = None
+
     def forward(
         self,
         input_ids: Optional[torch.Tensor],
@@ -447,6 +452,9 @@ class TriuneTransformer(nn.Module):
         last_token_only: bool = False,
         exit_policy: str = "gumbel",
         confidence_threshold: float = 0.8,
+        calm_entropy_beta: float = 0.0,
+        calm_calib_entropy: float = 1.5,
+        calm_entropy_ema_decay: float = 0.8,
         inputs_embeds: Optional[torch.Tensor] = None,
         tokenizer: Optional[Any] = None,
     ):
@@ -504,9 +512,21 @@ class TriuneTransformer(nn.Module):
                 new_cache[self.reflex_exit_layer] = new_c
 
             probs_r = F.softmax(logits_r.float(), dim=-1)
+            H_r = -(probs_r * probs_r.clamp_min(1e-12).log()).sum(dim=-1)
+            mean_H_r = float(H_r.mean().item()) if H_r.numel() > 0 else 0.0
+            eff_threshold = float(confidence_threshold)
+            if calm_entropy_beta > 0.0:
+                if self._calm_rolling_entropy is None:
+                    self._calm_rolling_entropy = mean_H_r
+                else:
+                    decay_e = min(max(float(calm_entropy_ema_decay), 0.0), 0.999)
+                    self._calm_rolling_entropy = decay_e * self._calm_rolling_entropy + (1.0 - decay_e) * mean_H_r
+                excess_h = max(0.0, self._calm_rolling_entropy - float(calm_calib_entropy))
+                eff_threshold = min(0.999, max(eff_threshold, eff_threshold * (1.0 + float(calm_entropy_beta) * excess_h)))
+
             top2_r = torch.topk(probs_r, 2, dim=-1).values
             margin_r = top2_r[..., 0] - top2_r[..., 1]  # [B, T_out]
-            settled_r = margin_r >= confidence_threshold
+            settled_r = margin_r >= eff_threshold
 
             logits_out = logits_r.clone()
             calm_exit_depths = torch.full(settled_r.shape, 2, dtype=torch.long, device=device)
@@ -526,6 +546,8 @@ class TriuneTransformer(nn.Module):
                     "cortex_rows": 0,
                     "limbic_seq_len": 0,
                     "cortex_seq_len": 0,
+                    "effective_threshold": round(eff_threshold, 6),
+                    "reflex_entropy_mean": round(mean_H_r, 6),
                 }
                 if cache is not None:
                     return logits_out, new_cache
@@ -580,7 +602,7 @@ class TriuneTransformer(nn.Module):
                 probs_l = F.softmax(logits_l_compact.float(), dim=-1)
                 top2_l = torch.topk(probs_l, 2, dim=-1).values
                 margin_l = top2_l[..., 0] - top2_l[..., 1]
-                settled_l_flat = margin_l >= confidence_threshold * 0.85
+                settled_l_flat = margin_l >= eff_threshold * 0.85
 
                 abs_rows_l = need_limbic.index_select(0, r_idx_l)
                 logits_out = logits_out.index_put((abs_rows_l, t_idx_l), logits_l_compact.to(logits_out.dtype))
@@ -608,7 +630,7 @@ class TriuneTransformer(nn.Module):
                 probs_l = F.softmax(logits_l_act.float(), dim=-1)
                 top2_l = torch.topk(probs_l, 2, dim=-1).values
                 margin_l = top2_l[..., 0] - top2_l[..., 1]  # [B_act, T_out]
-                settled_l_act = (~settled_r_act) & (margin_l >= confidence_threshold * 0.85)
+                settled_l_act = (~settled_r_act) & (margin_l >= eff_threshold * 0.85)
 
                 prev_logits_act = logits_out.index_select(0, need_limbic)
                 updated_l_act = torch.where(
@@ -637,6 +659,8 @@ class TriuneTransformer(nn.Module):
                     "cortex_rows": 0,
                     "limbic_seq_len": T_lim,
                     "cortex_seq_len": 0,
+                    "effective_threshold": round(eff_threshold, 6),
+                    "reflex_entropy_mean": round(mean_H_r, 6),
                 }
                 if cache is not None:
                     return logits_out, new_cache
@@ -700,6 +724,8 @@ class TriuneTransformer(nn.Module):
                 "cortex_rows": n_cortex_rows,
                 "limbic_seq_len": T_lim,
                 "cortex_seq_len": T_cor,
+                "effective_threshold": round(eff_threshold, 6),
+                "reflex_entropy_mean": round(mean_H_r, 6),
             }
             if cache is not None:
                 return logits_out, new_cache

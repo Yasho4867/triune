@@ -389,6 +389,18 @@ For $\eta \le 1/L$, $1 - \frac{L \eta}{2} \ge \frac{1}{2}$. Rearranging and tele
 Dividing by $T \frac{\eta}{2}$ establishes the ergodic convergence rate.
 \end{proof}
 
+\begin{lemma}[Bounded Block-Oja Subspace Drift \& Grassmann Transport Stability]
+\label{lem:block_oja_drift}
+Let $C_t \in \operatorname{St}(k_c, m)$ be the activation subspace before an uncentered Block-Oja EMA refresh step $\tilde{C}_{t+1} = (1 - \gamma_{\text{oja}}) C_t + \gamma_{\text{oja}} \Sigma_{X,t} C_t$, where $\Sigma_{X,t} = \frac{1}{|\mathcal{S}_e|} X_e^T X_e$ satisfies $\|\Sigma_{X,t}\|_2 \le B_X^2$ and $C_{t+1} = \operatorname{sCholQR2}(\tilde{C}_{t+1})$. If $\sigma_{\min}((1 - \gamma_{\text{oja}}) I_{k_c} + \gamma_{\text{oja}} C_t^T \Sigma_{X,t} C_t) = \sigma_0 > 0$, then up to sCholQR2 machine-precision residuals, the chordal Grassmann distance between consecutive subspaces is bounded by:
+\begin{equation}
+    d_{\text{Gr}}(C_t, C_{t+1}) = \left\| C_{t+1} C_{t+1}^T - C_t C_t^T \right\|_F / \sqrt{2} \le \frac{\sqrt{2}\,\gamma_{\text{oja}} B_X^2}{\sigma_0}
+\end{equation}
+Consequently, setting optional chordal trust-region damping $\tilde{M}_c = \min\!\big(1, \delta_{\max} / d_{\text{Gr}}(C_t, C_{t+1})\big)\, M_c T$ bounds momentum transport perturbation during cold-start distribution shifts while acting as an exact isometry ($\min=1$) once steady-state drift satisfies $d_{\text{Gr}} \le \delta_{\max}$.
+\end{lemma}
+\begin{proof}
+Decomposing $\tilde{C}_{t+1} = C_t \big((1-\gamma_{\text{oja}})I_{k_c} + \gamma_{\text{oja}} C_t^T \Sigma_{X,t} C_t\big) + \gamma_{\text{oja}}(I_m - C_t C_t^T)\Sigma_{X,t} C_t$ shows that the component orthogonal to $\operatorname{span}(C_t)$ has spectral norm at most $\gamma_{\text{oja}} B_X^2$, while the in-subspace singular values are bounded below by $\sigma_0$. Applying Wedin's $\sin\Theta$ perturbation bound for matrix subspaces yields $\|\sin\Theta(C_t, C_{t+1})\|_F \le \gamma_{\text{oja}} B_X^2 / \sigma_0$ (with $\sqrt{2}$ accounting for the rank-$k_c$ projector difference), giving the stated chordal bound. Multiplying transported first-moment state $M_c T$ by $\min(1, \delta_{\max}/d_{\text{Gr}})$ preserves exact Frobenius norm whenever $d_{\text{Gr}} \le \delta_{\max}$ and contracts stale off-manifold inertia linearly under abrupt domain shifts.
+\end{proof}
+
 \section{Numerical Implementation, Invariants, \& Diagnostics}
 
 Theorem~\ref{thm:augmented_triu} establishes the structural upper-triangular identity under exact arithmetic. In practical implementations, four numerical considerations must be accounted for:
@@ -616,6 +628,32 @@ Suite 4: 75.8M FineWeb Continuation & \texttt{No-Steer Low-Rank} & $4.9945 \pm 0
 }
 \end{table*}
 
+\subsection{Wall-Clock Refresh Amortization \& Grassmann Drift}
+\label{sec:amortization_drift}
+
+To verify that periodic two-pass Cholesky-QR refreshes and Block-Oja transport do not erode training throughput, Table~\ref{tab:amortization_drift} measures the step-time breakdown of 90.79M \texttt{TriuneTransformer} MoE ($r=16, k_c=4, B=4, T=128$, BF16 on RTX~5070; \nolinkurl{benchmarks/centroidsteer_amortization_results.json}) across refresh intervals $\tau_{\text{gap}} \in [10, 500]$. Non-refresh steps complete in $224.17\text{ ms}$ ($201.01\text{ ms}$ forward+backward + $23.16\text{ ms}$ optimizer update), while a Krylov refresh step adds $60.72\text{ ms}$. Amortized over $\tau_{\text{gap}} = 100$--$200$, refresh overhead drops to \textbf{0.27\%--0.14\%} of total step time. Over 30 consecutive training steps with live telemetry (\texttt{get\_telemetry()[\allowbreak"grassmann\_\allowbreak{}transport"]}), chordal subspace drift remains well bounded at mean $d_{\text{Gr}} = 0.5560$ ($\max = 1.0130$ across 200 transport events at $k_c=4$).
+
+\begin{table}[t]
+\centering
+\small
+\caption{\textbf{CentroidSteer Refresh Amortization Overhead (90.79M MoE, BF16, RTX~5070)} (\texttt{centroidsteer\_amortization\_results.json}). Base step latency is $224.17\text{ ms}$ ($201.01\text{ ms}$ fwd+bwd, $23.16\text{ ms}$ opt); Krylov refresh penalty is $60.72\text{ ms}$.}
+\label{tab:amortization_drift}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{cccc}
+\toprule
+\textbf{Refresh Gap ($\tau_{\text{gap}}$)} & \textbf{Amortized Penalty} & \textbf{Amortized Step} & \textbf{Overhead (\%)} \\
+\midrule
+10  & $6.072\text{ ms}$ & $230.24\text{ ms}$ & $2.64\%$ \\
+20  & $3.036\text{ ms}$ & $227.21\text{ ms}$ & $1.34\%$ \\
+50  & $1.214\text{ ms}$ & $225.38\text{ ms}$ & $0.54\%$ \\
+100 & $0.607\text{ ms}$ & $224.78\text{ ms}$ & $0.27\%$ \\
+200 & $\mathbf{0.304\text{ ms}}$ & $\mathbf{224.47\text{ ms}}$ & $\mathbf{0.14\%}$ \\
+500 & $0.121\text{ ms}$ & $224.29\text{ ms}$ & $0.05\%$ \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
 \subsection{Single-Border Ablation \& ANOVA Dispersion Diagnostics (\texorpdfstring{$N=8$}{N=8})}
 \label{sec:steering_ablation}
 
@@ -666,7 +704,7 @@ To guarantee transparent verification of every quantitative and mathematical cla
 \begin{itemize}\raggedright\setlength{\itemsep}{2pt}
     \item \textbf{Core Optimizer Implementation}: \nolinkurl{lucid_machines/optim/centroid.py} (\texttt{CentroidSteerOptimizer}, Exact Orthogonal Direct-Sum, Grassmann parallel transport, BF16 stochastic rounding, \texttt{get\_telemetry()}), \nolinkurl{lucid_machines/ops/centroid_steer.py} (\texttt{sCholQR2} \texttt{batched\_qr}, Kahan-Parlett projection, Triangular Core kernel), and \nolinkurl{lucid_machines/model/moe.py} (\texttt{last\_hidden\_centroids}).
     \item \textbf{Convergence \& 5-Seed Validation Scripts}: \nolinkurl{benchmarks/validate_centroid_steer_upgrade.py} (Suites 1--4, $N=5$ seeds), \nolinkurl{scripts/benchmark_convergence_100_steps.py} (dense sweep, $N=3$), \nolinkurl{scripts/benchmark_moe_convergence_100_steps.py} (MoE sweep including GaLore, BAdam, and ablation, $N=8$), and \nolinkurl{scripts/benchmark_full_matrix_comparison.py}.
-    \item \textbf{Machine-Readable Artifacts \& Verification}: Outputs serialized in \nolinkurl{benchmarks/centroidsteer_upgrade_results.json}, \nolinkurl{benchmarks/CENTROIDSTEER_UPGRADE_VALIDATION_REPORT.md}, \nolinkurl{benchmarks/optimizer_benchmark_results.json}, \nolinkurl{benchmarks/convergence_100_steps_results.json}, \nolinkurl{benchmarks/moe_convergence_100_steps_results.json}, and \nolinkurl{benchmarks/triangular_qr_residual_results.json}, validated via \texttt{pytest} on \nolinkurl{tests/test_triangular_core_integrity.py} and \nolinkurl{tests/test_benchmark_validity.py} (PyTorch 2.14.1+cu132, CUDA 13.2).
+    \item \textbf{Machine-Readable Artifacts \& Verification}: Outputs serialized in \nolinkurl{benchmarks/centroidsteer_upgrade_results.json}, \nolinkurl{benchmarks/CENTROIDSTEER_UPGRADE_VALIDATION_REPORT.md}, \nolinkurl{benchmarks/optimizer_benchmark_results.json}, \nolinkurl{benchmarks/centroidsteer_amortization_results.json}, \nolinkurl{benchmarks/convergence_100_steps_results.json}, \nolinkurl{benchmarks/moe_convergence_100_steps_results.json}, and \nolinkurl{benchmarks/triangular_qr_residual_results.json}, validated via \texttt{pytest} on \nolinkurl{tests/test_triangular_core_integrity.py}, \nolinkurl{tests/test_gap_closures.py}, and \nolinkurl{tests/test_benchmark_validity.py} (PyTorch 2.14.1+cu132, CUDA 13.2).
 \end{itemize}
 
 \section{Conclusion}

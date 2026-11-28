@@ -1,0 +1,78 @@
+{
+  "hardware": {
+    "device_name": "NVIDIA GeForce RTX 5070 Laptop GPU",
+    "total_vram_gb": 7.93,
+    "cuda_version": "13.2",
+    "pytorch_version": "2.14.1+cu132"
+  },
+  "model_params": 90789271,
+  "batch_size": 4,
+  "seq_len": 128,
+  "rank": 16,
+  "num_steer_dirs": 4,
+  "base_step_ms": 224.17,
+  "refresh_penalty_ms": 60.72,
+  "grassmann_drift_30steps": {
+    "events": 200,
+    "drift_mean": 0.555988,
+    "drift_max": 1.013009,
+    "damped_events": 0,
+    "drift_clip": null
+  },
+  "sweep": [
+    {
+      "update_gap": 10,
+      "fwd_bwd_ms": 201.01,
+      "non_refresh_opt_ms": 23.16,
+      "refresh_opt_ms": 83.87,
+      "amortized_refresh_ms": 6.072,
+      "amortized_step_ms": 230.24,
+      "refresh_overhead_pct": 2.64
+    },
+    {
+      "update_gap": 20,
+      "fwd_bwd_ms": 201.01,
+      "non_refresh_opt_ms": 23.16,
+      "refresh_opt_ms": 83.87,
+      "amortized_refresh_ms": 3.036,
+      "amortized_step_ms": 227.21,
+      "refresh_overhead_pct": 1.34
+    },
+    {
+      "update_gap": 50,
+      "fwd_bwd_ms": 201.01,
+      "non_refresh_opt_ms": 23.16,
+      "refresh_opt_ms": 83.87,
+      "amortized_refresh_ms": 1.214,
+      "amortized_step_ms": 225.38,
+      "refresh_overhead_pct": 0.54
+    },
+    {
+      "update_gap": 100,
+      "fwd_bwd_ms": 201.01,
+      "non_refresh_opt_ms": 23.16,
+      "refresh_opt_ms": 83.87,
+      "amortized_refresh_ms": 0.607,
+      "amortized_step_ms": 224.78,
+      "refresh_overhead_pct": 0.27
+    },
+    {
+      "update_gap": 200,
+      "fwd_bwd_ms": 201.01,
+      "non_refresh_opt_ms": 23.16,
+      "refresh_opt_ms": 83.87,
+      "amortized_refresh_ms": 0.304,
+      "amortized_step_ms": 224.47,
+      "refresh_overhead_pct": 0.14
+    },
+    {
+      "update_gap": 500,
+      "fwd_bwd_ms": 201.01,
+      "non_refresh_opt_ms": 23.16,
+      "refresh_opt_ms": 83.87,
+      "amortized_refresh_ms": 0.121,
+      "amortized_step_ms": 224.29,
+      "refresh_overhead_pct": 0.05
+    }
+  ]
+}
