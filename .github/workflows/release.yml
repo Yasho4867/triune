@@ -170,17 +170,39 @@ jobs:
 
       - name: Headless Smoke & Setup Verification
         shell: pwsh
+        timeout-minutes: 10
         run: |
           foreach ($exe in @(
             "studio\publish\app\PolysomStudio.exe",
-            "studio\publish\app\PolysomStudioSetup.exe",
-            "studio\publish\PolysomStudioSetup.exe"
+            "studio\publish\app\PolysomStudioSetup.exe"
           )) {
             $smoke = Start-Process -FilePath (Resolve-Path $exe) -ArgumentList "--smoke-test" -Wait -PassThru
             if ($smoke.ExitCode -ne 0) { throw "$exe --smoke-test failed: $($smoke.ExitCode)" }
           }
-          $proc = Start-Process -FilePath (Resolve-Path "studio\publish\PolysomStudioSetup.exe") -ArgumentList "--verify" -Wait -PassThru
-          if ($proc.ExitCode -ne 0) { throw "PolysomStudioSetup.exe --verify failed: $($proc.ExitCode)" }
+          $proc = Start-Process -FilePath (Resolve-Path "studio\publish\app\PolysomStudioSetup.exe") -ArgumentList "--verify","--cuda","cpu" -Wait -PassThru
+          if ($proc.ExitCode -ne 0) { throw "app\PolysomStudioSetup.exe --verify failed: $($proc.ExitCode)" }
+
+          $standaloneSetup = Resolve-Path "studio\publish\PolysomStudioSetup.exe"
+          if (Get-Command 'iscc.exe' -ErrorAction SilentlyContinue) {
+            $innoTarget = Join-Path $env:RUNNER_TEMP "polysom_inno_smoke"
+            if (Test-Path $innoTarget) { Remove-Item $innoTarget -Recurse -Force }
+            try {
+              $innoProc = Start-Process -FilePath $standaloneSetup -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SP-","/DIR=$innoTarget" -Wait -PassThru
+              if ($innoProc.ExitCode -ne 0) { throw "Inno setup installer exited with code $($innoProc.ExitCode)" }
+              if (-not (Test-Path (Join-Path $innoTarget "app\PolysomStudio.exe"))) {
+                throw "Inno setup install missing app\PolysomStudio.exe in $innoTarget"
+              }
+            } finally {
+              $unins = Join-Path $innoTarget "unins000.exe"
+              if (Test-Path $unins) {
+                Start-Process -FilePath $unins -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait | Out-Null
+              }
+              if (Test-Path $innoTarget) { Remove-Item $innoTarget -Recurse -Force -ErrorAction SilentlyContinue }
+            }
+          } else {
+            $smoke = Start-Process -FilePath $standaloneSetup -ArgumentList "--smoke-test" -Wait -PassThru
+            if ($smoke.ExitCode -ne 0) { throw "PolysomStudioSetup.exe --smoke-test failed: $($smoke.ExitCode)" }
+          }
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4

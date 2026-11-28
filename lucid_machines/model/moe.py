@@ -493,25 +493,31 @@ class MoE_FFN(nn.Module):
                 w1_sel = W1_stack[sel_idx]  # [top_k, H_ffn, D]
                 w2_sel = W2_stack[sel_idx]  # [top_k, D, H_ffn]
                 x_sel = flat_x.unsqueeze(0).expand(self.top_k, 1, D)  # [top_k, 1, D]
+                autocast_on = torch.is_autocast_enabled(x.device.type) if x.is_cuda else torch.is_autocast_enabled()
+                if autocast_on and w1_sel.dtype in (torch.bfloat16, torch.float16) and x_sel.dtype != w1_sel.dtype:
+                    x_sel = x_sel.to(w1_sel.dtype)
+                elif w1_sel.dtype != x_sel.dtype or w2_sel.dtype != x_sel.dtype:
+                    w1_sel = w1_sel.to(x_sel.dtype)
+                    w2_sel = w2_sel.to(x_sel.dtype)
                 h_pre = torch.bmm(x_sel, w1_sel.transpose(1, 2))
                 if has_lora_e0:
-                    A1_stack = torch.stack([e[0].lora_A for e in self.experts], dim=0)[sel_idx]
-                    B1_stack = torch.stack([e[0].lora_B for e in self.experts], dim=0)[sel_idx]
+                    A1_stack = torch.stack([e[0].lora_A for e in self.experts], dim=0)[sel_idx].to(x_sel.dtype)
+                    B1_stack = torch.stack([e[0].lora_B for e in self.experts], dim=0)[sel_idx].to(x_sel.dtype)
                     s1 = _get_submod_lora(self.experts[0][0])[2]
                     h_pre = h_pre + torch.bmm(torch.bmm(x_sel, A1_stack.transpose(1, 2)) * s1, B1_stack.transpose(1, 2))
                 if all_b1:
                     b1_stack = torch.stack([_get_submod_weight_bias(e[0])[1] for e in self.experts], dim=0)
-                    h_pre = h_pre + b1_stack[sel_idx].unsqueeze(1)
+                    h_pre = h_pre + b1_stack[sel_idx].unsqueeze(1).to(h_pre.dtype)
                 h = self.experts[0][1](h_pre)
                 y_sel = torch.bmm(h, w2_sel.transpose(1, 2))
                 if has_lora_e2:
-                    A2_stack = torch.stack([e[2].lora_A for e in self.experts], dim=0)[sel_idx]
-                    B2_stack = torch.stack([e[2].lora_B for e in self.experts], dim=0)[sel_idx]
+                    A2_stack = torch.stack([e[2].lora_A for e in self.experts], dim=0)[sel_idx].to(h.dtype)
+                    B2_stack = torch.stack([e[2].lora_B for e in self.experts], dim=0)[sel_idx].to(h.dtype)
                     s2 = _get_submod_lora(self.experts[0][2])[2]
                     y_sel = y_sel + torch.bmm(torch.bmm(h, A2_stack.transpose(1, 2)) * s2, B2_stack.transpose(1, 2))
                 if all_b2:
                     b2_stack = torch.stack([_get_submod_weight_bias(e[2])[1] for e in self.experts], dim=0)
-                    y_sel = y_sel + b2_stack[sel_idx].unsqueeze(1)
+                    y_sel = y_sel + b2_stack[sel_idx].unsqueeze(1).to(y_sel.dtype)
                 weights_sel = flat_vals[0].view(self.top_k, 1, 1).to(y_sel.dtype)
                 out = out + (y_sel * weights_sel).sum(dim=0).to(out.dtype)
             else:
@@ -640,6 +646,23 @@ class MoE_FFN(nn.Module):
                 A2_stack = B2_stack = None
                 s2 = 1.0
 
+            autocast_on = torch.is_autocast_enabled(x.device.type) if x.is_cuda else torch.is_autocast_enabled()
+            if autocast_on and W1_stack.dtype in (torch.bfloat16, torch.float16) and flat_x.dtype != W1_stack.dtype:
+                flat_x = flat_x.to(W1_stack.dtype)
+            elif W1_stack.dtype != flat_x.dtype or W2_stack.dtype != flat_x.dtype:
+                W1_stack = W1_stack.to(flat_x.dtype)
+                W2_stack = W2_stack.to(flat_x.dtype)
+            if b1_stack is not None and b1_stack.dtype != flat_x.dtype:
+                b1_stack = b1_stack.to(flat_x.dtype)
+            if b2_stack is not None and b2_stack.dtype != flat_x.dtype:
+                b2_stack = b2_stack.to(flat_x.dtype)
+            if A1_stack is not None and A1_stack.dtype != flat_x.dtype:
+                A1_stack = A1_stack.to(flat_x.dtype)
+                B1_stack = B1_stack.to(flat_x.dtype)
+            if A2_stack is not None and A2_stack.dtype != flat_x.dtype:
+                A2_stack = A2_stack.to(flat_x.dtype)
+                B2_stack = B2_stack.to(flat_x.dtype)
+
             if is_capturing:
                 x_exp = flat_x.unsqueeze(0).expand(self.num_experts, -1, -1)
                 h_pre = torch.bmm(x_exp, W1_stack.transpose(1, 2))
@@ -661,12 +684,6 @@ class MoE_FFN(nn.Module):
             # Vectorized zero-sync Top-K Capacity Gather + Grouped/Batched GEMM + Scatter:
             # Uses torch._grouped_mm when eligible (zero padding overhead) with automatic packed BMM fallback.
             cap = max(1, min(capacity, N_tok))
-            if (
-                W1_stack.dtype in (torch.bfloat16, torch.float16)
-                and flat_x.dtype != W1_stack.dtype
-                and (torch.is_autocast_enabled(x.device.type) if x.is_cuda else torch.is_autocast_enabled())
-            ):
-                flat_x = flat_x.to(W1_stack.dtype)
             use_grouped_mm = bool(
                 hasattr(torch, "_grouped_mm")
                 and x.is_cuda

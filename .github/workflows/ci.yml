@@ -87,6 +87,7 @@ jobs:
   build-windows-studio:
     name: Windows .NET 10 Build, Packaging & Smoke Verify
     runs-on: windows-latest
+    timeout-minutes: 25
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -142,11 +143,11 @@ jobs:
 
       - name: Headless --smoke-test & Non-Mutating --verify
         shell: pwsh
+        timeout-minutes: 10
         run: |
           foreach ($exe in @(
             "studio\publish\app\PolysomStudio.exe",
-            "studio\publish\app\PolysomStudioSetup.exe",
-            "studio\publish\PolysomStudioSetup.exe"
+            "studio\publish\app\PolysomStudioSetup.exe"
           )) {
             $smoke = Start-Process -FilePath (Resolve-Path $exe) -ArgumentList "--smoke-test" -Wait -PassThru
             if ($smoke.ExitCode -ne 0) { throw "$exe --smoke-test failed with exit code $($smoke.ExitCode)" }
@@ -157,14 +158,36 @@ jobs:
           $beforeDesktop = Test-Path (Join-Path $desktop "Polysom Studio.lnk")
           $beforePrograms = Test-Path (Join-Path $programs "Polysom Studio.lnk")
 
-          $verify = Start-Process -FilePath (Resolve-Path "studio\publish\PolysomStudioSetup.exe") -ArgumentList "--verify" -Wait -PassThru
+          $verify = Start-Process -FilePath (Resolve-Path "studio\publish\app\PolysomStudioSetup.exe") -ArgumentList "--verify","--cuda","cpu" -Wait -PassThru
           if ($verify.ExitCode -ne 0) {
-            throw "PolysomStudioSetup.exe --verify exited with code $($verify.ExitCode)"
+            throw "app\PolysomStudioSetup.exe --verify failed with exit code $($verify.ExitCode)"
           }
 
           if ((-not $beforeDesktop -and (Test-Path (Join-Path $desktop "Polysom Studio.lnk"))) -or
               (-not $beforePrograms -and (Test-Path (Join-Path $programs "Polysom Studio.lnk")))) {
             throw "--verify mutated Desktop or Start Menu shortcuts"
+          }
+
+          $standaloneSetup = Resolve-Path "studio\publish\PolysomStudioSetup.exe"
+          if (Get-Command 'iscc.exe' -ErrorAction SilentlyContinue) {
+            $innoTarget = Join-Path $env:RUNNER_TEMP "polysom_inno_smoke"
+            if (Test-Path $innoTarget) { Remove-Item $innoTarget -Recurse -Force }
+            try {
+              $innoProc = Start-Process -FilePath $standaloneSetup -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SP-","/DIR=$innoTarget" -Wait -PassThru
+              if ($innoProc.ExitCode -ne 0) { throw "Inno setup installer exited with code $($innoProc.ExitCode)" }
+              if (-not (Test-Path (Join-Path $innoTarget "app\PolysomStudio.exe"))) {
+                throw "Inno setup install missing app\PolysomStudio.exe in $innoTarget"
+              }
+            } finally {
+              $unins = Join-Path $innoTarget "unins000.exe"
+              if (Test-Path $unins) {
+                Start-Process -FilePath $unins -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait | Out-Null
+              }
+              if (Test-Path $innoTarget) { Remove-Item $innoTarget -Recurse -Force -ErrorAction SilentlyContinue }
+            }
+          } else {
+            $smoke = Start-Process -FilePath $standaloneSetup -ArgumentList "--smoke-test" -Wait -PassThru
+            if ($smoke.ExitCode -ne 0) { throw "PolysomStudioSetup.exe --smoke-test failed: $($smoke.ExitCode)" }
           }
 
   build-website:

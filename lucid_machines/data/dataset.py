@@ -443,7 +443,7 @@ def _is_valid_memmap_target(path_str: str | None) -> bool:
         return False
     p = Path(path_str)
     if p.is_file():
-        return True
+        return p.suffix.lower() in {".bin", ".memmap", ".u16"}
     if p.is_dir():
         return any(f.is_file() for f in p.glob("*.bin"))
     return False
